@@ -8,9 +8,9 @@ using BBT.Workflow.Shared;
 using BBT.Workflow.States;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
- 
+
 namespace BBT.Workflow.Tasks;
- 
+
 /// <summary>
 /// Executes SignalR workflow tasks that send instance state updates to a SignalR hub.
 /// This executor sends workflow instance state information to a configured SignalR endpoint.
@@ -31,7 +31,7 @@ public sealed class SignalRTaskExecutor(
     IConfiguration configuration,
     ILogger<SignalRTaskExecutor> logger) : TaskExecutor(scriptEngine, logger), ITaskExecutor
 {
- 
+
     /// <summary>
     /// Executes a SignalR task by building the instance state output and sending it to the configured SignalR hub.
     /// </summary>
@@ -53,66 +53,54 @@ public sealed class SignalRTaskExecutor(
     {
         var signalRTask = (task as SignalRTask)!;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        
+
         Logger.LogInformation("Starting SignalR task execution for task {TaskKey} - NotificationType: {NotificationType}",
             signalRTask.Key, signalRTask.NotificationType);
-            
-        StandardTaskResponse standardResponse;
- 
+
+
         try
         {
             await PrepareInputAsync(signalRTask, scriptCode, context, cancellationToken);
-            
+
             // Get SignalR URL from configuration
             var signalRUrl = configuration["SignalR:Url"];
             if (string.IsNullOrWhiteSpace(signalRUrl))
             {
                 throw new InvalidOperationException("SignalR:Url configuration is missing or empty");
             }
- 
-            // Validate context has workflow and instance
-            if (context.Workflow == null)
-            {
-                throw new InvalidOperationException("Workflow is required in context for SignalR task");
-            }
- 
-            if (context.Instance == null)
-            {
-                throw new InvalidOperationException("Instance is required in context for SignalR task");
-            }
- 
+
             runtimeInfoProvider.Check(context.Runtime.Domain);
- 
+
             // Get workflow and instance information
             var workflow = context.Workflow;
             var instance = context.Instance;
- 
+
             // Build instance transition information
             var transitionInfo = await BuildInstanceTransitionInfoAsync(instance, cancellationToken);
- 
+
             // Get available transitions
             var availableTransitions = GetMainFlowTransitions(instance, workflow, transitionInfo);
- 
+
             // Build transition items with href links
             var transitionItems = availableTransitions.Select(transitionKey => new TransitionItem
             {
                 Name = transitionKey,
                 Href = string.Format(InstanceUrlTemplates.Transition, context.Runtime.Domain, workflow.Key, instance.Id, transitionKey)
             }).ToList();
- 
+
             // Build data href
             var dataHref = new DataHref
             {
                 Href = string.Format(InstanceUrlTemplates.Data, context.Runtime.Domain, workflow.Key, instance.Id)
             };
- 
+
             // Build view href
             var viewHref = new ViewHref
             {
                 Href = string.Format(InstanceUrlTemplates.View, context.Runtime.Domain, workflow.Key, instance.Id),
                 LoadData = true
             };
- 
+
             // Build active correlations with href links
             var activeCorrelations = transitionInfo.ActiveCorrelations.Select(correlation => new ActiveCorrelationHref
             {
@@ -129,7 +117,7 @@ public sealed class SignalRTaskExecutor(
 
             // Create instance output with or without additional data
             object instanceOutput;
-            
+
             if (signalRTask.AdditionalData.HasValue)
             {
                 var additionalData = signalRTask.AdditionalData.Value.Deserialize<object>();
@@ -144,7 +132,7 @@ public sealed class SignalRTaskExecutor(
                     ETag = context.Instance.LatestData?.ETag ?? string.Empty,
                     AdditionalData = additionalData
                 };
-                
+
                 Logger.LogDebug("Created instance output with additional data for task {TaskKey}", signalRTask.Key);
             }
             else
@@ -160,7 +148,7 @@ public sealed class SignalRTaskExecutor(
                     ETag = context.Instance.LatestData?.ETag ?? string.Empty
                 };
             }
-            
+
             var signalRRequest = new SignalRRequest
             {
                 Id = context.Instance.Id.ToString(),
@@ -169,38 +157,13 @@ public sealed class SignalRTaskExecutor(
                 Subject = "workflow-completed",
                 Data = instanceOutput
             };
-            
+
             // Create HTTP client
             var httpClient = CreateHttpClient();
             // Create HTTP request
             var request = new HttpRequestMessage(HttpMethod.Post, signalRUrl);
- 
-            // Add headers from context (only allowed headers)
-            if (context.Headers != null && context.Headers.Count > 0 &&
-                signalRTask.AllowedHeaders != null && signalRTask.AllowedHeaders.Count > 0)
-            {
-                var allowedHeadersSet = new HashSet<string>(signalRTask.AllowedHeaders, StringComparer.OrdinalIgnoreCase);
-                var addedHeaderCount = 0;
-                
-                foreach (var header in context.Headers)
-                {
-                    var headerKey = (string)header.Key;
-                    
-                    // Only add header if it's in the allowed list
-                    if (allowedHeadersSet.Contains(headerKey))
-                    {
-                        var headerValue = header.Value?.ToString() ?? string.Empty;
-                        request.Headers.TryAddWithoutValidation(headerKey, headerValue);
-                        addedHeaderCount++;
-                        Logger.LogDebug("Added allowed header {HeaderKey}: {HeaderValue} to request", (object)headerKey, (object)headerValue);
-                    }
-                }
-            }
-            else if (signalRTask.AllowedHeaders == null || signalRTask.AllowedHeaders.Count == 0)
-            {
-                Logger.LogDebug("No allowed headers configured for SignalR task {TaskKey}, skipping header forwarding", signalRTask.Key);
-            }
- 
+            request = SetHeaders(request, signalRTask, context);
+           
             // Serialize and add request body
             var requestContent = JsonSerializer.Serialize(signalRRequest, new JsonSerializerOptions
             {
@@ -208,35 +171,35 @@ public sealed class SignalRTaskExecutor(
                 WriteIndented = false,
                 DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never
             });
-            
+
             if (string.IsNullOrWhiteSpace(requestContent))
             {
                 Logger.LogWarning("SignalR request content is empty for task {TaskKey}", signalRTask.Key);
             }
-            
+
             request.Content = new StringContent(
                 requestContent,
                 Encoding.UTF8,
                 "application/json"
             );
- 
+
             Logger.LogInformation("Sending SignalR request for task {TaskKey} to {SignalRUrl}",
                 signalRTask.Key, signalRUrl);
-                
+
             var response = await httpClient.SendAsync(request, cancellationToken);
             stopwatch.Stop();
- 
+
             Logger.LogInformation("SignalR request completed for task {TaskKey} - Status: {StatusCode}, Duration: {Duration}ms",
                 signalRTask.Key, response.StatusCode, stopwatch.ElapsedMilliseconds);
- 
+
             // Extract response headers
             var responseHeaders = response.Headers
                 .Concat(response.Content.Headers)
                 .ToDictionary(h => h.Key.ToLower(), h => string.Join(", ", h.Value));
- 
+
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
             object? responseData = null;
-            
+
             if (!string.IsNullOrWhiteSpace(content))
             {
                 try
@@ -250,14 +213,14 @@ public sealed class SignalRTaskExecutor(
                     responseData = content;
                 }
             }
- 
+
             // Create standardized response based on HTTP status
             if (response.IsSuccessStatusCode)
             {
                 Logger.LogInformation("SignalR task {TaskKey} completed successfully with status {StatusCode}",
                     signalRTask.Key, response.StatusCode);
-                    
-                standardResponse = CreateSuccessResponse(
+
+                StandardTaskResponse standardResponse = CreateSuccessResponse(
                     data: responseData,
                     taskType: nameof(TaskType.SignalR),
                     executionDurationMs: stopwatch.ElapsedMilliseconds,
@@ -270,13 +233,14 @@ public sealed class SignalRTaskExecutor(
                         ["InstanceId"] = instance.Id.ToString(),
                         ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty
                     });
+                context.SetStandardResponse(standardResponse);
             }
             else
             {
                 Logger.LogWarning("SignalR task {TaskKey} returned non-success status {StatusCode}: {ReasonPhrase}",
                     signalRTask.Key, response.StatusCode, response.ReasonPhrase);
-                    
-                standardResponse = CreateErrorResponse(
+
+                StandardTaskResponse standardResponse = CreateErrorResponse(
                     errorMessage: $"SignalR request failed with status {response.StatusCode}: {response.ReasonPhrase}",
                     taskType: nameof(TaskType.SignalR),
                     executionDurationMs: stopwatch.ElapsedMilliseconds,
@@ -289,6 +253,7 @@ public sealed class SignalRTaskExecutor(
                         ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty,
                         ["ResponseContent"] = content
                     });
+                context.SetStandardResponse(standardResponse);
             }
         }
         catch (TaskCanceledException ex) when (ex.CancellationToken.IsCancellationRequested)
@@ -296,8 +261,8 @@ public sealed class SignalRTaskExecutor(
             stopwatch.Stop();
             Logger.LogWarning("SignalR task {TaskKey} was cancelled after {Duration}ms",
                 signalRTask.Key, stopwatch.ElapsedMilliseconds);
-                
-            standardResponse = CreateErrorResponse(
+
+            StandardTaskResponse standardResponse = CreateErrorResponse(
                 errorMessage: "SignalR request was cancelled",
                 taskType: nameof(TaskType.SignalR),
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
@@ -307,14 +272,15 @@ public sealed class SignalRTaskExecutor(
                     ["NotificationType"] = signalRTask.NotificationType.ToString(),
                     ["Cancelled"] = true
                 });
+            context.SetStandardResponse(standardResponse);
         }
         catch (HttpRequestException ex)
         {
             stopwatch.Stop();
             Logger.LogError(ex, "SignalR request failed for task {TaskKey}, Duration: {Duration}ms",
                 signalRTask.Key, stopwatch.ElapsedMilliseconds);
-                
-            standardResponse = CreateErrorResponse(
+
+            StandardTaskResponse standardResponse = CreateErrorResponse(
                 errorMessage: ex.Message,
                 taskType: nameof(TaskType.SignalR),
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
@@ -323,14 +289,15 @@ public sealed class SignalRTaskExecutor(
                 {
                     ["NotificationType"] = signalRTask.NotificationType.ToString()
                 });
+            context.SetStandardResponse(standardResponse);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             Logger.LogError(ex, "Unexpected error occurred during SignalR task {TaskKey} execution after {Duration}ms",
                 signalRTask.Key, stopwatch.ElapsedMilliseconds);
-                
-            standardResponse = CreateErrorResponse(
+
+            StandardTaskResponse standardResponse = CreateErrorResponse(
                 errorMessage: ex.Message,
                 taskType: nameof(TaskType.SignalR),
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
@@ -339,18 +306,19 @@ public sealed class SignalRTaskExecutor(
                 {
                     ["NotificationType"] = signalRTask.NotificationType.ToString()
                 });
+            context.SetStandardResponse(standardResponse);
         }
- 
+
         Logger.LogDebug("Setting standard response in context for SignalR task {TaskKey}", signalRTask.Key);
-        context.SetStandardResponse(standardResponse);
-        
+
+
         Logger.LogDebug("Processing output for SignalR task {TaskKey}", signalRTask.Key);
         var outputResponse = await ProcessOutputAsync(scriptCode, context, cancellationToken);
-        
+
         Logger.LogInformation("SignalR task {TaskKey} execution completed, returning processed output", signalRTask.Key);
         return outputResponse;
     }
- 
+
     /// <summary>
     /// Builds instance transition information including status, current state, and correlations.
     /// </summary>
@@ -362,7 +330,7 @@ public sealed class SignalRTaskExecutor(
     {
         // Get active correlations from repository for reliability
         var correlations = await instanceCorrelationRepository.GetActiveByParentAsync(instance.Id, cancellationToken);
-        
+
         var activeCorrelations = correlations
             .Select(c => new InstanceCorrelationInfo
             {
@@ -376,10 +344,10 @@ public sealed class SignalRTaskExecutor(
                 IsCompleted = c.IsCompleted
             })
             .ToList();
- 
+
         return (instance.Status, instance.CurrentState, activeCorrelations);
     }
- 
+
     /// <summary>
     /// Gets available transitions from the main workflow instance.
     /// </summary>
@@ -393,20 +361,50 @@ public sealed class SignalRTaskExecutor(
         (InstanceStatus Status, string? CurrentState, List<InstanceCorrelationInfo> ActiveCorrelations) transitionInfo)
     {
         var availableTransitions = new List<string>();
- 
+
         if (instance.Status.Equals(InstanceStatus.Active))
         {
             availableTransitions = stateMachineService.AvailableUserTransitionKeys(currentWorkflow, instance);
         }
- 
+
         return availableTransitions;
     }
-      private HttpClient CreateHttpClient()
+    private HttpRequestMessage SetHeaders(HttpRequestMessage requestMessage,SignalRTask signalRTask, ScriptContext context)
     {
- 
+         // Add headers from context (only allowed headers)
+            if (context.Headers?.Count > 0 &&
+                signalRTask.AllowedHeaders != null && signalRTask.AllowedHeaders.Count > 0)
+            {
+                var allowedHeadersSet = new HashSet<string>(signalRTask.AllowedHeaders, StringComparer.OrdinalIgnoreCase);
+                var addedHeaderCount = 0;
+
+                foreach (var header in context.Headers)
+                {
+                    var headerKey = (string)header.Key;
+
+                    // Only add header if it's in the allowed list
+                    if (allowedHeadersSet.Contains(headerKey))
+                    {
+                        var headerValue = header.Value?.ToString() ?? string.Empty;
+                        requestMessage.Headers.TryAddWithoutValidation(headerKey, headerValue);
+                        addedHeaderCount++;
+                        Logger.LogDebug("Added allowed header {HeaderKey}: {HeaderValue} to request", (object)headerKey, (object)headerValue);
+                    }
+                }
+            }
+            else if (signalRTask.AllowedHeaders == null || signalRTask.AllowedHeaders.Count == 0)
+            {
+                Logger.LogDebug("No allowed headers configured for SignalR task {TaskKey}, skipping header forwarding", signalRTask.Key);
+            }
+
+        return requestMessage;
+    }
+    private HttpClient CreateHttpClient()
+    {
+
         var httpClient = httpClientFactory.CreateClient(HttpTaskExecutor.NoSslValidationHttpClientName);
-            
+
         return httpClient;
     }
- 
+
 }
