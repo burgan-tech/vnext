@@ -5,7 +5,7 @@ namespace BBT.Workflow.Instances;
 /// <summary>
 /// Output for retrieving instance state with combined information
 /// </summary>
-public sealed class GetInstanceStateOutput
+public class GetInstanceStateOutput
 {
     /// <summary>
     /// Data href link with optional extensions

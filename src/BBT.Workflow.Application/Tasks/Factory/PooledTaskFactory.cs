@@ -234,6 +234,10 @@ public static class PoolableTaskRegistry
         RegisterPoolableTask<HumanTask>(
             HumanTask.CreateEmpty,
             (source, target) => ((HumanTask)target).CopyFromInternal((HumanTask)source));
+            
+        RegisterPoolableTask<SignalRTask>(
+            SignalRTask.CreateEmpty,
+            (source, target) => ((SignalRTask)target).CopyFromInternal((SignalRTask)source));
     }
 
     public static void RegisterPoolableTask<T>(

@@ -132,6 +132,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ScriptTaskExecutor>();
         services.AddScoped<ConditionTaskExecutor>();
         services.AddScoped<TimerTaskExecutor>();
+        services.AddScoped<SignalRTaskExecutor>();
 
         // Scripting service
         services.AddScoped<IScriptEngine, ScriptEngine>();

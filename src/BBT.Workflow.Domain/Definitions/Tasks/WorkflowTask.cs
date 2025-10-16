@@ -16,6 +16,7 @@ namespace BBT.Workflow.Definitions;
 [JsonDerivedType(typeof(HumanTask), typeDiscriminator: "5")]
 [JsonDerivedType(typeof(HttpTask), typeDiscriminator: "6")]
 [JsonDerivedType(typeof(ScriptTask), typeDiscriminator: "7")]
+[JsonDerivedType(typeof(SignalRTask), typeDiscriminator: "10")]
 public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSetter, ITaskClonable
 {
     protected WorkflowTask()

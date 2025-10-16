@@ -16,7 +16,8 @@ public enum TaskType
     Http = 6,
     Script = 7,
     Condition = 8,
-    Timer = 9
+    Timer = 9,
+    SignalR = 10
 }
 
 /// <summary>
@@ -41,4 +42,12 @@ public enum TaskStatus
     Busy = 2,
     Completed = 3,
     Faulted = 4
+}
+
+/// <summary>
+/// SignalR task types
+/// </summary>
+public enum SignalRTaskType
+{
+    WorkflowSignalR = 1
 }

@@ -54,6 +54,8 @@ public sealed class TaskExecutorFactory(IServiceProvider serviceProvider) : ITas
                 return serviceProvider.GetRequiredService<ConditionTaskExecutor>();
             case TaskType.Timer:
                 return serviceProvider.GetRequiredService<TimerTaskExecutor>();
+            case TaskType.SignalR:
+                return serviceProvider.GetRequiredService<SignalRTaskExecutor>();
             default:
                 throw new ArgumentOutOfRangeException(nameof(type), type, null);
         }
