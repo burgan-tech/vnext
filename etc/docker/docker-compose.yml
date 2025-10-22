@@ -309,11 +309,11 @@ services:
       timeout: 5s
       retries: 3
 
-  vnext-core-init:
+  init:
     build:
       context: .
       dockerfile: Dockerfile.vnext-core-init
-    container_name: vnext-core-init
+    container_name: init
     environment:
       - VNEXT_APP_URL=${VNEXT_APP_URL:-http://host.docker.internal:4201}
       - APP_DOMAIN=${APP_DOMAIN:-core}

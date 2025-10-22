@@ -346,11 +346,11 @@ services:
       timeout: 5s
       retries: 3
 
-  vnext-core-init:
+  init:
     build:
       context: .
       dockerfile: Dockerfile.vnext-core-init
-    container_name: vnext-core-init
+    container_name: init
     env_file:
       - env.stage
     volumes:

@@ -22,6 +22,7 @@ env:
   REGISTRY: ghcr.io
   EXECUTION_IMAGE_NAME: ${{ github.repository }}/execution
   ORCHESTRATOR_IMAGE_NAME: ${{ github.repository }}/orchestrator
+  INIT_IMAGE_NAME: ${{ github.repository }}/init
 
 jobs:
   build-and-publish:
@@ -31,6 +32,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       execution_image: ${{ steps.meta-execution.outputs.tags }}
       orchestrator_image: ${{ steps.meta-orchestrator.outputs.tags }}
+      init_image: ${{ steps.meta-init.outputs.tags }}
     
     steps:
     # Option 1: GitHub App Token (Recommended)
@@ -146,6 +148,17 @@ jobs:
           type=ref,event=branch
           type=sha,prefix={{branch}}-
     
+    - name: Extract metadata for Init image
+      id: meta-init
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}
+        tags: |
+          type=raw,value=${{ steps.version.outputs.version }}
+          type=raw,value=latest
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+    
     - name: Build solution
       run: |
         echo "Restoring dependencies..."
@@ -188,6 +201,20 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
     
+    - name: Build and push Init Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./etc/docker
+        file: ./etc/docker/Dockerfile.vnext-core-init
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta-init.outputs.tags }}
+        labels: ${{ steps.meta-init.outputs.labels }}
+        build-args: |
+          VNEXT_CORE_RUNTIME_VERSION=latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
     - name: Create Git tag
       run: |
         VERSION="${{ steps.version.outputs.version }}"
@@ -224,6 +251,11 @@ jobs:
           docker pull ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
           ```
           
+          #### Init Service
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          ```
+          
           ### 🚀 Quick Start
           
           **Using Docker Compose:**
@@ -245,6 +277,14 @@ jobs:
                 - ASPNETCORE_ENVIRONMENT=Production
               depends_on:
                 - execution
+          
+            init:
+              image: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+              environment:
+                - VNEXT_APP_URL=http://orchestrator:5000
+                - APP_DOMAIN=core
+              depends_on:
+                - orchestrator
           ```
           
           **Using Kubernetes:**
@@ -260,6 +300,11 @@ jobs:
           # Deploy orchestrator service
           kubectl create deployment orchestrator \
             --image=${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
+            --namespace=bbt-workflow
+          
+          # Deploy init service
+          kubectl create deployment init \
+            --image=${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
             --namespace=bbt-workflow
           ```
           
@@ -303,6 +348,13 @@ jobs:
         format: spdx-json
         output-file: orchestrator-sbom.spdx.json
     
+    - name: Generate SBOM for Init image
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        format: spdx-json
+        output-file: init-sbom.spdx.json
+    
     - name: Upload SBOMs as artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -310,6 +362,7 @@ jobs:
         path: |
           execution-sbom.spdx.json
           orchestrator-sbom.spdx.json
+          init-sbom.spdx.json
         retention-days: 90
     
     - name: Security scan - Execution image
@@ -325,6 +378,14 @@ jobs:
       id: scan-orchestrator
       with:
         image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        fail-build: false
+        output-format: sarif
+    
+    - name: Security scan - Init image
+      uses: anchore/scan-action@v3
+      id: scan-init
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
         fail-build: false
         output-format: sarif
     
@@ -346,6 +407,15 @@ jobs:
             FOUND_FILES="$FOUND_FILES,${{ steps.scan-orchestrator.outputs.sarif }}"
           else
             FOUND_FILES="${{ steps.scan-orchestrator.outputs.sarif }}"
+          fi
+        fi
+        
+        if [ -n "${{ steps.scan-init.outputs.sarif }}" ] && [ -f "${{ steps.scan-init.outputs.sarif }}" ]; then
+          echo "Found init SARIF: ${{ steps.scan-init.outputs.sarif }}"
+          if [ -n "$FOUND_FILES" ]; then
+            FOUND_FILES="$FOUND_FILES,${{ steps.scan-init.outputs.sarif }}"
+          else
+            FOUND_FILES="${{ steps.scan-init.outputs.sarif }}"
           fi
         fi
         
@@ -446,6 +516,11 @@ jobs:
         echo "${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Init Service:**" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🎯 Next Steps" >> $GITHUB_STEP_SUMMARY
         echo "1. 🐳 Images are available in GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
         echo "2. 🏷️ Git tag v${{ steps.version.outputs.version }} has been created" >> $GITHUB_STEP_SUMMARY
@@ -459,6 +534,7 @@ jobs:
         echo '```bash' >> $GITHUB_STEP_SUMMARY
         echo "docker pull ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "docker pull ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Start services:**" >> $GITHUB_STEP_SUMMARY
