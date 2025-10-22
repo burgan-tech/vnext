@@ -309,6 +309,24 @@ services:
       timeout: 5s
       retries: 3
 
+  vnext-core-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.vnext-core-init
+    container_name: vnext-core-init
+    environment:
+      - VNEXT_APP_URL=${VNEXT_APP_URL:-http://host.docker.internal:4201}
+      - APP_DOMAIN=${APP_DOMAIN:-core}
+      - VNEXT_CORE_RUNTIME_VERSION=${VNEXT_CORE_RUNTIME_VERSION:-latest}
+    volumes:
+      - ./custom-components:/app/custom-components:ro
+    networks:
+      - bbt-development
+    depends_on:
+      - redis
+      - postgres
+    restart: "no"
+
 networks:
   bbt-development:
     external: true

@@ -1,0 +1,22 @@
+FROM node:20-alpine
+
+# Build argument for vnext-core-runtime version
+ARG VNEXT_CORE_RUNTIME_VERSION=latest
+
+WORKDIR /app
+
+# Update packages and add required tools
+RUN apk update && apk upgrade && apk add --no-cache wget curl bash jq
+
+# Create package.json and install the vnext-core-runtime package
+RUN npm init -y && npm install @burgan-tech/vnext-core-runtime@${VNEXT_CORE_RUNTIME_VERSION}
+
+# Create custom components directory
+RUN mkdir -p /app/custom-components
+
+# Create the init script
+COPY init-vnext-core.sh /app/init-vnext-core.sh
+RUN chmod +x /app/init-vnext-core.sh
+
+# Run the script
+CMD ["/app/init-vnext-core.sh"]
