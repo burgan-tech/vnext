@@ -189,13 +189,13 @@ This provides:
 The file includes essential references:
 ```csharp
 // NuGet packages
-#r "nuget: Microsoft.Extensions.DependencyInjection, 9.0.0"
-#r "nuget: System.Text.Json, 9.0.0"
-#r "nuget: Microsoft.Extensions.Caching.Distributed, 9.0.0"
+#r "nuget: Microsoft.Extensions.DependencyInjection, 10.0.0"
+#r "nuget: System.Text.Json, 10.0.0"
+#r "nuget: Microsoft.Extensions.Caching.Distributed, 10.0.0"
 
 // Project assemblies (built automatically)
-#r "../../../src/BBT.Workflow.Domain/bin/Debug/net9.0/BBT.Workflow.Domain.dll"
-#r "../../../src/BBT.Workflow.Application/bin/Debug/net9.0/BBT.Workflow.Application.dll"
+#r "../../../src/BBT.Workflow.Domain/bin/Debug/net10.0/BBT.Workflow.Domain.dll"
+#r "../../../src/BBT.Workflow.Application/bin/Debug/net10.0/BBT.Workflow.Application.dll"
 
 // Common using statements
 using BBT.Workflow.Scripting;

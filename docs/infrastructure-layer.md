@@ -52,7 +52,7 @@ The Infrastructure Layer of the BBT Workflow Engine implements the technical con
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   
@@ -61,7 +61,7 @@ The Infrastructure Layer of the BBT Workflow Engine implements the technical con
     <PackageReference Include="BBT.Aether.Infrastructure" Version="$(AetherPackageVersion)" />
     
     <!-- Entity Framework Core with PostgreSQL -->
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlPackageVersion)" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="$(MicrosoftPackageVersion)" />
     
     <!-- Application Layer Reference -->

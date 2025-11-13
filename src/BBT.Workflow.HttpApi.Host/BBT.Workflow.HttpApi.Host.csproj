@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <Import Project="..\..\common.props" />
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>BBT.Workflow</RootNamespace>
@@ -15,9 +15,9 @@
   <ItemGroup>
     <PackageReference Include="BBT.Aether.AspNetCore" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
-    <PackageReference Include="AspNetCore.HealthChecks.Dapr" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="AspNetCore.HealthChecks.Dapr" Version="$(HealthChecksPackageVersion)" />
+    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
+    <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="$(HealthChecksPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
     <ProjectReference Include="..\BBT.Workflow.Infrastructure\BBT.Workflow.Infrastructure.csproj" />
   </ItemGroup>

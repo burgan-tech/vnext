@@ -5,8 +5,12 @@
         <AetherPackageVersion>1.0.7</AetherPackageVersion>
         <!-- Elastic Apm packages -->
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
-        <!-- Microsoft packages -->
-        <MicrosoftPackageVersion>9.0.0</MicrosoftPackageVersion>
+        <!-- Microsoft packages (use RC version to match Npgsql RC) -->
+        <MicrosoftPackageVersion>10.0.0-rc.2.25502.107</MicrosoftPackageVersion>
+        <!-- HealthChecks packages (not yet available for .NET 10) -->
+        <HealthChecksPackageVersion>9.0.0</HealthChecksPackageVersion>
+        <!-- Npgsql packages (use RC version for EF Core 10.0.0 compatibility) -->
+        <NpgsqlPackageVersion>10.0.0-rc.2</NpgsqlPackageVersion>
         <!-- Dapr packages -->
         <DaprPackageVersion>1.15.4</DaprPackageVersion>
         <!-- AutoMapper packages -->
