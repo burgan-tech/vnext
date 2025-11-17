@@ -7,6 +7,7 @@ using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Headers;
+using BBT.Workflow.Instances.Validation;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Validation;
@@ -27,6 +28,7 @@ public sealed class InstanceCommandAppService(
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
+    IInstanceDataValidationService instanceDataValidationService,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -133,6 +135,20 @@ public sealed class InstanceCommandAppService(
                     new JsonData(mappedDataResult.Value!),
                     workflow.StartTransition.VersionStrategy
                 );
+                
+                // Validate instance data after data change (OnDataChange mode)
+                var dataValidationResult = await instanceDataValidationService.ValidateOnDataChangeAsync(
+                    instance,
+                    workflow,
+                    logger,
+                    cancellationToken);
+                
+                if (!dataValidationResult.IsSuccess)
+                {
+                    logger.LogWarning("Instance data validation failed for instance {InstanceId}: {ErrorCode}",
+                        instance.Id, dataValidationResult.Error.Code);
+                    return Result<(Definitions.Workflow, Instance)>.Fail(dataValidationResult.Error);
+                }
             }
         }
         

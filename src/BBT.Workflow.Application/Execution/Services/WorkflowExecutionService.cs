@@ -4,6 +4,7 @@ using BBT.Workflow.Domain.Extensions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Validation;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,7 @@ public sealed class WorkflowExecutionService(
     ICurrentSchema currentSchema,
     IDistributedLockService distributedLockService,
     IInstanceRepository instanceRepository,
+    IInstanceDataValidationService instanceDataValidationService,
     ILogger<WorkflowExecutionService> logger) : IWorkflowExecutionService
 {
     /// <summary>
@@ -68,7 +70,24 @@ public sealed class WorkflowExecutionService(
                             ThrowAppropriateException(executionResult.Error);
                         }
                         
-                        return executionResult.Value!;
+                        var execContext = executionResult.Value!;
+                        
+                        // Validate instance data after transition execution (PostExecution mode)
+                        var validationResult = await instanceDataValidationService.ValidatePostExecutionAsync(
+                            execContext.Instance,
+                            execContext.Workflow,
+                            logger,
+                            cancellationToken);
+                        
+                        if (!validationResult.IsSuccess)
+                        {
+                            logger.LogWarning(
+                                "Instance data validation failed after transition execution for instance {InstanceId}: {ErrorCode}",
+                                execContext.InstanceId, validationResult.Error.Code);
+                            ThrowAppropriateException(validationResult.Error);
+                        }
+                        
+                        return execContext;
                     },
                     cancellationToken,
                     logger);

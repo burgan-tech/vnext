@@ -58,6 +58,21 @@ public static class WorkflowFactory
             workflow.AddLanguage(label.Label, label.Language);
         }
 
+        // Set master schema for instance data validation
+        if (input.Attributes.Schema != null)
+        {
+            workflow.SetSchema(input.Attributes.Schema);
+        }
+
+        // Set instance data validation configuration
+        if (input.Attributes.InstanceDataValidation != null)
+        {
+            workflow.SetInstanceDataValidation(new InstanceDataValidationConfig
+            {
+                ValidationMode = (InstanceDataValidationMode)input.Attributes.InstanceDataValidation.ValidationMode
+            });
+        }
+
         return workflow;
     }
 

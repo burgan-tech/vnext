@@ -15,6 +15,7 @@ using Microsoft.Extensions.Logging;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Shared;
+using BBT.Workflow.Instances.Validation;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -30,6 +31,7 @@ public sealed class SubflowCompletionService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IGuidGenerator guidGenerator,
     IWorkflowExecutionService workflowExecutionService,
+    IInstanceDataValidationService instanceDataValidationService,
     ILogger<SubflowCompletionService> logger)
     : ApplicationService(serviceProvider), ISubflowCompletionService
 {
@@ -223,6 +225,7 @@ public sealed class SubflowCompletionService(
 
             await ProcessSubFlowOutputMappingAsync(
                 parentInstance,
+                parentWorkflow,
                 parentState,
                 await scriptContextBuilder.BuildAsync(cancellationToken),
                 cancellationToken);
@@ -244,11 +247,13 @@ public sealed class SubflowCompletionService(
     /// Processes SubFlow output mapping by executing the mapping script and merging results into parent instance data.
     /// </summary>
     /// <param name="parentInstance">The parent workflow instance</param>
+    /// <param name="parentWorkflow">The parent workflow definition</param>
     /// <param name="parentState">The parent state containing SubFlow configuration</param>
-    /// <param name="scriptContext"></param>
+    /// <param name="scriptContext">The script context for mapping execution</param>
     /// <param name="cancellationToken">Cancellation token</param>
     private async Task ProcessSubFlowOutputMappingAsync(
         Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
         State parentState,
         ScriptContext scriptContext,
         CancellationToken cancellationToken)
@@ -294,7 +299,17 @@ public sealed class SubflowCompletionService(
                     guidGenerator.Create(),
                     new JsonData(JsonSerializer.Serialize(outputMappingResult.Data)),
                     parentState.VersionStrategy);
-
+                var validationResult = await instanceDataValidationService.ValidateOnDataChangeAsync(
+                    parentInstance,
+                    parentWorkflow,
+                    logger,
+                    cancellationToken);
+ 
+                if (!validationResult.IsSuccess)
+                {
+                    throw new InvalidOperationException(
+                        $"Instance data validation failed after SubFlow output mapping: {validationResult.Error.Message}");
+                }
                 await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
 
                 logger.LogDebug(

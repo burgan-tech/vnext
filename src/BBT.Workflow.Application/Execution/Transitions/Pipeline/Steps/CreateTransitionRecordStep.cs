@@ -2,6 +2,7 @@ using BBT.Aether.Guids;
 using BBT.Workflow.Domain;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Validation;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -19,6 +20,7 @@ public sealed class CreateTransitionRecordStep(
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
     IRuntimeInfoProvider runtimeInfoProvider,
+    IInstanceDataValidationService instanceDataValidationService,
     ILogger<CreateTransitionRecordStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -81,6 +83,18 @@ public sealed class CreateTransitionRecordStep(
                         new JsonData(mappedDataResult.Value!),
                         transition?.VersionStrategy
                     );
+                    // Validate instance data after data change (OnDataChange mode)
+                    var validationResult = await instanceDataValidationService.ValidateOnDataChangeAsync(
+                        context.Instance,
+                        context.Workflow,
+                        logger,
+                        ct);
+                    
+                    if (!validationResult.IsSuccess)
+                    {
+                        throw new InvalidOperationException(
+                            $"Instance data validation failed: {validationResult.Error.Message}");
+                    }
                 }
                 
                 await instanceRepository.UpdateAsync(context.Instance, true, ct);

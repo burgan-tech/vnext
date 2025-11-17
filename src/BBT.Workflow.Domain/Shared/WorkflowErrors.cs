@@ -134,6 +134,21 @@ public static class WorkflowErrors
             WorkflowErrorCodes.ConfigInvalid,
             $"SubFlow configuration not found for state {state} on instance {instanceId}",
             target: instanceId.ToString());
-
+    #endregion
+ 
+    #region Instance Data Validation Errors
+ 
+    /// <summary>
+    /// Instance data schema validation failed with detailed field-level errors.
+    /// </summary>
+    public static Error InstanceDataSchemaValidationFailed(
+        Guid instanceId,
+        InstanceDataValidationMode validationMode,
+        IReadOnlyCollection<System.ComponentModel.DataAnnotations.ValidationResult> validationErrors)
+        => Error.Validation(
+            WorkflowErrorCodes.InstanceDataSchemaValidationFailed,
+            $"Instance data validation failed for instance {instanceId} in {validationMode} mode",
+            validationErrors,
+            target: instanceId.ToString());
     #endregion
 }

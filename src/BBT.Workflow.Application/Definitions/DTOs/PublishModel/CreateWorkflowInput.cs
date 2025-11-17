@@ -63,6 +63,18 @@ public sealed class CreateWorkflowInput
     /// </summary>
     [Required]
     public List<CreateStateInput> States { get; set; } = [];
+
+    /// <summary>
+    /// Master schema reference for instance data validation.
+    /// If provided, instance data will be validated against this schema.
+    /// </summary>
+    public ReferenceInput? Schema { get; set; }
+
+    /// <summary>
+    /// Instance data validation configuration.
+    /// Determines when and how instance data should be validated against the master schema.
+    /// </summary>
+    public CreateInstanceDataValidationConfigInput? InstanceDataValidation { get; set; }
 }
 
 public class CreateWorkflowTimeoutInput
@@ -106,4 +118,18 @@ public class TimerConfigInput
     [RegularExpression(@"^P(?=\d|T\d)(\d+Y)?(\d+M)?(\d+D)?(T(\d+H)?(\d+M)?(\d+S)?)?$",
         ErrorMessage = "Invalid duration format. Must be ISO 8601 compliant.")]
     public string Duration { get; set; }
+}
+
+/// <summary>
+/// Instance data validation configuration input
+/// </summary>
+public class CreateInstanceDataValidationConfigInput
+{
+    /// <summary>
+    /// When to validate instance data against the master schema.
+    /// Possible values: 0 (None), 1 (PostExecution), 2 (OnDataChange)
+    /// </summary>
+    [Required]
+    [Range(0, 2, ErrorMessage = "ValidationMode must be 0 (None), 1 (PostExecution), or 2 (OnDataChange)")]
+    public int ValidationMode { get; set; } = 1; // Default: PostExecution
 }

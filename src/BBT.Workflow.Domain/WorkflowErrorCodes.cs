@@ -37,6 +37,7 @@ public static class WorkflowErrorCodes
     public const string UnauthorizedTransition = "Transition:100010";
     public const string AutoTransitionFailed = "Transition:100011";
     public const string AutoTransitionConditionNotMet = "Transition:100014";
+    public const string InstanceDataSchemaValidationFailed = "Instance:100016";
     
     #endregion
     

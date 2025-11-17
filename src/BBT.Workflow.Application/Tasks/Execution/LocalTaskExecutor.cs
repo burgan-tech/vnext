@@ -11,6 +11,7 @@ using BBT.Workflow.Monitoring;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry.Trace;
+using BBT.Workflow.Instances.Validation;
 
 namespace BBT.Workflow.Tasks.Execution;
 
@@ -23,6 +24,7 @@ namespace BBT.Workflow.Tasks.Execution;
 /// <param name="taskPersistenceStrategyFactory">Factory for task persistence strategies.</param>
 /// <param name="taskFactory">Factory for creating task instances.</param>
 /// <param name="workflowMetrics">Service for recording task execution metrics.</param>
+/// <param name="instanceDataValidationService">Service for validating instance data against schema.</param>
 /// <param name="logger">Logger for task execution telemetry.</param>
 public sealed class LocalTaskExecutor(
     ITaskExecutorFactory taskExecutorFactory,
@@ -30,6 +32,7 @@ public sealed class LocalTaskExecutor(
     ITaskPersistenceStrategyFactory taskPersistenceStrategyFactory,
     ITaskFactory taskFactory,
     IWorkflowMetrics workflowMetrics,
+    IInstanceDataValidationService instanceDataValidationService,
     ILogger<LocalTaskExecutor> logger) : ITaskOrchestrator
 {
     /// <summary>
@@ -152,6 +155,18 @@ public sealed class LocalTaskExecutor(
                                     scriptResponse.Data, JsonSerializerConstants.JsonOptions)),
                                 VersionStrategy.IncreasePatch
                             );
+                              // Validate instance data after data change (OnDataChange mode)
+                            var validationResult = await instanceDataValidationService.ValidateOnDataChangeAsync(
+                                context.Instance,
+                                context.Workflow,
+                                logger,
+                                cancellationToken);
+                            
+                            if (!validationResult.IsSuccess)
+                            {
+                                throw new InvalidOperationException(
+                                    $"Instance data validation failed: {validationResult.Error.Message}");
+                            }
                         }
                     }
                 }

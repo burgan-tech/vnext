@@ -28,6 +28,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Application.Notifications;
 using BBT.Workflow.Execution.TriggerTransition;
 using BBT.Workflow.Tasks.TriggerTransition;
+using BBT.Workflow.Instances.Validation;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -230,6 +231,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
 
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
+        services.AddScoped<IInstanceDataValidationService, InstanceDataValidationService>();
 
         // Trigger Handlers
         services.AddScoped<ITransitionHandler, ManualTransitionHandler>();

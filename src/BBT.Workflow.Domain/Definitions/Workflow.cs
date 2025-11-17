@@ -119,6 +119,17 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
 
     [JsonInclude] [JsonPropertyName("states")]
     private List<State> states = new();
+      /// <summary>
+    /// Master schema for the complete instance data model (from Issue #110)
+    /// </summary>
+    [JsonInclude] 
+    public Reference? Schema { get; private set; }
+    
+    /// <summary>
+    /// Instance data validation configuration
+    /// </summary>
+    [JsonInclude] 
+    public InstanceDataValidationConfig? InstanceDataValidation { get; private set; }
 
     /// <summary>
     /// It is a content set with multiple language options for the content to be displayed to the user.
@@ -247,6 +258,24 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         states.Add(state);
     }
 
+    /// <summary>
+    /// Sets the master schema reference for instance data validation
+    /// </summary>
+    /// <param name="schema">The schema reference to use for validation</param>
+    public void SetSchema(IReference? schema)
+    {
+        Schema = schema?.ToReference();
+    }
+
+    /// <summary>
+    /// Sets the instance data validation configuration
+    /// </summary>
+    /// <param name="config">The validation configuration</param>
+    public void SetInstanceDataValidation(InstanceDataValidationConfig? config)
+    {
+        InstanceDataValidation = config;
+    }
+
     public Result<State> GetInitialState()
     {
         var state = States.FirstOrDefault(s => s.StateType == StateType.Initial);
@@ -320,4 +349,28 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     }
 
     
+}
+public sealed class InstanceDataValidationConfig
+{
+    /// <summary>
+    /// When to validate instance data against the master schema
+    /// </summary>
+    public InstanceDataValidationMode ValidationMode { get; set; } = InstanceDataValidationMode.PostExecution;
+}
+public enum InstanceDataValidationMode
+{
+    /// <summary>
+    /// No validation
+    /// </summary>
+    None = 0,
+    
+    /// <summary>
+    /// Validate after task execution
+    /// </summary>
+    PostExecution = 1,
+    
+    /// <summary>
+    /// Validate on every data change
+    /// </summary>
+    OnDataChange = 2
 }
