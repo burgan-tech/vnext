@@ -12,9 +12,15 @@ RUN apk update && apk upgrade && apk add --no-cache bash curl jq \
     && mkdir -p /app/.npm-cache /app/custom-components \
     && chown -R node:node /app && chmod -R 777 /app
 
-# Init script copy
-COPY init-vnext-core.sh /app/init-vnext-core.sh
-RUN chmod +x /app/init-vnext-core.sh
+# API server copy
+COPY VNext.Init.Host/package-api-server.js /app/package-api-server.js
+RUN chmod +x /app/package-api-server.js
 
 USER node
-ENTRYPOINT ["/app/init-vnext-core.sh"]
+
+# Health check - checks API server health endpoint
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+ENTRYPOINT ["node", "/app/package-api-server.js"]
+

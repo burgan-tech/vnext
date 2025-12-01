@@ -50,11 +50,15 @@ services:
 
   init:
     build:
-      context: .
-      dockerfile: Dockerfile.vnext-core-init
+      context: ../../init
+      dockerfile: VNext.Init.Host/Dockerfile
     container_name: init
     env_file:
       - env.stage
+    environment:
+      - PACKAGE_API_PORT=3000
+    ports:
+      - "3003:3000"
     volumes:
       - npm-cache:/app/.npm-cache
       - ./custom-components:/app/custom-components:ro
@@ -64,6 +68,12 @@ services:
       - vnext-app
       - redis
       - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: "no"
 
   vnext-orchestration-dapr:

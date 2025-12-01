@@ -1,0 +1,149 @@
+### VNext Init Service API Tests
+### This file can be used with VS Code REST Client extension or similar tools
+### Base URL - adjust based on your environment
+### Port 3003 is mapped from container port 3000
+@baseUrl = http://localhost:3003
+@vnextAppUrl = http://host.docker.internal:4201
+
+### Variables
+@packageName = @burgan-tech/vnext-core-runtime
+@version = latest
+@appDomain = core
+@npmRegistry = https://registry.npmjs.org/
+
+############################################################
+### Health Check - Checks API server and vnext app health
+############################################################
+GET {{baseUrl}}/health
+Accept: application/json
+
+############################################################
+### Test 1: Basic package download with default settings
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "{{version}}"
+}
+
+############################################################
+### Test 2: Package download with custom app domain
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "{{version}}",
+  "appDomain": "my-custom-domain"
+}
+
+############################################################
+### Test 3: Package download with specific version
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "1.0.0",
+  "appDomain": "{{appDomain}}"
+}
+
+############################################################
+### Test 4: Package download with custom npm registry
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "{{version}}",
+  "npmRegistry": "{{npmRegistry}}",
+  "appDomain": "{{appDomain}}"
+}
+
+############################################################
+### Test 5: Package download with npm token (private registry)
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "{{version}}",
+  "npmRegistry": "{{npmRegistry}}",
+  "npmToken": "your-npm-token-here",
+  "appDomain": "{{appDomain}}"
+}
+
+############################################################
+### Test 6: Package download with custom components path
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "{{version}}",
+  "appDomain": "{{appDomain}}",
+  "customComponentsPath": "/app/custom-components"
+}
+
+############################################################
+### Test 7: Complete configuration example
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "packageName": "{{packageName}}",
+  "version": "{{version}}",
+  "npmRegistry": "{{npmRegistry}}",
+  "npmToken": "your-npm-token-here",
+  "appDomain": "production",
+  "customComponentsPath": "/app/custom-components"
+}
+
+############################################################
+### Test 8: Error case - Missing packageName
+############################################################
+POST {{baseUrl}}/api/package/download
+Content-Type: application/json
+
+{
+  "version": "{{version}}"
+}
+
+############################################################
+### Test 9: Error case - Invalid endpoint
+############################################################
+GET {{baseUrl}}/api/invalid-endpoint
+Accept: application/json
+
+############################################################
+### Test 10: CORS preflight request
+############################################################
+OPTIONS {{baseUrl}}/api/package/download
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: Content-Type
+Origin: http://localhost:3001
+
+############################################################
+### Environment-specific configurations
+############################################################
+
+### Development Environment (Docker Compose)
+# @baseUrl = http://localhost:3003
+# @vnextAppUrl = http://host.docker.internal:4201
+
+### Docker Compose Internal Network
+# @baseUrl = http://init:3000
+# @vnextAppUrl = http://vnext-app:4201
+
+### Production Environment
+# @baseUrl = http://init-service:3003
+# @vnextAppUrl = http://vnext-app:4201
+
