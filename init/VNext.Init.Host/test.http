@@ -132,6 +132,140 @@ Access-Control-Request-Headers: Content-Type
 Origin: http://localhost:3001
 
 ############################################################
+### Custom Components Management
+############################################################
+
+### Upload Custom Component - JSON Body (Recommended)
+POST {{baseUrl}}/api/custom-components/upload
+Content-Type: application/json
+
+{
+  "folder": "Workflows",
+  "fileName": "custom-workflow.json",
+  "content": {
+    "data": [
+      {
+        "key": "custom-workflow",
+        "flow": "custom-flow",
+        "version": "1.0.0",
+        "domain": "core",
+        "attributes": {
+          "type": "F",
+          "states": []
+        }
+      }
+    ]
+  }
+}
+
+### Upload Custom Component - Tasks
+POST {{baseUrl}}/api/custom-components/upload
+Content-Type: application/json
+
+{
+  "folder": "Tasks",
+  "fileName": "custom-task.json",
+  "content": {
+    "data": [
+      {
+        "key": "custom-task",
+        "flow": "custom-flow",
+        "version": "1.0.0",
+        "domain": "core",
+        "attributes": {}
+      }
+    ]
+  }
+}
+
+### Upload Multiple Custom Components (Bulk Upload)
+POST {{baseUrl}}/api/custom-components/upload
+Content-Type: application/json
+
+{
+  "files": [
+    {
+      "folder": "Workflows",
+      "fileName": "workflow-1.json",
+      "content": {
+        "data": [
+          {
+            "key": "workflow-1",
+            "flow": "flow-1",
+            "version": "1.0.0",
+            "domain": "core",
+            "attributes": {}
+          }
+        ]
+      }
+    },
+    {
+      "folder": "Tasks",
+      "fileName": "task-1.json",
+      "content": {
+        "data": [
+          {
+            "key": "task-1",
+            "flow": "flow-1",
+            "version": "1.0.0",
+            "domain": "core",
+            "attributes": {}
+          }
+        ]
+      }
+    },
+    {
+      "folder": "Functions",
+      "fileName": "function-1.json",
+      "content": {
+        "data": [
+          {
+            "key": "function-1",
+            "flow": "flow-1",
+            "version": "1.0.0",
+            "domain": "core",
+            "attributes": {}
+          }
+        ]
+      }
+    }
+  ]
+}
+
+### Upload Multiple Custom Components - Array Format (Alternative)
+POST {{baseUrl}}/api/custom-components/upload
+Content-Type: application/json
+
+[
+  {
+    "folder": "Workflows",
+    "fileName": "workflow-2.json",
+    "content": {
+      "data": []
+    }
+  },
+  {
+    "folder": "Views",
+    "fileName": "view-1.json",
+    "content": {
+      "data": []
+    }
+  }
+]
+
+### List All Custom Components
+GET {{baseUrl}}/api/custom-components
+Accept: application/json
+
+### List Custom Components in Specific Folder
+GET {{baseUrl}}/api/custom-components?folder=Workflows
+Accept: application/json
+
+### Delete Custom Component
+DELETE {{baseUrl}}/api/custom-components/Workflows/custom-workflow.json
+Accept: application/json
+
+############################################################
 ### Environment-specific configurations
 ############################################################
 
