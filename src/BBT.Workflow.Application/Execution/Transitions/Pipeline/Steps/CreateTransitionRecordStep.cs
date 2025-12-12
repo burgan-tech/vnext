@@ -79,6 +79,12 @@ public sealed class CreateTransitionRecordStep(
             new JsonData(JsonSerializer.Serialize(context.Headers)));
 
         var transition = context.Workflow.FindTransition(transitionKey);
+        if(transition==null)
+        {
+            var state =context.Workflow.GetState(context.Instance.GetCurrentState).Value!;
+            transition = context.Workflow.ResolveTransition(transitionKey,  state);
+        }
+        
 
         return (instanceTransition, transition);
     }
