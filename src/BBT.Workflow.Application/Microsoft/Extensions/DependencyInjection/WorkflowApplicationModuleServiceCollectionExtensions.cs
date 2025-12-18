@@ -12,6 +12,7 @@ using BBT.Workflow.SubFlow;
 using BBT.Workflow.Functions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using BBT.Workflow.ServiceDiscovery;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -57,6 +58,16 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ISubflowStarter, SubflowStarter>();
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
+        
+        // Service Discovery
+        services.AddOptions<ServiceDiscoveryOptions>()
+        .BindConfiguration(ServiceDiscoveryOptions.SectionName);
+        services.AddHttpClient(DomainRegistrationService.HttpClientName, client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.Add("Accept", "application/json");
+        });
+        services.AddScoped<IDomainRegistrationService, DomainRegistrationService>();
         
         // Instance Services
         services.AddScoped<IInstanceCancellationService, InstanceCancellationService>();

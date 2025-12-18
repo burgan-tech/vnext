@@ -41,7 +41,8 @@ public sealed class RuntimeCacheBackend<T>(
         var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
         var runtimeInfoProvider = scope.ServiceProvider.GetRequiredService<IRuntimeInfoProvider>();
 
-        runtimeInfoProvider.Check(domain);
+        // Use async check for cross-domain support
+        await runtimeInfoProvider.CheckAsync(domain, cancellationToken);
 
         // Infrastructure exceptions (DB, connection) will bubble up - this is expected per Railway Pattern
         

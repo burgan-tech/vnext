@@ -1,5 +1,6 @@
 using System.Reflection;
 using BBT.Aether;
+using BBT.Aether.DistributedCache;
 using BBT.Workflow.Domain;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.ExceptionHandling;
@@ -52,16 +53,75 @@ public interface IRuntimeInfoProvider
     /// otherwise, <c>false</c>.
     /// </returns>
     bool IsDomainMatch(string? requestDomain);
+
+    /// <summary>
+    /// Checks if the specified domain is the same as the current runtime domain.
+    /// This is a simple synchronous check without any cache lookup.
+    /// </summary>
+    /// <param name="domain">The domain name to check.</param>
+    /// <returns>
+    /// <c>true</c> if the domain matches the current runtime domain (case-insensitive);
+    /// otherwise, <c>false</c>.
+    /// </returns>
+    bool IsSameDomain(string? domain);
+
+    /// <summary>
+    /// Validates domain access asynchronously with cross-domain support.
+    /// First checks if the domain matches the current runtime domain.
+    /// If not, queries the distributed cache to verify if the domain is registered.
+    /// </summary>
+    /// <param name="requestDomain">The domain name being requested for access.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>A task representing the asynchronous validation operation.</returns>
+    /// <exception cref="NotFoundDomainException">
+    /// Thrown when the domain is not the current runtime domain and is not found in the cache.
+    /// </exception>
+    Task CheckAsync(string requestDomain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets registered domain information from the distributed cache.
+    /// This method retrieves domain registry information that was stored by the domain-registration workflow.
+    /// </summary>
+    /// <param name="domain">The domain name to look up.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>
+    /// A task containing the <see cref="DomainRegistryInfo"/> if found in cache;
+    /// otherwise, <c>null</c>.
+    /// </returns>
+    Task<DomainRegistryInfo?> GetDomainInfoAsync(string domain, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
 public class RuntimeInfoProvider : IRuntimeInfoProvider
 {
+    private readonly IDistributedCacheService _distributedCache;
+
+    /// <summary>
+    /// Cache key prefix for domain registry entries.
+    /// </summary>
+    private const string DomainCacheKeyPrefix = "domain:";
+
     /// <inheritdoc />
     public string Version { get; }
 
     /// <inheritdoc />
     public string Domain { get; }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RuntimeInfoProvider"/> class.
+    /// </summary>
+    /// <param name="distributedCache">The distributed cache service for cross-domain lookups.</param>
+    public RuntimeInfoProvider(IDistributedCacheService distributedCache)
+    {
+        _distributedCache = distributedCache;
+        Version = Environment.GetEnvironmentVariable("APP_VERSION") ?? GetAssemblyVersion();
+        Domain = Environment.GetEnvironmentVariable("APP_DOMAIN") ?? "unknown";
+
+        if (Version == "unknown" || Domain == "unknown")
+        {
+            throw new AetherException("APP_VERSION and APP_DOMAIN environment variables must be set.");
+        }
+    }
 
     /// <inheritdoc />
     public void Check(string requestDomain)
@@ -80,15 +140,41 @@ public class RuntimeInfoProvider : IRuntimeInfoProvider
                Domain.Equals(requestDomain, StringComparison.OrdinalIgnoreCase);
     }
 
-    public RuntimeInfoProvider()
+    /// <inheritdoc />
+    public bool IsSameDomain(string? domain)
     {
-        Version = Environment.GetEnvironmentVariable("APP_VERSION") ?? GetAssemblyVersion();
-        Domain = Environment.GetEnvironmentVariable("APP_DOMAIN") ?? "unknown";
+        return IsDomainMatch(domain);
+    }
 
-        if (Version == "unknown" || Domain == "unknown")
+    /// <inheritdoc />
+    public async Task CheckAsync(string requestDomain, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(requestDomain);
+
+        // Fast path: same domain
+        if (IsSameDomain(requestDomain))
         {
-            throw new AetherException("APP_VERSION and APP_DOMAIN environment variables must be set.");
+            return;
         }
+
+        // Cross-domain: check if domain is registered in cache
+        var domainInfo = await GetDomainInfoAsync(requestDomain, cancellationToken);
+        if (domainInfo == null)
+        {
+            throw new NotFoundDomainException(requestDomain, Domain);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DomainRegistryInfo?> GetDomainInfoAsync(string domain, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            return null;
+        }
+
+        var cacheKey = $"{DomainCacheKeyPrefix}{domain}";
+        return await _distributedCache.GetAsync<DomainRegistryInfo>(cacheKey, cancellationToken);
     }
 
     /// <summary>

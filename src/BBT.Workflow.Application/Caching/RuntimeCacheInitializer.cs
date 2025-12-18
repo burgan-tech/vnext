@@ -1,6 +1,9 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.ServiceDiscovery;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Caching;
 
@@ -8,10 +11,14 @@ namespace BBT.Workflow.Caching;
 /// Implementation of cache initializer that loads all workflow components from the database
 /// and initializes the domain cache context. This centralizes the cache initialization logic
 /// that was previously scattered across multiple services.
+/// After cache initialization, it triggers domain registration if service discovery is enabled.
 /// </summary>
 public sealed class RuntimeCacheInitializer(
     IServiceScopeFactory scopeFactory,
-    IDomainCacheContext domainCacheContext) : IRuntimeCacheInitializer
+    IDomainCacheContext domainCacheContext,
+    IDomainRegistrationService domainRegistrationService,
+    IOptions<ServiceDiscoveryOptions> serviceDiscoveryOptions,
+    ILogger<RuntimeCacheInitializer> logger) : IRuntimeCacheInitializer
 {
     /// <inheritdoc />
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -48,5 +55,17 @@ public sealed class RuntimeCacheInitializer(
 
         // Initialize the domain cache context
         await domainCacheContext.InitializeAsync(initialData, cancellationToken);
+
+        // Register domain with service discovery if enabled
+        if (serviceDiscoveryOptions.Value.Enabled)
+        {
+            logger.LogInformation("Service discovery is enabled. Starting domain registration...");
+            await domainRegistrationService.RegisterDomainAsync(cancellationToken);
+            logger.LogInformation("Domain registration completed");
+        }
+        else
+        {
+            logger.LogDebug("Service discovery is disabled. Skipping domain registration");
+        }
     }
 }
