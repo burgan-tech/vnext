@@ -89,6 +89,8 @@ public sealed class TaskInvocationResult
     /// <param name="body">Raw error response body.</param>
     /// <param name="executionDurationMs">Execution duration in milliseconds.</param>
     /// <param name="taskType">The task type identifier.</param>
+    /// <param name="headers">Response headers (for HTTP error responses).</param>
+    /// <param name="data">Parsed response data (for JSON error responses).</param>
     /// <param name="metadata">Additional error metadata (exception type, stack trace, etc.).</param>
     public static TaskInvocationResult Failure(
         string error,
@@ -96,14 +98,18 @@ public sealed class TaskInvocationResult
         string? body = null,
         long executionDurationMs = 0,
         string? taskType = null,
+        Dictionary<string, string>? headers = null,
+        object? data = null,
         Dictionary<string, object>? metadata = null) => new()
     {
         IsSuccess = false,
         ErrorMessage = error,
         StatusCode = statusCode,
         Body = body,
+        Data = data,
         ExecutionDurationMs = executionDurationMs,
         TaskType = taskType,
+        Headers = headers,
         Metadata = metadata
     };
 }

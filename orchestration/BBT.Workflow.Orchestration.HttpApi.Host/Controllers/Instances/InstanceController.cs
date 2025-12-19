@@ -181,13 +181,17 @@ public sealed class InstanceController(
         [FromQuery] string[]? extension = null,
         CancellationToken cancellationToken = default)
     {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
         var input = new GetInstanceInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
             Extension = extension,
-            IfNoneMatch = ifNoneMatch
+            IfNoneMatch = ifNoneMatch,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
         };
 
         var result = await queryAppService.GetInstanceAsync(input, cancellationToken);
@@ -205,6 +209,8 @@ public sealed class InstanceController(
         [FromQuery] string? sort = null,
         CancellationToken cancellationToken = default)
     {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
         var input = new GetInstanceListInput
         {
             Domain = domain,
@@ -213,9 +219,10 @@ public sealed class InstanceController(
             Page = page,
             PageSize = pageSize,
             PageUrl = InstanceUrlTemplates.InstanceList(domain, workflow),
-
             Filter = filter,
-            Sort = sort
+            Sort = sort,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
         };
 
         var response = await queryAppService.GetInstanceListAsync(input, cancellationToken);
@@ -237,20 +244,23 @@ public sealed class InstanceController(
         [FromQuery] string[]? extension = null,
         CancellationToken cancellationToken = default)
     {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
         var input = new GetInstanceHistoryInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            Extension = extension
+            Extension = extension,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
         };
 
         var response = await queryAppService.GetInstanceHistoryAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
     [ApiExplorerSettings(IgnoreApi = true)]
-      [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data")]
-    
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data")]
     public async Task<IActionResult> GetInstanceDataAsync(
         [FromHeader(Name = "If-None-Match")] string? ifNoneMatch,
         [FromRoute] string domain,
@@ -258,14 +268,18 @@ public sealed class InstanceController(
         [FromRoute] string instance,
         CancellationToken cancellationToken = default)
     {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
         var input = new GetInstanceDataInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            IfNoneMatch = ifNoneMatch
+            IfNoneMatch = ifNoneMatch,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
         };
- 
+
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
         return FromResult(result.Result);
     }

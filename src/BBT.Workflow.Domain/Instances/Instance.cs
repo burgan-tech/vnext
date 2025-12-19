@@ -184,7 +184,7 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
     public InstanceCorrelation? Subflow =>
         ChildCorrelations.FirstOrDefault(p => !p.IsCompleted && p.SubFlowType.Equals(SubFlowType.SubFlow));
 
-    public Instance CreateSnapshot(InstanceDataShadow? latestData = null)
+    public Instance CreateSnapshot()
     {
         var snapshot = new Instance
         {
@@ -205,15 +205,6 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         foreach (var data in _dataList)
         {
             snapshot._dataList.Add(data.CreateSnapshot());
-        }
-
-        if (latestData != null)
-        {
-            if (snapshot._dataList.All(a => a.Id != latestData.Id))
-            {
-                snapshot._dataList.ForEach(f => f.MarkAsNotLatest());
-                snapshot._dataList.Add(latestData.Map());
-            }
         }
 
         foreach (var correlation in _childCorrelations)

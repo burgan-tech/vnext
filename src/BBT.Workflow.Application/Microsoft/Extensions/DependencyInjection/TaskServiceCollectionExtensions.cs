@@ -1,4 +1,5 @@
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
@@ -154,10 +155,16 @@ public static class TaskServiceCollectionExtensions
 
     /// <summary>
     /// Adds scripting services for script execution context.
+    /// CSharpEvaluator uses collectible AssemblyLoadContext to prevent memory leaks
+    /// from dynamic script compilation - assemblies can be GC'd when no longer referenced.
     /// </summary>
     private static IServiceCollection AddScriptingServices(this IServiceCollection services)
     {
         services.TryAddSingleton<IScriptContextFactory, ScriptContextFactory>();
+        
+        // Evaluator is stateless - singleton for efficiency (caches MetadataReferences only)
+        services.TryAddSingleton<IEvaluator, CSharpEvaluator>();
+        
         services.TryAddScoped<IScriptEngine, ScriptEngine>();
         
         return services;

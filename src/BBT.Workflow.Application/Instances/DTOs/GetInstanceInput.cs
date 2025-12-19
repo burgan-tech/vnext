@@ -29,6 +29,16 @@ public sealed class GetInstanceInput : IHasDomain
     /// ETag value for conditional requests (If-None-Match header)
     /// </summary>
     public string? IfNoneMatch { get; set; }
+
+    /// <summary>
+    /// HTTP headers from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>
+    /// Query parameters from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
 }
 
 /// <summary>
@@ -73,6 +83,16 @@ public sealed class GetInstanceListInput : IHasDomain
     /// Example: "CreatedAt" for ascending, "-CreatedAt" for descending
     /// </summary>
     public string? Sort { get; set; }
+
+    /// <summary>
+    /// HTTP headers from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>
+    /// Query parameters from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
 }
 
 /// <summary>
@@ -95,6 +115,16 @@ public sealed class GetInstanceHistoryInput : IHasDomain
     /// Extensions requested for data enrichment
     /// </summary>
     public string[]? Extension { get; set; }
+
+    /// <summary>
+    /// HTTP headers from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>
+    /// Query parameters from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
 }
 
 /// <summary>
@@ -122,4 +152,14 @@ public sealed class GetInstanceDataInput : IHasDomain
     /// Extensions requested for data enrichment
     /// </summary>
     public string[]? Extensions { get; set; }
+
+    /// <summary>
+    /// HTTP headers from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>
+    /// Query parameters from the request for script context binding
+    /// </summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
 } 

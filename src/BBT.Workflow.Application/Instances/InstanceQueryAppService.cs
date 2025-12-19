@@ -52,6 +52,8 @@ public sealed class InstanceQueryAppService(
                         instance,
                         instance.LatestData,
                         ExtensionScope.GetInstance,
+                        input.Headers,
+                        input.QueryParameters,
                         cancellationToken);
 
                     return ConditionalResult<GetInstanceOutput>.Success(result);
@@ -84,6 +86,8 @@ public sealed class InstanceQueryAppService(
                         instance,
                         instance.LatestData,
                         ExtensionScope.GetAllInstances,
+                        input.Headers,
+                        input.QueryParameters,
                         ct);
 
                     list.Add(instanceOutput);
@@ -114,6 +118,8 @@ public sealed class InstanceQueryAppService(
                         instance,
                         instanceData,
                         ExtensionScope.GetInstance,
+                        input.Headers,
+                        input.QueryParameters,
                         cancellationToken);
 
                     transitions.Add(transitionOutput);
@@ -274,6 +280,8 @@ public sealed class InstanceQueryAppService(
         Instance instance,
         InstanceData? instanceData,
         ExtensionScope currentScope,
+        Dictionary<string, string?>? headers,
+        Dictionary<string, string?>? queryParameters,
         CancellationToken cancellationToken)
     {
         var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, null, cancellationToken);
@@ -303,6 +311,8 @@ public sealed class InstanceQueryAppService(
             .WithRuntime(runtimeInfoProvider)
             .WithTransition(string.Empty)
             .WithBody(instanceData?.Data ?? new JsonData("{}"))
+            .WithHeaders(headers)
+            .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
 
         var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
@@ -354,6 +364,8 @@ public sealed class InstanceQueryAppService(
                         .WithRuntime(runtimeInfoProvider)
                         .WithTransition(string.Empty)
                         .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
+                        .WithHeaders(input.Headers)
+                        .WithQueryParameters(input.QueryParameters)
                         .BuildAsync(cancellationToken);
 
                     var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(

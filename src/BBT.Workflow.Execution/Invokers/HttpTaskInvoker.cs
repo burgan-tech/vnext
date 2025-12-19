@@ -92,20 +92,12 @@ public sealed class HttpTaskInvoker(
             }
 
             var response = await httpClient.SendAsync(request, cancellationToken);
-            stopwatch.Stop();
 
-            var responseHeaders = response.Headers
-                .Concat(response.Content.Headers)
-                .ToDictionary(h => h.Key.ToLower(), h => string.Join(", ", h.Value));
+            var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var responseData = TryParseJson(content);
-
-            // Record metrics
-            _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
-
-            // Record metrics
-            _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
+            stopwatch.Stop();
+            var responseData = InvokerHelpers.TryParseJson(content);
 
             var metadata = new Dictionary<string, object>
             {
@@ -114,7 +106,8 @@ public sealed class HttpTaskInvoker(
                 ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty
             };
 
-            // Always return result - let output mapping handle error scenarios
+            // Always return result with full response details - let output mapping handle error scenarios
+            // All HTTP responses (2xx, 4xx, 5xx) include headers, body, and parsed data
             return response.IsSuccessStatusCode
                 ? TaskInvocationResult.Success(
                     data: responseData,
@@ -130,6 +123,8 @@ public sealed class HttpTaskInvoker(
                     body: content,
                     executionDurationMs: stopwatch.ElapsedMilliseconds,
                     taskType: TaskType,
+                    headers: responseHeaders,
+                    data: responseData,
                     metadata: metadata);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -205,16 +200,4 @@ public sealed class HttpTaskInvoker(
         return client;
     }
 
-    private static object? TryParseJson(string? content)
-    {
-        if (string.IsNullOrEmpty(content)) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<object>(content);
-        }
-        catch
-        {
-            return content;
-        }
-    }
 }

@@ -70,8 +70,9 @@ public sealed class RunAutomaticTransitionsStep(
         CancellationToken cancellationToken)
     {
         var evaluations = new List<AutoConditionEvaluation>();
+        var orderedTransitions = context.Target!.AutoTransitions.OrderBy(t => t.TriggerKind);
 
-        foreach (var automaticTransition in context.Target!.AutoTransitions)
+        foreach (var automaticTransition in orderedTransitions)
         {
             var evalResult = await autoConditionEvaluator.EvaluateAsync(
                 automaticTransition,
@@ -84,6 +85,10 @@ public sealed class RunAutomaticTransitionsStep(
             }
 
             evaluations.Add(evalResult.Value);
+            if (evalResult.Value.Status == AutoConditionStatus.Satisfied)
+            {
+                break;
+            }
         }
 
         return Result<List<AutoConditionEvaluation>>.Ok(evaluations);

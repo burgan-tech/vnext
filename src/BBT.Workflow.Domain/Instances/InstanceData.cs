@@ -213,16 +213,4 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         // Reconstruct version with preserved pkg suffix and metadata (pre-release dropped)
         return $"{newBaseVersion}{suffix}{metadata}";
     }
-
-    public InstanceDataShadow Shadow()
-    {
-        return new InstanceDataShadow
-        {
-            Id = Id,
-            Version = Version,
-            HistorySequence = HistorySequence,
-            InstanceId = InstanceId,
-            Data = Attributes
-        };
-    }
 }

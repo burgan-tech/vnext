@@ -202,14 +202,25 @@ public sealed class InstanceExtensionService(
         if (!scriptContext.TaskResponse.TryGetValue(variableKeyTask, out var value))
             return;
 
-        // Extract data property from JsonElement if available, otherwise use raw value
-        var extractedValue = value is JsonElement jsonElement &&
-                             jsonElement.TryGetProperty("data", out var dataProperty)
-            ? dataProperty
-            : value;
+        // Extract data property if available, otherwise use raw value
+        var extractedValue = TryExtractDataProperty(value);
 
         context.Response[variableKeyExtension] = extractedValue!;
         context.ExecutedKeys.Add(extension.Key);
+    }
+
+    /// <summary>
+    /// Extracts the "data" property from a dynamic object if available.
+    /// Supports ExpandoObject (IDictionary), JsonElement, and falls back to raw value.
+    /// </summary>
+    private static object? TryExtractDataProperty(object? value)
+    {
+        return value switch
+        {
+            IDictionary<string, object?> dict when dict.TryGetValue("data", out var data) => data,
+            JsonElement { ValueKind: JsonValueKind.Object } element when element.TryGetProperty("data", out var prop) => prop,
+            _ => value
+        };
     }
 
     /// <summary>

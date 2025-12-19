@@ -42,15 +42,14 @@ public sealed class FunctionController(
         [FromQuery] FunctionListQueryParameters parameters,
         CancellationToken cancellationToken = default)
     {
-        var headers = HttpContext.Request.Headers.ToDictionary(h => h.Key, h => (string?)h.Value.ToString());
-        var queryParams = HttpContext.Request.Query.ToDictionary(q => q.Key, q => (string?)q.Value.ToString());
+        var requestContext = HttpContext.GetRequestBindingContext();
 
         var response = await functionAppService.GetFunctionByFunctionKeyAsync(
             function,
             RuntimeSysSchemaInfo.Functions,
             domain,
-            headers,
-            queryParams,
+            requestContext.Headers,
+            requestContext.QueryParameters,
             cancellationToken);
         return FromResult(response);
     }
@@ -63,6 +62,8 @@ public sealed class FunctionController(
         [FromQuery] FunctionListQueryParameters parameters,
         CancellationToken cancellationToken = default)
     {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
         var getInstanceListInput = new GetInstanceListInput
         {
             Domain = domain,
@@ -73,7 +74,9 @@ public sealed class FunctionController(
             Workflow = workflow,
             Filter = function.ToLowerInvariant() == Definitions.Functions.FunctionTypeConst.Data
                 ? parameters.Filter
-                : []
+                : [],
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
         };
 
         var instanceListResult = await queryAppService.GetInstanceListAsync(getInstanceListInput, cancellationToken);
@@ -101,7 +104,7 @@ public sealed class FunctionController(
         if (functionType == Definitions.Functions.FunctionTypeConst.Data)
         {
             return FromResult(await ProcessDataFunctionListAsync(domain, workflow, instanceListResult.Value!,
-                cancellationToken));
+                requestContext.Headers, requestContext.QueryParameters, cancellationToken));
         }
 
         if (functionType == Definitions.Functions.FunctionTypeConst.Schema)
@@ -111,7 +114,7 @@ public sealed class FunctionController(
         }
 
         return FromResult(await ProcessCustomFunctionListAsync(function, workflow, domain, instanceListResult.Value!,
-            cancellationToken));
+            requestContext.Headers, requestContext.QueryParameters, cancellationToken));
     }
 
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/functions/{function}")]
@@ -124,8 +127,7 @@ public sealed class FunctionController(
         [FromHeader(Name = "If-None-Match")] string? ifNoneMatch,
         CancellationToken cancellationToken = default)
     {
-        var headers = HttpContext.Request.Headers.ToDictionary(h => h.Key, h => (string?)h.Value.ToString());
-        var queryParams = HttpContext.Request.Query.ToDictionary(q => q.Key, q => (string?)q.Value.ToString());
+        var requestContext = HttpContext.GetRequestBindingContext();
 
         var functionType = function.ToLowerInvariant();
 
@@ -143,8 +145,9 @@ public sealed class FunctionController(
 
         if (functionType == Definitions.Functions.FunctionTypeConst.Data)
         {
-            var dataResult = await ProcessDataFunctionAsync(domain, workflow, instance, ifNoneMatch,
-                parameters.Extensions, cancellationToken);
+            var dataResult = await ProcessDataFunctionAsync(
+                domain, workflow, instance, ifNoneMatch,
+                parameters.Extensions, requestContext.Headers, requestContext.QueryParameters, cancellationToken);
 
             if (dataResult.IsNotModified)
             {
@@ -161,7 +164,7 @@ public sealed class FunctionController(
         }
 
         return FromResult(await functionAppService.GetFunctionByInstanceAsync(function, workflow, domain, instance,
-            headers, queryParams, cancellationToken));
+            requestContext.Headers, requestContext.QueryParameters, cancellationToken));
     }
 
     #region Private Helper Methods
@@ -334,6 +337,8 @@ public sealed class FunctionController(
         string instance,
         string? ifNoneMatch,
         string[]? extensions,
+        Dictionary<string, string?> headers,
+        Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
         var input = new GetInstanceDataInput
@@ -342,7 +347,9 @@ public sealed class FunctionController(
             Workflow = workflow,
             Instance = instance,
             IfNoneMatch = ifNoneMatch,
-            Extensions = extensions
+            Extensions = extensions,
+            Headers = headers,
+            QueryParameters = queryParams
         };
 
         var response = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
@@ -359,6 +366,8 @@ public sealed class FunctionController(
         string domain,
         string workflow,
         HateoasPagedList<GetInstanceOutput> instanceListResult,
+        Dictionary<string, string?> headers,
+        Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
         var list = new List<GetInstanceDataOutput>();
@@ -370,6 +379,8 @@ public sealed class FunctionController(
                 Domain = domain,
                 Workflow = workflow,
                 Instance = instance.Key!,
+                Headers = headers,
+                QueryParameters = queryParams
             };
 
             var response = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
@@ -387,11 +398,10 @@ public sealed class FunctionController(
         string workflow,
         string domain,
         HateoasPagedList<GetInstanceOutput> instanceListResult,
+        Dictionary<string, string?> headers,
+        Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
-        var headers = HttpContext.Request.Headers.ToDictionary(h => h.Key, h => (string?)h.Value.ToString());
-        var queryParams = HttpContext.Request.Query.ToDictionary(q => q.Key, q => (string?)q.Value.ToString());
-
         var list = new List<Dictionary<string, dynamic?>>();
 
         foreach (var instance in instanceListResult.Items)

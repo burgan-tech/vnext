@@ -30,6 +30,11 @@ public sealed class AutoConditionEvaluator(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        if(transition.TriggerKind == TransitionKind.DefaultAutoTransition)
+        {
+            return Task.FromResult(Result<AutoConditionEvaluation>.Ok(AutoConditionEvaluation.Satisfied(transition.Key)));
+        }
+
         return ValidateTransitionRule(transition)
             .BindAsync(_ => ExecuteConditionSafelyAsync(transition, context, cancellationToken));
     }

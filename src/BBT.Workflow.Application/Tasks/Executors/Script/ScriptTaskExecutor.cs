@@ -1,3 +1,4 @@
+using System.Text;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
@@ -103,8 +104,35 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
                 context.ScriptContext.Instance.Id,
                 result.Error.Message ?? "Unknown error");
         }
+        
+        // Update script context with response for output handler
+        UpdateScriptContextWithResponse(task.Key, result.Value, context.ScriptContext);
 
         return result;
+    }
+    
+    /// <summary>
+    /// Updates script context with response data for output handler processing.
+    /// </summary>
+    private static void UpdateScriptContextWithResponse(
+        string taskKey,
+        TaskInvocationResult? result,
+        ScriptContext context)
+    {
+        var variableKey = taskKey.ToVariableName();
+        var response = new StandardTaskResponse
+        {
+            IsSuccess = result?.IsSuccess ?? false,
+            Data = result?.Data,
+            StatusCode = result?.StatusCode,
+            Headers = result?.Headers,
+            ErrorMessage = result?.ErrorMessage,
+            ExecutionDurationMs = result?.ExecutionDurationMs,
+            TaskType = result?.TaskType,
+            Metadata = result?.Metadata
+        };
+        
+        context.SetStandardResponse(response, variableKey);
     }
 }
 

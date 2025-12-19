@@ -33,6 +33,7 @@ public class WorkflowValidator
         // State level validations
         ValidateStateLabels(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
+        ValidateDefaultAutoTransitions(workflow, result);
 
         // Transition level validations
         ValidateTransitionLabels(workflow, result);
@@ -207,6 +208,40 @@ public class WorkflowValidator
         }
     }
 
+    /// <summary>
+    /// Validates DefaultAutoTransition rules:
+    /// - Each state can have at most one DefaultAutoTransition
+    /// - DefaultAutoTransition must have TriggerType.Automatic
+    /// </summary>
+    private void ValidateDefaultAutoTransitions(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            var defaultAutoTransitions = state.Transitions
+                .Where(t => t.TriggerKind == TransitionKind.DefaultAutoTransition)
+                .ToList();
+
+            // Validate at most one DefaultAutoTransition per state
+            if (defaultAutoTransitions.Count > 1)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' can have at most one DefaultAutoTransition. Found: {defaultAutoTransitions.Count}.",
+                    [$"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Transitions)}"]));
+            }
+
+            // Validate DefaultAutoTransition must be Automatic trigger type
+            foreach (var transition in defaultAutoTransitions)
+            {
+                if (transition.TriggerType != TriggerType.Automatic)
+                {
+                    result.AddError(new ValidationResult(
+                        $"DefaultAutoTransition '{transition.Key}' in state '{state.Key}' must have TriggerType.Automatic.",
+                        [$"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Transitions)}[{transition.Key}].{nameof(Transition.TriggerType)}"]));
+                }
+            }
+        }
+    }
+
     #endregion
 
     #region Transition Level Validations
@@ -333,13 +368,13 @@ public class WorkflowValidator
 
     /// <summary>
     /// Validates Auto (Automatic) transition rules:
-    /// - Rule is required
+    /// - Rule is required (except for DefaultAutoTransition which acts as fallback)
     /// - Timer, Schema, View, and Mapping are not allowed
     /// </summary>
     private void ValidateAutoTransition(Transition transition, string basePath, WorkflowValidationResult result)
     {
-        // Rule is required for Auto transitions
-        if (transition.Rule == null)
+        // Rule is required for Auto transitions, except for DefaultAutoTransition (fallback)
+        if (transition.Rule == null && transition.TriggerKind != TransitionKind.DefaultAutoTransition)
         {
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' must have a rule defined.",

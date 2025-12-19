@@ -14,14 +14,17 @@ namespace BBT.Workflow.Scripting;
 /// Integrates with Dapr for distributed computing scenarios and provides global functions for scripts.
 /// Uses Roslyn's scripting APIs for dynamic C# code execution.
 /// </summary>
+/// <param name="evaluator">The underlying C# evaluator responsible for script compilation and execution (injected as singleton for shared caching)</param>
 /// <param name="workflowMetrics">The workflow metrics service for recording script engine metrics</param>
 public sealed class ScriptEngine(
+    IEvaluator evaluator,
     IWorkflowMetrics workflowMetrics) : IScriptEngine
 {
     /// <summary>
-    /// The underlying C# evaluator responsible for script compilation and execution
+    /// The underlying C# evaluator responsible for script compilation and execution.
+    /// Injected as a singleton to share the script cache across all requests.
     /// </summary>
-    private readonly IEvaluator _evaluator = new CSharpEvaluator();
+    private readonly IEvaluator _evaluator = evaluator;
 
     /// <summary>
     /// Lazily-initialized default metadata references used for script compilation.

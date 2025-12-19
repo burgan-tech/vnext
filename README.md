@@ -265,6 +265,43 @@ This approach ensures that production images remain small and secure while devel
 #### Mac
 To run the script on MacOS, you need to install PowerShell. You can find the official documentation for installing PowerShell on MacOS [here](https://docs.microsoft.com/en-us/powershell/scripting/install/installing-powershell-core-on-macos).
 
+---
+
+## Troubleshooting
+
+### PostSharp Targeting Pack Error
+
+If you encounter the following error during compilation:
+
+```
+POSTSHARP : error : error: Unhandled exception (PostSharp.Compiler.Hosting.CommandLine.dll 2025.1.10 release | .NET 9.0.11 (Arm64)): Requested targeting pack NETStandard.Library.Ref, version=2.1.0 is not installed in
+```
+
+**Solution:**
+
+1. First, clean the `bin` and `obj` folders. You can use one of the following methods:
+
+   **Option A - Using shell command (Linux/macOS):**
+   ```bash
+   find . -type d \( -name bin -o -name obj \) -exec rm -rf {} + 2>/dev/null
+   ```
+
+   **Option B - Using PowerShell script (Windows/macOS with PowerShell):**
+   ```powershell
+   ./delete-bin-obj.ps1
+   ```
+
+2. Then, rebuild the project:
+   ```bash
+   dotnet clean
+   dotnet restore
+   dotnet build
+   ```
+
+This issue typically occurs when there are stale build artifacts that conflict with PostSharp's targeting pack resolution.
+
+---
+
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 

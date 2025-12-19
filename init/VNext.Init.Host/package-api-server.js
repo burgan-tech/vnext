@@ -856,10 +856,24 @@ async function handleRuntimePublish(req, res) {
         // Process and publish with isRuntimePackage=true (special ordering)
         const results = await processPackage(packagePath, VNEXT_CORE_RUNTIME_PACKAGE, appDomain, true);
         
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // Determine success status and message based on results
+        let success = true;
+        let message = 'Runtime package processed and published successfully';
+        
+        if (results.success.length === 0 && results.failed.length > 0) {
+            // All packages failed
+            success = false;
+            message = 'Runtime package processing failed. No packages were loaded.';
+        } else if (results.success.length > 0 && results.failed.length > 0) {
+            // Partial success
+            success = false;
+            message = `Runtime package partially processed. ${results.success.length} packages loaded successfully, ${results.failed.length} packages failed to load.`;
+        }
+        
+        res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            success: true,
-            message: 'Runtime package processed and published successfully',
+            success: success,
+            message: message,
             packageName: VNEXT_CORE_RUNTIME_PACKAGE,
             appDomain: appDomain,
             results: {
@@ -934,10 +948,24 @@ async function handlePackagePublish(req, res) {
         // appDomain is null if not provided (no replacement)
         const results = await processPackage(packagePath, packageName, shouldReplaceDomain ? appDomain : null, false);
         
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // Determine success status and message based on results
+        let success = true;
+        let message = 'Package processed and published successfully';
+        
+        if (results.success.length === 0 && results.failed.length > 0) {
+            // All packages failed
+            success = false;
+            message = 'Package processing failed. No packages were loaded.';
+        } else if (results.success.length > 0 && results.failed.length > 0) {
+            // Partial success
+            success = false;
+            message = `Package partially processed. ${results.success.length} packages loaded successfully, ${results.failed.length} packages failed to load.`;
+        }
+        
+        res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            success: true,
-            message: 'Package processed and published successfully',
+            success: success,
+            message: message,
             packageName: packageName,
             appDomain: shouldReplaceDomain ? appDomain : null,
             domainReplacement: shouldReplaceDomain,

@@ -72,6 +72,15 @@ public sealed class Transition : IHasKey
     /// <see cref="TriggerType"/>
     /// </summary>
     public TriggerType TriggerType { get; private set; }
+    
+    /// <summary>
+    /// Optional transition kind that defines special behavior.
+    /// When set to <see cref="TransitionKind.DefaultAutoTransition"/>, this transition acts as a fallback
+    /// when no other automatic transitions are satisfied.
+    /// </summary>
+    [JsonInclude] 
+    public TransitionKind? TriggerKind { get; private set; }
+    
     [JsonInclude] public ScriptCode? Timer { get; private set; }
     [JsonInclude] public ScriptCode? Rule { get; private set; }
     [JsonInclude] public Reference? Schema { get; private set; }

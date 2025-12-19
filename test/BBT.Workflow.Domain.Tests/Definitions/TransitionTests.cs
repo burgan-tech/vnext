@@ -436,5 +436,79 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.Null(transition.Timer);
     }
+
+    [Fact]
+    public void Kind_ShouldBeNull_ByDefault()
+    {
+        // Act
+        var transition = Transition.Create("key", "from", "to", TriggerType.Automatic, "Patch");
+
+        // Assert
+        Assert.Null(transition.TriggerKind);
+    }
+
+    [Fact]
+    public void Kind_ShouldDeserialize_FromJson()
+    {
+        // Arrange
+        var json = """
+        {
+            "key": "default-transition",
+            "from": "state1",
+            "target": "state2",
+            "triggerType": "Automatic",
+            "kind": "DefaultAutoTransition",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "view": null
+        }
+        """;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+
+        // Act
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, options);
+
+        // Assert
+        Assert.NotNull(transition);
+        Assert.Equal(TransitionKind.DefaultAutoTransition, transition.TriggerKind);
+        Assert.Equal(TriggerType.Automatic, transition.TriggerType);
+    }
+
+    [Fact]
+    public void Kind_ShouldBeNull_WhenNotInJson()
+    {
+        // Arrange
+        var json = """
+        {
+            "key": "regular-transition",
+            "from": "state1",
+            "target": "state2",
+            "triggerType": "Automatic",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "view": null
+        }
+        """;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+
+        // Act
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, options);
+
+        // Assert
+        Assert.NotNull(transition);
+        Assert.Null(transition.TriggerKind);
+    }
 }
 
