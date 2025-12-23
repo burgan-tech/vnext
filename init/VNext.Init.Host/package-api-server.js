@@ -338,15 +338,57 @@ function httpRequest(url, options = {}) {
 
 /**
  * Setup npm registry configuration
+ * 
+ * Supports two authentication strategies:
+ * 1. Token-based authentication (_authToken) - for npmjs.org and compatible registries
+ * 2. Username/Password authentication (_password + username + email) - for Azure DevOps / TFS Artifacts
+ * 
+ * Auth Strategy Decision:
+ * - If npmToken exists → use _authToken
+ * - If npmUsername + npmPassword exists → use _password (Base64 encoded)
+ * - If neither exists → only set registry=
+ * 
+ * @param {string} registry - NPM registry URL
+ * @param {Object} authOptions - Authentication options
+ * @param {string} [authOptions.token] - NPM token for _authToken based auth
+ * @param {string} [authOptions.username] - Username for TFS Artifacts auth
+ * @param {string} [authOptions.password] - Password for TFS Artifacts auth (will be Base64 encoded)
+ * @param {string} [authOptions.email] - Email for TFS Artifacts auth (optional, defaults to 'unused@dev.azure.com')
  */
-async function setupNpmRegistry(registry, token) {
+async function setupNpmRegistry(registry, authOptions = {}) {
     const npmrcPath = path.join(process.env.HOME || '/app', '.npmrc');
+    const registryHost = registry.replace(/^https?:\/\//, '').replace(/\/$/, '');
     let npmrcContent = '';
     
+    const { token, username, password, email } = authOptions;
+    
     if (token) {
-        const registryHost = registry.replace(/^https?:\/\//, '').replace(/\/$/, '');
-        npmrcContent = `//${registryHost}:_authToken=${token}\nregistry=${registry}\n`;
+        // Strategy 1: Token-based authentication (_authToken)
+        // Compatible with npmjs.org and registries that support tokens
+        log.info('Using token-based authentication (_authToken)');
+        npmrcContent = [
+            `registry=${registry}`,
+            `//${registryHost}/:_authToken=${token}`,
+            ''
+        ].join('\n');
+    } else if (username && password) {
+        // Strategy 2: Username/Password authentication for Azure DevOps / TFS Artifacts
+        // Uses _password (Base64 encoded) + username + email
+        log.info('Using TFS Artifacts authentication (_password + username)');
+        const base64Password = Buffer.from(password).toString('base64');
+        const authEmail = email || 'unused@dev.azure.com';
+        
+        npmrcContent = [
+            `registry=${registry}`,
+            `//${registryHost}/:username=${username}`,
+            `//${registryHost}/:_password=${base64Password}`,
+            `//${registryHost}/:email=${authEmail}`,
+            'always-auth=true',
+            ''
+        ].join('\n');
     } else {
+        // No authentication - public registry
+        log.info('No authentication configured - using public registry');
         npmrcContent = `registry=${registry}\n`;
     }
     
@@ -357,12 +399,21 @@ async function setupNpmRegistry(registry, token) {
 /**
  * Download and install npm package
  * ONLY called from API request handler - never automatically
+ * 
+ * @param {string} packageName - Name of the npm package to download
+ * @param {string} version - Version of the package (e.g., 'latest', '1.0.0')
+ * @param {string} registry - NPM registry URL
+ * @param {Object} authOptions - Authentication options
+ * @param {string} [authOptions.token] - NPM token for _authToken based auth
+ * @param {string} [authOptions.username] - Username for TFS Artifacts auth
+ * @param {string} [authOptions.password] - Password for TFS Artifacts auth
+ * @param {string} [authOptions.email] - Email for TFS Artifacts auth
  */
-async function downloadPackage(packageName, version, registry, token) {
+async function downloadPackage(packageName, version, registry, authOptions = {}) {
     log.section(`Downloading Package: ${packageName}@${version}`);
     log.info('This download was triggered by an API call');
     
-    await setupNpmRegistry(registry, token);
+    await setupNpmRegistry(registry, authOptions);
     
     // Ensure package.json exists
     const packageJsonPath = '/app/package.json';
@@ -826,6 +877,9 @@ async function handleRuntimePublish(req, res) {
             version = 'latest',
             npmRegistry = DEFAULT_REGISTRY,
             npmToken,
+            npmUsername,
+            npmPassword,
+            npmEmail,
             appDomain
         } = body;
         
@@ -847,8 +901,16 @@ async function handleRuntimePublish(req, res) {
         // Wait for vnext app to be ready
         await waitForVNextApp();
         
+        // Build auth options
+        const authOptions = {
+            token: npmToken,
+            username: npmUsername,
+            password: npmPassword,
+            email: npmEmail
+        };
+        
         // Download package
-        const packagePath = await downloadPackage(VNEXT_CORE_RUNTIME_PACKAGE, version, npmRegistry, npmToken);
+        const packagePath = await downloadPackage(VNEXT_CORE_RUNTIME_PACKAGE, version, npmRegistry, authOptions);
         
         // Verify package structure
         await verifyPackageStructure(packagePath);
@@ -914,6 +976,9 @@ async function handlePackagePublish(req, res) {
             version = 'latest',
             npmRegistry = DEFAULT_REGISTRY,
             npmToken,
+            npmUsername,
+            npmPassword,
+            npmEmail,
             appDomain
         } = body;
         
@@ -938,8 +1003,16 @@ async function handlePackagePublish(req, res) {
         // Wait for vnext app to be ready
         await waitForVNextApp();
         
+        // Build auth options
+        const authOptions = {
+            token: npmToken,
+            username: npmUsername,
+            password: npmPassword,
+            email: npmEmail
+        };
+        
         // Download package
-        const packagePath = await downloadPackage(packageName, version, npmRegistry, npmToken);
+        const packagePath = await downloadPackage(packageName, version, npmRegistry, authOptions);
         
         // Verify package structure
         await verifyPackageStructure(packagePath);

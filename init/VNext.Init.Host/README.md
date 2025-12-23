@@ -55,7 +55,10 @@ This endpoint is specifically designed for the core runtime package with special
   "version": "latest",
   "appDomain": "my-domain",
   "npmRegistry": "https://registry.npmjs.org/",
-  "npmToken": "optional-token"
+  "npmToken": "optional-token",
+  "npmUsername": "optional-username",
+  "npmPassword": "optional-password",
+  "npmEmail": "optional-email"
 }
 ```
 
@@ -64,7 +67,12 @@ This endpoint is specifically designed for the core runtime package with special
 | `appDomain` | ✅ **Yes** | Target domain for replacement (e.g., "core", "my-domain") |
 | `version` | No | Package version (default: `latest`) |
 | `npmRegistry` | No | NPM registry URL (default: `https://registry.npmjs.org/`) |
-| `npmToken` | No | NPM token for private registries |
+| `npmToken` | No | NPM token for token-based auth (npmjs.org compatible) |
+| `npmUsername` | No | Username for TFS/Azure DevOps Artifacts auth |
+| `npmPassword` | No | Password for TFS/Azure DevOps Artifacts auth (will be Base64 encoded) |
+| `npmEmail` | No | Email for TFS Artifacts auth (default: `unused@dev.azure.com`) |
+
+> **Note:** Use either `npmToken` OR `npmUsername`+`npmPassword`, not both. See [NPM Authentication](#npm-authentication) for details.
 
 **Success Response (200):**
 ```json
@@ -104,7 +112,10 @@ This endpoint is for publishing any npm package with optional domain replacement
   "version": "latest",
   "appDomain": "my-domain",
   "npmRegistry": "https://registry.npmjs.org/",
-  "npmToken": "optional-token"
+  "npmToken": "optional-token",
+  "npmUsername": "optional-username",
+  "npmPassword": "optional-password",
+  "npmEmail": "optional-email"
 }
 ```
 
@@ -114,7 +125,12 @@ This endpoint is for publishing any npm package with optional domain replacement
 | `appDomain` | No | If provided, replaces all domains. If omitted, no replacement. |
 | `version` | No | Package version (default: `latest`) |
 | `npmRegistry` | No | NPM registry URL |
-| `npmToken` | No | NPM token for private registries |
+| `npmToken` | No | NPM token for token-based auth (npmjs.org compatible) |
+| `npmUsername` | No | Username for TFS/Azure DevOps Artifacts auth |
+| `npmPassword` | No | Password for TFS/Azure DevOps Artifacts auth (will be Base64 encoded) |
+| `npmEmail` | No | Email for TFS Artifacts auth (default: `unused@dev.azure.com`) |
+
+> **Note:** Use either `npmToken` OR `npmUsername`+`npmPassword`, not both. See [NPM Authentication](#npm-authentication) for details.
 
 **Success Response (200):**
 ```json
@@ -270,6 +286,63 @@ Each package must contain a `vnext.config.json` file with the following structur
   }
 }
 ```
+
+---
+
+## NPM Authentication
+
+The service supports two authentication strategies for npm registries:
+
+### Strategy 1: Token-based Authentication (`_authToken`)
+
+For npmjs.org and registries that support token-based authentication:
+
+```json
+{
+  "npmRegistry": "https://registry.npmjs.org/",
+  "npmToken": "your-npm-token"
+}
+```
+
+This generates an `.npmrc` file like:
+```ini
+registry=https://registry.npmjs.org/
+//registry.npmjs.org/:_authToken=your-npm-token
+```
+
+### Strategy 2: TFS/Azure DevOps Artifacts Authentication (`_password`)
+
+For Azure DevOps / TFS Artifacts npm feeds that require username/password authentication:
+
+```json
+{
+  "npmRegistry": "https://pkgs.dev.azure.com/org/project/_packaging/feed/npm/registry/",
+  "npmUsername": "my-user",
+  "npmPassword": "my-password-or-pat",
+  "npmEmail": "user@example.com"
+}
+```
+
+This generates an `.npmrc` file like:
+```ini
+registry=https://pkgs.dev.azure.com/org/project/_packaging/feed/npm/registry/
+//pkgs.dev.azure.com/org/project/_packaging/feed/npm/registry/:username=my-user
+//pkgs.dev.azure.com/org/project/_packaging/feed/npm/registry/:_password=BASE64_ENCODED_PASSWORD
+//pkgs.dev.azure.com/org/project/_packaging/feed/npm/registry/:email=user@example.com
+always-auth=true
+```
+
+> **Note:** The password is automatically Base64 encoded by the service.
+
+### Auth Strategy Decision
+
+| Condition | Strategy Used |
+|-----------|---------------|
+| `npmToken` provided | Token-based (`_authToken`) |
+| `npmUsername` + `npmPassword` provided | TFS Artifacts (`_password` + `username`) |
+| Neither provided | No authentication (public registry) |
+
+> ⚠️ **Important:** Do not provide both `npmToken` and `npmUsername`+`npmPassword` simultaneously. The service will prioritize `npmToken` if both are provided.
 
 ---
 
