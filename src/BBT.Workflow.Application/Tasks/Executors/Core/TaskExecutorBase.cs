@@ -220,6 +220,8 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
         return Result<StandardTaskResponse>.Ok(new StandardTaskResponse
         {
             IsSuccess = false,
+            Error = error,
+            ErrorCore = error.Code,
             ErrorMessage = error.Message,
             StatusCode = 500,
             ExecutionDurationMs = executionDurationMs,

@@ -53,4 +53,15 @@ public record FlowCompletedInput
     /// Duration of the SubItem execution
     /// </summary>
     public TimeSpan? Duration { get; init; }
+
+    /// <summary>
+    /// Indicates whether the SubFlow completed with an error.
+    /// </summary>
+    public bool HasError { get; init; }
+
+    /// <summary>
+    /// Error payload if the SubFlow failed.
+    /// Contains error information for propagation to parent workflow.
+    /// </summary>
+    public SubFlowErrorPayload? ErrorPayload { get; init; }
 }

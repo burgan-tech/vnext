@@ -183,6 +183,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
+            options.AddHandler<RetryStepJobHandler>(RetryStepJobHandler.HandlerName);
         });
         
         services.AddDaprJobScheduler();

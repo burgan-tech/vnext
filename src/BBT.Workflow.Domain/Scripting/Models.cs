@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
@@ -84,6 +85,16 @@ public sealed class StandardTaskResponse
     /// </summary>
     public bool IsSuccess { get; set; } = true;
 
+    /// <summary>
+    /// Error
+    /// </summary>
+    public Error? Error { get; set; }
+    
+    /// <summary>
+    /// Error core if task execution failed.
+    /// </summary>
+    public string? ErrorCore { get; set; }
+    
     /// <summary>
     /// Error message if task execution failed.
     /// </summary>

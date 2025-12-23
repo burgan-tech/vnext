@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Domain.Entities;
+using BBT.Aether.Results;
 using TaskStatus = BBT.Workflow.Definitions.TaskStatus;
 
 namespace BBT.Workflow.Instances;
@@ -62,5 +63,12 @@ public sealed class InstanceTask : Entity<Guid>
         FinishedAt = DateTime.UtcNow;
         Status = TaskStatus.Faulted;
         Response = new JsonData(JsonSerializer.Serialize(new { error = reason }));
+    }
+    
+    public void Faulted(Error error)
+    {
+        FinishedAt = DateTime.UtcNow;
+        Status = TaskStatus.Faulted;
+        Response = new JsonData(JsonSerializer.Serialize(new { error }));
     }
 }

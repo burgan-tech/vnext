@@ -16,4 +16,10 @@ public sealed class ExecutionInfo
     
     /// <summary>Gets or sets whether this execution is resuming from a SubFlow completion.</summary>
     public bool IsSubFlowResume { get; set; }
+
+    /// <summary>Gets or sets whether this execution is a step retry.</summary>
+    public bool IsStepRetry { get; set; }
+
+    /// <summary>Gets or sets the retry attempt number (for step retry scenarios).</summary>
+    public int RetryAttempt { get; set; }
 }

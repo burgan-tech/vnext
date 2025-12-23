@@ -669,4 +669,52 @@ public static class WorkflowMetrics
         .CreateGauge("workflow_instances_active",
             "Active workflow instances",
             new[] { "workflow_type" });
+
+    // Error Boundary Metrics
+
+    /// <summary>
+    /// Error boundary resolution counter with workflow, boundary_level, and action labels.
+    /// Tracks how errors are resolved at different levels (task, state, global).
+    /// </summary>
+    public static readonly Counter ErrorBoundaryResolutions = Metrics
+        .CreateCounter("workflow_error_boundary_resolutions_total",
+            "Total error boundary resolutions",
+            new[] { "workflow", "boundary_level", "action" });
+
+    /// <summary>
+    /// Error boundary retry attempts counter with workflow, task_type, and attempt labels.
+    /// </summary>
+    public static readonly Counter ErrorBoundaryRetries = Metrics
+        .CreateCounter("workflow_error_boundary_retries_total",
+            "Total error retry attempts",
+            new[] { "workflow", "task_type", "attempt" });
+
+    /// <summary>
+    /// Unhandled errors counter (no matching policy found) with workflow, exception_type, and scope labels.
+    /// </summary>
+    public static readonly Counter ErrorBoundaryUnhandled = Metrics
+        .CreateCounter("workflow_error_boundary_unhandled_total",
+            "Total unhandled errors (no policy matched)",
+            new[] { "workflow", "exception_type", "scope" });
+
+    /// <summary>
+    /// Error action execution duration histogram with action label.
+    /// Uses custom buckets for error action timing.
+    /// </summary>
+    public static readonly Histogram ErrorActionDuration = Metrics
+        .CreateHistogram("workflow_error_action_duration_seconds",
+            "Error action execution duration",
+            new[] { "action" },
+            new HistogramConfiguration
+            {
+                Buckets = new[] { 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0 }
+            });
+
+    /// <summary>
+    /// SubFlow error propagation counter with parent_workflow, child_workflow, and propagated labels.
+    /// </summary>
+    public static readonly Counter SubFlowErrorPropagations = Metrics
+        .CreateCounter("workflow_subflow_error_propagations_total",
+            "Total SubFlow error propagations",
+            new[] { "parent_workflow", "child_workflow", "propagated" });
 }

@@ -1,4 +1,5 @@
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Handlers;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
@@ -6,6 +7,7 @@ using BBT.Workflow.Execution.ReEntry;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Transitions.Factory;
+using BBT.Workflow.Execution.Transitions.Pipeline;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 
@@ -70,6 +72,12 @@ public static class PipelineServiceCollectionExtensions
 
         // Pipeline
         services.AddScoped<TransitionPipeline>();
+        
+        // Error Boundary Services
+        services.AddSingleton<ICompiledErrorPolicyCache, CompiledErrorPolicyCache>();
+        services.AddScoped<IErrorPolicyResolver, ErrorPolicyResolver>();
+        services.AddScoped<IErrorActionExecutor, ErrorActionExecutor>();
+        services.AddScoped<ErrorBoundaryStepInterceptor>();
         
         // Configure Re-entry Options
         services.Configure<ReentryOptions>(options =>

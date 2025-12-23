@@ -566,4 +566,47 @@ public interface IWorkflowMetrics
     void SetActiveWorkflowInstances(string workflowType, int count);
 
     #endregion
+
+    #region Error Boundary Metrics
+
+    /// <summary>
+    /// Records error boundary resolution.
+    /// </summary>
+    /// <param name="workflow">Workflow identifier</param>
+    /// <param name="boundaryLevel">Level where policy was found (task, state, global, subflow)</param>
+    /// <param name="action">Error action applied</param>
+    void RecordErrorBoundaryResolution(string workflow, string boundaryLevel, string action);
+
+    /// <summary>
+    /// Records error boundary retry attempt.
+    /// </summary>
+    /// <param name="workflow">Workflow identifier</param>
+    /// <param name="taskType">Type of task being retried</param>
+    /// <param name="attempt">Current retry attempt number</param>
+    void RecordErrorBoundaryRetry(string workflow, string taskType, int attempt);
+
+    /// <summary>
+    /// Records unhandled error (no matching policy found).
+    /// </summary>
+    /// <param name="workflow">Workflow identifier</param>
+    /// <param name="exceptionType">Type of exception that was unhandled</param>
+    /// <param name="scope">Scope where error occurred (task, state, subflow)</param>
+    void RecordErrorBoundaryUnhandled(string workflow, string exceptionType, string scope);
+
+    /// <summary>
+    /// Records error action duration.
+    /// </summary>
+    /// <param name="action">Error action type</param>
+    /// <param name="durationSeconds">Duration of action execution in seconds</param>
+    void RecordErrorActionDuration(string action, double durationSeconds);
+
+    /// <summary>
+    /// Records SubFlow error propagation.
+    /// </summary>
+    /// <param name="parentWorkflow">Parent workflow identifier</param>
+    /// <param name="childWorkflow">Child workflow identifier</param>
+    /// <param name="propagated">Whether error was propagated to parent</param>
+    void RecordSubFlowErrorPropagation(string parentWorkflow, string childWorkflow, bool propagated);
+
+    #endregion
 }

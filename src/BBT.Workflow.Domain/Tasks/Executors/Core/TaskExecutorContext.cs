@@ -23,5 +23,15 @@ public sealed record TaskExecutorContext(
     /// Gets the task type from the workflow task.
     /// </summary>
     public TaskType TaskType => Task.GetTaskType();
+
+    /// <summary>
+    /// The current retry attempt (0 = first execution, 1+ = retry).
+    /// </summary>
+    public int RetryAttempt { get; init; }
+
+    /// <summary>
+    /// Additional items dictionary for passing data between error handling components.
+    /// </summary>
+    public IDictionary<string, object?> Items { get; init; } = new Dictionary<string, object?>();
 }
 

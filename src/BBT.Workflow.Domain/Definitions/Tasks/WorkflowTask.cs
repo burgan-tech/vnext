@@ -67,6 +67,7 @@ public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSe
     /// </summary>
     public JsonElement Config { get; private set; }
 
+
     public string ComponentKey => RuntimeSysSchemaInfo.Tasks;
 
     private void SetKey(string key)
@@ -103,6 +104,7 @@ public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSe
     /// Internal method for object pooling - sets properties directly without validation
     /// </summary>
     internal void SetConfigInternal(JsonElement config) => Config = config;
+
 
     public TaskType GetTaskType() => Enum.Parse<TaskType>(Type);
 

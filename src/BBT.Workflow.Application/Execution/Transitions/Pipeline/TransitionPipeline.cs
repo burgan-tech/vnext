@@ -1,5 +1,6 @@
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
+using BBT.Workflow.Execution.Transitions.Pipeline;
 
 namespace BBT.Workflow.Execution.Pipeline;
 
@@ -7,18 +8,24 @@ namespace BBT.Workflow.Execution.Pipeline;
 /// Orchestrates the execution of transition lifecycle steps in a deterministic order.
 /// Each step in the pipeline performs a specific operation during the transition.
 /// Uses Result pattern for exception-free error handling.
+/// Supports error boundary handling for State and Global level policies via step interceptor.
 /// </summary>
 public class TransitionPipeline
 {
     private readonly IReadOnlyList<ITransitionStep> _steps;
+    private readonly ErrorBoundaryStepInterceptor _stepInterceptor;
 
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
     /// <param name="steps">The collection of pipeline steps to execute.</param>
-    public TransitionPipeline(IEnumerable<ITransitionStep> steps)
+    /// <param name="stepInterceptor">Error boundary step interceptor for step-level error handling.</param>
+    public TransitionPipeline(
+        IEnumerable<ITransitionStep> steps,
+        ErrorBoundaryStepInterceptor stepInterceptor)
     {
         _steps = steps.OrderBy(s => s.Order).ToList();
+        _stepInterceptor = stepInterceptor;
     }
 
     /// <summary>
@@ -103,14 +110,15 @@ public class TransitionPipeline
     }
 
     /// <summary>
-    /// Executes a single pipeline step.
-    /// Delegates to step implementation.
+    /// Executes a single pipeline step through the error boundary interceptor.
     /// </summary>
-    private static Task<Result<StepOutcome>> ExecuteStepAsync(
+    private Task<Result<StepOutcome>> ExecuteStepAsync(
         ITransitionStep step,
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
-        => step.ExecuteAsync(context, cancellationToken);
+    {
+        return _stepInterceptor.ExecuteWithErrorBoundaryAsync(step, context, cancellationToken);
+    }
 
     /// <summary>
     /// Determines flow control based on step outcome.
@@ -126,18 +134,32 @@ public class TransitionPipeline
         // Apply directive mutations from outcome
         outcome.MutateDirectives?.Invoke(context.Directives);
 
-        // 1) Stop pipeline?
+        // 0) Check for error boundary transition request
+        if (outcome.ErrorActionResult != null && outcome.ErrorActionResult.HasTransition)
+        {
+            // Error boundary requested a transition - store in Items for post-pipeline handling
+            context.Items["ErrorBoundary:TransitionKey"] = outcome.ErrorActionResult.TransitionKey;
+        }
+
+        // 1) Stop for retry? (graceful stop - retry job is scheduled)
+        if (outcome.StopForRetry)
+        {
+            context.Items["Pipeline:StoppedForRetry"] = true;
+            return FlowControl.Stop();
+        }
+
+        // 2) Stop pipeline?
         if (outcome.StopPipeline)
             return FlowControl.Stop();
 
-        // 2) Skip to specific order? (e.g., restart from CreateTransition after inline auto)
+        // 3) Skip to specific order? (e.g., restart from CreateTransition after inline auto)
         if (outcome.SkipToOrder is { } skipTo)
         {
             context.Directives.RequestResumeFrom(skipTo);
             return FlowControl.Replan();
         }
 
-        // 3) Directives changed requiring replan?
+        // 4) Directives changed requiring replan?
         if (NeedsReplan(state.Plan, context.Directives))
         {
             context.Directives.RequestResumeFrom(step.Order + 1);

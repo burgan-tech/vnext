@@ -1,3 +1,4 @@
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Tasks.Coordinator;
@@ -8,6 +9,7 @@ using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using IConditionEvaluator = BBT.Workflow.Tasks.Evaluation.IConditionEvaluator;
 using ITimerEvaluator = BBT.Workflow.Tasks.Evaluation.ITimerEvaluator;
@@ -99,13 +101,26 @@ public static class TaskServiceCollectionExtensions
 
     /// <summary>
     /// Adds task coordination services (ITaskCoordinator, ITaskConditionService, ITaskTimerService).
+    /// Uses the Decorator Pattern to wrap TaskCoordinator with ErrorBoundaryTaskCoordinatorDecorator.
     /// </summary>
     private static IServiceCollection AddTaskCoordination(this IServiceCollection services)
     {
-        services.AddScoped<ITaskCoordinator, TaskCoordinator>();
-        services.AddScoped<ITaskConditionService, TaskCoordinator>();
-        services.AddScoped<ITaskTimerService, TaskCoordinator>();
-        
+        // Inner coordinator (concrete implementation)
+        services.AddScoped<TaskCoordinator>();
+
+        // Decorator wrapping the inner coordinator with error boundary handling
+        services.AddScoped<ITaskCoordinator>(sp =>
+            new ErrorBoundaryTaskCoordinatorDecorator(
+                sp.GetRequiredService<TaskCoordinator>(),
+                sp.GetRequiredService<IErrorPolicyResolver>(),
+                sp.GetRequiredService<IErrorActionExecutor>(),
+                sp.GetRequiredService<ILogger<ErrorBoundaryTaskCoordinatorDecorator>>()));
+
+        // Condition and Timer services use the inner coordinator directly
+        // (error boundary not needed for evaluation operations)
+        services.AddScoped<ITaskConditionService>(sp => sp.GetRequiredService<TaskCoordinator>());
+        services.AddScoped<ITaskTimerService>(sp => sp.GetRequiredService<TaskCoordinator>());
+
         return services;
     }
 

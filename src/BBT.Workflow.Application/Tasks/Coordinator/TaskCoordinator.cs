@@ -148,7 +148,7 @@ public sealed class TaskCoordinator : ITaskCoordinator
         {
             stopwatch.Stop();
             RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
-                executorResult.Error.Message, cancellationToken);
+                executorResult.Error, cancellationToken);
             return Result.Fail(executorResult.Error);
         }
 
@@ -164,16 +164,28 @@ public sealed class TaskCoordinator : ITaskCoordinator
         var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
 
         stopwatch.Stop();
-
+        
         if (!executeResult.IsSuccess)
         {
             RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
-                executeResult.Error.Message, cancellationToken);
+                executeResult.Error, cancellationToken);
+            // Persist completion (non-blocking)
+            await PersistCompletionAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
             return Result.Fail(executeResult.Error);
         }
 
         // Complete task
         var response = executeResult.Value!;
+
+        if (response.Error.HasValue)
+        {
+            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+                response.Error.Value, cancellationToken);
+            // Persist completion (non-blocking)
+            await PersistCompletionAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
+            return Result.Fail(response.Error.Value);
+        }
+        
         ApplyOutputToContext(task, response, taskTrigger, context);
         instanceTask.Completed(new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions)));
 
@@ -287,10 +299,10 @@ public sealed class TaskCoordinator : ITaskCoordinator
         string taskType,
         string workflowKey,
         Stopwatch stopwatch,
-        string? errorMessage,
+        Error error,
         CancellationToken cancellationToken)
     {
-        instanceTask.Faulted(errorMessage ?? "Unknown error");
+        instanceTask.Faulted(error);
 
         // Fire and forget persistence for failed tasks
         if (strategy != null)
@@ -301,7 +313,7 @@ public sealed class TaskCoordinator : ITaskCoordinator
         _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
         _workflowMetrics.FinishTaskExecution(taskType, workflowKey);
 
-        _logger.LogError("Task {TaskKey} failed: {Error}", instanceTask.TaskId, errorMessage);
+        _logger.LogError("Task {TaskKey} failed: {Error}", instanceTask.TaskId, error.Message);
     }
 
     /// <summary>

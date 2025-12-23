@@ -97,6 +97,9 @@ public sealed class HandleSubFlowStep(
         var correlation = CreateCorrelation(context);
         context.Instance.AddCorrelation(correlation);
 
+        // Store error boundary context for SubFlow completion handling
+        StoreErrorBoundaryContext(context, correlation);
+
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
         var scriptContext = await context.GetOrBuildScriptContextAsync(
@@ -111,6 +114,41 @@ public sealed class HandleSubFlowStep(
             correlation,
             scriptContext,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Stores error boundary context information for SubFlow error handling.
+    /// This context will be used by SubflowCompletionService when the child workflow completes.
+    /// </summary>
+    private void StoreErrorBoundaryContext(TransitionExecutionContext context, InstanceCorrelation correlation)
+    {
+        var subFlow = context.Target!.SubFlow!;
+        
+        // Log error policy configuration for debugging
+        if (subFlow.ErrorBoundary != null || subFlow.ErrorPolicy != null)
+        {
+            logger.LogDebug(
+                "SubFlow {CorrelationId} has error handling configured. " +
+                "ErrorBoundary: {HasBoundary}, ErrorPolicy: {HasPolicy}, PropagateToParent: {Propagate}",
+                correlation.Id,
+                subFlow.HasErrorBoundary,
+                subFlow.ErrorPolicy != null,
+                subFlow.EffectiveErrorPolicy.PropagateToParent);
+        }
+
+        // Store SubFlow error context in instance extra properties for retrieval on completion
+        // This allows SubflowCompletionService to know the parent's error handling preferences
+        var errorContext = new Dictionary<string, object?>
+        {
+            ["HasErrorBoundary"] = subFlow.HasErrorBoundary,
+            ["PropagateToParent"] = subFlow.EffectiveErrorPolicy.PropagateToParent,
+            ["IncludeChildErrorDetails"] = subFlow.EffectiveErrorPolicy.IncludeChildErrorDetails,
+            ["ParentTransition"] = subFlow.EffectiveErrorPolicy.ParentTransition,
+            ["ParentStateKey"] = context.Target.Key,
+            ["ParentWorkflowKey"] = context.WorkflowKey
+        };
+
+        context.Instance.ExtraProperties[$"SubFlowErrorContext:{correlation.Id}"] = errorContext;
     }
 
     /// <summary>

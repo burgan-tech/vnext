@@ -36,6 +36,17 @@ public sealed class PipelineDirectives
     public bool IsSubFlowResume { get; private set; }
 
     /// <summary>
+    /// Gets the error transition key requested by the error boundary system.
+    /// When set, the pipeline should trigger this transition instead of continuing normally.
+    /// </summary>
+    public string? ErrorTransitionKey { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether an error transition has been requested.
+    /// </summary>
+    public bool HasErrorTransition => !string.IsNullOrEmpty(ErrorTransitionKey);
+
+    /// <summary>
     /// Requests the pipeline to resume from a specific order.
     /// </summary>
     /// <param name="order">The lifecycle order to resume from.</param>
@@ -73,13 +84,31 @@ public sealed class PipelineDirectives
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
+
+    /// <summary>
+    /// Requests an error-triggered transition.
+    /// The pipeline will stop current execution and trigger the specified transition.
+    /// </summary>
+    /// <param name="transitionKey">The key of the transition to trigger.</param>
+    public void RequestErrorTransition(string transitionKey)
+    {
+        if (!string.IsNullOrEmpty(transitionKey))
+        {
+            ErrorTransitionKey = transitionKey;
+        }
+    }
+
+    /// <summary>
+    /// Clears the error transition request.
+    /// </summary>
+    public void ClearErrorTransition() => ErrorTransitionKey = null;
     
     /// <summary>
     /// Creates a snapshot of the current directives state for post-commit processing.
     /// The snapshot captures the inline auto queue for execution after UoW commit.
     /// </summary>
     /// <returns>A snapshot containing the queued re-entry commands.</returns>
-    public DirectivesSnapshot CreateSnapshot() => new(InlineAutoQueue.ToArray());
+    public DirectivesSnapshot CreateSnapshot() => new(InlineAutoQueue.ToArray(), ErrorTransitionKey);
 }
 
 /// <summary>
@@ -87,10 +116,16 @@ public sealed class PipelineDirectives
 /// Used to transfer inline auto queue state across UoW boundaries.
 /// </summary>
 /// <param name="InlineAutoQueue">Array of re-entry commands to process after commit.</param>
-public sealed record DirectivesSnapshot(ReentryCommand[] InlineAutoQueue)
+/// <param name="ErrorTransitionKey">Optional error-triggered transition key.</param>
+public sealed record DirectivesSnapshot(ReentryCommand[] InlineAutoQueue, string? ErrorTransitionKey = null)
 {
     /// <summary>
     /// Gets a value indicating whether there are any queued inline auto transitions.
     /// </summary>
     public bool HasQueuedTransitions => InlineAutoQueue.Length > 0;
+
+    /// <summary>
+    /// Gets a value indicating whether an error transition was requested.
+    /// </summary>
+    public bool HasErrorTransition => !string.IsNullOrEmpty(ErrorTransitionKey);
 }

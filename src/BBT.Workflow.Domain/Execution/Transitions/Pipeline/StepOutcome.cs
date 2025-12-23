@@ -1,3 +1,5 @@
+using BBT.Workflow.Execution.ErrorHandling;
+
 namespace BBT.Workflow.Execution.Pipeline;
 
 /// <summary>
@@ -26,6 +28,18 @@ public sealed class StepOutcome
     public Action<PipelineDirectives>? MutateDirectives { get; init; }
 
     /// <summary>
+    /// Gets the error action result from error boundary processing.
+    /// Used when an error was caught and handled by the error boundary system.
+    /// </summary>
+    public ErrorActionResult? ErrorActionResult { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the pipeline should stop for a scheduled retry.
+    /// This is a graceful stop - the retry will be executed by a background job.
+    /// </summary>
+    public bool StopForRetry { get; init; }
+
+    /// <summary>
     /// Creates an outcome that continues to the next pipeline step.
     /// </summary>
     /// <returns>A StepOutcome that allows pipeline continuation.</returns>
@@ -50,4 +64,11 @@ public sealed class StepOutcome
     /// <param name="fx">The action to apply to the directives.</param>
     /// <returns>A StepOutcome with directive mutation.</returns>
     public static StepOutcome With(Action<PipelineDirectives> fx) => new() { MutateDirectives = fx };
+
+    /// <summary>
+    /// Creates an outcome that stops the pipeline for a scheduled retry.
+    /// The retry will be executed by a background job after the configured delay.
+    /// </summary>
+    /// <returns>A StepOutcome that stops the pipeline for retry.</returns>
+    public static StepOutcome RetryScheduled() => new() { StopForRetry = true };
 }

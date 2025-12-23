@@ -15,6 +15,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Pipeline step that executes the current state's OnExit tasks.
 /// These tasks run when leaving the current state.
 /// Uses Result pattern for exception-free error handling.
+/// Error boundary handling is applied transparently via ErrorBoundaryTaskCoordinatorDecorator.
 /// </summary>
 public sealed class RunOnExitTasksStep(
     ITaskCoordinator taskCoordinator,
@@ -72,6 +73,7 @@ public sealed class RunOnExitTasksStep(
 
     /// <summary>
     /// Executes the OnExit tasks and returns Result for error propagation.
+    /// Error boundary handling is applied transparently via ErrorBoundaryTaskCoordinatorDecorator.
     /// </summary>
     private async Task<Result> ExecuteTasksAsync(
         TransitionExecutionContext context,
@@ -80,12 +82,22 @@ public sealed class RunOnExitTasksStep(
     {
         var instanceTransitionId = GetTransitionRecordId(context);
 
-        return await taskCoordinator.ExecuteAsync(
-            context.Current.OnExits,
-            instanceTransitionId,
-            TaskTrigger.OnExit,
-            scriptContext,
-            cancellationToken);
+        // Set transition context for error boundary decorator
+        ErrorBoundaryTaskCoordinatorDecorator.SetTransitionContext(context);
+        try
+        {
+            return await taskCoordinator.ExecuteAsync(
+                context.Current.OnExits,
+                instanceTransitionId,
+                TaskTrigger.OnExit,
+                scriptContext,
+                cancellationToken);
+        }
+        finally
+        {
+            // Clear transition context after execution
+            ErrorBoundaryTaskCoordinatorDecorator.SetTransitionContext(null);
+        }
     }
 
     /// <summary>

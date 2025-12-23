@@ -5,6 +5,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -26,6 +27,8 @@ public sealed class SubflowCompletionService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IGuidGenerator guidGenerator,
     IWorkflowExecutionService workflowExecutionService,
+    IErrorPolicyResolver errorPolicyResolver,
+    IErrorActionExecutor errorActionExecutor,
     ILogger<SubflowCompletionService> logger)
     : ApplicationService(serviceProvider), ISubflowCompletionService
 {
@@ -80,12 +83,29 @@ public sealed class SubflowCompletionService(
                 return;
             }
 
+            // Check if SubFlow completed with an error
+            if (completedInput.HasError && completedInput.ErrorPayload != null)
+            {
+                await ProcessSubFlowErrorAsync(
+                    correlation,
+                    completedInput,
+                    parentInstance,
+                    cancellationToken);
+
+                // Cleanup cached error context from ExtraProperties
+                await CleanupSubFlowErrorContextAsync(parentInstance, correlation.Id, cancellationToken);
+                return;
+            }
+
             // Process parent workflow continuation for SubFlow (blocking)
             await ProcessParentWorkflowContinuationAsync(
                 correlation,
                 completedInput,
                 parentInstance,
                 cancellationToken);
+
+            // Cleanup cached error context from ExtraProperties (even on success)
+            await CleanupSubFlowErrorContextAsync(parentInstance, correlation.Id, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -227,6 +247,387 @@ public sealed class SubflowCompletionService(
     }
 
     /// <summary>
+    /// Processes SubFlow error using the error boundary system.
+    /// First attempts to use cached error context from ExtraProperties (set by HandleSubFlowStep),
+    /// then falls back to loading workflow definition if needed for policy resolution.
+    /// </summary>
+    private async Task ProcessSubFlowErrorAsync(
+        InstanceCorrelation correlation,
+        FlowCompletedInput completedInput,
+        Instance parentInstance,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            logger.LogWarning(
+                "Processing SubFlow error from child {ChildInstanceId} for parent {ParentInstanceId}",
+                completedInput.SubInstanceId,
+                parentInstance.Id);
+
+            var errorPayload = completedInput.ErrorPayload!;
+
+            // Try to get error context from ExtraProperties (cached by HandleSubFlowStep)
+            var errorContextKey = $"SubFlowErrorContext:{correlation.Id}";
+            var cachedContext = TryGetCachedErrorContext(parentInstance, errorContextKey);
+
+            if (cachedContext != null)
+            {
+                // Use cached context - more performant, avoids workflow definition reload
+                await ProcessSubFlowErrorWithCachedContextAsync(
+                    cachedContext,
+                    correlation,
+                    completedInput,
+                    parentInstance,
+                    errorPayload,
+                    cancellationToken);
+                return;
+            }
+
+            // Fallback: Load workflow definition (for backward compatibility or if context not cached)
+            logger.LogDebug(
+                "Cached error context not found for correlation {CorrelationId}, loading workflow definition",
+                correlation.Id);
+
+            await ProcessSubFlowErrorWithWorkflowDefinitionAsync(
+                correlation,
+                completedInput,
+                parentInstance,
+                errorPayload,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Error processing SubFlow error for parent {ParentInstanceId}",
+                parentInstance.Id);
+        }
+    }
+
+    /// <summary>
+    /// Attempts to retrieve cached SubFlow error context from instance ExtraProperties.
+    /// </summary>
+    private static SubFlowCachedErrorContext? TryGetCachedErrorContext(
+        Instance parentInstance,
+        string errorContextKey)
+    {
+        if (!parentInstance.ExtraProperties.TryGetValue(errorContextKey, out var storedContext))
+        {
+            return null;
+        }
+
+        // Handle both Dictionary<string, object?> and JsonElement cases
+        if (storedContext is Dictionary<string, object?> dictContext)
+        {
+            return SubFlowCachedErrorContext.FromDictionary(dictContext);
+        }
+
+        if (storedContext is JsonElement jsonElement)
+        {
+            return SubFlowCachedErrorContext.FromJsonElement(jsonElement);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Processes SubFlow error using cached context from ExtraProperties.
+    /// This is the optimized path that avoids reloading workflow definition.
+    /// </summary>
+    private async Task ProcessSubFlowErrorWithCachedContextAsync(
+        SubFlowCachedErrorContext cachedContext,
+        InstanceCorrelation correlation,
+        FlowCompletedInput completedInput,
+        Instance parentInstance,
+        SubFlowErrorPayload errorPayload,
+        CancellationToken cancellationToken)
+    {
+        logger.LogDebug(
+            "Using cached error context for SubFlow error handling. PropagateToParent: {Propagate}",
+            cachedContext.PropagateToParent);
+
+        // Check if error should be propagated to parent
+        if (!cachedContext.PropagateToParent)
+        {
+            logger.LogInformation(
+                "SubFlow error not propagated to parent (PropagateToParent=false)");
+
+            // Still resume the pipeline, but the error is not propagated
+            // For cached context, we need to load workflow for resume (minimal overhead)
+            var workflowForResume = await LoadWorkflowForResumeAsync(completedInput, cancellationToken);
+            if (workflowForResume != null)
+            {
+                await ResumePipelineAsync(parentInstance, workflowForResume, cancellationToken);
+            }
+            return;
+        }
+
+        // If propagation is needed but we need full policy resolution,
+        // we still need workflow definition for error boundary rules
+        if (cachedContext.HasErrorBoundary)
+        {
+            // Has custom error boundary - need to load workflow for policy resolution
+            await ProcessSubFlowErrorWithWorkflowDefinitionAsync(
+                correlation,
+                completedInput,
+                parentInstance,
+                errorPayload,
+                cancellationToken);
+            return;
+        }
+
+        // No custom error boundary - use ParentTransition if configured
+        if (!string.IsNullOrEmpty(cachedContext.ParentTransition))
+        {
+            logger.LogInformation(
+                "Using cached ParentTransition: {Transition}",
+                cachedContext.ParentTransition);
+
+            var workflowForTransition = await LoadWorkflowForResumeAsync(completedInput, cancellationToken);
+            if (workflowForTransition != null)
+            {
+                await TriggerErrorTransitionAsync(
+                    parentInstance,
+                    workflowForTransition,
+                    cachedContext.ParentTransition,
+                    cancellationToken);
+            }
+            return;
+        }
+
+        // No handling configured - log and let it bubble up
+        logger.LogError(
+            "No error policy found for SubFlow error in state {State}",
+            cachedContext.ParentStateKey);
+    }
+
+    /// <summary>
+    /// Processes SubFlow error by loading workflow definition.
+    /// This is the fallback path for full policy resolution.
+    /// </summary>
+    private async Task ProcessSubFlowErrorWithWorkflowDefinitionAsync(
+        InstanceCorrelation correlation,
+        FlowCompletedInput completedInput,
+        Instance parentInstance,
+        SubFlowErrorPayload errorPayload,
+        CancellationToken cancellationToken)
+    {
+        // Get parent workflow definition
+        var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
+            completedInput.Domain,
+            completedInput.Flow,
+            completedInput.Version,
+            cancellationToken);
+
+        if (!parentWorkflowResult.IsSuccess)
+        {
+            logger.LogError(
+                "Failed to get parent workflow {Flow} for SubFlow error handling",
+                completedInput.Flow);
+            return;
+        }
+
+        var parentWorkflow = parentWorkflowResult.Value!;
+
+        // Get the SubFlow state
+        var subFlowStateResult = parentWorkflow.GetState(correlation.ParentState);
+        if (!subFlowStateResult.IsSuccess)
+        {
+            logger.LogError(
+                "SubFlow state {State} not found in parent workflow",
+                correlation.ParentState);
+            return;
+        }
+
+        var subFlowState = subFlowStateResult.Value!;
+
+        // Check SubFlow error policy - get from SubFlow configuration
+        if (subFlowState.SubFlow == null)
+        {
+            logger.LogError(
+                "SubFlow configuration not found in state {State}",
+                subFlowState.Key);
+            return;
+        }
+
+        var subFlowPolicy = subFlowState.SubFlow.EffectiveErrorPolicy;
+
+        if (!subFlowPolicy.PropagateToParent)
+        {
+            logger.LogInformation(
+                "SubFlow error not propagated to parent (PropagateToParent=false)");
+
+            // Still resume the pipeline, but the error is not propagated
+            await ResumePipelineAsync(parentInstance, parentWorkflow, cancellationToken);
+            return;
+        }
+
+        // Build error context for parent
+        var errorContext = new ErrorContext
+        {
+            ExceptionTypeName = errorPayload.ExceptionTypeName,
+            ErrorCode = errorPayload.ErrorCode,
+            IsTimeout = errorPayload.IsTimeout,
+            Scope = ErrorBoundaryScope.SubFlow,
+            TaskKey = null,
+            StateKey = subFlowState.Key,
+            TransitionKey = null,
+            InstanceId = parentInstance.Id,
+            Domain = completedInput.Domain,
+            Flow = completedInput.Flow,
+            Attempt = 0,
+            Message = subFlowPolicy.IncludeChildErrorDetails
+                ? errorPayload.Message
+                : "SubFlow completed with error",
+            Details = subFlowPolicy.IncludeChildErrorDetails
+                ? errorPayload.Details
+                : null,
+            OccurredAt = errorPayload.OccurredAt
+        };
+
+        // Build a minimal transition context for policy resolution
+        var transitionContext = new TransitionExecutionContext
+        {
+            Domain = completedInput.Domain,
+            InstanceId = parentInstance.Id,
+            WorkflowKey = completedInput.Flow,
+            Instance = parentInstance,
+            Workflow = parentWorkflow,
+            Current = subFlowState
+        };
+
+        // Resolve error policy
+        var resolvedPolicy = errorPolicyResolver.ResolveSubFlow(
+            transitionContext,
+            errorContext,
+            subFlowState);
+
+        if (resolvedPolicy == null)
+        {
+            // No policy found - check if there's a ParentTransition configured
+            if (!string.IsNullOrEmpty(subFlowPolicy.ParentTransition))
+            {
+                logger.LogInformation(
+                    "No error policy found, using SubFlowErrorPolicy.ParentTransition: {Transition}",
+                    subFlowPolicy.ParentTransition);
+
+                await TriggerErrorTransitionAsync(
+                    parentInstance,
+                    parentWorkflow,
+                    subFlowPolicy.ParentTransition,
+                    cancellationToken);
+                return;
+            }
+
+            // No handling configured - log and let it bubble up
+            logger.LogError(
+                "No error policy found for SubFlow error in state {State}",
+                subFlowState.Key);
+            return;
+        }
+
+        // Execute the error action
+        var actionResult = await errorActionExecutor.ExecuteAsync(
+            transitionContext,
+            errorContext,
+            resolvedPolicy,
+            cancellationToken);
+
+        // Handle the action result
+        if (actionResult.HasTransition)
+        {
+            await TriggerErrorTransitionAsync(
+                parentInstance,
+                parentWorkflow,
+                actionResult.TransitionKey!,
+                cancellationToken);
+        }
+        else if (actionResult.ShouldContinue)
+        {
+            // Action allows continuation (e.g., Ignore)
+            await ResumePipelineAsync(parentInstance, parentWorkflow, cancellationToken);
+        }
+        // If neither, the workflow stays in current state (e.g., Abort without transition)
+    }
+
+    /// <summary>
+    /// Loads workflow definition for resume operations.
+    /// </summary>
+    private async Task<Definitions.Workflow?> LoadWorkflowForResumeAsync(
+        FlowCompletedInput completedInput,
+        CancellationToken cancellationToken)
+    {
+        var workflowResult = await componentCacheStore.GetFlowAsync(
+            completedInput.Domain,
+            completedInput.Flow,
+            completedInput.Version,
+            cancellationToken);
+
+        if (!workflowResult.IsSuccess)
+        {
+            logger.LogError(
+                "Failed to load workflow {Flow} for resume operation",
+                completedInput.Flow);
+            return null;
+        }
+
+        return workflowResult.Value;
+    }
+
+    /// <summary>
+    /// Triggers an error transition on the parent workflow.
+    /// </summary>
+    private async Task TriggerErrorTransitionAsync(
+        Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
+        string transitionKey,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            logger.LogInformation(
+                "Triggering error transition {Transition} for instance {InstanceId}",
+                transitionKey,
+                parentInstance.Id);
+
+            var input = new WorkflowExecutionContext
+            {
+                Domain = parentWorkflow.Domain,
+                WorkflowKey = parentWorkflow.Key,
+                WorkflowVersion = parentWorkflow.Version,
+                InstanceId = parentInstance.Id.ToString(),
+                TransitionKey = transitionKey,
+                TriggerType = TriggerType.Automatic,
+                Mode = ExecMode.Sync,
+                Headers = new Dictionary<string, string?>(),
+                Actor = ExecutionActor.System,
+                RequestedAt = DateTimeOffset.UtcNow,
+                Execution = new ExecutionInfo
+                {
+                    ExecutionChainId = Guid.NewGuid().ToString("N"),
+                    ChainDepth = 0
+                }
+            };
+
+            var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
+
+            if (!result.IsSuccess)
+            {
+                logger.LogError(
+                    "Failed to execute error transition {Transition}: {Error}",
+                    transitionKey,
+                    result.Error.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Error triggering error transition {Transition} for instance {InstanceId}",
+                transitionKey,
+                parentInstance.Id);
+        }
+    }
+
+    /// <summary>
     /// Resumes automatic transitions and scheduled processes for the parent workflow after SubFlow completion.
     /// This continues the workflow execution that was paused while waiting for SubFlow completion.
     /// </summary>
@@ -283,6 +684,42 @@ public sealed class SubflowCompletionService(
                 parentInstance.Id);
 
             // Don't throw - SubFlow completion should still be marked as successful
+        }
+    }
+
+    /// <summary>
+    /// Cleans up the cached SubFlow error context from instance ExtraProperties.
+    /// This should be called after SubFlow completion (both success and error cases)
+    /// to prevent data pollution in the instance.
+    /// </summary>
+    /// <param name="parentInstance">The parent instance</param>
+    /// <param name="correlationId">The SubFlow correlation ID</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    private async Task CleanupSubFlowErrorContextAsync(
+        Instance parentInstance,
+        Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var errorContextKey = $"SubFlowErrorContext:{correlationId}";
+
+            if (parentInstance.ExtraProperties.ContainsKey(errorContextKey))
+            {
+                parentInstance.ExtraProperties.Remove(errorContextKey);
+                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+
+                logger.LogDebug(
+                    "Cleaned up SubFlow error context for correlation {CorrelationId}",
+                    correlationId);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw - cleanup failure shouldn't affect SubFlow completion
+            logger.LogWarning(ex,
+                "Failed to cleanup SubFlow error context for correlation {CorrelationId}",
+                correlationId);
         }
     }
 }

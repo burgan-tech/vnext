@@ -37,7 +37,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         List<State> states,
         List<Transition> sharedTransitions,
         List<Reference> extensions,
-        Transition startTransition
+        Transition startTransition,
+        ErrorBoundary errorBoundary
     ) : this()
     {
         Type = type;
@@ -50,6 +51,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         this.extensions = extensions ?? [];
         this.sharedTransitions = sharedTransitions ?? [];
         StartTransition = startTransition;
+        ErrorBoundary = errorBoundary;
     }
 
     /// <summary>
@@ -104,6 +106,14 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// When configured, allows the workflow to be canceled via the cancel transition.
     /// </summary>
     public Transition? Cancel { get; private set; }
+
+    /// <summary>
+    /// Global error boundary for this workflow.
+    /// Provides default error handling for all states and tasks unless overridden at lower levels.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("errorBoundary")]
+    public ErrorBoundary? ErrorBoundary { get; private set; }
 
     [JsonInclude] [JsonPropertyName("labels")]
     private List<LanguageLabel> labels = new();

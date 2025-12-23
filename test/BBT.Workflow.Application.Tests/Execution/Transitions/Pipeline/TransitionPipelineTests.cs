@@ -7,6 +7,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.Transitions.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -25,11 +26,13 @@ public class TransitionPipelineTests
     private readonly Mock<ILogger<TransitionPipeline>> _mockLogger;
     private readonly List<Mock<ITransitionStep>> _mockSteps;
     private readonly TransitionPipeline _pipeline;
+    private readonly Mock<ErrorBoundaryStepInterceptor> _mockStepInterceptor;
 
     public TransitionPipelineTests()
     {
         _mockLogger = new Mock<ILogger<TransitionPipeline>>();
         _mockSteps = new List<Mock<ITransitionStep>>();
+        _mockStepInterceptor = new Mock<ErrorBoundaryStepInterceptor>();
         
         // Create a default set of steps in order
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
@@ -42,7 +45,8 @@ public class TransitionPipelineTests
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Finalize));
 
         _pipeline = new TransitionPipeline(
-            _mockSteps.Select(m => m.Object));
+            _mockSteps.Select(m => m.Object),
+            _mockStepInterceptor.Object);
     }
 
     #region RunAsync Tests
@@ -474,7 +478,8 @@ public class TransitionPipelineTests
         }
 
         var pipeline = new TransitionPipeline(
-            randomSteps.Select(m => m.Object));
+            randomSteps.Select(m => m.Object),
+            _mockStepInterceptor.Object);
 
         var context = CreateTransitionExecutionContext();
 

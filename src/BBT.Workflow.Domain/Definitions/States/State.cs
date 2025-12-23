@@ -35,7 +35,8 @@ public sealed class State : IHasKey
         List<LanguageLabel>? labels,
         List<OnExecuteTask>? onEntries,
         List<OnExecuteTask>? onExits,
-        ViewDefinition view)
+        ViewDefinition view,
+        ErrorBoundary errorBoundary)
         : this(key, stateType, subType)
     {
         VersionStrategy = versionStrategy;
@@ -43,6 +44,7 @@ public sealed class State : IHasKey
         this.onEntries = onEntries ?? [];
         this.onExits = onExits ?? [];
         this.view = view;
+        this.errorBoundary = errorBoundary;
     }
 
     /// <summary>
@@ -82,6 +84,9 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("view")]
     public ViewDefinition? view  { get; private set; }
 
+    [JsonInclude] [JsonPropertyName("errorBoundary")]
+    private ErrorBoundary? errorBoundary;
+
     /// <summary>
     /// Languages
     /// </summary>
@@ -93,6 +98,13 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonIgnore]
     public ViewDefinition? View => view;
+
+    /// <summary>
+    /// Error boundary for this state.
+    /// Overrides workflow-level error handling for tasks executed in this state.
+    /// </summary>
+    [JsonIgnore]
+    public ErrorBoundary? ErrorBoundary => errorBoundary;
 
     /// <summary>
     /// Transitions
@@ -145,10 +157,34 @@ public sealed class State : IHasKey
     {
         view = viewDefinition;
     }
-    
-    public void SetSubFlow(string type, IReference reference, ScriptCode mapping, Dictionary<string, Reference>? viewOverrides)
+
+    /// <summary>
+    /// Sets the error boundary for this state.
+    /// </summary>
+    /// <param name="boundary">The error boundary configuration.</param>
+    public void SetErrorBoundary(ErrorBoundary boundary)
     {
-        SubFlow = SubFlow.Create(type, reference, mapping, viewOverrides);
+        errorBoundary = boundary;
+    }
+    
+    /// <summary>
+    /// Sets the SubFlow configuration for this state.
+    /// </summary>
+    /// <param name="type">The SubFlow type.</param>
+    /// <param name="reference">Reference to the child workflow.</param>
+    /// <param name="mapping">Data mapping script.</param>
+    /// <param name="viewOverrides">Optional view overrides.</param>
+    /// <param name="errorBoundary">Optional error boundary for SubFlow execution errors.</param>
+    /// <param name="errorPolicy">Optional error propagation policy to parent workflow.</param>
+    public void SetSubFlow(
+        string type,
+        IReference reference,
+        ScriptCode mapping,
+        Dictionary<string, Reference>? viewOverrides,
+        ErrorBoundary? errorBoundary = null,
+        SubFlowErrorPolicy? errorPolicy = null)
+    {
+        SubFlow = SubFlow.Create(type, reference, mapping, viewOverrides, errorBoundary, errorPolicy);
     }
 
     public void AddTransition(Transition transition)
