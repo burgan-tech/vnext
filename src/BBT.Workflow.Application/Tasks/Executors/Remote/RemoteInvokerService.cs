@@ -70,9 +70,10 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 
         if (!result.IsSuccess)
         {
+            // TODO: Burada dapr invoke'da hata varsa Result.IsSuccess'e yansıyor. Burada TaskInvocationResult'da Error kısımlarında ayrıştırıcı bir kodlama ile yapmak gerekiyor. ErrorCode ve ExceptionTypeName kısımlarınında.
             _logger.LogError("Failed to invoke remote task {TaskKey}: {Error}",
                 taskKey, result.Error.Message);
-
+            // TODO: Eğer dapr invoke'da hata varsa Ok dönüp TaskInvocationResult.Failure dönüyoruz. Burada ErrorCode ve ExceptionTypeName kısımlarının değerlerini TaskInvocationResult.Failure'a aktarıyoruz.
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                 error: result.Error.Message ?? "Remote invocation failed",
                 statusCode: 500,
@@ -82,24 +83,6 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 
         var response = result.Value!;
 
-        // Always return TaskInvocationResult - let executor decide how to handle errors
-        if (!response.Success || response.Result == null)
-        {
-            _logger.LogWarning("Remote task {TaskKey} execution failed: {Error}",
-                taskKey, response.ErrorMessage ?? "Unknown error");
-
-            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                error: response.ErrorMessage ?? "Remote execution failed",
-                statusCode: 500,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
-                taskType: taskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["RemoteSuccess"] = false,
-                    ["TaskKey"] = taskKey
-                }));
-        }
-
         // Update execution duration to include network time
         var remoteResult = new TaskInvocationResult
         {
@@ -108,12 +91,14 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             Body = response.Result.Body,
             Data = response.Result.Data,
             ErrorMessage = response.Result.ErrorMessage,
+            ErrorCode = response.Result.ErrorCode,
+            ExceptionTypeName = response.Result.ExceptionTypeName,
             Headers = response.Result.Headers,
             TaskType = response.Result.TaskType,
             Metadata = response.Result.Metadata,
             ExecutionDurationMs = stopwatch.ElapsedMilliseconds
         };
-
+        //TODO: Burada response.Result.ErrorCode ve response.Result.ExceptionTypeName'ının değerlerini remoteResult'a aktarıyoruz.
         return Result<TaskInvocationResult>.Ok(remoteResult);
     }
 

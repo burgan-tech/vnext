@@ -108,9 +108,11 @@ public sealed class DaprHttpEndpointTaskInvoker(
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
-                    metadata: metadata);
+                    metadata: metadata,
+                    errorCode: $"Dapr.HttpEndpoint:{(int)response.StatusCode}",
+                    exceptionTypeName: "DaprHttpEndpointException");
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "cancelled");
@@ -121,11 +123,34 @@ public sealed class DaprHttpEndpointTaskInvoker(
                 error: "Dapr HTTP endpoint invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.HttpEndpoint.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["EndpointName"] = binding.EndpointName,
                     ["Path"] = binding.Path,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "timeout");
+            logger.LogError(ex, "Dapr HTTP endpoint invocation timeout: {EndpointName}/{Path}",
+                binding.EndpointName, binding.Path);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "Dapr.HttpEndpoint.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["EndpointName"] = binding.EndpointName,
+                    ["Path"] = binding.Path,
+                    ["ExceptionType"] = ex.GetType().Name,
+                    ["StackTrace"] = ex.StackTrace ?? string.Empty
                 });
         }
         catch (Exception ex)
@@ -139,6 +164,8 @@ public sealed class DaprHttpEndpointTaskInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.HttpEndpoint.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["EndpointName"] = binding.EndpointName,

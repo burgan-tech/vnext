@@ -125,9 +125,11 @@ public sealed class HttpTaskInvoker(
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
-                    metadata: metadata);
+                    metadata: metadata,
+                    errorCode: $"Http:{(int)response.StatusCode}",
+                    exceptionTypeName: "HttpResponseException");
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
@@ -138,6 +140,8 @@ public sealed class HttpTaskInvoker(
                 error: "HTTP request was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Http.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Url"] = binding.Url,
@@ -153,8 +157,31 @@ public sealed class HttpTaskInvoker(
             
             return TaskInvocationResult.Failure(
                 error: ex.Message,
+                statusCode: (int?)ex.StatusCode,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: ex.StatusCode.HasValue ? $"Http:{(int)ex.StatusCode}" : "Http.RequestException",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["Url"] = binding.Url,
+                    ["Method"] = binding.Method,
+                    ["ExceptionType"] = ex.GetType().Name,
+                    ["StackTrace"] = ex.StackTrace ?? string.Empty
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "failure");
+            logger.LogError(ex, "HTTP task timeout for {TaskKey} - URL: {Url}", taskKey, binding.Url);
+            
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "Http.Timeout",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Url"] = binding.Url,
@@ -173,6 +200,8 @@ public sealed class HttpTaskInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Http.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Url"] = binding.Url,

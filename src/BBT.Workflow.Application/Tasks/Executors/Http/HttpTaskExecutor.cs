@@ -53,8 +53,8 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
 
             await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Http task input handler failed: {ex.Message}"));
+            WorkflowErrorCodes.TaskInputMappingFailed,
+            $"Http task input mapping failed: {ex.Message}"));
 
         if (!result.IsSuccess)
         {
@@ -132,8 +132,8 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Http task output handler failed: {ex.Message}"));
+            WorkflowErrorCodes.TaskOutputMappingFailed,
+            $"Http task output mapping failed: {ex.Message}"));
 
         if (!result.IsSuccess)
         {

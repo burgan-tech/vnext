@@ -91,7 +91,7 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
                     ["Topic"] = binding.TopicName
                 });
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprPubSubPublish(binding.PubSubName, binding.TopicName, "cancelled");
@@ -102,11 +102,35 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
                 error: "Dapr PubSub operation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.PubSub.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["PubSubName"] = binding.PubSubName,
                     ["Topic"] = binding.TopicName,
                     ["Cancelled"] = true,
+                    ["Published"] = false
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordDaprPubSubPublish(binding.PubSubName, binding.TopicName, "timeout");
+            _logger.LogError(ex, "Dapr PubSub publish timeout: {PubSubName}/{Topic}",
+                binding.PubSubName, binding.TopicName);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "Dapr.PubSub.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["PubSubName"] = binding.PubSubName,
+                    ["Topic"] = binding.TopicName,
+                    ["ExceptionType"] = ex.GetType().Name,
+                    ["StackTrace"] = ex.StackTrace ?? string.Empty,
                     ["Published"] = false
                 });
         }
@@ -121,6 +145,8 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.PubSub.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["PubSubName"] = binding.PubSubName,

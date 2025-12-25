@@ -87,6 +87,7 @@ public sealed class ChangeStateStep(
         var result = context.Workflow.GetState(context.Instance.GetCurrentState)
             .Map(state =>
             {
+                context.Current = state;
                 context.Target = state;
                 return context;
             });

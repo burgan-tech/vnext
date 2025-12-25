@@ -28,13 +28,15 @@ public sealed class ErrorPolicyResolver : IErrorPolicyResolver
     public ResolvedPolicy? Resolve(
         TransitionExecutionContext context,
         ErrorContext errorContext,
-        OnExecuteTask? onExecuteTask = null)
+        OnExecuteTask? onExecuteTask = null,
+        bool excludeRetry = false)
     {
         _logger.LogDebug(
-            "Resolving error policy for {ExceptionType} in instance {InstanceId}, scope: {Scope}",
+            "Resolving error policy for {ExceptionType} in instance {InstanceId}, scope: {Scope}, excludeRetry: {ExcludeRetry}",
             errorContext.ExceptionTypeName,
             context.InstanceId,
-            errorContext.Scope);
+            errorContext.Scope,
+            excludeRetry);
 
         // Get cached compiled policies for this workflow
         var compiledPolicies = _policyCache.GetOrCompile(context.Workflow);
@@ -47,7 +49,7 @@ public sealed class ErrorPolicyResolver : IErrorPolicyResolver
                 onExecuteTask.ErrorBoundary);
             if (taskBoundary != null)
             {
-                var matchedRule = taskBoundary.FindMatch(errorContext);
+                var matchedRule = taskBoundary.FindMatch(errorContext, excludeRetry);
                 if (matchedRule != null)
                 {
                     _logger.LogDebug(
@@ -66,7 +68,7 @@ public sealed class ErrorPolicyResolver : IErrorPolicyResolver
             var stateBoundary = compiledPolicies.GetStateBoundary(currentState.Key);
             if (stateBoundary != null)
             {
-                var matchedRule = stateBoundary.FindMatch(errorContext);
+                var matchedRule = stateBoundary.FindMatch(errorContext, excludeRetry);
                 if (matchedRule != null)
                 {
                     _logger.LogDebug(
@@ -82,7 +84,7 @@ public sealed class ErrorPolicyResolver : IErrorPolicyResolver
         // 3. Check Global boundary
         if (compiledPolicies.GlobalBoundary != null)
         {
-            var matchedRule = compiledPolicies.GlobalBoundary.FindMatch(errorContext);
+            var matchedRule = compiledPolicies.GlobalBoundary.FindMatch(errorContext, excludeRetry);
             if (matchedRule != null)
             {
                 _logger.LogDebug(

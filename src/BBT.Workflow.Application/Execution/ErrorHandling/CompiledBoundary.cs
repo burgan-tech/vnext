@@ -44,26 +44,35 @@ public sealed class CompiledBoundary
     /// Attempts to find a matching rule for the given error context.
     /// </summary>
     /// <param name="errorContext">The error context to match against.</param>
+    /// <param name="excludeRetry">If true, excludes Retry action rules from matching.</param>
     /// <returns>The first matching rule, or null if no match found.</returns>
-    public ErrorHandlerRule? FindMatch(ErrorContext errorContext)
+    public ErrorHandlerRule? FindMatch(ErrorContext errorContext, bool excludeRetry = false)
     {
         // If timeout and we have a timeout policy, handle it first
         if (errorContext.IsTimeout && Boundary.OnTimeout != null)
         {
-            // Convert timeout policy to a synthetic rule
-            return new ErrorHandlerRule
+            // Skip timeout policy if it's a retry action and excludeRetry is set
+            if (!excludeRetry || Boundary.OnTimeout.Action != ErrorAction.Retry)
             {
-                Action = Boundary.OnTimeout.Action,
-                RetryPolicy = Boundary.OnTimeout.DefaultRetryPolicy,
-                Transition = Boundary.OnTimeout.Transition,
-                NotificationConfig = Boundary.OnTimeout.NotificationConfig,
-                Priority = 0 // Timeout rules have highest priority
-            };
+                // Convert timeout policy to a synthetic rule
+                return new ErrorHandlerRule
+                {
+                    Action = Boundary.OnTimeout.Action,
+                    RetryPolicy = Boundary.OnTimeout.DefaultRetryPolicy,
+                    Transition = Boundary.OnTimeout.Transition,
+                    NotificationConfig = Boundary.OnTimeout.NotificationConfig,
+                    Priority = 0 // Timeout rules have highest priority
+                };
+            }
         }
 
         // Match against error rules
         foreach (var rule in SortedRules)
         {
+            // Skip Retry rules if excludeRetry is set
+            if (excludeRetry && rule.Action == ErrorAction.Retry)
+                continue;
+
             if (Matches(rule, errorContext))
             {
                 return rule;
@@ -75,11 +84,60 @@ public sealed class CompiledBoundary
 
     /// <summary>
     /// Checks if a rule matches the given error context.
+    /// Uses NormalizedError for consistent matching when available.
     /// </summary>
     private static bool Matches(ErrorHandlerRule rule, ErrorContext errorContext)
     {
+        // Use NormalizedError for matching if available
+        if (errorContext.NormalizedError != null)
+        {
+            return MatchesNormalized(rule, errorContext.NormalizedError);
+        }
+        
+        // Fallback to legacy matching
         return rule.MatchesExceptionType(errorContext.ExceptionTypeName) &&
-               rule.MatchesErrorCode(errorContext.ErrorCode);
+               rule.MatchesAnyCode(errorContext.ErrorCode, errorContext.StatusCode);
+    }
+
+    /// <summary>
+    /// Checks if a rule matches a normalized error.
+    /// Provides consistent matching across all error sources.
+    /// </summary>
+    private static bool MatchesNormalized(ErrorHandlerRule rule, NormalizedError normalizedError)
+    {
+        // Check exception type matching (null exception type matches wildcard or unspecified)
+        if (!rule.MatchesExceptionType(normalizedError.ExceptionType ?? "Exception"))
+            return false;
+
+        // Check error codes - match against all matchable codes from normalized error
+        // This includes: normalized code, status code string, original code
+        var hasCodeMatch = false;
+        var hasWildcard = rule.ErrorCodes?.Contains("*") ?? false;
+        
+        if (hasWildcard || rule.ErrorCodes == null || rule.ErrorCodes.Count == 0)
+        {
+            hasCodeMatch = true;
+        }
+        else
+        {
+            // Try matching against all possible codes
+            foreach (var code in normalizedError.GetMatchableCodes())
+            {
+                if (rule.MatchesErrorCode(code))
+                {
+                    hasCodeMatch = true;
+                    break;
+                }
+            }
+            
+            // Also try status code matching
+            if (!hasCodeMatch && normalizedError.StatusCode.HasValue)
+            {
+                hasCodeMatch = rule.MatchesStatusCode(normalizedError.StatusCode);
+            }
+        }
+
+        return hasCodeMatch;
     }
 
     /// <summary>

@@ -62,8 +62,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
             await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Input handler failed for {TaskType}: {ex.Message}"));
+            WorkflowErrorCodes.TaskInputMappingFailed,
+            $"Input mapping failed for {TaskType}: {ex.Message}"));
 
         if (!result.IsSuccess)
         {
@@ -102,8 +102,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Output handler failed for {TaskType}: {ex.Message}"));
+            WorkflowErrorCodes.TaskOutputMappingFailed,
+            $"Output mapping failed for {TaskType}: {ex.Message}"));
 
         if (!result.IsSuccess)
         {

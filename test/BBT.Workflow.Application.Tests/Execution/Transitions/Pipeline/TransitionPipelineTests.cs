@@ -26,13 +26,13 @@ public class TransitionPipelineTests
     private readonly Mock<ILogger<TransitionPipeline>> _mockLogger;
     private readonly List<Mock<ITransitionStep>> _mockSteps;
     private readonly TransitionPipeline _pipeline;
-    private readonly Mock<ErrorBoundaryStepInterceptor> _mockStepInterceptor;
+    private readonly Mock<StepExecutionMiddleware> _mockStepMiddleware;
 
     public TransitionPipelineTests()
     {
         _mockLogger = new Mock<ILogger<TransitionPipeline>>();
         _mockSteps = new List<Mock<ITransitionStep>>();
-        _mockStepInterceptor = new Mock<ErrorBoundaryStepInterceptor>();
+        _mockStepMiddleware = new Mock<StepExecutionMiddleware>();
         
         // Create a default set of steps in order
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
@@ -46,7 +46,7 @@ public class TransitionPipelineTests
 
         _pipeline = new TransitionPipeline(
             _mockSteps.Select(m => m.Object),
-            _mockStepInterceptor.Object);
+            _mockStepMiddleware.Object);
     }
 
     #region RunAsync Tests
@@ -479,7 +479,7 @@ public class TransitionPipelineTests
 
         var pipeline = new TransitionPipeline(
             randomSteps.Select(m => m.Object),
-            _mockStepInterceptor.Object);
+            _mockStepMiddleware.Object);
 
         var context = CreateTransitionExecutionContext();
 

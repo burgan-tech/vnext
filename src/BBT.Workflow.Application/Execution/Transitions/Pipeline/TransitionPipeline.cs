@@ -8,24 +8,24 @@ namespace BBT.Workflow.Execution.Pipeline;
 /// Orchestrates the execution of transition lifecycle steps in a deterministic order.
 /// Each step in the pipeline performs a specific operation during the transition.
 /// Uses Result pattern for exception-free error handling.
-/// Supports error boundary handling for State and Global level policies via step interceptor.
+/// Supports error handling for State and Global level policies via step middleware.
 /// </summary>
 public class TransitionPipeline
 {
     private readonly IReadOnlyList<ITransitionStep> _steps;
-    private readonly ErrorBoundaryStepInterceptor _stepInterceptor;
+    private readonly StepExecutionMiddleware _stepMiddleware;
 
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
     /// <param name="steps">The collection of pipeline steps to execute.</param>
-    /// <param name="stepInterceptor">Error boundary step interceptor for step-level error handling.</param>
+    /// <param name="stepMiddleware">Step execution middleware for step-level cross-cutting concerns.</param>
     public TransitionPipeline(
         IEnumerable<ITransitionStep> steps,
-        ErrorBoundaryStepInterceptor stepInterceptor)
+        StepExecutionMiddleware stepMiddleware)
     {
         _steps = steps.OrderBy(s => s.Order).ToList();
-        _stepInterceptor = stepInterceptor;
+        _stepMiddleware = stepMiddleware;
     }
 
     /// <summary>
@@ -117,7 +117,7 @@ public class TransitionPipeline
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        return _stepInterceptor.ExecuteWithErrorBoundaryAsync(step, context, cancellationToken);
+        return _stepMiddleware.ExecuteAsync(step, context, cancellationToken);
     }
 
     /// <summary>

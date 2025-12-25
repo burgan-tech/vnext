@@ -90,7 +90,7 @@ public sealed class DaprBindingTaskInvoker(
                     ["Operation"] = operation
                 });
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "cancelled");
@@ -101,11 +101,34 @@ public sealed class DaprBindingTaskInvoker(
                 error: "Dapr binding invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.Binding.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["BindingName"] = binding.BindingName,
                     ["Operation"] = binding.Operation,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "timeout");
+            logger.LogError(ex, "Dapr binding invocation timeout: {BindingName}, Operation: {Operation}",
+                binding.BindingName, binding.Operation);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "Dapr.Binding.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["BindingName"] = binding.BindingName,
+                    ["Operation"] = binding.Operation,
+                    ["ExceptionType"] = ex.GetType().Name,
+                    ["StackTrace"] = ex.StackTrace ?? string.Empty
                 });
         }
         catch (Exception ex)
@@ -119,6 +142,8 @@ public sealed class DaprBindingTaskInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.Binding.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["BindingName"] = binding.BindingName,

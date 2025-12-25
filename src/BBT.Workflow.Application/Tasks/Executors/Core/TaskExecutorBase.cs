@@ -48,7 +48,7 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
         {
             return Result<StandardTaskResponse>.Fail(validationResult.Error);
         }
-
+        // TODO: StandardTaskResponse kısmını ise CreateErrorResponse ve CreateSuccessResponse ile dönüyoruz.
         var task = (TTask)context.Task;
 
         // 2. PrepareInput (virtual - custom per executor)
@@ -206,7 +206,10 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
             Metadata = invocationResult.Metadata,
             ExecutionDurationMs = executionDurationMs,
             TaskType = TaskType.ToString(),
-            ErrorMessage = invocationResult.ErrorMessage
+            ErrorMessage = invocationResult.ErrorMessage,
+            ErrorCode = invocationResult.ErrorCode,
+            ExceptionTypeName = invocationResult.ExceptionTypeName
+        
         });
     }
 
@@ -221,7 +224,6 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
         {
             IsSuccess = false,
             Error = error,
-            ErrorCore = error.Code,
             ErrorMessage = error.Message,
             StatusCode = 500,
             ExecutionDurationMs = executionDurationMs,

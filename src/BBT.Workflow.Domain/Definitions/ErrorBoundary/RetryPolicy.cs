@@ -43,6 +43,13 @@ public sealed record RetryPolicy
     public TimeSpan MaxDelay { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Whether to add random jitter to retry delays.
+    /// Helps prevent thundering herd problems when multiple tasks retry simultaneously.
+    /// </summary>
+    [JsonPropertyName("useJitter")]
+    public bool UseJitter { get; init; } = true;
+
+    /// <summary>
     /// Calculates the delay for a specific retry attempt.
     /// </summary>
     /// <param name="attempt">The current retry attempt number (1-based).</param>

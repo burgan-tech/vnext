@@ -77,8 +77,8 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
 
             await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Notification task input handler failed: {ex.Message}"));
+            WorkflowErrorCodes.TaskInputMappingFailed,
+            $"Notification task input mapping failed: {ex.Message}"));
 
         if (!result.IsSuccess)
         {
@@ -169,8 +169,8 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Notification task output handler failed: {ex.Message}"));
+            WorkflowErrorCodes.TaskOutputMappingFailed,
+            $"Notification task output mapping failed: {ex.Message}"));
 
         if (!result.IsSuccess)
         {

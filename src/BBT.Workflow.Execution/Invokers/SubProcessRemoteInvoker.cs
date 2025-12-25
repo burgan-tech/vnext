@@ -149,9 +149,11 @@ public sealed class SubProcessRemoteInvoker(
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
-                    metadata: metadata);
+                    metadata: metadata,
+                    errorCode: $"SubProcess:{(int)response.StatusCode}",
+                    exceptionTypeName: "SubProcessRemoteException");
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
@@ -162,6 +164,8 @@ public sealed class SubProcessRemoteInvoker(
                 error: "SubProcess remote invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "SubProcess.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Domain"] = binding.Domain,
@@ -169,6 +173,28 @@ public sealed class SubProcessRemoteInvoker(
                     ["SubProcessInstanceId"] = binding.InstanceId.ToString(),
                     ["OrchestrationAppId"] = _orchestrationAppId,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "timeout");
+            logger.LogError(ex, "SubProcess remote invocation timeout for task {TaskKey}: {Domain}/{Workflow}",
+                taskKey, binding.Domain, binding.Workflow);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "SubProcess.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["Domain"] = binding.Domain,
+                    ["Workflow"] = binding.Workflow,
+                    ["SubProcessInstanceId"] = binding.InstanceId.ToString(),
+                    ["OrchestrationAppId"] = _orchestrationAppId,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)
@@ -182,6 +208,8 @@ public sealed class SubProcessRemoteInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "SubProcess.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Domain"] = binding.Domain,

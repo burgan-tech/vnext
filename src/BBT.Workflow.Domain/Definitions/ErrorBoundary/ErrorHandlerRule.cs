@@ -33,11 +33,13 @@ public sealed record ErrorHandlerRule
     public IReadOnlyList<string>? ErrorTypes { get; init; }
 
     /// <summary>
-    /// List of error codes to match (e.g., HTTP status codes, domain error codes).
+    /// List of error codes to match. Supports both domain error codes (e.g., "Task:400007")
+    /// and HTTP status codes as strings (e.g., "500", "503").
     /// If null or empty, matches all error codes.
+    /// Use "*" for explicit wildcard matching.
     /// </summary>
     [JsonPropertyName("errorCodes")]
-    public IReadOnlyList<int>? ErrorCodes { get; init; }
+    public IReadOnlyList<string>? ErrorCodes { get; init; }
 
     /// <summary>
     /// Optional transition key to trigger when this rule matches.
@@ -85,7 +87,7 @@ public sealed record ErrorHandlerRule
     [JsonIgnore]
     public bool IsWildcard =>
         (ErrorTypes == null || ErrorTypes.Count == 0 || ErrorTypes.Contains("*")) &&
-        (ErrorCodes == null || ErrorCodes.Count == 0);
+        (ErrorCodes == null || ErrorCodes.Count == 0 || ErrorCodes.Contains("*"));
 
     /// <summary>
     /// Calculates the effective priority considering wildcard status.
@@ -105,7 +107,7 @@ public sealed record ErrorHandlerRule
             var score = 0;
             if (ErrorTypes != null && ErrorTypes.Count > 0 && !ErrorTypes.Contains("*"))
                 score += ErrorTypes.Count;
-            if (ErrorCodes != null && ErrorCodes.Count > 0)
+            if (ErrorCodes != null && ErrorCodes.Count > 0 && !ErrorCodes.Contains("*"))
                 score += ErrorCodes.Count;
             return score;
         }
@@ -127,19 +129,58 @@ public sealed record ErrorHandlerRule
     }
 
     /// <summary>
-    /// Checks if this rule matches the given error code.
+    /// Checks if this rule matches the given error code (domain error code as string).
+    /// Supports wildcard matching with "*".
     /// </summary>
-    /// <param name="errorCode">The error code to check (null if not applicable).</param>
+    /// <param name="errorCode">The error code to check (e.g., "Task:400007", null if not applicable).</param>
     /// <returns>True if the rule matches the error code.</returns>
-    public bool MatchesErrorCode(int? errorCode)
+    public bool MatchesErrorCode(string? errorCode)
     {
-        if (ErrorCodes == null || ErrorCodes.Count == 0)
+        if (ErrorCodes == null || ErrorCodes.Count == 0 || ErrorCodes.Contains("*"))
             return true;
 
-        if (errorCode == null)
+        if (string.IsNullOrEmpty(errorCode))
             return false;
 
-        return ErrorCodes.Contains(errorCode.Value);
+        return ErrorCodes.Contains(errorCode, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Checks if this rule matches the given HTTP status code.
+    /// Converts the status code to string and checks against ErrorCodes.
+    /// </summary>
+    /// <param name="statusCode">The HTTP status code to check (null if not applicable).</param>
+    /// <returns>True if the rule matches the status code.</returns>
+    public bool MatchesStatusCode(int? statusCode)
+    {
+        if (statusCode == null)
+            return false;
+
+        return MatchesErrorCode(statusCode.Value.ToString());
+    }
+
+    /// <summary>
+    /// Checks if this rule matches either the error code or status code.
+    /// </summary>
+    /// <param name="errorCode">The domain error code (e.g., "Task:400007").</param>
+    /// <param name="statusCode">The HTTP status code.</param>
+    /// <returns>True if the rule matches either code.</returns>
+    public bool MatchesAnyCode(string? errorCode, int? statusCode)
+    {
+        // If wildcard, match everything
+        if (ErrorCodes == null || ErrorCodes.Count == 0 || ErrorCodes.Contains("*"))
+            return true;
+
+        // Check error code match
+        if (!string.IsNullOrEmpty(errorCode) && 
+            ErrorCodes.Contains(errorCode, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        // Check status code match
+        if (statusCode.HasValue && 
+            ErrorCodes.Contains(statusCode.Value.ToString(), StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        return false;
     }
 }
-

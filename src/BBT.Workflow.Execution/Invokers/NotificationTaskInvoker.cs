@@ -91,6 +91,8 @@ public sealed class NotificationTaskInvoker : ITaskInvoker<NotificationBinding>
                 error: $"Failed to resolve notification binding: {ex.Message}",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Notification.BindingResolution",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["ExceptionType"] = ex.GetType().Name
@@ -141,7 +143,7 @@ public sealed class NotificationTaskInvoker : ITaskInvoker<NotificationBinding>
                     ["Recipients"] = binding.To ?? Array.Empty<string>()
                 });
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordNotificationInvocation(bindingName, bindingKind, "cancelled");
@@ -154,11 +156,36 @@ public sealed class NotificationTaskInvoker : ITaskInvoker<NotificationBinding>
                 error: "Notification task was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Notification.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["BindingName"] = bindingName,
                     ["BindingKind"] = bindingKind,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordNotificationInvocation(bindingName, bindingKind, "timeout");
+
+            _logger.LogError(ex,
+                "Notification task timeout. Binding: {BindingName}, TaskKey: {TaskKey}",
+                bindingName, taskKey);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "Notification.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["BindingName"] = bindingName,
+                    ["BindingKind"] = bindingKind,
+                    ["ExceptionType"] = ex.GetType().Name,
+                    ["StackTrace"] = ex.StackTrace ?? string.Empty
                 });
         }
         catch (Exception ex)
@@ -174,6 +201,8 @@ public sealed class NotificationTaskInvoker : ITaskInvoker<NotificationBinding>
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Notification.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["BindingName"] = bindingName,

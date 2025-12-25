@@ -138,6 +138,20 @@ public sealed class ErrorBoundaryValidator
             }
         }
 
+        // Validate ErrorCodes - should not contain empty strings (wildcards are valid)
+        if (rule.ErrorCodes != null)
+        {
+            for (var i = 0; i < rule.ErrorCodes.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(rule.ErrorCodes[i]))
+                {
+                    results.Add(new ValidationResult(
+                        $"ErrorCodes contains empty value at index {i}.",
+                        [$"{context}.{nameof(ErrorHandlerRule.ErrorCodes)}[{i}]"]));
+                }
+            }
+        }
+
         return results;
     }
 

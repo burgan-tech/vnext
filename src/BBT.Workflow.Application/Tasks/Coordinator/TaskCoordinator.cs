@@ -18,11 +18,19 @@ namespace BBT.Workflow.Tasks.Coordinator;
 /// <summary>
 /// Coordinates workflow task execution with support for both parallel and sequential execution strategies.
 /// Implements condition and timer evaluation services.
-/// Uses ITaskExecutorRegistry to resolve executors for each task type.
+/// Uses ITaskExecutorRegistry to resolve executors and ITaskExecutorInvoker to invoke them.
 /// </summary>
+/// <remarks>
+/// Error boundary and retry logic is handled by ITaskExecutorInvoker.
+/// This coordinator focuses solely on:
+/// - Task execution strategy (parallel vs sequential)
+/// - Task lifecycle management (creation, completion, persistence)
+/// - Metrics collection
+/// </remarks>
 public sealed class TaskCoordinator : ITaskCoordinator
 {
     private readonly ITaskExecutorRegistry _executorRegistry;
+    private readonly ITaskExecutorInvoker _executorInvoker;
     private readonly IConditionEvaluator _conditionEvaluator;
     private readonly ITimerEvaluator _timerEvaluator;
     private readonly ITaskFactory _taskFactory;
@@ -36,6 +44,7 @@ public sealed class TaskCoordinator : ITaskCoordinator
     /// </summary>
     public TaskCoordinator(
         ITaskExecutorRegistry executorRegistry,
+        ITaskExecutorInvoker executorInvoker,
         IConditionEvaluator conditionEvaluator,
         ITimerEvaluator timerEvaluator,
         ITaskFactory taskFactory,
@@ -45,6 +54,7 @@ public sealed class TaskCoordinator : ITaskCoordinator
         ILogger<TaskCoordinator> logger)
     {
         _executorRegistry = executorRegistry;
+        _executorInvoker = executorInvoker;
         _conditionEvaluator = conditionEvaluator;
         _timerEvaluator = timerEvaluator;
         _taskFactory = taskFactory;
@@ -64,7 +74,8 @@ public sealed class TaskCoordinator : ITaskCoordinator
     {
         var tasks = onExecuteTasks.ToList();
 
-        if (!tasks.Any()) return Result.Ok();
+        if (!tasks.Any())
+            return Result.Ok();
 
         _logger.LogDebug("Coordinating execution of {TaskCount} tasks for instance {InstanceId}",
             tasks.Count, context.Instance.Id);
@@ -102,6 +113,7 @@ public sealed class TaskCoordinator : ITaskCoordinator
 
     /// <summary>
     /// Executes a single task with full lifecycle management.
+    /// Error boundary handling is delegated to ITaskExecutorInvoker.
     /// </summary>
     private async Task<Result> ExecuteTaskAsync(
         OnExecuteTask onExecuteTask,
@@ -142,7 +154,7 @@ public sealed class TaskCoordinator : ITaskCoordinator
         // Persist creation (non-blocking)
         await PersistCreationAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
 
-        // Get executor and execute
+        // Get executor from registry
         var executorResult = _executorRegistry.GetExecutor(taskType);
         if (!executorResult.IsSuccess)
         {
@@ -160,32 +172,44 @@ public sealed class TaskCoordinator : ITaskCoordinator
             instanceTransitionId,
             taskTrigger);
 
-        // Execute
-        var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
+        // Execute through invoker - handles error boundary and retry
+        var executeResult = await _executorInvoker.InvokeAsync(
+            executorResult.Value!,
+            executorContext,
+            cancellationToken);
 
         stopwatch.Stop();
-        
+
         if (!executeResult.IsSuccess)
         {
             RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
                 executeResult.Error, cancellationToken);
-            // Persist completion (non-blocking)
-            await PersistCompletionAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
             return Result.Fail(executeResult.Error);
         }
 
-        // Complete task
+        // Get response for context update
         var response = executeResult.Value!;
 
-        if (response.Error.HasValue)
+        // Check if response indicates error (invoker may have marked it as handled)
+        if (response.HasExplicitError())
         {
             RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
-                response.Error.Value, cancellationToken);
-            // Persist completion (non-blocking)
-            await PersistCompletionAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
-            return Result.Fail(response.Error.Value);
+                response.Error!.Value, cancellationToken);
+            // Error was handled by invoker (e.g., Ignore action), continue
+            return Result.Ok();
         }
-        
+
+        // Check if response has failure indicators but invoker didn't fail
+        // This means error was handled by error boundary (e.g., Ignore, Log actions)
+        if (response.HasFailure())
+        {
+            _logger.LogWarning(
+                "Task {TaskKey} completed with failure indicators ({Status}), error was handled by invoker",
+                task.Key,
+                response.GetStatusSummary());
+        }
+
+        // Apply output to context on success
         ApplyOutputToContext(task, response, taskTrigger, context);
         instanceTask.Completed(new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions)));
 
@@ -215,17 +239,17 @@ public sealed class TaskCoordinator : ITaskCoordinator
         var results = await Task.WhenAll(executionTasks);
 
         // Check for any failures
-        if (results.Any(r => !r.IsSuccess))
+        var failedResult = results.FirstOrDefault();
+        if (failedResult is { IsSuccess: false })
         {
-            var firstFailure = results.First(r => !r.IsSuccess);
-            return Result.Fail(firstFailure.Error);
+            return Result.Fail(failedResult.Error);
         }
 
         return Result.Ok();
     }
 
     /// <summary>
-    /// Executes multiple tasks in parallel.
+    /// Executes multiple tasks sequentially.
     /// </summary>
     private async Task<Result> ExecuteTasksSequentiallyAsync(
         List<OnExecuteTask> tasks,
@@ -325,10 +349,6 @@ public sealed class TaskCoordinator : ITaskCoordinator
         TaskTrigger taskTrigger,
         ScriptContext context)
     {
-        // Store in TaskResponse WARN: No needed
-        // var variableKey = task.Key.ToVariableName();
-        // context.TaskResponse[variableKey] = response;
-
         // Add to instance data if not an extension task and has data
         if (taskTrigger != TaskTrigger.Extension && response.Data is not null)
         {

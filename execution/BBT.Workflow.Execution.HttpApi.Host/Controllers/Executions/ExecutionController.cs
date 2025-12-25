@@ -53,6 +53,7 @@ public sealed class ExecutionController(
             [TelemetryConstants.TagNames.TaskType] = envelope.TaskType
         }))
         {
+            // TODO: burada her zaman ok dönğyoruz. Bu böyle olmak zorunda ama TaskInvokeResponse'da ErrorCode ve ExceptionTypeName kısımlarının değerlerini TaskInvocationResult'a aktarıyoruz.
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
             return Ok(new TaskInvokeResponse
             {

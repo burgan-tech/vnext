@@ -33,6 +33,16 @@ public sealed class TaskInvocationResult
     public string? ErrorMessage { get; init; }
     
     /// <summary>
+    /// Domain error code for error boundary matching (e.g., "Task:400007", "Dapr.Invocation").
+    /// </summary>
+    public string? ErrorCode { get; init; }
+    
+    /// <summary>
+    /// Exception type name for error boundary matching (e.g., "HttpRequestException", "TimeoutException").
+    /// </summary>
+    public string? ExceptionTypeName { get; init; }
+    
+    /// <summary>
     /// Response headers (for HTTP-based tasks).
     /// </summary>
     public Dictionary<string, string>? Headers { get; init; }
@@ -83,12 +93,20 @@ public sealed class TaskInvocationResult
         string? body = null,
         long executionDurationMs = 0,
         string? taskType = null,
-        Dictionary<string, object>? metadata = null) => new()
+        Dictionary<string, string>? headers = null,
+        object? data = null,
+        Dictionary<string, object>? metadata = null,
+        string? errorCode = null,
+        string? exceptionTypeName = null) => new()
     {
         IsSuccess = false,
         ErrorMessage = error,
+        ErrorCode = errorCode,
+        ExceptionTypeName = exceptionTypeName,
         StatusCode = statusCode,
         Body = body,
+        Data = data,
+        Headers = headers,
         ExecutionDurationMs = executionDurationMs,
         TaskType = taskType,
         Metadata = metadata

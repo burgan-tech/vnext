@@ -8,6 +8,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Executors;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -15,7 +16,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Pipeline step that executes the transition's OnExecute tasks.
 /// These tasks run before the state change occurs.
 /// Uses Result pattern for exception-free error handling.
-/// Error boundary handling is applied transparently via ErrorBoundaryTaskCoordinatorDecorator.
+/// Error boundary handling is applied transparently via TaskExecutorInvoker.
 /// </summary>
 public sealed class RunOnExecuteTasksStep(
     ITaskCoordinator taskCoordinator,
@@ -73,7 +74,7 @@ public sealed class RunOnExecuteTasksStep(
 
     /// <summary>
     /// Executes the OnExecute tasks and returns Result for error propagation.
-    /// Error boundary handling is applied transparently via ErrorBoundaryTaskCoordinatorDecorator.
+    /// Error boundary handling is applied transparently via TaskExecutorInvoker.
     /// </summary>
     private async Task<Result> ExecuteTasksAsync(
         TransitionExecutionContext context,
@@ -82,8 +83,8 @@ public sealed class RunOnExecuteTasksStep(
     {
         var instanceTransitionId = GetTransitionRecordId(context);
 
-        // Set transition context for error boundary decorator
-        ErrorBoundaryTaskCoordinatorDecorator.SetTransitionContext(context);
+        // Set transition context for executor invoker (error boundary resolution)
+        TaskExecutorInvoker.SetTransitionContext(context);
         try
         {
             return await taskCoordinator.ExecuteAsync(
@@ -96,7 +97,7 @@ public sealed class RunOnExecuteTasksStep(
         finally
         {
             // Clear transition context after execution
-            ErrorBoundaryTaskCoordinatorDecorator.SetTransitionContext(null);
+            TaskExecutorInvoker.SetTransitionContext(null);
         }
     }
 

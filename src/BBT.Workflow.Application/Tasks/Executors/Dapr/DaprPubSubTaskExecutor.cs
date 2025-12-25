@@ -54,8 +54,8 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
 
             await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"DaprPubSub task input handler failed: {ex.Message}"));
+            WorkflowErrorCodes.TaskInputMappingFailed,
+            $"DaprPubSub task input mapping failed: {ex.Message}"));
 
         if (!result.IsSuccess)
         {
@@ -131,8 +131,8 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"DaprPubSub task output handler failed: {ex.Message}"));
+            WorkflowErrorCodes.TaskOutputMappingFailed,
+            $"DaprPubSub task output mapping failed: {ex.Message}"));
 
         if (!result.IsSuccess)
         {

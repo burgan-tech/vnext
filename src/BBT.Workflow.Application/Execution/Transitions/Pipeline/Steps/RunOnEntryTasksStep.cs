@@ -7,6 +7,7 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Executors;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -14,7 +15,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Pipeline step that executes the target state's OnEntry tasks.
 /// These tasks run when entering the new state.
 /// Uses Result pattern for exception-free error handling.
-/// Error boundary handling is applied transparently via ErrorBoundaryTaskCoordinatorDecorator.
+/// Error boundary handling is applied transparently via TaskExecutorInvoker.
 /// </summary>
 public sealed class RunOnEntryTasksStep(
     ITaskCoordinator taskCoordinator,
@@ -71,7 +72,7 @@ public sealed class RunOnEntryTasksStep(
 
     /// <summary>
     /// Executes the OnEntry tasks and returns Result for error propagation.
-    /// Error boundary handling is applied transparently via ErrorBoundaryTaskCoordinatorDecorator.
+    /// Error boundary handling is applied transparently via TaskExecutorInvoker.
     /// </summary>
     private async Task<Result> ExecuteTasksAsync(
         TransitionExecutionContext context,
@@ -80,8 +81,8 @@ public sealed class RunOnEntryTasksStep(
     {
         var instanceTransitionId = GetTransitionRecordId(context);
 
-        // Set transition context for error boundary decorator
-        ErrorBoundaryTaskCoordinatorDecorator.SetTransitionContext(context);
+        // Set transition context for executor invoker (error boundary resolution)
+        TaskExecutorInvoker.SetTransitionContext(context);
         try
         {
             return await taskCoordinator.ExecuteAsync(
@@ -94,7 +95,7 @@ public sealed class RunOnEntryTasksStep(
         finally
         {
             // Clear transition context after execution
-            ErrorBoundaryTaskCoordinatorDecorator.SetTransitionContext(null);
+            TaskExecutorInvoker.SetTransitionContext(null);
         }
     }
 

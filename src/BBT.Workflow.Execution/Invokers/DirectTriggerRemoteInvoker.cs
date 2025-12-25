@@ -146,6 +146,8 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                     statusCode: (int)response.StatusCode,
                     executionDurationMs: stopwatch.ElapsedMilliseconds,
                     taskType: TaskType,
+                    errorCode: $"DirectTrigger:{(int)response.StatusCode}",
+                    exceptionTypeName: "DirectTriggerRemoteException",
                     metadata: CreateMetadata(binding, statusCode: (int)response.StatusCode));
             }
 
@@ -164,7 +166,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 taskType: TaskType,
                 metadata: CreateMetadata(binding));
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
@@ -176,7 +178,25 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 error: "DirectTrigger remote invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "DirectTrigger.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: CreateMetadata(binding, cancelled: true));
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "timeout");
+            _logger.LogError(ex,
+                "DirectTrigger remote invocation timeout for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
+                taskKey, binding.Domain, binding.Workflow, binding.Identifier, binding.TransitionName);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "DirectTrigger.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
@@ -190,6 +210,8 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "DirectTrigger.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
     }

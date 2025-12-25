@@ -14,11 +14,14 @@ public interface IErrorPolicyResolver
     /// <param name="context">The transition execution context.</param>
     /// <param name="errorContext">The normalized error context.</param>
     /// <param name="onExecuteTask">The task execution configuration that caused the error (null for non-task errors).</param>
+    /// <param name="excludeRetry">If true, excludes Retry action rules from matching. 
+    /// Used when Polly retries are exhausted and only non-retry actions should be considered.</param>
     /// <returns>The resolved policy, or null if no matching policy found (unhandled error).</returns>
     ResolvedPolicy? Resolve(
         TransitionExecutionContext context,
         ErrorContext errorContext,
-        OnExecuteTask? onExecuteTask = null);
+        OnExecuteTask? onExecuteTask = null,
+        bool excludeRetry = false);
 
     /// <summary>
     /// Resolves error policy for SubFlow propagation.

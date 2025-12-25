@@ -93,7 +93,12 @@ public sealed class StandardTaskResponse
     /// <summary>
     /// Error core if task execution failed.
     /// </summary>
-    public string? ErrorCore { get; set; }
+    public string? ErrorCode { get; set; }
+
+    /// <summary>
+    /// Exception type name if task execution failed.
+    /// </summary>
+    public string? ExceptionTypeName { get; set; }
     
     /// <summary>
     /// Error message if task execution failed.

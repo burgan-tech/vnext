@@ -73,11 +73,14 @@ public static class PipelineServiceCollectionExtensions
         // Pipeline
         services.AddScoped<TransitionPipeline>();
         
-        // Error Boundary Services
+        // Error Handling Services
         services.AddSingleton<ICompiledErrorPolicyCache, CompiledErrorPolicyCache>();
+        services.AddSingleton<IErrorNormalizer, ErrorNormalizer>();
         services.AddScoped<IErrorPolicyResolver, ErrorPolicyResolver>();
         services.AddScoped<IErrorActionExecutor, ErrorActionExecutor>();
-        services.AddScoped<ErrorBoundaryStepInterceptor>();
+        
+        // Step Execution Middleware
+        services.AddScoped<StepExecutionMiddleware>();
         
         // Configure Re-entry Options
         services.Configure<ReentryOptions>(options =>

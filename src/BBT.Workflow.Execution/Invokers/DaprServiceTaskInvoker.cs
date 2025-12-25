@@ -132,9 +132,11 @@ public sealed class DaprServiceTaskInvoker(
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
-                    metadata: metadata);
+                    metadata: metadata,
+                    errorCode: $"Dapr.Service:{(int)response.StatusCode}",
+                    exceptionTypeName: "DaprServiceException");
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "cancelled");
@@ -145,12 +147,36 @@ public sealed class DaprServiceTaskInvoker(
                 error: "Dapr service invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.Service.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["AppId"] = binding.AppId,
                     ["MethodName"] = binding.MethodName,
                     ["HttpVerb"] = binding.Method,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "timeout");
+            logger.LogError(ex, "Dapr service invocation timeout: {AppId}/{MethodName}",
+                binding.AppId, binding.MethodName);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "Dapr.Service.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["AppId"] = binding.AppId,
+                    ["MethodName"] = binding.MethodName,
+                    ["HttpVerb"] = binding.Method,
+                    ["ExceptionType"] = ex.GetType().Name,
+                    ["StackTrace"] = ex.StackTrace ?? string.Empty
                 });
         }
         catch (Exception ex)
@@ -164,6 +190,8 @@ public sealed class DaprServiceTaskInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "Dapr.Service.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["AppId"] = binding.AppId,

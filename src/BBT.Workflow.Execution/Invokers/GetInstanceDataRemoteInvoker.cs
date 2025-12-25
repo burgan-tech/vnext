@@ -119,9 +119,11 @@ public sealed class GetInstanceDataRemoteInvoker(
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
-                    metadata: metadata);
+                    metadata: metadata,
+                    errorCode: $"GetInstanceData:{(int)response.StatusCode}",
+                    exceptionTypeName: "GetInstanceDataRemoteException");
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
@@ -132,6 +134,8 @@ public sealed class GetInstanceDataRemoteInvoker(
                 error: "GetInstanceData remote invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "GetInstanceData.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Domain"] = binding.Domain,
@@ -139,6 +143,28 @@ public sealed class GetInstanceDataRemoteInvoker(
                     ["Instance"] = binding.Instance,
                     ["OrchestrationAppId"] = _orchestrationAppId,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "timeout");
+            logger.LogError(ex, "GetInstanceData remote invocation timeout for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
+                taskKey, binding.Domain, binding.Workflow, binding.Instance);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "GetInstanceData.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["Domain"] = binding.Domain,
+                    ["Workflow"] = binding.Workflow,
+                    ["Instance"] = binding.Instance,
+                    ["OrchestrationAppId"] = _orchestrationAppId,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)
@@ -152,6 +178,8 @@ public sealed class GetInstanceDataRemoteInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "GetInstanceData.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Domain"] = binding.Domain,

@@ -143,9 +143,11 @@ public sealed class StartTriggerRemoteInvoker(
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
-                    metadata: metadata);
+                    metadata: metadata,
+                    errorCode: $"StartTrigger:{(int)response.StatusCode}",
+                    exceptionTypeName: "StartTriggerRemoteException");
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
@@ -156,12 +158,35 @@ public sealed class StartTriggerRemoteInvoker(
                 error: "StartTrigger remote invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "StartTrigger.Cancelled",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Domain"] = binding.Domain,
                     ["Workflow"] = binding.Workflow,
                     ["OrchestrationAppId"] = _orchestrationAppId,
                     ["Cancelled"] = true
+                });
+        }
+        catch (TimeoutException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "timeout");
+            logger.LogError(ex, "StartTrigger remote invocation timeout for task {TaskKey}: {Domain}/{Workflow}",
+                taskKey, binding.Domain, binding.Workflow);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                errorCode: "StartTrigger.Timeout",
+                exceptionTypeName: ex.GetType().Name,
+                metadata: new Dictionary<string, object>
+                {
+                    ["Domain"] = binding.Domain,
+                    ["Workflow"] = binding.Workflow,
+                    ["OrchestrationAppId"] = _orchestrationAppId,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)
@@ -175,6 +200,8 @@ public sealed class StartTriggerRemoteInvoker(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
+                errorCode: "StartTrigger.Exception",
+                exceptionTypeName: ex.GetType().Name,
                 metadata: new Dictionary<string, object>
                 {
                     ["Domain"] = binding.Domain,

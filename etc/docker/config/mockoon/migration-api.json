@@ -1,171 +1,197 @@
 {
-  "uuid": "eb5010d9-a3b0-40fb-9121-efab74922ee2",
+  "uuid": "cc2c7a20-cf65-4f34-bdeb-6bbd3e3f9525",
   "lastMigration": 33,
-  "name": "Dev - vNext - Sample Api Mock",
+  "name": "vNext - Sample Api Mock",
   "endpointPrefix": "",
   "latency": 0,
   "port": 3001,
   "hostname": "localhost",
   "folders": [
     {
-      "uuid": "d577ab0d-5a1b-4fd0-9b14-b7a78c485cbf",
+      "uuid": "46fb060c-5347-41f5-809e-86e40337f2fa",
       "name": "ouath2",
       "children": [
         {
           "type": "route",
-          "uuid": "2ce3f471-130f-41fa-9d5d-aaa7f2c8d505"
+          "uuid": "8ba61c4a-f251-47ef-a4a6-92398c4d66ef"
         },
         {
           "type": "route",
-          "uuid": "0926ef4f-0c4b-4af3-805e-2e44a9a54ac3"
+          "uuid": "41dbf3e6-de0a-460e-879b-614d59ff813f"
         },
         {
           "type": "route",
-          "uuid": "d026844b-2c11-43a6-8b05-5e738b14671c"
+          "uuid": "2c335800-21d9-4ea7-bad3-e5e6ae8af460"
         },
         {
           "type": "route",
-          "uuid": "e902459a-09d7-4fec-8c8b-ecdf8ad96d6a"
+          "uuid": "95eecaa5-c860-4be1-87b7-22c96833e35e"
         },
         {
           "type": "route",
-          "uuid": "895b4a63-cbfb-440f-b52f-e3df8bc1fe64"
+          "uuid": "8bf14db4-9693-4511-8a8c-c4129661c76b"
         },
         {
           "type": "route",
-          "uuid": "678025c3-acfc-4f6e-8007-bd159d7ccb44"
+          "uuid": "8d1c1536-9e82-4cb1-9349-79852ef6131b"
         },
         {
           "type": "route",
-          "uuid": "9d77c42b-2e94-47f2-a17b-3b28dcf4687b"
+          "uuid": "aac5c06b-6c01-4fda-a241-ebfdbf4c5045"
         },
         {
           "type": "route",
-          "uuid": "b8c5445e-592e-49da-a04b-5423eee7ab0c"
+          "uuid": "ca026001-69e8-41c9-9dfc-2c59a4f7021d"
         },
         {
           "type": "route",
-          "uuid": "81603a3f-116b-4b5e-9d04-507a8dad8905"
+          "uuid": "956b0537-fa8f-4169-bf00-fbd7f43b4d4d"
         },
         {
           "type": "route",
-          "uuid": "8fe5b740-4dce-4914-aadb-9fc1fbfffe46"
+          "uuid": "6f09aa19-7f4e-41f5-a60e-45ec17077c22"
         }
       ]
     },
     {
-      "uuid": "d915ee3a-219c-4c8a-b12b-e3f0fa806169",
+      "uuid": "b3a79260-52ee-40db-b9f5-057764d77ceb",
       "name": "payment",
       "children": [
         {
           "type": "route",
-          "uuid": "db1c2329-c443-4949-bccf-f96f76694bea"
+          "uuid": "0400d70c-1c06-417b-976f-9067fdde9e37"
         },
         {
           "type": "route",
-          "uuid": "7424357b-826f-47a5-90ad-c890ee8e7dfc"
+          "uuid": "6fcdb524-386e-463a-982f-ad2cf770b258"
         },
         {
           "type": "route",
-          "uuid": "ee7774b5-626e-479d-9d55-6f76a4cc0d4c"
+          "uuid": "373fb5aa-4591-443e-a08d-bcf6e01f36b3"
         },
         {
           "type": "route",
-          "uuid": "5e806ff8-061e-429c-806f-82dcd84032fd"
+          "uuid": "11d5f117-fe6c-45c4-ae1b-cae4e6514801"
         },
         {
           "type": "route",
-          "uuid": "772c00f9-c32d-40eb-8f2b-fcc9193c7f98"
+          "uuid": "510a89ef-42e4-4b00-b92b-ee182658f57e"
         },
         {
           "type": "route",
-          "uuid": "846af4bb-38c1-42e6-a912-b4abe700ac74"
+          "uuid": "0f592f33-c8a9-490b-8c3c-12f3193d9eb3"
         },
         {
           "type": "route",
-          "uuid": "6eebbd26-703e-4124-a67c-b80f6efffdf8"
+          "uuid": "7a54e9b9-abfc-4574-b274-ccfb8ec53f15"
         },
         {
           "type": "route",
-          "uuid": "45344ff8-ffe6-4b6c-bd82-5b5b03ff6afe"
+          "uuid": "207ece34-36e7-4926-b96b-d0564f6f24ed"
         },
         {
           "type": "route",
-          "uuid": "64a85162-2707-47b3-8543-b6f31889fccb"
+          "uuid": "26d4f313-c36c-408b-b532-67f51fe0d118"
         }
       ]
     },
     {
-      "uuid": "ae0ab77a-48d6-458d-94ae-885ed9567efe",
+      "uuid": "4b345806-3c85-4752-98bd-15b973301107",
       "name": "account-opening",
       "children": [
         {
           "type": "route",
-          "uuid": "ac27373c-6ab6-43ca-884c-ab44979f5f14"
+          "uuid": "7579d9f9-d6ab-487b-b22c-9a04b7e3498d"
         },
         {
           "type": "route",
-          "uuid": "07488e10-b4ab-4cad-b80f-f8875bc496d2"
+          "uuid": "33139996-5a0a-4514-b461-adb9d8c42e0c"
         }
       ]
     },
     {
-      "uuid": "eba8285f-51b1-41e4-b9a0-081531c55a1f",
-      "name": "task-test",
-      "children": [
-        {
-          "type": "route",
-          "uuid": "c6ee38d2-3e27-4edb-bff6-e721bcc94ea2"
-        },
-        {
-          "type": "route",
-          "uuid": "126a2c76-7f77-46f2-9b19-76731472ad85"
-        },
-        {
-          "type": "route",
-          "uuid": "f5902d1f-4bc2-4c32-b3c6-a63ea9c03346"
-        },
-        {
-          "type": "route",
-          "uuid": "c5d7a37f-1e69-4dba-99cd-0a5a287b400b"
-        }
-      ]
-    },
-    {
-      "uuid": "f643b1f6-1e55-4bcb-89d9-94aad6af9013",
-      "name": "notification",
-      "children": [
-        {
-          "type": "route",
-          "uuid": "33336829-43d0-49b6-af2a-253884596824"
-        }
-      ]
-    },
-    {
-      "uuid": "996942da-01d2-4572-b4fd-dc6c7c8c8f08",
+      "uuid": "0c0c687a-810a-434f-affc-a23e45a90dfc",
       "name": "contract",
       "children": [
         {
           "type": "route",
-          "uuid": "b0676c5e-9873-444c-b765-368c78081679"
+          "uuid": "5e07a4b9-bb6d-4983-91ca-c310ff06bb11"
         },
         {
           "type": "route",
-          "uuid": "c122d71d-6193-4400-b26f-a1c5e211747b"
+          "uuid": "0fe9d51a-a402-45ec-955c-dca673b35b3b"
+        }
+      ]
+    },
+    {
+      "uuid": "fb3934f2-4587-470e-a75c-054eb7f4b45d",
+      "name": "task-test",
+      "children": [
+        {
+          "type": "route",
+          "uuid": "73691013-0ade-4d97-8dba-98848fb35e76"
+        },
+        {
+          "type": "route",
+          "uuid": "d767c310-4aa8-451c-b736-2f76728c7037"
+        },
+        {
+          "type": "route",
+          "uuid": "75c69f59-d442-44ce-bc38-65efabeb2ee3"
+        },
+        {
+          "type": "route",
+          "uuid": "30ce347c-8b04-44e4-8d50-da46d7ab04c7"
+        }
+      ]
+    },
+    {
+      "uuid": "ad23cdc9-2552-4503-bead-579cff0ec274",
+      "name": "notification",
+      "children": [
+        {
+          "type": "route",
+          "uuid": "52f44c97-9b96-4d7e-8f6a-63457637d466"
+        }
+      ]
+    },
+    {
+      "uuid": "eb01a2c3-d4e5-4f67-8901-2345abcdef01",
+      "name": "error-boundary",
+      "children": [
+        {
+          "type": "route",
+          "uuid": "eb01a2c3-0001-4f67-8901-2345abcdef01"
+        },
+        {
+          "type": "route",
+          "uuid": "eb01a2c3-0002-4f67-8901-2345abcdef02"
+        },
+        {
+          "type": "route",
+          "uuid": "eb01a2c3-0003-4f67-8901-2345abcdef03"
+        },
+        {
+          "type": "route",
+          "uuid": "eb01a2c3-0004-4f67-8901-2345abcdef04"
+        },
+        {
+          "type": "route",
+          "uuid": "eb01a2c3-0005-4f67-8901-2345abcdef05"
         }
       ]
     }
   ],
   "routes": [
     {
-      "uuid": "997c7b82-5db3-4ec7-a1a1-078be6d22bb6",
+      "uuid": "5a05d227-3eb2-4253-8b26-20b6a95b66ae",
       "type": "http",
       "documentation": "Health check endpoint",
       "method": "get",
       "endpoint": "health",
       "responses": [
         {
-          "uuid": "4e9ca8e2-49d6-4b0d-bae8-04958b40f6ea",
+          "uuid": "2a89fdb6-4edc-4911-865a-eae2cf5c5b60",
           "body": "{\n  \"status\": \"ok\",\n  \"timestamp\": \"{{now}}\",\n  \"service\": \"migration-api\",\n  \"version\": \"1.0.0\"\n}",
           "latency": 0,
           "statusCode": 200,
@@ -194,14 +220,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "2ce3f471-130f-41fa-9d5d-aaa7f2c8d505",
+      "uuid": "8ba61c4a-f251-47ef-a4a6-92398c4d66ef",
       "type": "http",
       "documentation": "OAuth2 Client validation - İstemci doğrulama",
       "method": "post",
       "endpoint": "api/oauth2/client/validate",
       "responses": [
         {
-          "uuid": "dc1ad98a-5a68-48ad-9b95-5a3ca6b977e7",
+          "uuid": "818941e1-e6e0-4c1b-acc0-73c5eab77e84",
           "body": "{\n  \"success\": true,\n  \"clientId\": \"{{body 'client_id'}}\",\n  \"grantTypes\": [\"client_credentials\", \"password\", \"authorization_code\"],\n  \"redirectUris\": [\"http://localhost:3000/callback\"],\n  \"scopes\": [\"api\", \"read\", \"write\"],\n  \"isActive\": true\n}",
           "latency": 100,
           "statusCode": 200,
@@ -233,7 +259,7 @@
           "callbacks": []
         },
         {
-          "uuid": "9f47e121-98f1-4a7c-a0cb-9ea7873ea961",
+          "uuid": "9e2a036a-a8b4-4f45-bc3d-91693f57e322",
           "body": "{\n  \"success\": false,\n  \"error\": \"Geçersiz client credentials\",\n  \"errorCode\": \"invalid_client\"\n}",
           "latency": 50,
           "statusCode": 401,
@@ -270,14 +296,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "0926ef4f-0c4b-4af3-805e-2e44a9a54ac3",
+      "uuid": "41dbf3e6-de0a-460e-879b-614d59ff813f",
       "type": "http",
       "documentation": "OAuth2 User credentials validation - Kullanıcı kimlik bilgileri doğrulama",
       "method": "post",
       "endpoint": "api/oauth2/user/authenticate",
       "responses": [
         {
-          "uuid": "ae5a06af-128e-4d3b-b0eb-7efa8867422a",
+          "uuid": "219ffca1-bd0d-4a93-abbf-033b90943857",
           "body": "{\n  \"success\": true,\n  \"userId\": \"{{faker 'string.uuid'}}\",\n  \"username\": \"{{body 'username'}}\",\n  \"email\": \"{{body 'username'}}@example.com\",\n  \"roles\": [\"user\"],\n  \"mfaRequired\": true\n}",
           "latency": 150,
           "statusCode": 200,
@@ -316,7 +342,7 @@
           "callbacks": []
         },
         {
-          "uuid": "d76ae384-de5a-4c1f-8f8c-801134ea3de7",
+          "uuid": "c6e20796-a6f8-4e89-937c-54fd85b4438f",
           "body": "{\n  \"success\": false,\n  \"error\": \"Geçersiz kullanıcı adı veya şifre\",\n  \"errorCode\": \"invalid_credentials\"\n}",
           "latency": 100,
           "statusCode": 401,
@@ -345,14 +371,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "895b4a63-cbfb-440f-b52f-e3df8bc1fe64",
+      "uuid": "8bf14db4-9693-4511-8a8c-c4129661c76b",
       "type": "http",
       "documentation": "OAuth2 Authorization code validation - Authorization code doğrulama",
       "method": "post",
       "endpoint": "api/oauth2/user/validate-authorization-code",
       "responses": [
         {
-          "uuid": "5defc0a6-0186-4003-9478-5668702d0f71",
+          "uuid": "27016b3c-e3ea-4f53-9979-762844e6067f",
           "body": "{\n  \"success\": true,\n  \"code\": \"{{body 'code'}}\",\n  \"clientId\": \"{{body 'client_id'}}\",\n  \"userId\": \"{{faker 'string.uuid'}}\",\n  \"redirectUri\": \"{{body 'redirect_uri'}}\",\n  \"codeChallenge\": \"{{body 'code_challenge'}}\",\n  \"codeChallengeMethod\": \"{{body 'code_challenge_method'}}\",\n  \"isValid\": true,\n  \"expiresAt\": \"{{dateTimeAdd (now) 10 'minutes'}}\"\n}",
           "latency": 100,
           "statusCode": 200,
@@ -381,14 +407,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "d026844b-2c11-43a6-8b05-5e738b14671c",
+      "uuid": "2c335800-21d9-4ea7-bad3-e5e6ae8af460",
       "type": "http",
       "documentation": "Device registration check - Cihaz kayıt durumu kontrolü",
       "method": "get",
       "endpoint": "api/oauth2/devices/check",
       "responses": [
         {
-          "uuid": "487fcf36-2ed5-457a-b3e6-93243faac1e9",
+          "uuid": "2df2b0fe-6114-406a-8536-cc7e8a34ffb7",
           "body": "{\n  \"isRegistered\": true,\n  \"deviceId\": \"{{header 'X-Device-Id'}}\",\n  \"deviceName\": \"iPhone 15 Pro\",\n  \"deviceType\": \"mobile\",\n  \"supportsPush\": true,\n  \"registeredAt\": \"2024-09-10T01:48:20.501Z\",\n  \"lastSeenAt\": \"{{now}}\"\n}",
           "latency": 80,
           "statusCode": 200,
@@ -420,7 +446,7 @@
           "callbacks": []
         },
         {
-          "uuid": "f4ff4c24-09ee-4b20-a60f-d481ecf00594",
+          "uuid": "e3c46ef5-4156-49d0-8ff9-a554b5e501d5",
           "body": "{\n  \"isRegistered\": false,\n  \"deviceId\": \"{{header 'X-Device-Id'}}\",\n  \"supportsPush\": false,\n  \"requiresRegistration\": true\n}",
           "latency": 60,
           "statusCode": 200,
@@ -457,14 +483,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "e902459a-09d7-4fec-8c8b-ecdf8ad96d6a",
+      "uuid": "95eecaa5-c860-4be1-87b7-22c96833e35e",
       "type": "http",
       "documentation": "Send push notification for MFA - MFA için push bildirimi gönder",
       "method": "post",
       "endpoint": "api/oauth2/push/send",
       "responses": [
         {
-          "uuid": "4829ea6c-4a32-4169-8b57-79fcb069e8e2",
+          "uuid": "0f3b22cd-5e87-4c72-9346-188fa9d9120d",
           "body": "{\n  \"success\": true,\n  \"notificationId\": \"push_{{faker 'string.uuid'}}\",\n  \"deviceId\": \"{{body 'deviceId'}}\",\n  \"userId\": \"{{body 'userId'}}\",\n  \"message\": \"Giriş onayı gerekli\",\n  \"sentAt\": \"{{now}}\",\n  \"expiresAt\": \"{{dateTimeAdd (now) 5 'minutes'}}\",\n  \"status\": \"sent\"\n}",
           "latency": 200,
           "statusCode": 200,
@@ -493,14 +519,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "678025c3-acfc-4f6e-8007-bd159d7ccb44",
+      "uuid": "8d1c1536-9e82-4cb1-9349-79852ef6131b",
       "type": "http",
       "documentation": "Check push notification response - Push bildirimi yanıtını kontrol et",
       "method": "post",
       "endpoint": "api/oauth2/push/status",
       "responses": [
         {
-          "uuid": "533e0143-869d-4ec4-a5a8-47bf3e2481d6",
+          "uuid": "0ab9012d-e65e-428b-a643-a045ab203693",
           "body": "{\n  \"notificationId\": \"{{body 'notificationId'}}\",\n  \"status\": \"approved\",\n  \"respondedAt\": \"{{now}}\",\n  \"deviceId\": \"{{body 'deviceId'}}\",\n  \"action\": \"approve\",\n  \"success\": true\n}",
           "latency": 100,
           "statusCode": 200,
@@ -532,7 +558,7 @@
           "callbacks": []
         },
         {
-          "uuid": "9b036b29-597c-459d-a25e-2fc2b9cf3ee2",
+          "uuid": "51e7f58b-e90b-4cfb-847b-1875d8156fb2",
           "body": "{\n  \"notificationId\": \"{{body 'notificationId'}}\",\n  \"status\": \"denied\",\n  \"respondedAt\": \"{{now}}\",\n  \"deviceId\": \"{{body 'deviceId'}}\",\n  \"action\": \"deny\",\n  \"success\": false,\n  \"reason\": \"User denied the request\"\n}",
           "latency": 80,
           "statusCode": 200,
@@ -569,14 +595,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "9d77c42b-2e94-47f2-a17b-3b28dcf4687b",
+      "uuid": "aac5c06b-6c01-4fda-a241-ebfdbf4c5045",
       "type": "http",
       "documentation": "Send OTP notification - OTP bildirimi gönder (SMS/Email)",
       "method": "post",
       "endpoint": "api/oauth2/otp/send",
       "responses": [
         {
-          "uuid": "0b384707-28ab-432c-80c2-ab130ad004b4",
+          "uuid": "113f9d3f-32d8-491a-9c29-56db03240f0f",
           "body": "{\n  \"success\": true,\n  \"otpId\": \"otp_{{faker 'string.uuid'}}\",\n  \"userId\": \"{{body 'userId'}}\",\n  \"method\": \"{{body 'method'}}\",\n  \"target\": \"{{body 'target'}}\",\n  \"maskedTarget\": \"***@***.com\",\n  \"sentAt\": \"{{now}}\",\n  \"expiresAt\": \"{{dateTimeAdd (now) 5 'minutes'}}\",\n  \"length\": 6\n}",
           "latency": 250,
           "statusCode": 200,
@@ -605,14 +631,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "b8c5445e-592e-49da-a04b-5423eee7ab0c",
+      "uuid": "ca026001-69e8-41c9-9dfc-2c59a4f7021d",
       "type": "http",
       "documentation": "Verify OTP code - OTP kodu doğrula",
       "method": "post",
       "endpoint": "api/oauth2/otp/verify",
       "responses": [
         {
-          "uuid": "39f8cad8-b478-4787-8e5b-d7c4ae5863e3",
+          "uuid": "df8f0537-450f-4491-b825-e7d6dd39d0cc",
           "body": "{\n  \"success\": true,\n  \"otpId\": \"{{body 'otpId'}}\",\n  \"code\": \"{{body 'code'}}\",\n  \"isValid\": true,\n  \"verifiedAt\": \"{{now}}\",\n  \"remainingAttempts\": 2\n}",
           "latency": 100,
           "statusCode": 200,
@@ -644,7 +670,7 @@
           "callbacks": []
         },
         {
-          "uuid": "b240f789-a820-4457-b83e-ef03d158a958",
+          "uuid": "16f286db-7997-4b14-a987-1c639ee2c9f5",
           "body": "{\n  \"success\": false,\n  \"otpId\": \"{{body 'otpId'}}\",\n  \"code\": \"{{body 'code'}}\",\n  \"isValid\": false,\n  \"error\": \"Geçersiz OTP kodu\",\n  \"remainingAttempts\": 1\n}",
           "latency": 80,
           "statusCode": 400,
@@ -673,14 +699,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "81603a3f-116b-4b5e-9d04-507a8dad8905",
+      "uuid": "956b0537-fa8f-4169-bf00-fbd7f43b4d4d",
       "type": "http",
       "documentation": "Register device for MFA - MFA için cihaz kaydet",
       "method": "post",
       "endpoint": "api/oauth2/devices/register",
       "responses": [
         {
-          "uuid": "6cacdbf2-be70-427d-9472-d41113e1cd85",
+          "uuid": "650d204a-51aa-4662-9e9a-06664ad7b059",
           "body": "{\n  \"success\": true,\n  \"deviceId\": \"{{faker 'string.uuid'}}\",\n  \"userId\": \"{{body 'userId'}}\",\n  \"deviceName\": \"{{body 'deviceName'}}\",\n  \"deviceType\": \"{{body 'deviceType'}}\",\n  \"supportsPush\": true,\n  \"registeredAt\": \"{{now}}\",\n  \"token\": \"device_{{faker 'string.alphanumeric' 32}}\"\n}",
           "latency": 150,
           "statusCode": 201,
@@ -709,14 +735,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "8fe5b740-4dce-4914-aadb-9fc1fbfffe46",
+      "uuid": "6f09aa19-7f4e-41f5-a60e-45ec17077c22",
       "type": "http",
       "documentation": "Generate OAuth2 tokens - OAuth2 token'ları oluştur",
       "method": "post",
       "endpoint": "api/oauth2/tokens/generate",
       "responses": [
         {
-          "uuid": "79f308f1-77de-4614-b124-9a3effe47db9",
+          "uuid": "c4a04178-0461-45ac-a6b0-238608a93fd4",
           "body": "{\n  \"access_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.{{faker 'string.alphanumeric' 50}}\",\n  \"refresh_token\": \"rt_{{faker 'string.alphanumeric' 32}}\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 3600,\n  \"scope\": \"{{body 'scope'}}\",\n  \"client_id\": \"{{body 'clientId'}}\",\n  \"user_id\": \"{{body 'userId'}}\",\n  \"device_id\": \"{{body 'deviceId'}}\",\n  \"issued_at\": \"{{now}}\",\n  \"expires_at\": \"{{dateTimeAdd (now) 1 'hours'}}\"\n}",
           "latency": 120,
           "statusCode": 200,
@@ -745,14 +771,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "db1c2329-c443-4949-bccf-f96f76694bea",
+      "uuid": "0400d70c-1c06-417b-976f-9067fdde9e37",
       "type": "http",
       "documentation": "Save Payment Configuration - Ödeme yapılandırmasını kaydet",
       "method": "post",
       "endpoint": "api/payments/schedules",
       "responses": [
         {
-          "uuid": "7e4d6452-99f5-49c7-abd7-f10a38b419e6",
+          "uuid": "e884dba5-3969-4a04-8ecd-0d0e5fb0927d",
           "body": "{\n  \"success\": true,\n  \"scheduleId\": \"{{faker 'string.uuid'}}\",\n  \"userId\": \"{{body 'userId'}}\",\n  \"amount\": {{body 'amount'}},\n  \"currency\": \"{{body 'currency'}}\",\n  \"frequency\": \"{{body 'frequency'}}\",\n  \"startDate\": \"{{body 'startDate'}}\",\n  \"endDate\": \"{{body 'endDate'}}\",\n  \"paymentMethodId\": \"{{body 'paymentMethodId'}}\",\n  \"description\": \"{{body 'description'}}\",\n  \"recipientId\": \"{{body 'recipientId'}}\",\n  \"isAutoRetry\": {{body 'isAutoRetry'}},\n  \"maxRetries\": {{body 'maxRetries'}},\n  \"status\": \"inactive\",\n  \"nextPaymentDate\": \"{{dateTimeAdd (now) 1 'days'}}\",\n  \"createdAt\": \"{{now}}\",\n  \"maxPayments\": 4\n}",
           "latency": 200,
           "statusCode": 201,
@@ -776,7 +802,7 @@
           "callbacks": []
         },
         {
-          "uuid": "90914809-217c-46b1-bb8c-6446e0a8ff45",
+          "uuid": "dd9e529a-6371-493a-a703-9891bd1efb7c",
           "body": "{\n  \"success\": false,\n  \"error\": \"Geçersiz ödeme yapılandırması\",\n  \"errorCode\": \"invalid_payment_config\",\n  \"details\": \"Eksik veya geçersiz parametreler\"\n}",
           "latency": 100,
           "statusCode": 400,
@@ -813,14 +839,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "7424357b-826f-47a5-90ad-c890ee8e7dfc",
+      "uuid": "6fcdb524-386e-463a-982f-ad2cf770b258",
       "type": "http",
       "documentation": "Process Payment - Ödeme işle",
       "method": "post",
       "endpoint": "api/payments/process",
       "responses": [
         {
-          "uuid": "59a857d0-d608-45f1-8597-317aba9b8ded",
+          "uuid": "011b7be9-5d5e-4de5-92f1-3567cf7ee69f",
           "body": "{\n  \"success\": true,\n  \"transactionId\": \"txn_{{faker 'string.uuid'}}\",\n  \"scheduleId\": \"{{body 'scheduleId'}}\",\n  \"amount\": {{body 'amount'}},\n  \"currency\": \"{{body 'currency'}}\",\n  \"paymentMethod\": \"card\",\n  \"processedAt\": \"{{now}}\",\n  \"fees\": {\n    \"amount\": {{faker 'number.float' 0.5 5.0 2}},\n    \"currency\": \"{{body 'currency'}}\"\n  },\n  \"status\": \"completed\"\n}",
           "latency": 1500,
           "statusCode": 200,
@@ -852,7 +878,7 @@
           "callbacks": []
         },
         {
-          "uuid": "2e1d8099-e9ae-4eea-afcb-906bd05b3dfa",
+          "uuid": "53781cfd-a6f1-4378-be6f-872ab89f8b73",
           "body": "{\n  \"success\": false,\n  \"error\": \"Yetersiz bakiye\",\n  \"errorCode\": \"insufficient_funds\",\n  \"amount\": {{body 'amount'}},\n  \"availableBalance\": {{faker 'number.float' 0 100 2}}\n}",
           "latency": 800,
           "statusCode": 402,
@@ -884,7 +910,7 @@
           "callbacks": []
         },
         {
-          "uuid": "cbdced8a-0eca-4fa0-bbc7-52142b9b516a",
+          "uuid": "99a674ff-c9bd-4786-bda6-186bdfd5d078",
           "body": "{\n  \"success\": false,\n  \"error\": \"Ödeme işleme hatası\",\n  \"errorCode\": \"payment_processing_error\",\n  \"description\": \"Ödeme sağlayıcısı geçici olarak kullanılamıyor\"\n}",
           "latency": 5000,
           "statusCode": 503,
@@ -913,14 +939,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "ee7774b5-626e-479d-9d55-6f76a4cc0d4c",
+      "uuid": "373fb5aa-4591-443e-a08d-bcf6e01f36b3",
       "type": "http",
       "documentation": "Activate Payment Schedule - Ödeme planını aktifleştir",
       "method": "patch",
       "endpoint": "api/payments/schedules/:scheduleId/activate",
       "responses": [
         {
-          "uuid": "369b4fa4-a8cc-40c2-914a-7fdf8eaefd94",
+          "uuid": "688a2e3c-b375-4115-8099-9ce8a7a0188e",
           "body": "{\n  \"success\": true,\n  \"scheduleId\": \"{{urlParam 'scheduleId'}}\",\n  \"status\": \"active\",\n  \"activatedAt\": \"{{now}}\",\n  \"nextPaymentDate\": \"{{dateTimeAdd (now) 1 'days'}}\",\n  \"isActive\": true\n}",
           "latency": 300,
           "statusCode": 200,
@@ -944,7 +970,7 @@
           "callbacks": []
         },
         {
-          "uuid": "fa6ff299-c8be-43f4-b3f1-a2156367f152",
+          "uuid": "a077bdd7-9b8d-44d2-904a-e7f4e2550cc6",
           "body": "{\n  \"success\": false,\n  \"error\": \"Ödeme planı bulunamadı\",\n  \"errorCode\": \"schedule_not_found\",\n  \"scheduleId\": \"{{urlParam 'scheduleId'}}\"\n}",
           "latency": 100,
           "statusCode": 404,
@@ -981,14 +1007,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "5e806ff8-061e-429c-806f-82dcd84032fd",
+      "uuid": "11d5f117-fe6c-45c4-ae1b-cae4e6514801",
       "type": "http",
       "documentation": "Deactivate Payment Schedule - Ödeme planını deaktifleştir",
       "method": "patch",
       "endpoint": "api/payments/schedules/:scheduleId/deactivate",
       "responses": [
         {
-          "uuid": "8bfbc40e-5d68-40be-8cc6-50e551203aa1",
+          "uuid": "e0d0ab89-aafa-47d3-b08c-46f56caf0ccd",
           "body": "{\n  \"success\": true,\n  \"scheduleId\": \"{{urlParam 'scheduleId'}}\",\n  \"status\": \"deactive\",\n  \"deactivatedAt\": \"{{now}}\",\n  \"reason\": \"{{body 'reason'}}\",\n  \"isActive\": false\n}",
           "latency": 200,
           "statusCode": 200,
@@ -1017,14 +1043,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "772c00f9-c32d-40eb-8f2b-fcc9193c7f98",
+      "uuid": "510a89ef-42e4-4b00-b92b-ee182658f57e",
       "type": "http",
       "documentation": "Archive Payment Record - Ödeme kaydını arşivle",
       "method": "post",
       "endpoint": "api/payments/schedules/:scheduleId/archive",
       "responses": [
         {
-          "uuid": "a3157f6a-c9e8-49e0-b842-05e4437882d6",
+          "uuid": "3de0ad5d-7435-403f-ac36-bc8a37e49dfd",
           "body": "{\n  \"success\": true,\n  \"scheduleId\": \"{{urlParam 'scheduleId'}}\",\n  \"status\": \"archived\",\n  \"archivedAt\": \"{{now}}\",\n  \"completionReason\": \"{{body 'completionReason'}}\",\n  \"finalPaymentCount\": {{body 'finalPaymentCount'}}\n}",
           "latency": 150,
           "statusCode": 200,
@@ -1053,14 +1079,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "846af4bb-38c1-42e6-a912-b4abe700ac74",
+      "uuid": "0f592f33-c8a9-490b-8c3c-12f3193d9eb3",
       "type": "http",
       "documentation": "Increment Retry Counter - Yeniden deneme sayacını artır",
       "method": "patch",
       "endpoint": "api/payments/schedules/:scheduleId/retry",
       "responses": [
         {
-          "uuid": "3c614b88-7a22-441d-87ba-54d76d73e7dc",
+          "uuid": "e29a1679-70fa-4683-a2c4-cedf6bf8ad98",
           "body": "{\n  \"success\": true,\n  \"scheduleId\": \"{{urlParam 'scheduleId'}}\",\n  \"retryCount\": {{body 'retryCount'}},\n  \"retryAt\": \"{{body 'retryAt'}}\",\n  \"maxRetries\": 3,\n  \"retriesRemaining\": {{subtract 3 (body 'retryCount')}}\n}",
           "latency": 100,
           "statusCode": 200,
@@ -1089,14 +1115,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "6eebbd26-703e-4124-a67c-b80f6efffdf8",
+      "uuid": "7a54e9b9-abfc-4574-b274-ccfb8ec53f15",
       "type": "http",
       "documentation": "Send Payment Notification Sms - Sms Bilgilendirme",
       "method": "post",
       "endpoint": "api/payments/notify/sms",
       "responses": [
         {
-          "uuid": "d3ae0bee-7a1b-4a64-9311-e228b571a5eb",
+          "uuid": "c8cb9051-5141-4d59-be65-54409f532adb",
           "body": "{\n  \"success\": true,\n  \"sendedAt\": \"{{now}}\"\n}",
           "latency": 200,
           "statusCode": 201,
@@ -1120,7 +1146,7 @@
           "callbacks": []
         },
         {
-          "uuid": "de0c0ce2-8ddc-4a3f-875a-1dcbf7cb3170",
+          "uuid": "75c96004-c78a-4790-a7f3-928c533b57b0",
           "body": "{\n  \"success\": false,\n  \"error\": \"Geçersiz ödeme yapılandırması\",\n  \"errorCode\": \"invalid_payment_config\",\n  \"details\": \"Eksik veya geçersiz parametreler\"\n}",
           "latency": 100,
           "statusCode": 400,
@@ -1157,14 +1183,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "45344ff8-ffe6-4b6c-bd82-5b5b03ff6afe",
+      "uuid": "207ece34-36e7-4926-b96b-d0564f6f24ed",
       "type": "http",
       "documentation": "Send Payment Notification Push - Mobile Bilgilendirme",
       "method": "post",
       "endpoint": "api/payments/notify/push",
       "responses": [
         {
-          "uuid": "0e27e419-3d18-4bd1-a227-1939a9a69d22",
+          "uuid": "634f50b5-8c31-41d4-ade6-6f1ee8a7536a",
           "body": "{\n  \"success\": true,\n  \"sendedAt\": \"{{now}}\"\n}",
           "latency": 200,
           "statusCode": 201,
@@ -1188,7 +1214,7 @@
           "callbacks": []
         },
         {
-          "uuid": "e9248eb9-8776-4fe4-94d7-b31669da0925",
+          "uuid": "258a1313-08c6-45f4-89dd-9c3c57393510",
           "body": "{\n  \"success\": false,\n  \"error\": \"Geçersiz ödeme yapılandırması\",\n  \"errorCode\": \"invalid_payment_config\",\n  \"details\": \"Eksik veya geçersiz parametreler\"\n}",
           "latency": 100,
           "statusCode": 400,
@@ -1225,14 +1251,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "64a85162-2707-47b3-8543-b6f31889fccb",
+      "uuid": "26d4f313-c36c-408b-b532-67f51fe0d118",
       "type": "http",
       "documentation": "Get User Info - Kullanıcı Bilgisini Getir",
       "method": "get",
       "endpoint": "api/payments/users/:userId",
       "responses": [
         {
-          "uuid": "36c94083-cc67-4731-b516-509446e44f36",
+          "uuid": "042dae89-63bc-423e-8505-f2825df4245d",
           "body": "{\n  \"name\": \"John\",\n  \"surname\": \"Smith\",\n  \"email\": \"john.smith@example.com\",\n  \"phoneNumber\": \"905452424847\",\n  \"registeredDevices\": [{\n    \"deviceId\": \"{{faker 'string.uuid'}}\",\n    \"deviceInfo\": \"Ios 18\",\n    \"active\": true\n  }],\n  \"language\": \"tr-TR\"\n}",
           "latency": 200,
           "statusCode": 200,
@@ -1261,14 +1287,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "ac27373c-6ab6-43ca-884c-ab44979f5f14",
+      "uuid": "7579d9f9-d6ab-487b-b22c-9a04b7e3498d",
       "type": "http",
       "documentation": "Validates account opening against bank policies",
       "method": "post",
       "endpoint": "api/banking/policies/validate-account-opening",
       "responses": [
         {
-          "uuid": "fa7fe845-42e9-4631-b7b5-31e2ea5d31ea",
+          "uuid": "5b154c2e-31e6-42be-8238-8623488b9f11",
           "body": "{\n    \"validationId\": \"{{faker 'string.uuid'}}\",\n    \"complianceChecks\": {\n      \"kycCompliant\": true,\n      \"amlCompliant\": true,\n      \"sanctionsCheck\": true,\n      \"riskAssessment\": \"low\"\n    },\n    \"accountLimits\": {\n      \"dailyTransactionLimit\": 50000,\n      \"monthlyTransactionLimit\": 500000,\n      \"minimumBalance\": 0,\n      \"maximumBalance\": 1000000\n    },\n    \"additionalRequirements\": [],\n    \"approvedBy\": \"system\",\n    \"approvalLevel\": \"automated\",\n    \"policyVersion\": \"1.0.0\",\n    \"validationScore\": {{faker 'number.int' min=85 max=100}}\n}",
           "latency": 0,
           "statusCode": 200,
@@ -1300,7 +1326,7 @@
           "callbacks": []
         },
         {
-          "uuid": "bac2121a-771f-47bd-a9ce-ff5495bdca3c",
+          "uuid": "bb862b01-f62e-437a-9e8d-c7cf2a38d0d3",
           "body": "{\n  \"validationId\": \"{{faker 'string.uuid'}}\",\n  \"error\": {\n    \"message\": \"Policy validation failed\",\n    \"code\": \"policy_violation\",\n    \"description\": \"Account opening request does not meet policy requirements\"\n  },\n  \"failedChecks\": [\n    \"risk_assessment\"\n  ],\n  \"recommendations\": [\n    \"Please review your account information\",\n    \"Contact customer support for assistance\"\n  ],\n  \"canRetry\": true,\n  \"retryAfter\": 300\n}",
           "latency": 0,
           "statusCode": 403,
@@ -1329,14 +1355,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "07488e10-b4ab-4cad-b80f-f8875bc496d2",
+      "uuid": "33139996-5a0a-4514-b461-adb9d8c42e0c",
       "type": "http",
       "documentation": "Creates a new bank account in core banking system",
       "method": "post",
       "endpoint": "api/banking/accounts/create",
       "responses": [
         {
-          "uuid": "3a05e2d6-59e4-41db-aaf9-4b18aa1faf38",
+          "uuid": "308fd823-ef23-4833-95be-0d5c520a1dea",
           "body": "{\n    \"accountId\": \"{{faker 'string.uuid'}}\",\n    \"accountNumber\": \"{{faker 'finance.accountNumber'}}\",\n    \"iban\": \"TR{{faker 'string.numeric' 24}}\",\n    \"accountType\": \"demand-deposit\",\n    \"currency\": \"{{body 'currency'}}\",\n    \"branchCode\": \"{{body 'branchCode'}}\",\n    \"status\": \"active\",\n    \"isActive\": true,\n    \"currentBalance\": {{body 'initialDeposit' 0}},\n    \"availableBalance\": {{body 'initialDeposit' 0}},\n    \"limits\": {\n      \"dailyTransactionLimit\": 50000,\n      \"monthlyTransactionLimit\": 500000,\n      \"minimumBalance\": 0,\n      \"maximumBalance\": 1000000\n    },\n    \"debitCardRequested\": false,\n    \"onlineBankingEnabled\": true,\n    \"mobileBankingEnabled\": true,\n    \"creationReference\": \"{{faker 'string.uuid'}}\",\n    \"coreBankingId\": \"CB{{faker 'string.numeric' 10}}\",\n    \"services\": [\n      \"online-banking\",\n      \"mobile-banking\",\n      \"sms-banking\"\n    ]\n}",
           "latency": 0,
           "statusCode": 201,
@@ -1368,7 +1394,7 @@
           "callbacks": []
         },
         {
-          "uuid": "7f42bc87-d4fb-4022-b95e-ce8c14463d06",
+          "uuid": "6b220657-625b-43ef-8bac-80a265d9c3ba",
           "body": "{\n  \"error\": {\n    \"message\": \"Account creation failed\",\n    \"code\": \"validation_error\",\n    \"description\": \"Account data validation failed\"\n  },\n  \"failureReason\": \"invalid_account_name\",\n  \"failureCategory\": \"validation_error\",\n  \"canRetry\": true,\n  \"retryAfter\": 300,\n  \"maxRetries\": 3,\n  \"recommendations\": [\n    \"Please check your account information and try again\",\n    \"Account name must be between 1-50 characters\"\n  ],\n  \"supportReference\": \"{{faker 'string.uuid'}}\"\n}",
           "latency": 0,
           "statusCode": 422,
@@ -1397,266 +1423,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "c6ee38d2-3e27-4edb-bff6-e721bcc94ea2",
+      "uuid": "5e07a4b9-bb6d-4983-91ca-c310ff06bb11",
       "type": "http",
-      "documentation": "Task Test HTTP Endpoint - Test for HttpTask type",
-      "method": "post",
-      "endpoint": "api/task-test/http-endpoint",
-      "responses": [
-        {
-          "uuid": "527817f1-6f48-45a1-9155-e07381570be3",
-          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"HttpTask\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/task-test/http-endpoint\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
-          "latency": 0,
-          "statusCode": 200,
-          "label": "Success Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "key": "X-Task-Type",
-              "value": "HttpTasks"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": true,
-          "crudKey": "id",
-          "callbacks": []
-        },
-        {
-          "uuid": "cfe7a8a6-f2e0-4d4a-9c52-6bab05172fe2",
-          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
-          "latency": 0,
-          "statusCode": 500,
-          "label": "Error Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": false,
-          "crudKey": "id",
-          "callbacks": []
-        }
-      ],
-      "responseMode": null,
-      "streamingMode": null,
-      "streamingInterval": 0
-    },
-    {
-      "uuid": "126a2c76-7f77-46f2-9b19-76731472ad85",
-      "type": "http",
-      "documentation": "Task Test Consume Endpoint - Test for PubSub type",
-      "method": "post",
-      "endpoint": "api/task-test/consume",
-      "responses": [
-        {
-          "uuid": "f7110ad6-0327-4693-a3ec-35750923334a",
-          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"DaprPubsub\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/task-test/consume\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
-          "latency": 0,
-          "statusCode": 200,
-          "label": "Success Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "key": "X-Task-Type",
-              "value": "DaprPubSub"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": true,
-          "crudKey": "id",
-          "callbacks": []
-        },
-        {
-          "uuid": "295de68c-d569-4a20-9580-3759b2e0ab8c",
-          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
-          "latency": 0,
-          "statusCode": 500,
-          "label": "Error Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": false,
-          "crudKey": "id",
-          "callbacks": []
-        }
-      ],
-      "responseMode": null,
-      "streamingMode": null,
-      "streamingInterval": 0
-    },
-    {
-      "uuid": "f5902d1f-4bc2-4c32-b3c6-a63ea9c03346",
-      "type": "http",
-      "documentation": "Task Test HTTP Endpoint - Test for DaprService type",
-      "method": "post",
-      "endpoint": "api/task-test/dapr-endpoint",
-      "responses": [
-        {
-          "uuid": "6d3634d5-2d99-4795-9544-98e7f7f1a206",
-          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"DaprService\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/task-test/dapr-endpoint\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
-          "latency": 0,
-          "statusCode": 200,
-          "label": "Success Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "key": "X-Task-Type",
-              "value": "DaprService"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": true,
-          "crudKey": "id",
-          "callbacks": []
-        },
-        {
-          "uuid": "ecfae540-22f4-4bdb-a6fa-f0dfd301ef3a",
-          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
-          "latency": 0,
-          "statusCode": 500,
-          "label": "Error Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": false,
-          "crudKey": "id",
-          "callbacks": []
-        }
-      ],
-      "responseMode": null,
-      "streamingMode": null,
-      "streamingInterval": 0
-    },
-    {
-      "uuid": "33336829-43d0-49b6-af2a-253884596824",
-      "type": "http",
-      "documentation": "Task Test HTTP Endpoint - Test for NotificationTask type",
-      "method": "post",
-      "endpoint": "api/notification/send",
-      "responses": [
-        {
-          "uuid": "484b4ed0-ed9a-49cc-8940-4b7c96394511",
-          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"NotificationTask\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/notification/send\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
-          "latency": 0,
-          "statusCode": 200,
-          "label": "Success Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": true,
-          "crudKey": "id",
-          "callbacks": []
-        },
-        {
-          "uuid": "2009b9b5-4a11-40fc-8a84-14d50535e2c8",
-          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
-          "latency": 0,
-          "statusCode": 500,
-          "label": "Error Response",
-          "headers": [
-            {
-              "key": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "bodyType": "INLINE",
-          "filePath": "",
-          "databucketID": "",
-          "sendFileAsBody": false,
-          "rules": [],
-          "rulesOperator": "OR",
-          "disableTemplating": false,
-          "fallbackTo404": false,
-          "default": false,
-          "crudKey": "id",
-          "callbacks": []
-        }
-      ],
-      "responseMode": null,
-      "streamingMode": null,
-      "streamingInterval": 0
-    },
-    {
-      "uuid": "b0676c5e-9873-444c-b765-368c78081679",
-      "type": "http",
-      "documentation": "Fetch Contracts",
+      "documentation": "",
       "method": "post",
       "endpoint": "api/contract/get-documents",
       "responses": [
         {
-          "uuid": "b31a2f72-475b-48e7-8eeb-58da8fa1aaa1",
+          "uuid": "12a6bb9b-5e3f-4393-8fce-f66b76f6c370",
           "body": "{\n  \"statusCode\": 200,\n  \"data\": {\n    \"groupCode\": \"{{body 'groupCode'}}\",\n    \"contracts\": [\n      {\n        \"contractId\": \"{{faker 'string.uuid'}}\",\n        \"contractType\": \"account-opening\",\n        \"contractName\": \"Hesap Açılış Sözleşmesi\",\n        \"templateId\": \"TPL-ACCOUNT-001\",\n        \"contractData\": {\n          \"accountType\": \"demand-deposit\",\n          \"currency\": \"TRY\"\n        }\n      },\n      {\n        \"contractId\": \"{{faker 'string.uuid'}}\",\n        \"contractType\": \"terms-conditions\",\n        \"contractName\": \"Genel Hüküm ve Koşullar\",\n        \"templateId\": \"TPL-TERMS-001\",\n        \"contractData\": {\n          \"version\": \"2.0\"\n        }\n      },\n      {\n        \"contractId\": \"{{faker 'string.uuid'}}\",\n        \"contractType\": \"kvkk\",\n        \"contractName\": \"KVKK Aydınlatma Metni\",\n        \"templateId\": \"TPL-KVKK-001\",\n        \"contractData\": {\n          \"consentDate\": \"{{now 'yyyy-MM-dd'}}\"\n        }\n      }\n    ],\n    \"totalContracts\": 3,\n    \"retrievedAt\": \"{{now}}\"\n  }\n}",
           "latency": 0,
           "statusCode": 200,
@@ -1680,7 +1454,7 @@
           "callbacks": []
         },
         {
-          "uuid": "1caca7d5-d08b-459d-aeeb-e6a2529d4e9c",
+          "uuid": "b816189d-1b14-4475-b5e3-770cdfd88a5a",
           "body": "{\n  \"statusCode\": 404,\n  \"data\": {\n    \"error\": {\n      \"message\": \"Contract group not found\",\n      \"code\": \"group_not_found\",\n      \"description\": \"The specified contract group code does not exist\"\n    }\n  }\n}",
           "latency": 0,
           "statusCode": 404,
@@ -1709,14 +1483,14 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "c122d71d-6193-4400-b26f-a1c5e211747b",
+      "uuid": "0fe9d51a-a402-45ec-955c-dca673b35b3b",
       "type": "http",
-      "documentation": "Render Document",
+      "documentation": "",
       "method": "post",
       "endpoint": "api/contract/render-document",
       "responses": [
         {
-          "uuid": "2dbaa98a-9890-4b3f-a5a6-b6e1b44c018a",
+          "uuid": "d7ee8c1b-f0a0-49df-86a9-5b4421305c80",
           "body": "{\n  \"statusCode\": 200,\n  \"data\": {\n    \"documentId\": \"{{faker 'string.uuid'}}\",\n    \"documentUrl\": \"https://cdn.example.com/contracts/{{faker 'string.alphanumeric' 32}}.pdf\",\n    \"documentSize\": {{faker 'number.int' min=50000 max=500000}},\n    \"pageCount\": {{faker 'number.int' min=1 max=10}},\n    \"checksum\": \"{{faker 'string.alphanumeric' 64}}\",\n    \"expiresAt\": \"{{faker 'date.future'}}\",\n    \"renderedAt\": \"{{now}}\",\n    \"format\": \"pdf\",\n    \"templateVersion\": \"1.0.0\"\n  }\n}",
           "latency": 0,
           "statusCode": 200,
@@ -1740,11 +1514,11 @@
           "callbacks": []
         },
         {
-          "uuid": "c04b7472-fd71-4534-88fe-785fa3fd8df3",
+          "uuid": "5d073833-c477-4dc1-9a2d-bb48d947f8e5",
           "body": "{\n  \"statusCode\": 500,\n  \"data\": {\n    \"error\": {\n      \"message\": \"Document rendering failed\",\n      \"code\": \"render_failed\",\n      \"description\": \"Unable to render the contract document\"\n    }\n  }\n}",
           "latency": 0,
           "statusCode": 500,
-          "label": "",
+          "label": "Document Render Failed",
           "headers": [
             {
               "key": "Content-Type",
@@ -1769,14 +1543,214 @@
       "streamingInterval": 0
     },
     {
-      "uuid": "c5d7a37f-1e69-4dba-99cd-0a5a287b400b",
+      "uuid": "30ce347c-8b04-44e4-8d50-da46d7ab04c7",
+      "type": "http",
+      "documentation": "Task Test HTTP Endpoint - Test for HttpTask type",
+      "method": "post",
+      "endpoint": "api/task-test/http-endpoint",
+      "responses": [
+        {
+          "uuid": "e9361ff0-f4c6-46a1-94de-1960c8e55cb3",
+          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"HttpTask\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/task-test/http-endpoint\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
+          "latency": 500,
+          "statusCode": 200,
+          "label": "Success Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "key": "X-Task-Type",
+              "value": "HttpTask"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "6ad55341-fb41-466e-ab2b-2c87b19f4364",
+          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
+          "latency": 200,
+          "statusCode": 500,
+          "label": "Error Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "body",
+              "modifier": "simulateError",
+              "value": "true",
+              "invert": false,
+              "operator": "equals"
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "73691013-0ade-4d97-8dba-98848fb35e76",
+      "type": "http",
+      "documentation": "Task Test Consume Endpoint - Test for PubSub type",
+      "method": "post",
+      "endpoint": "api/task-test/consume",
+      "responses": [
+        {
+          "uuid": "3da94bc4-8996-4852-9f9d-c051a050ff5d",
+          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"DaprPubsub\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/task-test/consume\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Success Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "key": "X-Task-Type",
+              "value": "DaprPubSub"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "485b5259-27df-4ce8-80f5-a3b76afc054c",
+          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
+          "latency": 0,
+          "statusCode": 500,
+          "label": "Error Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "d767c310-4aa8-451c-b736-2f76728c7037",
+      "type": "http",
+      "documentation": "Task Test HTTP Endpoint - Test for DaprService type",
+      "method": "post",
+      "endpoint": "api/task-test/dapr-endpoint",
+      "responses": [
+        {
+          "uuid": "24f42129-e879-49de-84b2-65825a45018d",
+          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"DaprService\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/task-test/dapr-endpoint\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Success Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "key": "X-Task-Type",
+              "value": "DaprService"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "1ba077d4-6d3e-4209-af3c-b7d5734a3e90",
+          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
+          "latency": 0,
+          "statusCode": 500,
+          "label": "Error Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "75c69f59-d442-44ce-bc38-65efabeb2ee3",
       "type": "http",
       "documentation": "Task Test HTTP Endpoint - Test for HttpTask type",
       "method": "post",
       "endpoint": "api/task-test/list-items",
       "responses": [
         {
-          "uuid": "84921ae2-0ef7-4296-9634-c7b4b48ce12f",
+          "uuid": "163ea29b-0661-463d-a116-a57758be033e",
           "body": "[\n  {\n    \"id\": \"{{faker 'string.uuid'}}\",\n    \"name\": \"item_{{faker 'string.alphanumeric' 10}}\",\n    \"isActive\": true\n  },\n  {\n    \"id\": \"{{faker 'string.uuid'}}\",\n    \"name\": \"item_{{faker 'string.alphanumeric' 10}}\",\n    \"isActive\": true\n  },\n  {\n    \"id\": \"{{faker 'string.uuid'}}\",\n    \"name\": \"item_{{faker 'string.alphanumeric' 10}}\",\n    \"isActive\": true\n  },\n  {\n    \"id\": \"{{faker 'string.uuid'}}\",\n    \"name\": \"item_{{faker 'string.alphanumeric' 10}}\",\n    \"isActive\": true\n  }\n]",
           "latency": 0,
           "statusCode": 200,
@@ -1804,7 +1778,7 @@
           "callbacks": []
         },
         {
-          "uuid": "92018329-603a-4242-a0c1-415df7f78565",
+          "uuid": "afdc2ca6-ceb3-40ee-a7b9-c91a3697aa25",
           "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
           "latency": 0,
           "statusCode": 500,
@@ -1831,41 +1805,289 @@
       "responseMode": null,
       "streamingMode": null,
       "streamingInterval": 0
+    },
+    {
+      "uuid": "52f44c97-9b96-4d7e-8f6a-63457637d466",
+      "type": "http",
+      "documentation": "Task Test HTTP Endpoint - Test for NotificationTask type",
+      "method": "post",
+      "endpoint": "api/notification/send",
+      "responses": [
+        {
+          "uuid": "01c4b612-de94-44a9-992c-34f9e1c70821",
+          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"taskType\": \"NotificationTask\",\n    \"message\": \"HTTP task test successful\",\n    \"receivedData\": {{body}},\n    \"processedAt\": \"{{now}}\",\n    \"requestId\": \"{{faker 'string.uuid'}}\"\n  },\n  \"metadata\": {\n    \"endpoint\": \"api/notification/send\",\n    \"method\": \"POST\",\n    \"responseTime\": {{faker 'number.int' min=50 max=200}}\n  }\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Success Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "6a6a1054-a070-4cce-99d6-2631a898c43a",
+          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Task test HTTP endpoint error\",\n    \"timestamp\": \"{{now}}\"\n  }\n}",
+          "latency": 0,
+          "statusCode": 500,
+          "label": "Error Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "eb01a2c3-0001-4f67-8901-2345abcdef01",
+      "type": "http",
+      "documentation": "ErrorBoundary Test - Simulate 503 Service Unavailable for Retry testing",
+      "method": "post",
+      "endpoint": "api/error-boundary/simulate-503",
+      "responses": [
+        {
+          "uuid": "3a2db3d9-f08b-4978-a645-681fe94ba529",
+          "body": "{\n  \"statusCode\": 503,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"SERVICE_UNAVAILABLE\",\n    \"message\": \"Service temporarily unavailable\",\n    \"description\": \"The service is currently undergoing maintenance or is overloaded\",\n    \"retryAfter\": 5\n  },\n  \"timestamp\": \"{{now}}\",\n  \"requestId\": \"{{faker 'string.uuid'}}\"\n}",
+          "latency": 500,
+          "statusCode": 503,
+          "label": "Service Unavailable - Retry Test",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "key": "Retry-After",
+              "value": "5"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "eb01a2c3-0002-4f67-8901-2345abcdef02",
+      "type": "http",
+      "documentation": "ErrorBoundary Test - Simulate 500 Internal Server Error for Abort testing",
+      "method": "post",
+      "endpoint": "api/error-boundary/simulate-500",
+      "responses": [
+        {
+          "uuid": "c5864a01-4ae8-45c8-b99e-c658c442e177",
+          "body": "{\n  \"statusCode\": 500,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_SERVER_ERROR\",\n    \"message\": \"An unexpected error occurred\",\n    \"description\": \"Critical system failure - operation cannot be completed\",\n    \"errorType\": \"HttpRequestException\"\n  },\n  \"timestamp\": \"{{now}}\",\n  \"requestId\": \"{{faker 'string.uuid'}}\"\n}",
+          "latency": 200,
+          "statusCode": 500,
+          "label": "Internal Server Error - Abort Test",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "eb01a2c3-0003-4f67-8901-2345abcdef03",
+      "type": "http",
+      "documentation": "ErrorBoundary Test - Simulate 400 Bad Request for Ignore testing",
+      "method": "post",
+      "endpoint": "api/error-boundary/simulate-400",
+      "responses": [
+        {
+          "uuid": "6df197a0-25a2-4740-8288-850e70204d12",
+          "body": "{\n  \"statusCode\": 400,\n  \"success\": false,\n  \"error\": {\n    \"code\": \"BAD_REQUEST\",\n    \"message\": \"Invalid request parameters\",\n    \"description\": \"The request contains invalid or missing parameters\",\n    \"validationErrors\": [\n      {\n        \"field\": \"testField\",\n        \"message\": \"Field is required\"\n      }\n    ]\n  },\n  \"timestamp\": \"{{now}}\",\n  \"requestId\": \"{{faker 'string.uuid'}}\"\n}",
+          "latency": 100,
+          "statusCode": 400,
+          "label": "Bad Request - Ignore Test",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "eb01a2c3-0004-4f67-8901-2345abcdef04",
+      "type": "http",
+      "documentation": "ErrorBoundary Test - Simulate timeout with delayed response",
+      "method": "post",
+      "endpoint": "api/error-boundary/simulate-timeout",
+      "responses": [
+        {
+          "uuid": "0fa74f43-09bd-4c80-b9f3-aa581b25fd9e",
+          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"message\": \"This response is intentionally delayed to trigger timeout\",\n    \"delayedBy\": \"30 seconds\"\n  },\n  \"timestamp\": \"{{now}}\",\n  \"requestId\": \"{{faker 'string.uuid'}}\"\n}",
+          "latency": 30000,
+          "statusCode": 200,
+          "label": "Delayed Response - Timeout Test",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "eb01a2c3-0005-4f67-8901-2345abcdef05",
+      "type": "http",
+      "documentation": "ErrorBoundary Test - Successful response for happy path testing",
+      "method": "post",
+      "endpoint": "api/error-boundary/simulate-success",
+      "responses": [
+        {
+          "uuid": "5a01fa25-1f85-48fd-a016-13cc1b78cb22",
+          "body": "{\n  \"statusCode\": 200,\n  \"success\": true,\n  \"data\": {\n    \"message\": \"Operation completed successfully\",\n    \"result\": {\n      \"operationId\": \"{{faker 'string.uuid'}}\",\n      \"status\": \"completed\",\n      \"processedAt\": \"{{now}}\"\n    }\n  },\n  \"timestamp\": \"{{now}}\",\n  \"requestId\": \"{{faker 'string.uuid'}}\"\n}",
+          "latency": 200,
+          "statusCode": 200,
+          "label": "Success Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
     }
   ],
   "rootChildren": [
     {
       "type": "route",
-      "uuid": "997c7b82-5db3-4ec7-a1a1-078be6d22bb6"
+      "uuid": "5a05d227-3eb2-4253-8b26-20b6a95b66ae"
     },
     {
       "type": "folder",
-      "uuid": "d577ab0d-5a1b-4fd0-9b14-b7a78c485cbf"
+      "uuid": "46fb060c-5347-41f5-809e-86e40337f2fa"
     },
     {
       "type": "folder",
-      "uuid": "d915ee3a-219c-4c8a-b12b-e3f0fa806169"
+      "uuid": "b3a79260-52ee-40db-b9f5-057764d77ceb"
     },
     {
       "type": "folder",
-      "uuid": "ae0ab77a-48d6-458d-94ae-885ed9567efe"
+      "uuid": "4b345806-3c85-4752-98bd-15b973301107"
     },
     {
       "type": "folder",
-      "uuid": "eba8285f-51b1-41e4-b9a0-081531c55a1f"
+      "uuid": "0c0c687a-810a-434f-affc-a23e45a90dfc"
     },
     {
       "type": "folder",
-      "uuid": "f643b1f6-1e55-4bcb-89d9-94aad6af9013"
+      "uuid": "eb01a2c3-d4e5-4f67-8901-2345abcdef01"
     },
     {
       "type": "folder",
-      "uuid": "996942da-01d2-4572-b4fd-dc6c7c8c8f08"
+      "uuid": "fb3934f2-4587-470e-a75c-054eb7f4b45d"
+    },
+    {
+      "type": "folder",
+      "uuid": "ad23cdc9-2552-4503-bead-579cff0ec274"
     }
   ],
   "proxyMode": false,
   "proxyHost": "",
-  "proxyRemovePrefix": false,
+  "proxyRemovePrefix": true,
   "tlsOptions": {
     "enabled": false,
     "type": "CERT",

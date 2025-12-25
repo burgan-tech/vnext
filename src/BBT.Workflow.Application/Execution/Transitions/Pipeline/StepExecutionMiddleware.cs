@@ -12,40 +12,49 @@ using Microsoft.Extensions.Logging;
 namespace BBT.Workflow.Execution.Transitions.Pipeline;
 
 /// <summary>
-/// Intercepts pipeline step execution with error boundary handling.
+/// Middleware for pipeline step execution with cross-cutting concerns.
 /// Wraps step failures, resolves error policies, and executes appropriate actions.
-/// Supports State-level and Global-level error boundaries for non-task errors.
+/// Supports State-level and Global-level error handling for non-task errors.
 /// Implements scheduled retry for pipeline steps via background jobs.
 /// </summary>
 /// <remarks>
-/// This is NOT a decorator pattern implementation. It is an interceptor that wraps
-/// individual step executions to apply error boundary logic. The TransitionPipeline
-/// uses this interceptor optionally to handle step-level errors with configurable policies.
+/// This middleware can be extended for various inspection/handling scenarios:
+/// - Error boundary handling with configurable policies
+/// - Retry scheduling via background jobs
+/// - Logging and metrics collection
+/// - Circuit breaker patterns
+/// - Rate limiting
+///
+/// The TransitionPipeline uses this middleware to handle step-level errors
+/// with configurable policies.
 /// </remarks>
-public sealed class ErrorBoundaryStepInterceptor
+public sealed class StepExecutionMiddleware
 {
     private readonly IErrorPolicyResolver _errorPolicyResolver;
     private readonly IErrorActionExecutor _errorActionExecutor;
+    private readonly IErrorNormalizer _errorNormalizer;
     private readonly IBackgroundJobService _backgroundJobService;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IInstanceJobRepository _jobRepository;
     private readonly IWorkflowMetrics _workflowMetrics;
-    private readonly ILogger<ErrorBoundaryStepInterceptor> _logger;
+    private readonly ILogger<StepExecutionMiddleware> _logger;
 
     /// <summary>
-    /// Initializes a new instance of ErrorBoundaryStepInterceptor.
+    /// Initializes a new instance of StepExecutionMiddleware.
     /// </summary>
-    public ErrorBoundaryStepInterceptor(
+    public StepExecutionMiddleware(
         IErrorPolicyResolver errorPolicyResolver,
         IErrorActionExecutor errorActionExecutor,
+        IErrorNormalizer errorNormalizer,
         IBackgroundJobService backgroundJobService,
         IInstanceRepository instanceRepository,
         IInstanceJobRepository jobRepository,
         IWorkflowMetrics workflowMetrics,
-        ILogger<ErrorBoundaryStepInterceptor> logger)
+        ILogger<StepExecutionMiddleware> logger)
     {
         _errorPolicyResolver = errorPolicyResolver;
         _errorActionExecutor = errorActionExecutor;
+        _errorNormalizer = errorNormalizer;
         _backgroundJobService = backgroundJobService;
         _instanceRepository = instanceRepository;
         _jobRepository = jobRepository;
@@ -54,14 +63,14 @@ public sealed class ErrorBoundaryStepInterceptor
     }
 
     /// <summary>
-    /// Executes a pipeline step with error boundary handling.
+    /// Executes a pipeline step with middleware handling.
     /// If the step fails, attempts to resolve and apply an error policy.
     /// </summary>
     /// <param name="step">The pipeline step to execute.</param>
     /// <param name="context">The transition execution context.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The step outcome, potentially modified by error handling.</returns>
-    public async Task<Result<StepOutcome>> ExecuteWithErrorBoundaryAsync(
+    public async Task<Result<StepOutcome>> ExecuteAsync(
         ITransitionStep step,
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
@@ -73,7 +82,7 @@ public sealed class ErrorBoundaryStepInterceptor
             return stepResult;
         }
 
-        // Step failed - attempt error boundary handling
+        // Step failed - attempt error handling
         return await HandleStepErrorAsync(step, context, stepResult.Error, cancellationToken);
     }
 
@@ -87,14 +96,14 @@ public sealed class ErrorBoundaryStepInterceptor
         CancellationToken cancellationToken)
     {
         _logger.LogWarning(
-            "Step {StepName} failed with error {ErrorCode}: {ErrorMessage}. Attempting error boundary resolution.",
+            "Step {StepName} failed with error {ErrorCode}: {ErrorMessage}. Attempting error policy resolution.",
             step.GetType().Name,
             error.Code,
             error.Message);
 
         // Build error context for policy resolution
         // Pipeline step errors are handled at State level boundary
-        var errorContext = ErrorContextBuilder.Create()
+        var errorContext = ErrorContextBuilder.Create(_errorNormalizer)
             .WithError(error)
             .WithScope(ErrorBoundaryScope.State)
             .FromContext(context)
@@ -388,4 +397,3 @@ public sealed class ErrorBoundaryStepInterceptor
             scheduledTime);
     }
 }
-

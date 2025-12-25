@@ -31,6 +31,16 @@ public sealed class TaskInvocationResult
     public string? ErrorMessage { get; init; }
     
     /// <summary>
+    /// Domain error code for error boundary matching (e.g., "Task:400007", "Dapr.Invocation").
+    /// </summary>
+    public string? ErrorCode { get; init; }
+    
+    /// <summary>
+    /// Exception type name for error boundary matching (e.g., "HttpRequestException", "TimeoutException").
+    /// </summary>
+    public string? ExceptionTypeName { get; init; }
+    
+    /// <summary>
     /// Response headers (for HTTP-based tasks).
     /// </summary>
     public Dictionary<string, string>? Headers { get; init; }
@@ -92,6 +102,8 @@ public sealed class TaskInvocationResult
     /// <param name="headers">Response headers (for HTTP error responses).</param>
     /// <param name="data">Parsed response data (for JSON error responses).</param>
     /// <param name="metadata">Additional error metadata (exception type, stack trace, etc.).</param>
+    /// <param name="errorCode">Domain error code for error boundary matching.</param>
+    /// <param name="exceptionTypeName">Exception type name for error boundary matching.</param>
     public static TaskInvocationResult Failure(
         string error,
         int? statusCode = null,
@@ -100,10 +112,14 @@ public sealed class TaskInvocationResult
         string? taskType = null,
         Dictionary<string, string>? headers = null,
         object? data = null,
-        Dictionary<string, object>? metadata = null) => new()
+        Dictionary<string, object>? metadata = null,
+        string? errorCode = null,
+        string? exceptionTypeName = null) => new()
     {
         IsSuccess = false,
         ErrorMessage = error,
+        ErrorCode = errorCode,
+        ExceptionTypeName = exceptionTypeName,
         StatusCode = statusCode,
         Body = body,
         Data = data,
@@ -139,4 +155,3 @@ public sealed class TaskInvokeResponse
     /// </summary>
     public long ExecutionDurationMs { get; init; }
 }
-

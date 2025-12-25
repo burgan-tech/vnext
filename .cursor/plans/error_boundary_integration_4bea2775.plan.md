@@ -150,7 +150,3 @@ public string? ErrorTransitionKey { get; private set; }
 ### 7. Metrics Entegrasyonu
 
 [`PrometheusWorkflowMetrics.cs`](src/BBT.Workflow.Infrastructure/Monitoring/PrometheusWorkflowMetrics.cs) dosyasındaki error boundary metriklerinin pipeline'dan çağrılması.
-
-## Dosya Değişiklikleri Özeti
-
-| Dosya | Değişiklik Tipi ||-------|----------------|| `PipelineServiceCollectionExtensions.cs` | Güncelleme (DI kayıtları) || `ErrorBoundaryPipelineDecorator.cs` | Yeni dosya || `TransitionPipeline.cs` | Güncelleme (decorator entegrasyonu) || `StepOutcome.cs` | Güncelleme (ErrorActionResult property) |

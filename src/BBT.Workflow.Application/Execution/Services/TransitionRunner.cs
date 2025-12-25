@@ -23,6 +23,7 @@ public sealed class TransitionRunner(
     IComponentCacheStore componentCacheStore,
     IErrorPolicyResolver errorPolicyResolver,
     IErrorActionExecutor errorActionExecutor,
+    IErrorNormalizer errorNormalizer,
     IOptions<ReentryOptions> options,
     ILogger<TransitionRunner> logger) : ITransitionRunner
 {
@@ -204,7 +205,7 @@ public sealed class TransitionRunner(
         };
 
         // Build error context
-        var errorContext = ErrorContextBuilder.Create()
+        var errorContext = ErrorContextBuilder.Create(errorNormalizer)
             .WithError(error)
             .WithScope(ErrorBoundaryScope.Global)
             .FromContext(transitionContext)

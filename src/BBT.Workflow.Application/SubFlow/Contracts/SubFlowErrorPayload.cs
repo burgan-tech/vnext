@@ -17,9 +17,9 @@ public sealed record SubFlowErrorPayload
     public string Message { get; init; } = string.Empty;
 
     /// <summary>
-    /// Optional error code from the child workflow.
+    /// Optional error code from the child workflow (domain error code as string).
     /// </summary>
-    public int? ErrorCode { get; init; }
+    public string? ErrorCode { get; init; }
 
     /// <summary>
     /// Optional error details (may be sanitized for PII).

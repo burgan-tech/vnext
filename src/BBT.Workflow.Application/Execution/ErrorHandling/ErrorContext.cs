@@ -24,10 +24,16 @@ public sealed record ErrorContext
     public string ExceptionTypeName { get; init; } = string.Empty;
 
     /// <summary>
-    /// The error code for matching (HTTP status code, domain code, etc.).
+    /// The domain error code for matching (e.g., "Task:400007", "Validation:100001").
     /// Null if not applicable.
     /// </summary>
-    public int? ErrorCode { get; init; }
+    public string? ErrorCode { get; init; }
+
+    /// <summary>
+    /// The HTTP status code from the response, if applicable.
+    /// Used for StatusCode-based error boundary matching (e.g., 503, 502, 429).
+    /// </summary>
+    public int? StatusCode { get; init; }
 
     /// <summary>
     /// Indicates whether this error is a timeout.
@@ -90,6 +96,12 @@ public sealed record ErrorContext
     public DateTimeOffset OccurredAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
+    /// Normalized error representation for consistent boundary matching.
+    /// Unifies Result, TaskInvocationResult, and StandardTaskResponse errors.
+    /// </summary>
+    public NormalizedError? NormalizedError { get; init; }
+
+    /// <summary>
     /// Gets a value indicating whether this context has exception information.
     /// </summary>
     public bool HasException => Exception != null;
@@ -126,7 +138,7 @@ public sealed record ErrorContext
         {
             Error = error,
             ExceptionTypeName = MapErrorStringToExceptionName(errorString),
-            ErrorCode = null,
+            ErrorCode = error.Code,
             IsTimeout = errorString?.Contains("timeout", StringComparison.OrdinalIgnoreCase) ?? false,
             Scope = scope,
             Message = errorString ?? string.Empty,
@@ -134,12 +146,12 @@ public sealed record ErrorContext
         };
     }
 
-    private static int? ExtractErrorCode(Exception ex)
+    private static string? ExtractErrorCode(Exception ex)
     {
         return ex switch
         {
-            IHasErrorCode hasCode => hasCode.ErrorCode,
-            HttpRequestException httpEx => (int?)httpEx.StatusCode,
+            IHasErrorCode hasCode => hasCode.ErrorCode.ToString(),
+            HttpRequestException httpEx => httpEx.StatusCode?.ToString(),
             _ => null
         };
     }

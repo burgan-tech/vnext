@@ -1,4 +1,4 @@
-using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Resilience;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Tasks.Coordinator;
@@ -8,8 +8,8 @@ using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
+using BBT.Workflow.Tasks.Resilience;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using IConditionEvaluator = BBT.Workflow.Tasks.Evaluation.IConditionEvaluator;
 using ITimerEvaluator = BBT.Workflow.Tasks.Evaluation.ITimerEvaluator;
@@ -35,6 +35,9 @@ public static class TaskServiceCollectionExtensions
         // Core unified infrastructure
         services.AddTaskEvaluators();
         
+        // Resilience (Polly pipelines)
+        services.AddTaskResilience();
+        
         // Task coordination and orchestration
         services.AddTaskCoordination();
         
@@ -55,7 +58,10 @@ public static class TaskServiceCollectionExtensions
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
         
-        // Executor registry
+        // Task executor invoker - handles error boundary and retry (no per-call allocation)
+        services.TryAddScoped<ITaskExecutorInvoker, TaskExecutorInvoker>();
+        
+        // Executor registry - simple lookup with dictionary caching
         services.TryAddScoped<ITaskExecutorRegistry, TaskExecutorRegistry>();
         
         // Script executor (no remote - inline execution)
@@ -75,7 +81,7 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<NotificationTaskExecutor>();
         
         // Trigger task executors (domain-aware: local or remote)
-        services.AddTaskExecutor< SubProcessTaskExecutor>();
+        services.AddTaskExecutor<SubProcessTaskExecutor>();
         services.AddTaskExecutor<StartTriggerTaskExecutor>();
         services.AddTaskExecutor<DirectTriggerTaskExecutor>();
         services.AddTaskExecutor<GetInstanceDataTaskExecutor>();
@@ -100,24 +106,31 @@ public static class TaskServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Adds Polly-based resilience services for task execution.
+    /// </summary>
+    private static IServiceCollection AddTaskResilience(this IServiceCollection services)
+    {
+        // Configure default task retry options
+        services.AddOptions<TaskRetryOptions>()
+            .BindConfiguration(TaskRetryOptions.SectionName)
+            .ValidateDataAnnotations();
+
+        // Register resilience pipeline factory as singleton (thread-safe, stateless)
+        services.TryAddSingleton<ITaskResiliencePipelineFactory, TaskResiliencePipelineFactory>();
+
+        return services;
+    }
+
+    /// <summary>
     /// Adds task coordination services (ITaskCoordinator, ITaskConditionService, ITaskTimerService).
-    /// Uses the Decorator Pattern to wrap TaskCoordinator with ErrorBoundaryTaskCoordinatorDecorator.
+    /// Error boundary handling is done by ITaskExecutorInvoker.
     /// </summary>
     private static IServiceCollection AddTaskCoordination(this IServiceCollection services)
     {
-        // Inner coordinator (concrete implementation)
+        // TaskCoordinator implements all task coordination interfaces
+        // Error boundary handling is delegated to ITaskExecutorInvoker
         services.AddScoped<TaskCoordinator>();
-
-        // Decorator wrapping the inner coordinator with error boundary handling
-        services.AddScoped<ITaskCoordinator>(sp =>
-            new ErrorBoundaryTaskCoordinatorDecorator(
-                sp.GetRequiredService<TaskCoordinator>(),
-                sp.GetRequiredService<IErrorPolicyResolver>(),
-                sp.GetRequiredService<IErrorActionExecutor>(),
-                sp.GetRequiredService<ILogger<ErrorBoundaryTaskCoordinatorDecorator>>()));
-
-        // Condition and Timer services use the inner coordinator directly
-        // (error boundary not needed for evaluation operations)
+        services.AddScoped<ITaskCoordinator>(sp => sp.GetRequiredService<TaskCoordinator>());
         services.AddScoped<ITaskConditionService>(sp => sp.GetRequiredService<TaskCoordinator>());
         services.AddScoped<ITaskTimerService>(sp => sp.GetRequiredService<TaskCoordinator>());
 
