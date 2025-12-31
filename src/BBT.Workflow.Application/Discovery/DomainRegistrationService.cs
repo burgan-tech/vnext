@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -72,9 +73,20 @@ public sealed class DomainRegistrationService(
         var registryFlow= options.RegistryFlow;
         var requestUrl = $"{registryBaseUrl}/{registryDomain}/workflows/{registryFlow}/instances/start?sync=false";
 
+        var httpClientName = options.ValidateSsl
+            ? TaskConstants.DefaultHttpClientName
+            : TaskConstants.NoSslValidationHttpClientName;
+
+        if (!options.ValidateSsl)
+        {
+            logger.LogWarning(
+                "SSL certificate validation is disabled for domain registration to '{RegistryUrl}'. This should only be used in development environments.",
+                requestUrl);
+        }
+
         try
         {
-            var httpClient = httpClientFactory.CreateClient(HttpClientName);
+            var httpClient = httpClientFactory.CreateClient(httpClientName);
             
             var response = await httpClient.PostAsJsonAsync(requestUrl, requestBody, JsonOptions, cancellationToken);
 

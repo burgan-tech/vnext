@@ -32,5 +32,17 @@ public sealed class ServiceDiscoveryOptions
     /// Default is "core".
     /// </summary>
     public string Domain { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Gets or sets the registry flow name to use in the HTTP call path.
+    /// This is the workflow flow name for domain registration.
+    /// </summary>
     public string RegistryFlow { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets whether SSL certificate validation should be performed for HTTP requests to the registry.
+    /// When set to false, SSL certificate validation is disabled (useful for development with self-signed certificates).
+    /// Default is true (SSL validation enabled) for production security.
+    /// </summary>
+    public bool ValidateSsl { get; set; } = true;
 }
