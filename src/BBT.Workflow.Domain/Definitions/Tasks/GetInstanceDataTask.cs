@@ -43,6 +43,11 @@ public sealed class GetInstanceDataTask : WorkflowTask
     /// </summary>
     public string[]? Extensions { get; private set; }
 
+    /// <summary>
+    /// Whether to use Dapr service invocation instead of direct HTTP
+    /// </summary>
+    public bool UseDapr { get; private set; } = false;
+
     public string? Identifier => TriggerInstanceId.HasValue ? TriggerInstanceId.Value.ToString() : TriggerKey;
 
     public void SetInstance(string? instanceId)
@@ -79,6 +84,11 @@ public sealed class GetInstanceDataTask : WorkflowTask
         Extensions = extensions;
     }
 
+    public void SetUseDapr(bool useDapr)
+    {
+        UseDapr = useDapr;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -87,6 +97,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
     internal void SetTriggerKeyInternal(string? triggerKey) => TriggerKey = triggerKey;
     internal void SetTriggerInstanceIdInternal(Guid? triggerInstanceId) => TriggerInstanceId = triggerInstanceId;
     internal void SetExtensionsInternal(string[]? extensions) => Extensions = extensions;
+    internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
 
     protected override void Configure(JsonElement config)
     {
@@ -115,6 +126,9 @@ public sealed class GetInstanceDataTask : WorkflowTask
                 }
                 Extensions = extensionsList.Count > 0 ? extensionsList.ToArray() : null;
         }
+
+        if (config.TryGetProperty("useDapr", out var useDaprElement))
+            UseDapr = useDaprElement.GetBoolean();
     }
 
     public static GetInstanceDataTask Create(JsonElement config)
@@ -143,6 +157,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         cloned.TriggerKey = TriggerKey;
         cloned.TriggerInstanceId = TriggerInstanceId;
         cloned.Extensions = Extensions;
+        cloned.UseDapr = UseDapr;
 
         return cloned;
     }
@@ -159,6 +174,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         SetTriggerKeyInternal(source.TriggerKey);
         SetTriggerInstanceIdInternal(source.TriggerInstanceId);
         SetExtensionsInternal(source.Extensions);
+        SetUseDaprInternal(source.UseDapr);
     }
 
     /// <summary>
@@ -172,6 +188,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         TriggerKey = null;
         TriggerInstanceId = null;
         Extensions = null;
+        UseDapr = false;
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Instances;
@@ -21,6 +22,7 @@ namespace BBT.Workflow.Tasks.Executors;
 public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetInstanceDataTask>
 {
     private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IDomainDiscoveryResolver _endpointResolver;
 
     /// <summary>
     /// Initializes a new instance of GetInstanceDataTaskExecutor.
@@ -30,10 +32,12 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IDomainDiscoveryResolver endpointResolver,
         ILogger<GetInstanceDataTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _serviceScopeFactory = scopeFactory;
+        _endpointResolver = endpointResolver;
     }
 
     /// <inheritdoc />
@@ -168,7 +172,7 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
     {
         Logger.LogDebug("Using RemoteInvokerService for GetInstanceData task {TaskKey}", task.Key);
 
-        var binding = BuildGetInstanceDataBinding(task, instanceIdentifier);
+        var binding = await BuildGetInstanceDataBindingAsync(task, instanceIdentifier, cancellationToken);
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.GetInstanceData,
@@ -196,15 +200,25 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         return result;
     }
 
-    private GetInstanceDataBinding BuildGetInstanceDataBinding(GetInstanceDataTask task, string instanceIdentifier)
+    private async Task<GetInstanceDataBinding> BuildGetInstanceDataBindingAsync(
+        GetInstanceDataTask task,
+        string instanceIdentifier,
+        CancellationToken cancellationToken)
     {
+        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        var endpoint = await _endpointResolver.GetEndpointAsync(
+            task.TriggerDomain, preferredKind, cancellationToken);
+
         return new GetInstanceDataBinding
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
             Instance = instanceIdentifier,
             Extensions = task.Extensions,
-            ETag = null
+            ETag = null,
+            UseDapr = task.UseDapr,
+            BaseUrl = endpoint.BaseUrl.ToString(),
+            DaprAppId = endpoint.DaprAppId
         };
     }
 }

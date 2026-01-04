@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Instances;
@@ -21,6 +22,7 @@ namespace BBT.Workflow.Tasks.Executors;
 public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask>
 {
     private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IDomainDiscoveryResolver _endpointResolver;
 
     /// <summary>
     /// Initializes a new instance of StartTriggerTaskExecutor.
@@ -30,10 +32,12 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IDomainDiscoveryResolver endpointResolver,
         ILogger<StartTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _serviceScopeFactory = scopeFactory;
+        _endpointResolver = endpointResolver;
     }
 
     /// <inheritdoc />
@@ -124,7 +128,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
     {
         Logger.LogDebug("Using RemoteInvokerService for StartTrigger task {TaskKey}", task.Key);
 
-        var binding = BuildStartTriggerBinding(task, context);
+        var binding = await BuildStartTriggerBindingAsync(task, context, cancellationToken);
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.StartTrigger,
@@ -172,9 +176,17 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         };
     }
 
-    private StartTriggerBinding BuildStartTriggerBinding(StartTask task, TaskExecutorContext context)
+    private async Task<StartTriggerBinding> BuildStartTriggerBindingAsync(
+        StartTask task,
+        TaskExecutorContext context,
+        CancellationToken cancellationToken)
     {
         var headers = ExtractHeaders(context.ScriptContext);
+
+        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        var endpoint = await _endpointResolver.GetEndpointAsync(
+            task.TriggerDomain, preferredKind, cancellationToken);
+
         return new StartTriggerBinding
         {
             Domain = task.TriggerDomain,
@@ -184,7 +196,10 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             Tags = task.TriggerTags,
             Body = task.Body,
             Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
-            Sync = task.TriggerSync
+            Sync = task.TriggerSync,
+            UseDapr = task.UseDapr,
+            BaseUrl = endpoint.BaseUrl.ToString(),
+            DaprAppId = endpoint.DaprAppId
         };
     }
 }

@@ -48,6 +48,11 @@ public sealed class SubProcessTask : WorkflowTask
     /// </summary>
     public string[]? TriggerTags { get; private set; }
 
+    /// <summary>
+    /// Whether to use Dapr service invocation instead of direct HTTP
+    /// </summary>
+    public bool UseDapr { get; private set; } = false;
+
     public void SetBody(dynamic body)
     {
         Body = JsonSerializer.SerializeToElement(body);
@@ -80,6 +85,11 @@ public sealed class SubProcessTask : WorkflowTask
         TriggerTags = tags;
     }
 
+    public void SetUseDapr(bool useDapr)
+    {
+        UseDapr = useDapr;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -90,6 +100,7 @@ public sealed class SubProcessTask : WorkflowTask
     internal void SetTriggerVersionInternal(string? triggerVersion) => TriggerVersion = triggerVersion;
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
+    internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
 
     protected override void Configure(JsonElement config)
     {
@@ -117,6 +128,9 @@ public sealed class SubProcessTask : WorkflowTask
             TriggerTags = triggerTagsElement.GetArrayLength() > 0
                 ? triggerTagsElement.EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToArray()
                 : null;
+
+        if (config.TryGetProperty("useDapr", out var useDaprElement))
+            UseDapr = useDaprElement.GetBoolean();
     }
 
     public static SubProcessTask Create(JsonElement config)
@@ -146,6 +160,7 @@ public sealed class SubProcessTask : WorkflowTask
         cloned.TriggerVersion = TriggerVersion;
         cloned.Body = Body;
         cloned.TriggerTags = TriggerTags;
+        cloned.UseDapr = UseDapr;
         return cloned;
     }
 
@@ -162,6 +177,7 @@ public sealed class SubProcessTask : WorkflowTask
         SetTriggerVersionInternal(source.TriggerVersion);
         SetBodyInternal(source.Body);
         SetTriggerTagsInternal(source.TriggerTags);
+        SetUseDaprInternal(source.UseDapr);
     }
 
     /// <summary>
@@ -176,6 +192,7 @@ public sealed class SubProcessTask : WorkflowTask
         TriggerVersion = null;
         Body = null;
         TriggerTags = null;
+        UseDapr = false;
     }
 
     /// <summary>

@@ -10,18 +10,32 @@ namespace BBT.Workflow.Execution.Invokers;
 
 /// <summary>
 /// Remote invoker for GetInstanceData tasks.
-/// Uses Dapr service invocation to call the orchestration app's instance data endpoint.
+/// Supports both Dapr service invocation and direct HTTP calls.
 /// Used for cross-domain instance data retrieval.
 /// </summary>
-public sealed class GetInstanceDataRemoteInvoker(
-    DaprClient daprClient,
-    IConfiguration configuration,
-    ILogger<GetInstanceDataRemoteInvoker> logger,
-    ITaskMetrics? metrics = null)
-    : ITaskInvoker<GetInstanceDataBinding>
+public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataBinding>
 {
-    private readonly ITaskMetrics _metrics = metrics ?? NullTaskMetrics.Instance;
-    private readonly string _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+    private readonly DaprClient _daprClient;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<GetInstanceDataRemoteInvoker> _logger;
+    private readonly ITaskMetrics _metrics;
+    private readonly string _orchestrationAppId;
+
+    public const string HttpClientName = "TriggerInvoker";
+
+    public GetInstanceDataRemoteInvoker(
+        DaprClient daprClient,
+        IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
+        ILogger<GetInstanceDataRemoteInvoker> logger,
+        ITaskMetrics? metrics = null)
+    {
+        _daprClient = daprClient;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger;
+        _metrics = metrics ?? NullTaskMetrics.Instance;
+        _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+    }
 
     /// <inheritdoc />
     public string TaskType => TaskTypes.GetInstanceData;
@@ -54,113 +68,211 @@ public sealed class GetInstanceDataRemoteInvoker(
         GetInstanceDataBinding binding,
         CancellationToken cancellationToken)
     {
+        // Route to Dapr or HttpClient based on binding
+        if (binding.UseDapr && !string.IsNullOrEmpty(binding.DaprAppId))
+        {
+            return await ExecuteWithDaprAsync(taskKey, binding, cancellationToken);
+        }
+
+        return await ExecuteWithHttpClientAsync(taskKey, binding, cancellationToken);
+    }
+
+    private async Task<TaskInvocationResult> ExecuteWithDaprAsync(
+        string? taskKey,
+        GetInstanceDataBinding binding,
+        CancellationToken cancellationToken)
+    {
         var stopwatch = Stopwatch.StartNew();
 
         try
         {
-            // Build the endpoint path: /api/v1/{domain}/workflows/{workflow}/instances/{instance}/data
-            var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/{binding.Instance}/data";
+            var appId = binding.DaprAppId ?? _orchestrationAppId;
+            var request = CreateDaprRequest(binding, appId);
 
-            // Add query parameters for extensions
-            if (binding.Extensions != null && binding.Extensions.Length > 0)
-            {
-                var extensionsParam = string.Join(",", binding.Extensions);
-                path += $"?extensions={Uri.EscapeDataString(extensionsParam)}";
-            }
-
-            var request = daprClient.CreateInvokeMethodRequest(
-                HttpMethod.Get,
-                _orchestrationAppId,
-                path);
-
-            // Add ETag header for conditional request
-            if (!string.IsNullOrEmpty(binding.ETag))
-            {
-                request.Headers.TryAddWithoutValidation("If-None-Match", binding.ETag);
-            }
-
-            // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
-            using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
-
-            var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
-
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var response = await _daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
             stopwatch.Stop();
-            var responseData = InvokerHelpers.TryParseJson(content);
-            
-            var metadata = new Dictionary<string, object>
-            {
-                ["Domain"] = binding.Domain,
-                ["Workflow"] = binding.Workflow,
-                ["Instance"] = binding.Instance,
-                ["OrchestrationAppId"] = _orchestrationAppId,
-                ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty
-            };
-            
-            // Record metrics based on success/failure
-            _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
 
-            // Always return result with full response details - let output mapping handle error scenarios
-            // All HTTP responses (2xx, 4xx, 5xx) include headers, body, and parsed data
-            return response.IsSuccessStatusCode
-                ? TaskInvocationResult.Success(
-                    data: responseData,
-                    body: content,
-                    statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
-                    taskType: TaskType,
-                    headers: responseHeaders,
-                    metadata: metadata)
-                : TaskInvocationResult.Failure(
-                    error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
-                    statusCode: (int)response.StatusCode,
-                    body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
-                    taskType: TaskType,
-                    headers: responseHeaders,
-                    data: responseData,
-                    metadata: metadata);
+            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
-            logger.LogWarning("GetInstanceData remote invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
+            _logger.LogWarning("GetInstanceData Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
             return TaskInvocationResult.Failure(
                 error: "GetInstanceData remote invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["Domain"] = binding.Domain,
-                    ["Workflow"] = binding.Workflow,
-                    ["Instance"] = binding.Instance,
-                    ["OrchestrationAppId"] = _orchestrationAppId,
-                    ["Cancelled"] = true
-                });
+                metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
-            logger.LogError(ex, "GetInstanceData remote invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
+            _logger.LogError(ex, "GetInstanceData Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["Domain"] = binding.Domain,
-                    ["Workflow"] = binding.Workflow,
-                    ["Instance"] = binding.Instance,
-                    ["OrchestrationAppId"] = _orchestrationAppId,
-                    ["ExceptionType"] = ex.GetType().Name
-                });
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
     }
-}
 
+    private async Task<TaskInvocationResult> ExecuteWithHttpClientAsync(
+        string? taskKey,
+        GetInstanceDataBinding binding,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            var httpClient = _httpClientFactory.CreateClient(HttpClientName);
+            var request = CreateHttpRequest(binding);
+
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            stopwatch.Stop();
+
+            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+        }
+        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "cancelled");
+            _logger.LogWarning("GetInstanceData HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
+                taskKey, binding.Domain, binding.Workflow, binding.Instance);
+
+            return TaskInvocationResult.Failure(
+                error: "GetInstanceData remote invocation was cancelled",
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: CreateMetadata(binding, cancelled: true));
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "failure");
+            _logger.LogError(ex, "GetInstanceData HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
+                taskKey, binding.Domain, binding.Workflow, binding.Instance);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
+        }
+    }
+
+    private async Task<TaskInvocationResult> ProcessResponseAsync(
+        GetInstanceDataBinding binding,
+        HttpResponseMessage response,
+        long executionDurationMs,
+        CancellationToken cancellationToken)
+    {
+        var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseData = InvokerHelpers.TryParseJson(content);
+        var metadata = CreateMetadata(binding, reasonPhrase: response.ReasonPhrase);
+
+        _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
+
+        return response.IsSuccessStatusCode
+            ? TaskInvocationResult.Success(
+                data: responseData,
+                body: content,
+                statusCode: (int)response.StatusCode,
+                executionDurationMs: executionDurationMs,
+                taskType: TaskType,
+                headers: responseHeaders,
+                metadata: metadata)
+            : TaskInvocationResult.Failure(
+                error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                statusCode: (int)response.StatusCode,
+                body: content,
+                executionDurationMs: executionDurationMs,
+                taskType: TaskType,
+                headers: responseHeaders,
+                data: responseData,
+                metadata: metadata);
+    }
+
+    private static string BuildPath(GetInstanceDataBinding binding)
+    {
+        var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/{binding.Instance}/data";
+
+        if (binding.Extensions != null && binding.Extensions.Length > 0)
+        {
+            var extensionsParam = string.Join(",", binding.Extensions);
+            path += $"?extensions={Uri.EscapeDataString(extensionsParam)}";
+        }
+
+        return path;
+    }
+
+    private HttpRequestMessage CreateDaprRequest(GetInstanceDataBinding binding, string appId)
+    {
+        var path = BuildPath(binding);
+
+        var request = _daprClient.CreateInvokeMethodRequest(
+            HttpMethod.Get,
+            appId,
+            path);
+
+        if (!string.IsNullOrEmpty(binding.ETag))
+        {
+            request.Headers.TryAddWithoutValidation("If-None-Match", binding.ETag);
+        }
+
+        return request;
+    }
+
+    private HttpRequestMessage CreateHttpRequest(GetInstanceDataBinding binding)
+    {
+        var path = BuildPath(binding);
+
+        if (string.IsNullOrEmpty(binding.BaseUrl))
+            throw new InvalidOperationException("BaseUrl is required for HTTP execution");
+
+        var baseUrl = binding.BaseUrl.TrimEnd('/') + "/";
+        var requestUri = new Uri(new Uri(baseUrl), path.TrimStart('/'));
+
+        var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+
+        if (!string.IsNullOrEmpty(binding.ETag))
+        {
+            request.Headers.TryAddWithoutValidation("If-None-Match", binding.ETag);
+        }
+
+        return request;
+    }
+
+    private Dictionary<string, object> CreateMetadata(
+        GetInstanceDataBinding binding,
+        bool cancelled = false,
+        string? reasonPhrase = null,
+        string? exceptionType = null)
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            ["Domain"] = binding.Domain,
+            ["Workflow"] = binding.Workflow,
+            ["Instance"] = binding.Instance,
+            ["OrchestrationAppId"] = _orchestrationAppId
+        };
+
+        if (cancelled)
+            metadata["Cancelled"] = true;
+
+        if (!string.IsNullOrEmpty(reasonPhrase))
+            metadata["ReasonPhrase"] = reasonPhrase;
+
+        if (!string.IsNullOrEmpty(exceptionType))
+            metadata["ExceptionType"] = exceptionType;
+
+        return metadata;
+    }
+}

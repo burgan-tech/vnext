@@ -6,5 +6,6 @@ namespace BBT.Workflow.Definitions.Functions
         public const string View = "view";
         public const string Data = "data";
         public const string Schema = "schema";
+        public const string Extensions = "extensions";
     }
 }

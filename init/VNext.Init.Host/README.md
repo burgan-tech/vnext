@@ -348,6 +348,8 @@ always-auth=true
 
 ## Environment Variables
 
+### Core Configuration
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `NPM_REGISTRY` | NPM registry URL | `https://registry.npmjs.org/` |
@@ -356,6 +358,41 @@ always-auth=true
 | `PACKAGE_API_PORT` | Port for the API server | `3000` |
 
 > **Note:** There is no default value for `appDomain`. It must be explicitly provided in the request when domain replacement is needed.
+
+### Server Timeout Configuration
+
+These environment variables control HTTP server timeouts. Increase these values for long-running pipelines with many components.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SERVER_TIMEOUT_MS` | Total request timeout in milliseconds | `600000` (10 min) |
+| `SERVER_KEEP_ALIVE_TIMEOUT_MS` | Keep-alive connection timeout in milliseconds | `600000` (10 min) |
+| `SERVER_HEADERS_TIMEOUT_MS` | Headers timeout in milliseconds (must be > keep-alive) | `610000` (10 min + 10 sec) |
+
+#### Example: 30 Minute Timeout
+
+For pipelines with many components that take longer to process:
+
+```yaml
+# docker-compose.yml
+services:
+  vnext-init:
+    environment:
+      SERVER_TIMEOUT_MS: 1800000        # 30 minutes
+      SERVER_KEEP_ALIVE_TIMEOUT_MS: 1800000
+      SERVER_HEADERS_TIMEOUT_MS: 1810000
+```
+
+Or via command line:
+
+```bash
+docker run -e SERVER_TIMEOUT_MS=1800000 \
+           -e SERVER_KEEP_ALIVE_TIMEOUT_MS=1800000 \
+           -e SERVER_HEADERS_TIMEOUT_MS=1810000 \
+           your-image
+```
+
+> **Tip:** If you're experiencing timeout errors during package publishing, try increasing these values. The `SERVER_HEADERS_TIMEOUT_MS` should always be slightly larger than `SERVER_KEEP_ALIVE_TIMEOUT_MS`.
 
 ---
 

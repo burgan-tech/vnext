@@ -25,6 +25,15 @@ const VNEXT_APP_URL = process.env.VNEXT_APP_URL || 'http://host.docker.internal:
 const API_ENDPOINT = `${VNEXT_APP_URL}/api/v1/definitions/publish`;
 const DEFAULT_REGISTRY = process.env.NPM_REGISTRY || 'https://registry.npmjs.org/';
 
+/**
+ * Server timeout configuration (in milliseconds)
+ * These can be overridden via environment variables for long-running pipelines
+ * Default: 10 minutes (600000ms)
+ */
+const SERVER_TIMEOUT_MS = parseInt(process.env.SERVER_TIMEOUT_MS, 10) || 600000;
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = parseInt(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS, 10) || 600000;
+const SERVER_HEADERS_TIMEOUT_MS = parseInt(process.env.SERVER_HEADERS_TIMEOUT_MS, 10) || (SERVER_KEEP_ALIVE_TIMEOUT_MS + 10000);
+
 /** 
  * The special core runtime package that requires domain replacement for SYS files
  */
@@ -1156,6 +1165,12 @@ async function runAutomaticInit() {
 function startServer() {
     const server = http.createServer(handleRequest);
     
+    // Increase timeouts for long-running package publish operations
+    // Configurable via env vars: SERVER_TIMEOUT_MS, SERVER_KEEP_ALIVE_TIMEOUT_MS, SERVER_HEADERS_TIMEOUT_MS
+    server.timeout = SERVER_TIMEOUT_MS;
+    server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS;
+    
     server.listen(PORT, () => {
         log.section('Package API Server Started');
         log.success(`Server running on port ${PORT}`);
@@ -1170,6 +1185,11 @@ function startServer() {
         log.detail(`  - appDomain is OPTIONAL`);
         log.detail(`  - If appDomain provided, replaces all domains`);
         log.info(`VNext App URL: ${VNEXT_APP_URL}`);
+        log.subsection('Timeout Configuration');
+        log.info(`Server Timeout: ${SERVER_TIMEOUT_MS}ms (${SERVER_TIMEOUT_MS / 60000} min)`);
+        log.info(`Keep-Alive Timeout: ${SERVER_KEEP_ALIVE_TIMEOUT_MS}ms (${SERVER_KEEP_ALIVE_TIMEOUT_MS / 60000} min)`);
+        log.info(`Headers Timeout: ${SERVER_HEADERS_TIMEOUT_MS}ms`);
+        log.detail(`  - Override via: SERVER_TIMEOUT_MS, SERVER_KEEP_ALIVE_TIMEOUT_MS, SERVER_HEADERS_TIMEOUT_MS`);
     });
     
     server.on('error', (err) => {

@@ -11,18 +11,18 @@ namespace BBT.Workflow.Execution.Strategies;
 /// <summary>
 /// Synchronous transition execution strategy.
 /// Executes transitions immediately in the current thread/context.
+/// Delegates lock management and sync dispatch chain to TransitionPipeline.
 /// </summary>
 public sealed class SyncTransitionStrategy(
     ITransitionHandlerFactory handlerFactory,
-    ITransitionContextFactory contextFactory,
     TransitionPipeline pipeline) : ITransitionStrategy
 {
-     public ExecMode Mode => ExecMode.Sync;
+    public ExecMode Mode => ExecMode.Sync;
      
     /// <inheritdoc />
     /// <summary>
     /// Executes transition synchronously.
-    /// Railway chain: Resolve Handler → Create Context → Execute Lifecycle
+    /// Railway chain: Resolve Handler → Execute Pipeline (with lock and sync dispatch chain)
     /// </summary>
     [Trace]
     public Task<Result<TransitionExecutionContext>> ExecuteAsync(
@@ -32,57 +32,33 @@ public sealed class SyncTransitionStrategy(
         var activity = Activity.Current;
 
         return handlerFactory.Get(context.TriggerType)
-            .BindAsync(handler => CreateContextAndExecuteAsync(handler, context, activity, cancellationToken));
+            .BindAsync(handler => ExecuteWithPipelineAsync(handler, context, activity, cancellationToken));
     }
 
     /// <summary>
-    /// Creates execution context and runs the handler lifecycle.
-    /// Handles telemetry enrichment and activity status as side effects.
+    /// Executes the handler lifecycle with pipeline.
+    /// Pipeline now handles context creation, locking, and sync dispatch chain.
     /// </summary>
-    private async Task<Result<TransitionExecutionContext>> CreateContextAndExecuteAsync(
+    private async Task<Result<TransitionExecutionContext>> ExecuteWithPipelineAsync(
         ITransitionHandler handler,
         WorkflowExecutionContext context,
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var contextResult = await contextFactory.CreateAsync(context, cancellationToken);
-        if (!contextResult.IsSuccess)
+        // Pipeline handles: context creation, lock, steps, sync dispatch chain
+        var pipelineResult = await pipeline.RunAsync(context, cancellationToken);
+        
+        if (!pipelineResult.IsSuccess)
         {
-            SetActivityError(activity, contextResult.Error);
-            return contextResult;
+            SetActivityError(activity, pipelineResult.Error);
+            return pipelineResult;
         }
 
-        var ctx = contextResult.Value!;
+        var ctx = pipelineResult.Value!;
         EnrichTelemetry(activity, ctx, handler, context.TriggerType);
+        SetActivityStatus(activity, pipelineResult);
 
-        var lifecycleResult = await ExecuteHandlerLifecycleAsync(handler, ctx, cancellationToken);
-
-        SetActivityStatus(activity, lifecycleResult);
-
-        return lifecycleResult;
-    }
-
-    /// <summary>
-    /// Executes the handler lifecycle: PreHandle → Pipeline → PostHandle.
-    /// No TryAsync - handlers are application layer, infrastructure exceptions bubble up.
-    /// </summary>
-    private async Task<Result<TransitionExecutionContext>> ExecuteHandlerLifecycleAsync(
-        ITransitionHandler handler,
-        TransitionExecutionContext ctx,
-        CancellationToken cancellationToken)
-    {
-        // PreHandle - application layer, no Try needed
-        await handler.PreHandleAsync(ctx, cancellationToken);
-
-        // Pipeline execution - returns Result
-        var pipelineResult = await pipeline.RunAsync(ctx, cancellationToken);
-        if (!pipelineResult.IsSuccess)
-            return Result<TransitionExecutionContext>.Fail(pipelineResult.Error);
-
-        // PostHandle - application layer, no Try needed
-        await handler.PostHandleAsync(ctx, cancellationToken);
-
-        return Result<TransitionExecutionContext>.Ok(ctx);
+        return pipelineResult;
     }
 
     /// <summary>
@@ -98,19 +74,9 @@ public sealed class SyncTransitionStrategy(
         if (activity is null) return;
 
         activity.SetTag(TelemetryConstants.TagNames.Domain, ctx.Workflow.Domain);
-        activity.SetTag(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
-        activity.SetTag(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
-        activity.SetTag(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId.ToString());
-        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
-        activity.SetTag(TelemetryConstants.TagNames.TriggerType, triggerType.ToString());
         activity.SetTag(TelemetryConstants.TagNames.HandlerName, handler.GetType().Name);
 
         activity.SetBaggage(TelemetryConstants.TagNames.Domain, ctx.Workflow.Domain);
-        activity.SetBaggage(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
-        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
-        activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId.ToString());
-        
-        activity.SetDisplayName($"{ctx.InstanceId}/{ctx.TransitionKey}");
     }
 
     /// <summary>

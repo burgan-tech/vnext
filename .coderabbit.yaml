@@ -48,7 +48,8 @@ review:
     - "**/*.suo"
     - "**/packages/**"
     - "**/.vs/**"
-    - "**/node_modules/**"
+    - "**/node_modules/**",
+    - "**/etc/docker/config/**"
 
 # Chat settings
 chat:

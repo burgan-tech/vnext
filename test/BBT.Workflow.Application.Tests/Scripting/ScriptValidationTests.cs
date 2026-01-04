@@ -13,6 +13,7 @@ using Xunit;
 using Xunit.Abstractions;
 using IRuntimeInfoProvider = BBT.Workflow.Runtime.IRuntimeInfoProvider;
 using Dapr.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Scripting;
@@ -34,13 +35,6 @@ public class ScriptValidationTests : ApplicationTestBase<ApplicationEntryPoint>
         _output = output;
     }
 
-    public override void Dispose()
-    {
-        // Reset static state to prevent test interference
-        ScriptHelper.Reset();
-        base.Dispose();
-    }
-
     protected override void AddApplication(IServiceCollection services)
     {
         // Mock DaprClient for testing
@@ -54,7 +48,15 @@ public class ScriptValidationTests : ApplicationTestBase<ApplicationEntryPoint>
             .ReturnsAsync(new Dictionary<string, string> { { "test_key", "mock_secret_value" } });
 
         services.AddSingleton(mockDaprClient.Object);
-        ScriptHelper.SetDaprClient(mockDaprClient.Object);
+        
+        // Mock Logger for IScriptServices
+        var mockLogger = new Mock<ILogger<ScriptServices>>();
+        services.AddSingleton(mockLogger.Object);
+        
+        // Mock Configuration for IScriptServices
+        var mockConfiguration = new Mock<IConfiguration>();
+        services.AddSingleton(mockConfiguration.Object);
+        
         base.AddApplication(services);
     }
 
@@ -217,4 +219,4 @@ public class ScriptValidationResult
             Message = "Validation failed"
         };
     }
-} 
+}

@@ -1,37 +1,182 @@
+using System.Diagnostics;
 using BBT.Aether.Aspects;
+using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
+using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
 
 /// <summary>
 /// Orchestrates the execution of transition lifecycle steps in a deterministic order.
+/// Manages distributed locks and sync dispatch chain for automatic transitions.
 /// Each step in the pipeline performs a specific operation during the transition.
 /// Uses Result pattern for exception-free error handling.
 /// </summary>
 public class TransitionPipeline
 {
     private readonly IReadOnlyList<ITransitionStep> _steps;
+    private readonly IDistributedLockService _distributedLockService;
+    private readonly ITransitionContextFactory _contextFactory;
+    private readonly IPostCommitExecutor _postCommitExecutor;
+    private readonly IInstanceRepository _instanceRepository;
+    private readonly ILogger<TransitionPipeline> _logger;
+
+    /// <summary>
+    /// Default lock lease duration in seconds.
+    /// </summary>
+    private const int DefaultLockLeaseSeconds = 60;
+
+    /// <summary>
+    /// Maximum allowed chain depth for automatic transitions.
+    /// Prevents infinite loops in recursive transition chains.
+    /// </summary>
+    private const int MaxChainDepth = 50;
 
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
     /// <param name="steps">The collection of pipeline steps to execute.</param>
-    public TransitionPipeline(IEnumerable<ITransitionStep> steps)
+    /// <param name="distributedLockService">Service for distributed locking.</param>
+    /// <param name="contextFactory">Factory for creating transition contexts.</param>
+    /// <param name="postCommitExecutor">Executor for post-commit jobs.</param>
+    /// <param name="instanceRepository">Repository for instance operations.</param>
+    /// <param name="logger">Logger instance.</param>
+    public TransitionPipeline(
+        IEnumerable<ITransitionStep> steps,
+        IDistributedLockService distributedLockService,
+        ITransitionContextFactory contextFactory,
+        IPostCommitExecutor postCommitExecutor,
+        IInstanceRepository instanceRepository,
+        ILogger<TransitionPipeline> logger)
     {
         _steps = steps.OrderBy(s => s.Order).ToList();
+        _distributedLockService = distributedLockService;
+        _contextFactory = contextFactory;
+        _postCommitExecutor = postCommitExecutor;
+        _instanceRepository = instanceRepository;
+        _logger = logger;
     }
 
     /// <summary>
-    /// Executes all pipeline steps in order for the given transition context.
-    /// Stateful loop with flow control (stop, replan, continue).
-    /// Returns Result to indicate success or failure without throwing exceptions.
+    /// Executes the transition pipeline with distributed locking and sync dispatch chain.
+    /// Manages lock acquisition/release per transition and chains automatic transitions.
     /// </summary>
-    /// <param name="context">The transition execution context.</param>
+    /// <param name="workflowContext">The workflow execution context containing request details.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
-    /// <returns>A Result indicating success or failure of the pipeline execution.</returns>
-    [Trace]
-    public async Task<Result> RunAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
+    /// <returns>A Result containing the final TransitionExecutionContext or an error.</returns>
+    public async Task<Result<TransitionExecutionContext>> RunAsync(
+        WorkflowExecutionContext workflowContext,
+        CancellationToken cancellationToken)
     {
+        var currentWorkflowContext = workflowContext;
+        Error? lastPipelineError = null;
+
+        // Sync dispatch loop: chains automatic transitions under the same trace
+        while (true)
+        {
+            // Guard: Prevent infinite chain loops (defense in depth)
+            var currentDepth = currentWorkflowContext.Execution?.ChainDepth ?? 0;
+            if (currentDepth > MaxChainDepth)
+            {
+                _logger.TransitionChainDepthExceeded(
+                    currentDepth,
+                    MaxChainDepth,
+                    currentWorkflowContext.TransitionKey);
+                return Result<TransitionExecutionContext>.Fail(
+                    WorkflowErrors.TransitionChainDepthExceeded(
+                        currentDepth,
+                        MaxChainDepth,
+                        currentWorkflowContext.TransitionKey));
+            }
+
+            // 1) Create TransitionExecutionContext
+            var contextResult = await _contextFactory.CreateAsync(currentWorkflowContext, cancellationToken);
+            if (!contextResult.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(contextResult.Error);
+
+            var context = contextResult.Value!;
+
+            // Guard: Skip immediate execution requested
+            if (context.SkipImmediateExecution)
+                return Result<TransitionExecutionContext>.Ok(context);
+
+            // Post-commit jobs collected during pipeline execution
+            IReadOnlyList<IPostCommitJob> postCommitJobs = [];
+
+            // 2) Execute with distributed lock
+            var lockAcquired = await _distributedLockService.ExecuteWithLockAsync(
+                context.LockKey,
+                async () =>
+                {
+                    // 3) Execute pipeline steps
+                    var pipelineResult = await RunSingleTransitionAsync(context, cancellationToken);
+                    if (!pipelineResult.IsSuccess)
+                    {
+                        lastPipelineError = pipelineResult.Error;
+                        return;
+                    }
+
+                    // 4) Consume post-commit jobs before lock release
+                    postCommitJobs = context.Directives.ConsumePostCommitJobs();
+                },
+                DefaultLockLeaseSeconds,
+                cancellationToken);
+
+            if (!lockAcquired)
+            {
+                _logger.InstanceLockFailed(context.InstanceId.ToString());
+                return Result<TransitionExecutionContext>.Fail(
+                    WorkflowErrors.InstanceLockConflict(context.InstanceId));
+            }
+
+            // Check if pipeline execution failed
+            if (lastPipelineError.HasValue)
+                return Result<TransitionExecutionContext>.Fail(lastPipelineError.Value);
+
+            // 5) Execute post-commit jobs (outside lock - avoids deadlocks for remote calls)
+            if (postCommitJobs.Count > 0)
+            {
+                var postCommitResult = await _postCommitExecutor.ExecuteAsync(postCommitJobs, context, cancellationToken);
+                if (!postCommitResult.IsSuccess)
+                {
+                    // Handle fault request: reacquire lock and mark instance as faulted
+                    if (postCommitResult.FaultRequest is not null)
+                    {
+                        await MarkInstanceFaultedWithLockAsync(
+                            context,
+                            postCommitResult.FaultRequest,
+                            cancellationToken);
+                    }
+
+                    return Result<TransitionExecutionContext>.Fail(
+                        postCommitResult.Error ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed"));
+                }
+            }
+
+            // 6) Check for next transition in sync dispatch chain
+            var nextTransition = context.Directives.ConsumeNextTransition();
+            if (nextTransition is null)
+                return Result<TransitionExecutionContext>.Ok(context);
+
+            // 7) Create new WorkflowExecutionContext for next transition
+            currentWorkflowContext = CreateNextWorkflowContext(context, nextTransition);
+            lastPipelineError = null; // Reset for next iteration
+        }
+    }
+
+    /// <summary>
+    /// Executes a single transition's pipeline steps.
+    /// </summary>
+    [Trace]
+    private async Task<Result> RunSingleTransitionAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        EnrichTelemetry(context);
+
         var state = CreateInitialState(context);
 
         while (state.HasMoreSteps())
@@ -62,6 +207,58 @@ public class TransitionPipeline
         }
 
         return Result.Ok();
+    }
+
+    private static void EnrichTelemetry(TransitionExecutionContext context)
+    {
+        var activity = Activity.Current;
+        if (activity is null) return;
+        
+        activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
+        activity.SetTag(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
+        activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, context.TransitionKey);
+        if (context.Transition != null)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.TriggerType, context.Transition.TriggerType.ToString());
+        }
+        
+        activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
+        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
+        activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+        
+        activity.SetDisplayName($"transition/{context.TransitionKey}");
+    }
+
+    /// <summary>
+    /// Creates a new WorkflowExecutionContext for the next transition in the chain.
+    /// </summary>
+    private static WorkflowExecutionContext CreateNextWorkflowContext(
+        TransitionExecutionContext currentContext,
+        NextTransitionRequest nextTransition)
+    {
+        return new WorkflowExecutionContext
+        {
+            Domain = currentContext.Domain,
+            InstanceId = currentContext.InstanceId.ToString(),
+            WorkflowKey = currentContext.WorkflowKey,
+            WorkflowVersion = currentContext.Workflow.Version,
+            TransitionKey = nextTransition.TransitionKey,
+            TriggerType = Definitions.TriggerType.Automatic,
+            Mode = ExecMode.Sync,
+            Actor = Shared.ExecutionActor.System,
+            CorrelationId = currentContext.CorrelationId,
+            CausationId = currentContext.ExecutionChainId,
+            RequestedAt = DateTimeOffset.UtcNow,
+            Headers = currentContext.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+            Execution = new ExecutionInfo
+            {
+                ExecutionChainId = currentContext.ExecutionChainId,
+                ChainDepth = currentContext.ChainDepth + 1,
+                ResumeFrom = null
+            },
+            IsReentry = true
+        };
     }
 
     /// <summary>
@@ -165,6 +362,61 @@ public class TransitionPipeline
             return true;
 
         return false;
+    }
+
+    /// <summary>
+    /// Marks the workflow instance as faulted within a lock scope.
+    /// Reacquires the distributed lock to ensure consistent state update.
+    /// </summary>
+    /// <param name="context">The transition execution context.</param>
+    /// <param name="faultRequest">The fault request containing error details.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private async Task MarkInstanceFaultedWithLockAsync(
+        TransitionExecutionContext context,
+        PostCommitFaultRequest faultRequest,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Marking instance {InstanceId} as faulted due to post-commit failure: {ErrorCode} - {ErrorMessage}",
+            context.InstanceId,
+            faultRequest.ErrorCode,
+            faultRequest.ErrorMessage);
+
+        var lockAcquired = await _distributedLockService.ExecuteWithLockAsync(
+            context.LockKey,
+            async () =>
+            {
+                var instanceResult = await _instanceRepository.GetResultAsync(
+                    context.InstanceId.ToString(),
+                    includeDetails: false,
+                    cancellationToken);
+
+                if (instanceResult.IsSuccess && instanceResult.Value is not null)
+                {
+                    instanceResult.Value.Fault();
+                    await _instanceRepository.UpdateAsync(instanceResult.Value, true, cancellationToken);
+
+                    _logger.LogInformation(
+                        "Instance {InstanceId} marked as faulted successfully",
+                        context.InstanceId);
+                }
+                else
+                {
+                    _logger.LogError(
+                        "Failed to load instance {InstanceId} for fault marking: {Error}",
+                        context.InstanceId,
+                        instanceResult.Error.Message);
+                }
+            },
+            DefaultLockLeaseSeconds,
+            cancellationToken);
+
+        if (!lockAcquired)
+        {
+            _logger.LogError(
+                "Failed to acquire lock for marking instance {InstanceId} as faulted",
+                context.InstanceId);
+        }
     }
 
     /// <summary>

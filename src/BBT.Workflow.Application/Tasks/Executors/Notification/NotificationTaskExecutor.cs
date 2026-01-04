@@ -183,28 +183,4 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
 
         return result;
     }
-
-    /// <summary>
-    /// Updates the script context with the task response for output handler processing.
-    /// </summary>
-    private static void UpdateScriptContextWithResponse(
-        string taskKey,
-        TaskInvocationResult result,
-        ScriptContext context)
-    {
-        var variableKey = taskKey.ToVariableName();
-        var response = new StandardTaskResponse
-        {
-            IsSuccess = result.IsSuccess,
-            Data = result.Data,
-            StatusCode = result.StatusCode,
-            Headers = result.Headers,
-            ErrorMessage = result.ErrorMessage,
-            ExecutionDurationMs = result.ExecutionDurationMs,
-            TaskType = result.TaskType,
-            Metadata = result.Metadata
-        };
-        
-        context.SetStandardResponse(response, variableKey);
-    }
 }

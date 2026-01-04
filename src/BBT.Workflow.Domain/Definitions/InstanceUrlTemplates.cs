@@ -58,6 +58,18 @@ public static class InstanceUrlTemplates
     public const string ViewTemplate = "/{0}/workflows/{1}/instances/{2}/functions/view";
 
     /// <summary>
+    /// URL template for instance schema endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/schema?transitionKey={transitionKey}
+    /// </summary>
+    public const string SchemaTemplate = "/{0}/workflows/{1}/instances/{2}/functions/schema?transitionKey={3}";
+
+    /// <summary>
+    /// URL template for instance extensions endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/extensions
+    /// </summary>
+    public const string ExtensionsTemplate = "/{0}/workflows/{1}/instances/{2}/functions/extensions";
+
+    /// <summary>
     /// URL template for start instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/start
     /// </summary>
@@ -173,6 +185,29 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string View(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(ViewTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for instance schema function endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instanceId">The instance ID</param>
+    /// <param name="transitionKey">The transition key</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string Schema(string domain, string workflow, string instanceId, string transitionKey, string? apiVersionPrefix = null)
+        => BuildUrl(SchemaTemplate, apiVersionPrefix, domain, workflow, instanceId, transitionKey);
+
+    /// <summary>
+    /// Generates URL for instance extensions function endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instanceId">The instance ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string Extensions(string domain, string workflow, string instanceId, string? apiVersionPrefix = null)
+        => BuildUrl(ExtensionsTemplate, apiVersionPrefix, domain, workflow, instanceId);
 
     /// <summary>
     /// Generates URL for start instance endpoint.

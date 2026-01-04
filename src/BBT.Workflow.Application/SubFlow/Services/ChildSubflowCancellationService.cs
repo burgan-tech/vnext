@@ -1,8 +1,8 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +11,7 @@ namespace BBT.Workflow.SubFlow;
 /// <summary>
 /// Service for handling child subflow cancellation operations.
 /// Propagates cancellation requests to child subflows.
+/// Uses IInstanceCommandGateway to route between local and remote execution based on target domain.
 /// </summary>
 /// <remarks>
 /// This service encapsulates the business logic for child subflow cancellation,
@@ -18,7 +19,7 @@ namespace BBT.Workflow.SubFlow;
 /// </remarks>
 public sealed class ChildSubflowCancellationService(
     IServiceProvider serviceProvider,
-    IRemoteInstanceCommandAppService commandAppService,
+    IInstanceCommandGateway instanceCommandGateway,
     ILogger<ChildSubflowCancellationService> logger)
     : ApplicationService(serviceProvider), IChildSubflowCancellationService
 {
@@ -32,10 +33,10 @@ public sealed class ChildSubflowCancellationService(
     {
         try
         {
-            var result = await commandAppService.TransitionAsync(
+            var result = await instanceCommandGateway.TransitionAsync(
                 instanceId,
                 WellKnownTransitionKeys.Cancel,
-                new TransitionInput(
+                new Instances.TransitionInput(
                     domain: domain,
                     workflow: flow,
                     version: version),

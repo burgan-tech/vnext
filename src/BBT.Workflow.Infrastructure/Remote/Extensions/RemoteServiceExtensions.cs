@@ -1,5 +1,4 @@
 using BBT.Workflow.Remote.Configuration;
-using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
@@ -40,18 +39,19 @@ public static class RemoteServiceExtensions
         }
 
         var options = optionsSection.Get<RemoteOptions>() ?? new RemoteOptions();
-        
+
         services.AddHttpClient<IRemoteInstanceCommandAppService, RemoteInstanceCommandAppService>((sp, client) =>
             {
                 var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
                 var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
 
-                client.BaseAddress = new Uri(clientOptions.BaseUrl);
+                // Note: BaseAddress is no longer set here - it's resolved dynamically per request
+                // using IDomainDiscoveryResolver based on the target domain
                 client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
                 client.DefaultRequestHeaders.Add("User-Agent",
-                    $"amorphie-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
-                
+                    $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
+
                 // Add internal operation header for circuit breaker context
                 if (clientOptions.EnableCircuitBreakerBypass)
                 {
@@ -71,12 +71,13 @@ public static class RemoteServiceExtensions
                 var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
                 var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
 
-                client.BaseAddress = new Uri(clientOptions.BaseUrl);
+                // Note: BaseAddress is no longer set here - it's resolved dynamically per request
+                // using IDomainDiscoveryResolver based on the target domain
                 client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
                 client.DefaultRequestHeaders.Add("User-Agent",
-                    $"amorphie-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
-                
+                    $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
+
                 // Add internal operation header for circuit breaker context
                 if (clientOptions.EnableCircuitBreakerBypass)
                 {

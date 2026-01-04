@@ -118,30 +118,6 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     }
 
     /// <summary>
-    /// Updates script context with response data for output handler processing.
-    /// </summary>
-    protected static void UpdateScriptContextWithResponse(
-        string taskKey,
-        TaskInvocationResult result,
-        ScriptContext context)
-    {
-        var variableKey = taskKey.ToVariableName();
-        var response = new StandardTaskResponse
-        {
-            IsSuccess = result.IsSuccess,
-            Data = result.Data,
-            StatusCode = result.StatusCode,
-            Headers = result.Headers,
-            ErrorMessage = result.ErrorMessage,
-            ExecutionDurationMs = result.ExecutionDurationMs,
-            TaskType = result.TaskType,
-            Metadata = result.Metadata
-        };
-        
-        context.SetStandardResponse(response, variableKey);
-    }
-
-    /// <summary>
     /// Extracts headers from the script context for HTTP calls.
     /// </summary>
     protected static Dictionary<string, string?>? ExtractHeaders(ScriptContext context)

@@ -22,5 +22,6 @@ public static class TelemetryConstants
         public const string TaskType = "vnext.task.type";
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
+        public const string JobName = "vnext.job.name";
     }
 }

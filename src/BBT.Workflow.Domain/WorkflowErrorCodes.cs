@@ -36,6 +36,8 @@ public static class WorkflowErrorCodes
     public const string DuplicateInstanceKey = "Instance:100019";
     public const string InstanceCancellationFailed = "Instance:100020";
     public const string ChildSubflowCancellationFailed = "Instance:100021";
+    public const string SubflowCompletionFailed = "Instance:100022";
+    public const string SubflowStartFailed = "Instance:100023";
     
     #endregion
     

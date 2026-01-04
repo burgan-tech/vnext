@@ -54,6 +54,11 @@ public sealed class StartTask : WorkflowTask
     /// </summary>
     public string[]? TriggerTags { get; private set; }
 
+    /// <summary>
+    /// Whether to use Dapr service invocation instead of direct HTTP
+    /// </summary>
+    public bool UseDapr { get; private set; } = false;
+
     public void SetTags(string[] tags)
     {
         TriggerTags = tags;
@@ -91,6 +96,11 @@ public sealed class StartTask : WorkflowTask
         TriggerVersion = version;
     }
 
+    public void SetUseDapr(bool useDapr)
+    {
+        UseDapr = useDapr;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -102,6 +112,8 @@ public sealed class StartTask : WorkflowTask
     internal void SetTriggerVersionInternal(string? version) => TriggerVersion = version;
     internal void SetTriggerKeyInternal(string? key) => TriggerKey = key;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
+    internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
+
     protected override void Configure(JsonElement config)
     {
         base.Configure(config);
@@ -129,6 +141,9 @@ public sealed class StartTask : WorkflowTask
 
         if (config.TryGetProperty("tags", out var triggerTagsElement))
             TriggerTags = triggerTagsElement.GetArrayLength() > 0 ? triggerTagsElement.EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToArray() : null;
+
+        if (config.TryGetProperty("useDapr", out var useDaprElement))
+            UseDapr = useDaprElement.GetBoolean();
     }
 
     public static StartTask Create(JsonElement config)
@@ -159,6 +174,7 @@ public sealed class StartTask : WorkflowTask
         cloned.TriggerVersion = TriggerVersion;
         cloned.TriggerKey = TriggerKey;
         cloned.TriggerTags = TriggerTags;
+        cloned.UseDapr = UseDapr;
         return cloned;
     }
 
@@ -176,6 +192,7 @@ public sealed class StartTask : WorkflowTask
         SetTriggerVersionInternal(source.TriggerVersion);
         SetTriggerKeyInternal(source.TriggerKey);
         SetTriggerTagsInternal(source.TriggerTags);
+        SetUseDaprInternal(source.UseDapr);
     }
 
     /// <summary>
@@ -191,6 +208,7 @@ public sealed class StartTask : WorkflowTask
         TriggerVersion = null;  
         TriggerKey = null;
         TriggerTags = null;
+        UseDapr = false;
     }
 
     /// <summary>

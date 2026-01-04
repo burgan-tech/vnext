@@ -1,8 +1,8 @@
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -13,13 +13,14 @@ namespace BBT.Workflow.SubFlow;
 /// Service for managing SubFlow and SubProcess workflows.
 /// SubFlow: Runs on the main flow, preserves main flow state, acts as a wrapper.
 /// SubProcess: Creates separate instances via remote calls (unchanged behavior).
+/// Uses IInstanceCommandGateway to route between local and remote execution based on target domain.
 /// </summary>
-/// <param name="remoteInstanceCommandAppService">Manages remote requests to trigger SubProcess only.</param>
+/// <param name="instanceCommandGateway">Gateway for instance commands, routes local/remote based on domain.</param>
 /// <param name="configuration">Configuration provider for accessing application settings.</param>
 /// <param name="scriptEngine">Script engine for compiling and executing mapping scripts.</param>
 /// <param name="logger">Logger for SubFlow telemetry.</param>
 public sealed class SubflowStarter(
-    IRemoteInstanceCommandAppService remoteInstanceCommandAppService,
+    IInstanceCommandGateway instanceCommandGateway,
     IConfiguration configuration,
     IScriptEngine scriptEngine,
     ILogger<SubflowStarter> logger) : ISubflowStarter
@@ -103,6 +104,17 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult,
         CancellationToken cancellationToken)
     {
+        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
+        SubFlowActivityHelper.EnrichWithStart(
+            activity,
+            parentInstance.Id,
+            subFlowReference.Domain,
+            subFlowReference.Key,
+            correlation.SubFlowInstanceId);
+        activity?.SetTag("vnext.subflow.type", subFlowTypeCode == "S" ? "subflow" : "subprocess");
+        activity?.SetTag("vnext.subflow.parent.state", stateKey);
+        activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
+
         try
         {
             // Prepare instance creation input
@@ -161,12 +173,13 @@ public sealed class SubflowStarter(
                 RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>()
             };
 
-            var startResult = await remoteInstanceCommandAppService.StartSubAsync(subFlowStartInput, cancellationToken);
+            var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
 
             if (!startResult.IsSuccess)
             {
                 var error = startResult.Error;
 
+                SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
                 logger.LogError(
                     "SubFlow {SubFlowKey} start failed for instance {InstanceId}: {ErrorCode} - {ErrorMessage}",
                     subFlowReference.Key,
@@ -179,6 +192,7 @@ public sealed class SubflowStarter(
                     new Exception(error.Code));
             }
 
+            SubFlowActivityHelper.SetSuccess(activity);
             logger.LogInformation(
                 "SubFlow {SubFlowKey} started successfully for instance {InstanceId}",
                 subFlowReference.Key,
@@ -186,6 +200,7 @@ public sealed class SubflowStarter(
         }
         catch (Exception ex)
         {
+            SubFlowActivityHelper.SetError(activity, ex.Message, ex);
             logger.LogError(ex,
                 "SubFlow {SubFlowKey} start failed for instance {InstanceId}",
                 subFlowReference.Key,

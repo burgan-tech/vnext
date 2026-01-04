@@ -10,6 +10,7 @@
     <!-- No Domain dependency! Execution is completely independent -->
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />

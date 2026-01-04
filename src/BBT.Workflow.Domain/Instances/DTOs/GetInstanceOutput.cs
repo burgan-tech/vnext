@@ -12,7 +12,21 @@ public sealed class GetInstanceOutput
     public string? Flow { get; set; } = string.Empty;
     public string? Domain { get; set; } = string.Empty;
     public string? FlowVersion { get; set; } = string.Empty;
-    public string? Etag { get => _etag?.Replace("\"", ""); set => _etag = value; }
+    /// <summary>
+    /// ETag value returned with quotes per RFC 7232.
+    /// </summary>
+    public string? Etag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_etag))
+                return null;
+            // Strip any existing quotes and wrap with quotes per RFC 7232
+            var unquoted = _etag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _etag = value;
+    }
     private string? _etag = string.Empty;
     public List<string>? Tags { get; set; } = [];
     public JsonElement? Attributes { get; set; }
@@ -33,7 +47,23 @@ public sealed class GetInstanceHistoryOutput
 public sealed class GetInstanceDataOutput
 {
     public JsonElement? Data { get; set; }
-    public string? Etag { get => _etag != null ? $"\"{_etag}\"" : string.Empty; set => _etag = value; }
+
+    /// <summary>
+    /// ETag value returned with quotes per RFC 7232.
+    /// </summary>
+    public string? Etag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_etag))
+                return null;
+            // Strip any existing quotes and wrap with quotes per RFC 7232
+            var unquoted = _etag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _etag = value;
+    }
     private string? _etag = string.Empty;
+
     public Dictionary<string, object>? Extensions { get; set; }
 }

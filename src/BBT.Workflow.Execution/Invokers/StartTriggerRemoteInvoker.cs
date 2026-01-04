@@ -11,18 +11,32 @@ namespace BBT.Workflow.Execution.Invokers;
 
 /// <summary>
 /// Remote invoker for StartTrigger tasks.
-/// Uses Dapr service invocation to call the orchestration app's workflow start endpoint.
+/// Supports both Dapr service invocation and direct HTTP calls.
 /// Used for cross-domain workflow instance creation.
 /// </summary>
-public sealed class StartTriggerRemoteInvoker(
-    DaprClient daprClient,
-    IConfiguration configuration,
-    ILogger<StartTriggerRemoteInvoker> logger,
-    ITaskMetrics? metrics = null)
-    : ITaskInvoker<StartTriggerBinding>
+public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding>
 {
-    private readonly ITaskMetrics _metrics = metrics ?? NullTaskMetrics.Instance;
-    private readonly string _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+    private readonly DaprClient _daprClient;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<StartTriggerRemoteInvoker> _logger;
+    private readonly ITaskMetrics _metrics;
+    private readonly string _orchestrationAppId;
+
+    public const string HttpClientName = "TriggerInvoker";
+
+    public StartTriggerRemoteInvoker(
+        DaprClient daprClient,
+        IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
+        ILogger<StartTriggerRemoteInvoker> logger,
+        ITaskMetrics? metrics = null)
+    {
+        _daprClient = daprClient;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger;
+        _metrics = metrics ?? NullTaskMetrics.Instance;
+        _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+    }
 
     /// <inheritdoc />
     public string TaskType => TaskTypes.StartTrigger;
@@ -55,134 +69,245 @@ public sealed class StartTriggerRemoteInvoker(
         StartTriggerBinding binding,
         CancellationToken cancellationToken)
     {
+        // Route to Dapr or HttpClient based on binding
+        if (binding.UseDapr && !string.IsNullOrEmpty(binding.DaprAppId))
+        {
+            return await ExecuteWithDaprAsync(taskKey, binding, cancellationToken);
+        }
+
+        return await ExecuteWithHttpClientAsync(taskKey, binding, cancellationToken);
+    }
+
+    private async Task<TaskInvocationResult> ExecuteWithDaprAsync(
+        string? taskKey,
+        StartTriggerBinding binding,
+        CancellationToken cancellationToken)
+    {
         var stopwatch = Stopwatch.StartNew();
 
         try
         {
-            // Build the endpoint path: /api/v1/{domain}/workflows/{workflow}/instances/start
-            var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/start";
+            var appId = binding.DaprAppId ?? _orchestrationAppId;
+            var request = CreateDaprRequest(binding, appId);
 
-            // Add query parameters
-            var queryParams = new List<string>();
-            if (!string.IsNullOrEmpty(binding.Version))
-                queryParams.Add($"version={Uri.EscapeDataString(binding.Version)}");
-            if (binding.Sync)
-                queryParams.Add("sync=true");
-
-            if (queryParams.Count > 0)
-                path += "?" + string.Join("&", queryParams);
-
-            // Build request body
-            var requestBody = new
-            {
-                key = binding.Key,
-                tags = binding.Tags,
-                attributes = binding.Body
-            };
-
-            var request = daprClient.CreateInvokeMethodRequest(
-                HttpMethod.Post,
-                _orchestrationAppId,
-                path);
-
-            // Add body
-            request.Content = new StringContent(
-                JsonSerializer.Serialize(requestBody),
-                Encoding.UTF8,
-                "application/json");
-
-            // Add headers
-            if (!string.IsNullOrEmpty(binding.Headers))
-            {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-                if (headers != null)
-                {
-                    foreach (var header in headers.Where(h => h.Value != null))
-                    {
-                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
-            }
-
-            // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
-            using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
-
-            var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
-
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var response = await _daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
             stopwatch.Stop();
-            var responseData = InvokerHelpers.TryParseJson(content);
-            
-            var metadata = new Dictionary<string, object>
-            {
-                ["Domain"] = binding.Domain,
-                ["Workflow"] = binding.Workflow,
-                ["OrchestrationAppId"] = _orchestrationAppId,
-                ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty
-            };
-            
-            // Record metrics based on success/failure
-            _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
 
-            // Always return result with full response details - let output mapping handle error scenarios
-            // All HTTP responses (2xx, 4xx, 5xx) include headers, body, and parsed data
-            return response.IsSuccessStatusCode
-                ? TaskInvocationResult.Success(
-                    data: responseData,
-                    body: content,
-                    statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
-                    taskType: TaskType,
-                    headers: responseHeaders,
-                    metadata: metadata)
-                : TaskInvocationResult.Failure(
-                    error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
-                    statusCode: (int)response.StatusCode,
-                    body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
-                    taskType: TaskType,
-                    headers: responseHeaders,
-                    data: responseData,
-                    metadata: metadata);
+            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
-            logger.LogWarning("StartTrigger remote invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
+            _logger.LogWarning("StartTrigger Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: "StartTrigger remote invocation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["Domain"] = binding.Domain,
-                    ["Workflow"] = binding.Workflow,
-                    ["OrchestrationAppId"] = _orchestrationAppId,
-                    ["Cancelled"] = true
-                });
+                metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
-            logger.LogError(ex, "StartTrigger remote invocation failed for task {TaskKey}: {Domain}/{Workflow}",
+            _logger.LogError(ex, "StartTrigger Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["Domain"] = binding.Domain,
-                    ["Workflow"] = binding.Workflow,
-                    ["OrchestrationAppId"] = _orchestrationAppId,
-                    ["ExceptionType"] = ex.GetType().Name
-                });
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
     }
-}
 
+    private async Task<TaskInvocationResult> ExecuteWithHttpClientAsync(
+        string? taskKey,
+        StartTriggerBinding binding,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            var httpClient = _httpClientFactory.CreateClient(HttpClientName);
+            var request = CreateHttpRequest(binding);
+
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            stopwatch.Stop();
+
+            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+        }
+        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "cancelled");
+            _logger.LogWarning("StartTrigger HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
+                taskKey, binding.Domain, binding.Workflow);
+
+            return TaskInvocationResult.Failure(
+                error: "StartTrigger remote invocation was cancelled",
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: CreateMetadata(binding, cancelled: true));
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "failure");
+            _logger.LogError(ex, "StartTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
+                taskKey, binding.Domain, binding.Workflow);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
+        }
+    }
+
+    private async Task<TaskInvocationResult> ProcessResponseAsync(
+        StartTriggerBinding binding,
+        HttpResponseMessage response,
+        long executionDurationMs,
+        CancellationToken cancellationToken)
+    {
+        var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseData = InvokerHelpers.TryParseJson(content);
+        var metadata = CreateMetadata(binding, reasonPhrase: response.ReasonPhrase);
+
+        _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
+
+        return response.IsSuccessStatusCode
+            ? TaskInvocationResult.Success(
+                data: responseData,
+                body: content,
+                statusCode: (int)response.StatusCode,
+                executionDurationMs: executionDurationMs,
+                taskType: TaskType,
+                headers: responseHeaders,
+                metadata: metadata)
+            : TaskInvocationResult.Failure(
+                error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                statusCode: (int)response.StatusCode,
+                body: content,
+                executionDurationMs: executionDurationMs,
+                taskType: TaskType,
+                headers: responseHeaders,
+                data: responseData,
+                metadata: metadata);
+    }
+
+    private static string BuildPath(StartTriggerBinding binding)
+    {
+        var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/start";
+
+        var queryParams = new List<string>();
+        if (!string.IsNullOrEmpty(binding.Version))
+            queryParams.Add($"version={Uri.EscapeDataString(binding.Version)}");
+        if (binding.Sync)
+            queryParams.Add("sync=true");
+
+        if (queryParams.Count > 0)
+            path += "?" + string.Join("&", queryParams);
+
+        return path;
+    }
+
+    private HttpRequestMessage CreateDaprRequest(StartTriggerBinding binding, string appId)
+    {
+        var path = BuildPath(binding);
+
+        var requestBody = new
+        {
+            key = binding.Key,
+            tags = binding.Tags,
+            attributes = binding.Body
+        };
+
+        var request = _daprClient.CreateInvokeMethodRequest(
+            HttpMethod.Post,
+            appId,
+            path);
+
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(requestBody),
+            Encoding.UTF8,
+            "application/json");
+
+        AddHeaders(request, binding.Headers);
+        return request;
+    }
+
+    private HttpRequestMessage CreateHttpRequest(StartTriggerBinding binding)
+    {
+        var path = BuildPath(binding);
+
+        if (string.IsNullOrEmpty(binding.BaseUrl))
+            throw new InvalidOperationException("BaseUrl is required for HTTP execution");
+
+        var baseUrl = binding.BaseUrl.TrimEnd('/') + "/";
+        var requestUri = new Uri(new Uri(baseUrl), path.TrimStart('/'));
+
+        var requestBody = new
+        {
+            key = binding.Key,
+            tags = binding.Tags,
+            attributes = binding.Body
+        };
+
+        var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(requestBody),
+                Encoding.UTF8,
+                "application/json")
+        };
+
+        AddHeaders(request, binding.Headers);
+        return request;
+    }
+
+    private static void AddHeaders(HttpRequestMessage request, string? headersJson)
+    {
+        if (string.IsNullOrEmpty(headersJson))
+            return;
+
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson);
+        if (headers != null)
+        {
+            foreach (var header in headers.Where(h => h.Value != null))
+            {
+                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+        }
+    }
+
+    private Dictionary<string, object> CreateMetadata(
+        StartTriggerBinding binding,
+        bool cancelled = false,
+        string? reasonPhrase = null,
+        string? exceptionType = null)
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            ["Domain"] = binding.Domain,
+            ["Workflow"] = binding.Workflow,
+            ["OrchestrationAppId"] = _orchestrationAppId
+        };
+
+        if (cancelled)
+            metadata["Cancelled"] = true;
+
+        if (!string.IsNullOrEmpty(reasonPhrase))
+            metadata["ReasonPhrase"] = reasonPhrase;
+
+        if (!string.IsNullOrEmpty(exceptionType))
+            metadata["ExceptionType"] = exceptionType;
+
+        return metadata;
+    }
+}

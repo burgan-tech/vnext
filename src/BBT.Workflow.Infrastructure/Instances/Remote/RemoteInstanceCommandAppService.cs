@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Options;
@@ -9,11 +10,13 @@ using Microsoft.Extensions.Options;
 namespace BBT.Workflow.Instances.Remote;
 
 /// <summary>
-/// Remote implementation of instance command operations using HTTP client calls to InstanceController
+/// Remote implementation of instance command operations using HTTP client calls to InstanceController.
+/// Uses IDomainDiscoveryResolver to dynamically resolve endpoint URLs based on target domain.
 /// </summary>
 public sealed class RemoteInstanceCommandAppService(
     HttpClient httpClient,
-    IOptions<RemoteOptions> options)
+    IOptions<RemoteOptions> options,
+    IDomainDiscoveryResolver endpointResolver)
     : IRemoteInstanceCommandAppService
 {
     private readonly RemoteOptions _options = options.Value;
@@ -36,7 +39,10 @@ public sealed class RemoteInstanceCommandAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.Start(input.Domain, input.Workflow, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Start(input.Domain, input.Workflow, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (!string.IsNullOrEmpty(input.Version))
@@ -45,7 +51,9 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add($"sync={input.Sync}");
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var requestBody = new CreateInstanceInput
             {
@@ -57,7 +65,7 @@ public sealed class RemoteInstanceCommandAppService(
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
             {
                 Content = content
             };
@@ -93,7 +101,10 @@ public sealed class RemoteInstanceCommandAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.StartSub(input.Domain, input.Workflow, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.StartSub(input.Domain, input.Workflow, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (!string.IsNullOrEmpty(input.Version))
@@ -102,7 +113,9 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add($"sync={input.Sync}");
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var requestBody = new CreateInstanceInput
             {
@@ -117,7 +130,7 @@ public sealed class RemoteInstanceCommandAppService(
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
             {
                 Content = content
             };
@@ -155,7 +168,10 @@ public sealed class RemoteInstanceCommandAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.Transition(input.Domain, input.Workflow, instanceId.ToString(),
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Transition(input.Domain, input.Workflow, instanceId.ToString(),
                 transitionKey, ApiVersionPrefix);
 
             var queryParams = new List<string>();
@@ -165,14 +181,16 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add("sync=true");
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var content = input.Data != null
                 ? new StringContent(JsonSerializer.Serialize(input.Data, JsonOptions), Encoding.UTF8,
                     "application/json")
                 : new StringContent("{}", Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Patch, url)
+            var requestMessage = new HttpRequestMessage(HttpMethod.Patch, requestUri)
             {
                 Content = content
             };
@@ -207,13 +225,18 @@ public sealed class RemoteInstanceCommandAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.Complete(input.Domain, input.Flow, input.InstanceId.ToString(),
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Complete(input.Domain, input.Flow, input.InstanceId.ToString(),
                 ApiVersionPrefix);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var jsonContent = JsonSerializer.Serialize(input, JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
             {
                 Content = content
             };

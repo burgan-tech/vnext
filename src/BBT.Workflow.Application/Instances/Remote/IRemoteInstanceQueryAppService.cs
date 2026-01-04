@@ -46,4 +46,21 @@ public interface IRemoteInstanceQueryAppService
         string? platform,
         string? transitionKey,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves schema function result for an instance (returns GetSchemaOutput with transition schema)
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/schema?transitionKey={transitionKey}
+    /// </summary>
+    Task<Result<DTOs.GetSchemaOutput>> GetFunctionWithSchemaAsync(
+        GetFunctionWithInstanceInput input,
+        string transitionKey,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves extensions function result for an instance (returns GetExtensionsOutput with executed extension results)
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/extensions?extensions={extensions}
+    /// </summary>
+    Task<Result<DTOs.GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default);
 } 

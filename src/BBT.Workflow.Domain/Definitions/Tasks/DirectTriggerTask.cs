@@ -63,6 +63,11 @@ public sealed class DirectTriggerTask : WorkflowTask
     /// </summary>
     public JsonElement? Body { get; private set; }
 
+    /// <summary>
+    /// Whether to use Dapr service invocation instead of direct HTTP
+    /// </summary>
+    public bool UseDapr { get; private set; } = false;
+
     public string? Identifier => TriggerInstanceId.HasValue ? TriggerInstanceId.Value.ToString() : TriggerKey;
 
     public void SetTags(string[] tags)
@@ -120,6 +125,11 @@ public sealed class DirectTriggerTask : WorkflowTask
         TransitionName = transitionName;
     }
 
+    public void SetUseDapr(bool useDapr)
+    {
+        UseDapr = useDapr;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -132,6 +142,7 @@ public sealed class DirectTriggerTask : WorkflowTask
     internal void SetTriggerSyncInternal(bool sync) => TriggerSync = sync;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
     internal void SetTriggerVersionInternal(string? version) => TriggerVersion = version;
+    internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
 
     protected override void Configure(JsonElement config)
     {
@@ -166,6 +177,9 @@ public sealed class DirectTriggerTask : WorkflowTask
             var body = bodyElement.GetRawText();
             Body = string.IsNullOrWhiteSpace(body) ? null : bodyElement;
         }
+
+        if (config.TryGetProperty("useDapr", out var useDaprElement))
+            UseDapr = useDaprElement.GetBoolean();
     }
 
     public static DirectTriggerTask Create(JsonElement config)
@@ -198,6 +212,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         cloned.TriggerSync = TriggerSync;
         cloned.TriggerVersion = TriggerVersion;
         cloned.TriggerTags = TriggerTags;
+        cloned.UseDapr = UseDapr;
         return cloned;
     }
 
@@ -217,6 +232,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         SetTriggerSyncInternal(source.TriggerSync);
         SetTriggerVersionInternal(source.TriggerVersion);
         SetTriggerTagsInternal(source.TriggerTags);
+        SetUseDaprInternal(source.UseDapr);
     }
 
     /// <summary>
@@ -234,6 +250,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         TriggerSync = true;
         TriggerVersion = null;
         TriggerTags = null;
+        UseDapr = false;
     }
 
     /// <summary>

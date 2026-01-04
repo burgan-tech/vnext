@@ -99,6 +99,16 @@ public sealed class InstanceCorrelation : Entity<Guid>
         CompletedAt = DateTime.UtcNow;
     }
 
+    /// <summary>
+    /// Reverts the correlation to its incomplete state.
+    /// Used for rollback scenarios when subflow completion needs to be undone.
+    /// </summary>
+    public void Revert()
+    {
+        IsCompleted = false;
+        CompletedAt = null;
+    }
+
     internal InstanceCorrelation CreateSnapshot()
     {
         var snapshot = new InstanceCorrelation

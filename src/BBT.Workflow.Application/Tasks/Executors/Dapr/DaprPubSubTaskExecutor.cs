@@ -145,26 +145,5 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
 
         return result;
     }
-
-    private static void UpdateScriptContextWithResponse(
-        string taskKey,
-        TaskInvocationResult result,
-        ScriptContext context)
-    {
-        var variableKey = taskKey.ToVariableName();
-        var response = new StandardTaskResponse
-        {
-            IsSuccess = result.IsSuccess,
-            Data = result.Data,
-            StatusCode = result.StatusCode,
-            Headers = result.Headers,
-            ErrorMessage = result.ErrorMessage,
-            ExecutionDurationMs = result.ExecutionDurationMs,
-            TaskType = result.TaskType,
-            Metadata = result.Metadata
-        };
-        
-        context.SetStandardResponse(response, variableKey);
-    }
 }
 

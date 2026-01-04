@@ -4,7 +4,7 @@ namespace BBT.Workflow.Scripting;
 
 /// <summary>
 /// Defines a test collection to ensure scripting tests run sequentially.
-/// This prevents static state interference in ScriptHelper between test classes.
+/// This prevents test interference when using shared compiled script caches.
 /// </summary>
 [CollectionDefinition("ScriptingTests", DisableParallelization = true)]
 public class ScriptingTestCollection

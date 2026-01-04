@@ -26,9 +26,6 @@ public class WorkflowExceptionToErrorInfoConverter(IServiceProvider serviceProvi
         return exception switch
         {
             NotFoundDomainException ex => new ServiceErrorInfo(ex.Message, ex.Details, ex.Code, ex.Data),
-            RuntimeSchemaInvalidException ex => new ServiceErrorInfo(ex.Message, ex.Details, ex.Code, ex.Data), 
-            AutoTransitionConditionNotMetException ex => new ServiceErrorInfo(ex.Message, ex.Details, ex.Code, ex.Data),
-            RemoteServiceException ex => ex.ErrorInfo,
             // Default handling for other exceptions
             _ => base.CreateErrorInfoWithoutCode(exception, options)
         };

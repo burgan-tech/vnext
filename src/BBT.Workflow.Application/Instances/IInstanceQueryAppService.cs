@@ -59,4 +59,11 @@ public interface IInstanceQueryAppService : IApplicationService
         GetSchemaInput input,
         string? transitionKey,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves and executes extensions for an instance
+    /// </summary>
+    Task<Result<GetExtensionsOutput>> GetExtensionsAsync(
+        GetExtensionsInput input,
+        CancellationToken cancellationToken = default);
 }

@@ -1,3 +1,4 @@
+using BBT.Workflow.Scripting.Functions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Scripting;
 
@@ -19,6 +20,7 @@ public interface IScriptCompiler
 {
     /// <summary>
     /// Compiles C# code into an instance of the specified type asynchronously.
+    /// If the instance inherits from ScriptBase, services will be automatically injected.
     /// </summary>
     /// <typeparam name="T">The target type to compile the code into</typeparam>
     /// <param name="code">The C# code to compile</param>

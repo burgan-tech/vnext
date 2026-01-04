@@ -29,7 +29,7 @@ public sealed class ScriptResponse
     /// </summary>
     /// <value>A string key that identifies this response, or null if no specific identification is needed.</value>
     public string? Key { get; set; }
-    
+
     /// <summary>
     /// The primary data payload returned by the script execution.
     /// This data will be used differently based on the mapping interface context:
@@ -40,21 +40,21 @@ public sealed class ScriptResponse
     /// </summary>
     /// <value>Dynamic data object containing the script execution results, or null if no data is produced.</value>
     public dynamic? Data { get; set; }
-    
+
     /// <summary>
     /// HTTP headers or metadata headers associated with the response.
     /// Useful for passing additional context information, authentication tokens, or custom metadata.
     /// </summary>
     /// <value>Dynamic object containing header information, or null if no headers are needed.</value>
     public dynamic? Headers { get; set; }
-    
+
     /// <summary>
     /// Route values or routing parameters associated with the response.
     /// Can be used for workflow routing decisions, URL generation, or parameter passing between workflow components.
     /// </summary>
     /// <value>Dynamic object containing route values, or null if no routing information is provided.</value>
     public dynamic? RouteValues { get; set; }
-    
+
     /// <summary>
     /// Collection of tags for categorizing, filtering, or marking the response.
     /// Tags can be used for workflow analytics, debugging, conditional processing, or organizational purposes.
@@ -62,7 +62,7 @@ public sealed class ScriptResponse
     /// <value>Array of string tags. Initialize as empty array if no tags are needed.</value>
     public string[] Tags { get; set; } = Array.Empty<string>();
 }
-    
+
 /// <summary>
 /// Standardized task execution response that provides consistent structure for all task types.
 /// This model includes execution status, data, metadata, and error information.
@@ -110,14 +110,14 @@ public sealed class StandardTaskResponse
     public string? TaskType { get; set; }
 }
 
-public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
+public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncDisposable
 {
     public static readonly JsonSerializerOptions JsonScriptBodyOptions = new()
     {
         Converters = { new ExpandoObjectJsonConverter() },
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
-    
+
     private bool _disposed;
 
     protected virtual void Dispose(bool disposing)
@@ -130,6 +130,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
             try
             {
                 TaskResponse.Clear();
+                OutputResponse.Clear();
                 MetaData.Clear();
                 Definitions.Clear();
 
@@ -191,7 +192,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// Use SetBody() or SetStandardResponse() methods to modify this property safely.
     /// </remarks>
     public dynamic? Body { get; private set; }
-    
+
     /// <summary>
     /// Contains HTTP headers from transition requests with all header keys normalized to lowercase.
     /// This includes both standard HTTP headers and custom application-specific headers.
@@ -208,7 +209,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// across different HTTP clients and frameworks.
     /// </remarks>
     public dynamic? Headers { get; private set; }
-    
+
     /// <summary>
     /// Contains route values and URL parameters extracted from the transition request.
     /// These values are typically derived from URL path segments and query parameters.
@@ -226,7 +227,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// to pass structured data through the URL routing mechanism.
     /// </remarks>
     public dynamic? RouteValues { get; private set; }
-    
+
     /// <summary>
     /// Contains query string parameters extracted from the HTTP request.
     /// These values are derived from URL query string parameters.
@@ -241,7 +242,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// and other request-specific data through the URL query string.
     /// </remarks>
     public dynamic? QueryParameters { get; private set; }
-    
+
     /// <summary>
     /// The active workflow instance that is currently being processed or executed.
     /// This represents the live instance with its current state, data, and execution history.
@@ -259,7 +260,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// essential for making context-aware decisions in mapping implementations.
     /// </remarks>
     public Instance Instance { get; private set; }
-    
+
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
     /// for the current workflow execution context.
@@ -277,7 +278,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// available transitions, and task configurations for informed decision making.
     /// </remarks>
     public Definitions.Workflow Workflow { get; private set; }
-    
+
     /// <summary>
     /// Provides runtime information and services for the current execution context,
     /// including environment details, configuration, and operational capabilities.
@@ -295,7 +296,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// processing and integration with external systems.
     /// </remarks>
     public IRuntimeInfoProvider Runtime { get; private set; }
-    
+
     /// <summary>
     /// The current transition being processed, containing information about the state change,
     /// triggers, conditions, and associated tasks.
@@ -313,7 +314,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// This is particularly useful for transition-specific logic and task processing.
     /// </remarks>
     public Transition Transition { get; private set; }
-    
+
     /// <summary>
     /// Contains workflow and component definitions available in the current execution context.
     /// This includes reusable definitions, templates, and configuration objects.
@@ -358,6 +359,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     /// and dynamic property access scenarios.
     /// </remarks>
     public Dictionary<string, dynamic?> TaskResponse { get; private set; } = new();
+
+    public Dictionary<string, dynamic?> OutputResponse { get; private set; } = new();
 
     /// <summary>
     /// Contains execution metadata, performance metrics, and contextual information
@@ -404,13 +407,34 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
     }
 
     /// <summary>
-    /// Merges the provided object into the existing Body using the specified JSON options.
-    /// If Body is null, it initializes it with the new content.
-    /// Supports both JSON objects and JSON arrays with full merge capabilities.
+    /// Sets the output response data directly without merging to Body.
+    /// If <paramref name="taskKey"/> is null or whitespace, the method has no effect.
     /// </summary>
-    /// <param name="content">The content to merge into Body.</param>
+    /// <param name="output">The output data.</param>
+    /// <param name="taskKey">The standardized task variable name. If null or whitespace, no action is taken.</param>
+    public void SetOutputResponse(object? output, string? taskKey = null)
+    {
+        ThrowIfDisposed();
+
+        // Only set output if taskKey is provided
+        if (!string.IsNullOrWhiteSpace(taskKey))
+        {
+            var value = ToDynamic(output, JsonScriptBodyOptions);
+            if (value != null)
+            {
+                OutputResponse[taskKey!] = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Converts an object to dynamic without merging to Body.
+    /// Avoids double serialization when data doesn't need to be merged.
+    /// </summary>
+    /// <param name="content">The content to convert.</param>
     /// <param name="jsonOptions">The JSON serialization options to use.</param>
-    private dynamic? MergeToBody(object? content, JsonSerializerOptions jsonOptions)
+    /// <returns>The dynamic representation of the content, or null if content is null.</returns>
+    private static dynamic? ToDynamic(object? content, JsonSerializerOptions jsonOptions)
     {
         if (content == null)
         {
@@ -419,7 +443,19 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
 
         var serializedContent = JsonSerializer.Serialize(content, jsonOptions);
         using var document = JsonDocument.Parse(serializedContent);
-        var newValue = document.RootElement.ToDynamic();
+        return document.RootElement.ToDynamic();
+    }
+
+    /// <summary>
+    /// Merges the provided object into the existing Body using the specified JSON options.
+    /// If Body is null, it initializes it with the new content.
+    /// Supports both JSON objects and JSON arrays with full merge capabilities.
+    /// </summary>
+    /// <param name="content">The content to merge into Body.</param>
+    /// <param name="jsonOptions">The JSON serialization options to use.</param>
+    private dynamic? MergeToBody(object? content, JsonSerializerOptions jsonOptions)
+    {
+        var newValue = ToDynamic(content, jsonOptions);
 
         if (newValue == null)
         {
@@ -499,6 +535,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
             return this;
         }
 
+        public Builder SetOutputResponse(Dictionary<string, object?> outputResponse)
+        {
+            _context.OutputResponse = outputResponse;
+            return this;
+        }
+
         public Builder SetMetadata(Dictionary<string, object> metadata)
         {
             _context.MetaData = metadata;
@@ -509,5 +551,25 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable
         {
             return _context;
         }
+    }
+
+    /// <summary>
+    /// Asynchronously releases managed resources used by the ScriptContext.
+    /// Implements IAsyncDisposable pattern for proper async cleanup.
+    /// </summary>
+    /// <returns>A ValueTask representing the asynchronous dispose operation.</returns>
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+            return;
+
+        // Perform synchronous cleanup through existing Dispose logic
+        Dispose(true);
+
+        // Suppress finalization since we've already cleaned up
+        GC.SuppressFinalize(this);
+
+        // No async operations needed currently, but await to satisfy compiler
+        await ValueTask.CompletedTask;
     }
 }

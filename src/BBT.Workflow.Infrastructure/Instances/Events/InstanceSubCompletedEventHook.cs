@@ -1,9 +1,6 @@
-using BBT.Aether.MultiSchema;
-using BBT.Aether.Uow;
 using BBT.Workflow.Events.Hooks;
-using BBT.Workflow.Instances.Remote;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Logging;
 
@@ -12,7 +9,7 @@ namespace BBT.Workflow.Instances.Events;
 /// <summary>
 /// Hook executed before InstanceSubCompletedEvent is published.
 /// Performs pre-publish processing for sub-flow completion events.
-/// This hook delegates the actual completion logic to ISubflowCompletionService.
+/// Uses IInstanceCommandGateway to route between local and remote execution based on target domain.
 /// </summary>
 /// <remarks>
 /// Register this hook in DI using:
@@ -22,15 +19,11 @@ namespace BBT.Workflow.Instances.Events;
 /// </remarks>
 public sealed class InstanceSubCompletedEventHook(
     ILogger<InstanceSubCompletedEventHook> logger,
-    IRemoteInstanceCommandAppService remoteInstanceCommandAppService,
-    ISubflowCompletionService subflowCompletionService,
-    IRuntimeInfoProvider runtimeInfoProvider,
-    ICurrentSchema currentSchema,
-    IUnitOfWorkManager unitOfWorkManager) : IEventPublishHook<InstanceSubCompletedEvent>
+    IInstanceCommandGateway instanceCommandGateway) : IEventPublishHook<InstanceSubCompletedEvent>
 {
     /// <summary>
     /// Executes hook logic before the InstanceSubCompletedEvent is published.
-    /// Routes to local or remote processing based on domain match.
+    /// Delegates to IInstanceCommandGateway which handles local/remote routing automatically.
     /// </summary>
     /// <param name="eventData">The strongly-typed event data.</param>
     /// <param name="context">The hook context with metadata.</param>
@@ -47,13 +40,23 @@ public sealed class InstanceSubCompletedEventHook(
         {
             var input = MapToFlowCompletedInput(eventData);
 
-            if (runtimeInfoProvider.IsDomainMatch(eventData.Domain))
+            // Gateway handles local/remote routing based on domain
+            var result = await instanceCommandGateway.CompleteAsync(input, cancellationToken);
+
+            if (!result.IsSuccess)
             {
-                await ProcessLocalAsync(input, cancellationToken);
-            }
-            else
-            {
-                await remoteInstanceCommandAppService.CompleteAsync(input, cancellationToken);
+                logger.SubFlowCompletionFailed(
+                    new Exception(result.Error.Message),
+                    eventData.SubInstanceId,
+                    eventData.InstanceId);
+
+                return EventHookResult.Fail(
+                    new Exception(result.Error.Message),
+                    new Dictionary<string, string>
+                    {
+                        ["hook_error"] = "SubFlowCompletionFailed",
+                        ["error_code"] = result.Error.Code ?? "unknown"
+                    });
             }
 
             return EventHookResult.Ok(new Dictionary<string, string>
@@ -71,25 +74,6 @@ public sealed class InstanceSubCompletedEventHook(
             {
                 ["hook_error"] = "SubFlowCompletionHookFailed"
             });
-        }
-    }
-
-    /// <summary>
-    /// Processes the subflow completion locally with proper schema and UoW scope.
-    /// </summary>
-    private async Task ProcessLocalAsync(FlowCompletedInput input, CancellationToken cancellationToken)
-    {
-        using (currentSchema.Use(input.Flow))
-        {
-            await using (var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
-                         {
-                             Scope = UnitOfWorkScopeOption.RequiresNew
-                         }, cancellationToken))
-            {
-                await subflowCompletionService.CompletionAsync(input, cancellationToken);
-                await uow.SaveChangesAsync(cancellationToken);
-                await uow.CommitAsync(cancellationToken);
-            }
         }
     }
 

@@ -106,6 +106,20 @@ public static class WorkflowErrors
             $"Auto-transition \"{transitionKey}\" condition not met" + (reason != null ? $": {reason}" : ""),
             target: transitionKey);
 
+    /// <summary>
+    /// Transition chain depth exceeded the maximum allowed limit.
+    /// This prevents infinite loops in automatic transition chains.
+    /// </summary>
+    /// <param name="currentDepth">The current chain depth.</param>
+    /// <param name="maxDepth">The maximum allowed chain depth.</param>
+    /// <param name="transitionKey">The transition key that exceeded the limit.</param>
+    public static Error TransitionChainDepthExceeded(int currentDepth, int maxDepth, string? transitionKey = null)
+        => Error.Validation(
+            WorkflowErrorCodes.TransitionChainDepthExceeded,
+            $"Transition chain depth limit exceeded ({currentDepth}/{maxDepth})" +
+            (string.IsNullOrEmpty(transitionKey) ? "" : $" for transition '{transitionKey}'"),
+            target: transitionKey);
+
     #endregion
 
     #region Task Errors
@@ -160,6 +174,20 @@ public static class WorkflowErrors
             WorkflowErrorCodes.NotFoundDomain,
             $"Domain validation failed: {reason}",
             target: domain);
+
+    #endregion
+
+    #region Lock Errors
+
+    /// <summary>
+    /// Failed to acquire distributed lock for instance.
+    /// </summary>
+    /// <param name="instanceId">The ID of the instance that could not be locked.</param>
+    public static Error InstanceLockConflict(Guid instanceId)
+        => Error.Conflict(
+            WorkflowErrorCodes.ConflictWorkflow,
+            "Failed to acquire lock for instance",
+            target: instanceId.ToString());
 
     #endregion
     

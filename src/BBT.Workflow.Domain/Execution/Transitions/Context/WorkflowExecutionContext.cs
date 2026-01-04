@@ -1,7 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Aspects;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Execution.ReEntry;
 using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Execution;
@@ -64,33 +63,6 @@ public sealed class WorkflowExecutionContext
     
     /// <summary>Gets or sets the route values from the HTTP request.</summary>
     public Dictionary<string, string?> RouteValues { get; set; } = new();
-
-    /// <summary>
-    /// Creates a WorkflowExecutionInput from a ReentryCommand.
-    /// </summary>
-    /// <param name="command">The re-entry command to convert.</param>
-    /// <returns>A new WorkflowExecutionInput instance.</returns>
-    public static WorkflowExecutionContext From(ReentryCommand command) => new()
-    {
-        Domain = command.Domain,
-        InstanceId = command.InstanceId.ToString(),
-        WorkflowKey = command.WorkflowKey,
-        TransitionKey = command.TransitionKey,
-        TriggerType = command.TriggerType,
-        Mode = ExecMode.Sync, // Re-entry is always sync
-        CorrelationId = Guid.NewGuid().ToString("N"),
-        CausationId = command.ExecutionChainId,
-        RequestedAt = DateTimeOffset.UtcNow,
-        Headers = command.Headers?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new(),
-        Execution = new ExecutionInfo
-        {
-            ExecutionChainId = command.ExecutionChainId ?? Guid.NewGuid().ToString("N"),
-            ChainDepth = command.ChainDepth,
-            ResumeFrom = null
-        },
-        IsReentry = true,
-        Actor = command.Actor
-    };
 }
 
 public sealed class TransitionDataInfo 

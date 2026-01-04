@@ -34,6 +34,15 @@ public sealed class SubflowCompletionService(
         FlowCompletedInput completedInput,
         CancellationToken cancellationToken = default)
     {
+        // Start activity at the very beginning to capture the full operation trace
+        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Completion/{completedInput.Domain}/{completedInput.Flow}");
+        SubFlowActivityHelper.EnrichWithCompletion(
+            activity,
+            completedInput.SubInstanceId,
+            completedInput.InstanceId,
+            completedInput.Domain,
+            completedInput.Flow);
+
         // Check if this domain is handled by this runtime instance
         try
         {
@@ -42,6 +51,7 @@ public sealed class SubflowCompletionService(
         catch (NotFoundDomainException)
         {
             // Silently ignore - this is expected in multi-domain scenarios
+            activity?.SetTag("vnext.subflow.result", "domain_not_handled");
             return;
         }
 
@@ -56,29 +66,34 @@ public sealed class SubflowCompletionService(
                 logger.InstanceNotFound(
                     completedInput.InstanceId,
                     completedInput.Flow);
+                activity?.SetTag("vnext.subflow.result", "parent_not_found");
                 return;
             }
 
-            // Complete correlation through Instance aggregate
-            var correlation = parentInstance.CompleteCorrelation(completedInput.SubInstanceId);
+            var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
             if (correlation == null)
             {
                 logger.SubFlowCorrelationNotFound(completedInput.SubInstanceId);
+                activity?.SetTag("vnext.subflow.result", "correlation_not_found");
                 return;
             }
-
-            logger.SubFlowCorrelationCompleted(
+            
+            // Complete correlation and persist changes
+            await CompleteAndPersistCorrelationAsync(
+                parentInstance,
                 completedInput.SubInstanceId,
-                completedInput.InstanceId);
-
-            // Save instance (correlation is part of aggregate)
-            await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                completedInput.InstanceId,
+                cancellationToken);
 
             // If this is a SubProcess (non-blocking), just return after marking correlation as completed
             if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
             {
+                activity?.SetTag("vnext.subflow.type", "subprocess");
+                SubFlowActivityHelper.SetSuccess(activity);
                 return;
             }
+
+            activity?.SetTag("vnext.subflow.type", "subflow");
 
             // Process parent workflow continuation for SubFlow (blocking)
             await ProcessParentWorkflowContinuationAsync(
@@ -86,13 +101,18 @@ public sealed class SubflowCompletionService(
                 completedInput,
                 parentInstance,
                 cancellationToken);
+
+            SubFlowActivityHelper.SetSuccess(activity);
         }
         catch (Exception ex)
         {
+            SubFlowActivityHelper.SetError(activity, ex.Message, ex);
             logger.SubFlowCompletionFailed(
                 ex,
                 completedInput.SubInstanceId,
                 completedInput.InstanceId);
+
+            throw;
         }
     }
 
@@ -165,6 +185,7 @@ public sealed class SubflowCompletionService(
         await ResumePipelineAsync(
             parentInstance,
             parentWorkflow,
+            completedInput.SubInstanceId,
             cancellationToken);
     }
 
@@ -232,10 +253,12 @@ public sealed class SubflowCompletionService(
     /// </summary>
     /// <param name="parentInstance">The parent workflow instance</param>
     /// <param name="parentWorkflow">The parent workflow definition</param>
+    /// <param name="subInstanceId">The SubFlow instance identifier for rollback</param>
     /// <param name="cancellationToken">Cancellation token</param>
     private async Task ResumePipelineAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
+        Guid subInstanceId,
         CancellationToken cancellationToken)
     {
         try
@@ -273,16 +296,70 @@ public sealed class SubflowCompletionService(
                         parentInstance.Id,
                         result.Error.Message ?? "Unknown error");
                 }
+
+                throw new SubflowCompletionException(
+                    parentWorkflow.Domain,
+                    parentWorkflow.Key,
+                    parentInstance.Id.ToString(),
+                    result.Error.Code,
+                    result.Error.Message ?? "Unknown error"
+                );
             }
         }
         catch (Exception ex)
         {
             logger.SubFlowCompletionFailed(
                 ex,
-                Guid.Empty,
+                subInstanceId,
                 parentInstance.Id);
 
-            // Don't throw - SubFlow completion should still be marked as successful
+            // Revert the correlation to allow retry
+            await RevertAndPersistCorrelationAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            throw;
         }
+    }
+
+    /// <summary>
+    /// Completes the SubFlow correlation and persists the changes to the repository.
+    /// </summary>
+    /// <param name="parentInstance">The parent workflow instance</param>
+    /// <param name="subInstanceId">The SubFlow instance identifier</param>
+    /// <param name="parentInstanceId">The parent instance identifier for logging</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    private async Task CompleteAndPersistCorrelationAsync(
+        Instance parentInstance,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var correlation = parentInstance.CompleteCorrelation(subInstanceId);
+        if(correlation == null)
+            return;
+
+        logger.SubFlowCorrelationCompleted(subInstanceId, parentInstanceId);
+
+        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+    }
+    
+    /// <summary>
+    /// Reverts the SubFlow correlation and persists the changes to the repository.
+    /// </summary>
+    /// <param name="parentInstance">The parent workflow instance</param>
+    /// <param name="subInstanceId">The SubFlow instance identifier</param>
+    /// <param name="parentInstanceId">The parent instance identifier for logging</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    private async Task RevertAndPersistCorrelationAsync(
+        Instance parentInstance,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var correlation = parentInstance.RevertCorrelation(subInstanceId);
+        if(correlation == null)
+            return;
+
+        logger.SubFlowCorrelationReverted(subInstanceId, parentInstanceId);
+
+        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
     }
 }

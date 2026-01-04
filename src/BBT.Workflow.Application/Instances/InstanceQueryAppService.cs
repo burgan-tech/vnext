@@ -6,8 +6,8 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Extentions;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances.DTOs;
-using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
@@ -20,10 +20,9 @@ public sealed class InstanceQueryAppService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
-    IInstanceCorrelationRepository instanceCorrelationRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
-    IRemoteInstanceQueryAppService remoteInstanceQueryAppService,
+    IInstanceQueryGateway instanceQueryGateway,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -135,36 +134,47 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Builds instance transition information including status, current state, and correlations.
     /// This method consolidates the logic for determining instance information based on instance status.
+    /// Uses instance.ActiveCorrelations directly to avoid extra database call.
     /// </summary>
     /// <param name="instance">The workflow instance</param>
-    /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>A tuple containing status, current state, and correlations</returns>
-    private async
-        Task<(InstanceStatus Status, string? CurrentState, List<InstanceCorrelationInfo>
-            ActiveCorrelations)> BuildInstanceTransitionInfoAsync(
-            Instance instance,
-            CancellationToken cancellationToken = default)
+    private (InstanceStatus Status, string? CurrentState, List<InstanceCorrelationInfo> ActiveCorrelations)
+        BuildInstanceTransitionInfo(Instance instance)
     {
-        // Get active correlations
-        var activeCorrelations = await GetActiveCorrelationsAsync(instance.Id, cancellationToken);
+        // Map active correlations from entity to DTO
+        var activeCorrelations = instance.ActiveCorrelations
+            .Select(c => new InstanceCorrelationInfo
+            {
+                CorrelationId = c.Id,
+                ParentState = c.ParentState,
+                SubFlowInstanceId = c.SubFlowInstanceId,
+                SubFlowType = c.SubFlowType,
+                SubFlowDomain = c.SubFlowDomain,
+                SubFlowName = c.SubFlowName,
+                SubFlowVersion = c.SubFlowVersion,
+                IsCompleted = c.IsCompleted
+            })
+            .ToList();
 
         return (instance.Status, instance.CurrentState, activeCorrelations);
     }
 
     /// <summary>
-    /// Gets available transitions from a remote SubFlow instance.
+    /// Gets available transitions and state information from a remote SubFlow instance.
+    /// Includes view extensions and active correlations from the SubFlow.
     /// </summary>
     /// <param name="activeSubFlowCorrelation">The active SubFlow correlation</param>
     /// <param name="mainInstance">The main workflow instance</param>
     /// <param name="currentWorkflow">The current workflow definition</param>
+    /// <param name="extensions">Extensions to pass to the SubFlow for data href building</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Tuple containing available transitions and current state from SubFlow, status always from main flow</returns>
-    private async Task<(List<string> AvailableTransitions, string? CurrentState, InstanceStatus? Status)>
-        GetSubFlowTransitionsAsync(
-            InstanceCorrelationInfo activeSubFlowCorrelation,
-            Instance mainInstance,
-            BBT.Workflow.Definitions.Workflow currentWorkflow,
-            CancellationToken cancellationToken = default)
+    /// <returns>SubFlowStateInfo containing transitions, state, view extensions, and active correlations from SubFlow</returns>
+    private async Task<SubFlowStateInfo> GetSubFlowTransitionsAsync(
+        InstanceCorrelationInfo activeSubFlowCorrelation,
+        Instance mainInstance,
+        BBT.Workflow.Definitions.Workflow currentWorkflow,
+        string[]? extensions,
+        CancellationToken cancellationToken = default)
     {
         try
         {
@@ -173,21 +183,31 @@ public sealed class InstanceQueryAppService(
                 Domain = activeSubFlowCorrelation.SubFlowDomain,
                 Workflow = activeSubFlowCorrelation.SubFlowName,
                 Version = activeSubFlowCorrelation.SubFlowVersion,
-                Instance = activeSubFlowCorrelation.SubFlowInstanceId.ToString()
+                Instance = activeSubFlowCorrelation.SubFlowInstanceId.ToString(),
+                Extensions = extensions
             };
 
-            var subFlowResult = await remoteInstanceQueryAppService.GetFunctionWithStateAsync(
+            var subFlowResult = await instanceQueryGateway.GetFunctionWithStateAsync(
                 subFlowInput,
                 cancellationToken);
 
             if (subFlowResult.IsSuccess && subFlowResult.Value != null)
             {
-                // Use SubFlow transitions and current state, but always use main instance status
+                var subFlowValue = subFlowResult.Value;
+                
                 // Extract transition names from TransitionItem list
-                var transitionNames = subFlowResult.Value.Transitions
+                var transitionNames = subFlowValue.Transitions
                     .Select(t => t.Name)
                     .ToList();
-                return (transitionNames, subFlowResult.Value.State, mainInstance.Status);
+
+                // Return complete SubFlow state including view extensions and active correlations
+                return new SubFlowStateInfo(
+                    AvailableTransitions: transitionNames,
+                    CurrentState: subFlowValue.State,
+                    Status: mainInstance.Status,
+                    SubFlowData: subFlowValue.Data,
+                    SubFlowView: subFlowValue.View,
+                    SubFlowActiveCorrelations: subFlowValue.ActiveCorrelations);
             }
         }
         catch (Exception ex)
@@ -210,8 +230,8 @@ public sealed class InstanceQueryAppService(
     /// <param name="instance">The workflow instance</param>
     /// <param name="currentWorkflow">The current workflow definition</param>
     /// <param name="transitionInfo">Optional transition info (used when called from main method)</param>
-    /// <returns>Tuple containing available transitions, current state, and status from main flow</returns>
-    private (List<string> AvailableTransitions, string? CurrentState, InstanceStatus? Status) GetMainFlowTransitions(
+    /// <returns>SubFlowStateInfo containing available transitions, current state, and status from main flow (no SubFlow-specific data)</returns>
+    private SubFlowStateInfo GetMainFlowTransitions(
         Instance instance,
         BBT.Workflow.Definitions.Workflow currentWorkflow,
         (InstanceStatus Status, string? CurrentState, List<InstanceCorrelationInfo> ActiveCorrelations)?
@@ -231,34 +251,10 @@ public sealed class InstanceQueryAppService(
         var currentState = transitionInfo?.CurrentState ?? instance.CurrentState;
         var status = transitionInfo?.Status ?? instance.Status;
 
-        return (availableTransitions, currentState, status);
-    }
-
-    /// <summary>
-    /// Gets active SubFlow/SubProcess correlations for the instance.
-    /// </summary>
-    /// <param name="instanceId">The workflow instance ID</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>List of active correlation information</returns>
-    private async Task<List<InstanceCorrelationInfo>> GetActiveCorrelationsAsync(
-        Guid instanceId,
-        CancellationToken cancellationToken = default)
-    {
-        var correlations = await instanceCorrelationRepository.GetActiveByParentAsync(instanceId, cancellationToken);
-
-        return correlations
-            .Select(c => new InstanceCorrelationInfo
-            {
-                CorrelationId = c.Id,
-                ParentState = c.ParentState,
-                SubFlowInstanceId = c.SubFlowInstanceId,
-                SubFlowType = c.SubFlowType,
-                SubFlowDomain = c.SubFlowDomain,
-                SubFlowName = c.SubFlowName,
-                SubFlowVersion = c.SubFlowVersion,
-                IsCompleted = c.IsCompleted
-            })
-            .ToList();
+        return new SubFlowStateInfo(
+            AvailableTransitions: availableTransitions,
+            CurrentState: currentState,
+            Status: status);
     }
 
     /// <summary>
@@ -358,6 +354,20 @@ public sealed class InstanceQueryAppService(
                         Etag = instance.LatestData?.ETag ?? string.Empty
                     };
 
+                    // If there's an active SubFlow and extensions are requested, fetch from SubFlow
+                    if (instance.Subflow != null)
+                    {
+                        var subFlowExtensionsResult = await GetSubFlowExtensionsAsync(
+                            instance.Subflow,
+                            input.Extensions,
+                            cancellationToken);
+
+                        result.Extensions = subFlowExtensionsResult.Value?.Extensions ?? new Dictionary<string, object>();
+
+                        return ConditionalResult<GetInstanceDataOutput>.Success(result);
+                    }
+
+                    // No active SubFlow - process extensions locally
                     var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
                         .WithWorkflow(flow)
                         .WithInstance(instance)
@@ -442,6 +452,7 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Builds the complete instance state output including transitions, correlations, and view information.
+    /// When there's an active SubFlow, includes the SubFlow's view extensions in data href and merges active correlations.
     /// </summary>
     private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
         Instance instance,
@@ -449,8 +460,8 @@ public sealed class InstanceQueryAppService(
         GetInstanceStateInput input,
         CancellationToken cancellationToken)
     {
-        // Build instance transition information using shared logic
-        var transitionInfo = await BuildInstanceTransitionInfoAsync(instance, cancellationToken);
+        // Build instance transition information using shared logic (no DB call - uses instance.ActiveCorrelations)
+        var transitionInfo = BuildInstanceTransitionInfo(instance);
 
         // Check if there are any active SubFlow correlations
         var activeSubFlowCorrelation = transitionInfo.ActiveCorrelations
@@ -458,15 +469,16 @@ public sealed class InstanceQueryAppService(
             .OrderByDescending(c => c.CorrelationId)
             .FirstOrDefault();
 
-        var (availableTransitions, currentState, status) = activeSubFlowCorrelation != null
-            ? await GetSubFlowTransitionsAsync(activeSubFlowCorrelation, instance, currentWorkflow, cancellationToken)
+        var subFlowStateInfo = activeSubFlowCorrelation != null
+            ? await GetSubFlowTransitionsAsync(activeSubFlowCorrelation, instance, currentWorkflow, input.Extensions, cancellationToken)
             : GetMainFlowTransitions(instance, currentWorkflow, transitionInfo);
 
         // Build transition items with href links
-        var transitionItems = availableTransitions.Select(transitionKey => new TransitionItem
+        var transitionItems = subFlowStateInfo.AvailableTransitions.Select(transitionKey => new TransitionItem
         {
             Name = transitionKey,
-            Href = InstanceUrlTemplates.Transition(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey)
+            Href = InstanceUrlTemplates.Transition(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey),
+            Schema = new HrefBase { Href = InstanceUrlTemplates.Schema(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey) }
         }).ToList();
 
         // Get current state using Railway pattern
@@ -476,11 +488,15 @@ public sealed class InstanceQueryAppService(
                 Error.NotFound("notfound", $"State {instance.CurrentState} not found in workflow {input.Workflow}"))
             .Map(currentStateValue =>
             {
-                // Get view definition
+                // Get view definition from main flow
                 var viewDefinition = GetViewDefinition(instance, currentWorkflow, currentStateValue);
 
                 // Build data href with extensions
-                var allExtensions = (input.Extensions ?? []).Concat(viewDefinition?.Extensions ?? []).ToArray();
+                // If SubFlow is active, use SubFlow's extensions; otherwise use main flow extensions
+                var allExtensions = subFlowStateInfo.SubFlowData != null
+                    ? ExtractExtensionsFromDataHref(subFlowStateInfo.SubFlowData.Href)
+                    : (input.Extensions ?? []).Concat(viewDefinition?.Extensions ?? []).ToArray();
+                
                 var dataHref = new DataHref
                 {
                     Href = allExtensions.Length > 0
@@ -489,15 +505,15 @@ public sealed class InstanceQueryAppService(
                         : InstanceUrlTemplates.Data(input.Domain, input.Workflow, instance.Id.ToString())
                 };
 
-                // Build view href
+                // Build view href - use SubFlow view's LoadData if available, otherwise use main flow
                 var viewHref = new ViewHref
                 {
                     Href = InstanceUrlTemplates.View(input.Domain, input.Workflow, instance.Id.ToString()),
-                    LoadData = viewDefinition?.LoadData == true
+                    LoadData = subFlowStateInfo.SubFlowView?.LoadData ?? viewDefinition?.LoadData == true
                 };
 
-                // Build active correlations with href links
-                var activeCorrelationHrefs = transitionInfo.ActiveCorrelations.Select(correlation =>
+                // Build active correlations with href links from main flow
+                var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations.Select(correlation =>
                     new ActiveCorrelationHref
                     {
                         CorrelationId = correlation.CorrelationId,
@@ -508,21 +524,59 @@ public sealed class InstanceQueryAppService(
                         SubFlowName = correlation.SubFlowName,
                         SubFlowVersion = correlation.SubFlowVersion,
                         IsCompleted = correlation.IsCompleted,
-                        Href = InstanceUrlTemplates.Data(correlation.SubFlowDomain, correlation.SubFlowName,
-                            correlation.SubFlowInstanceId.ToString())
+                        Href = allExtensions.Length > 0
+                            ? InstanceUrlTemplates.DataWithExtensions(correlation.SubFlowDomain, correlation.SubFlowName,
+                                correlation.SubFlowInstanceId.ToString(),
+                                string.Join(",", allExtensions))
+                            : InstanceUrlTemplates.Data(correlation.SubFlowDomain, correlation.SubFlowName,
+                                correlation.SubFlowInstanceId.ToString())
                     }).ToList();
+
+                // Merge SubFlow active correlations if available
+                var allActiveCorrelations = subFlowStateInfo.SubFlowActiveCorrelations != null
+                    ? mainFlowCorrelationHrefs.Concat(subFlowStateInfo.SubFlowActiveCorrelations).ToList()
+                    : mainFlowCorrelationHrefs;
 
                 return new GetInstanceStateOutput
                 {
                     Data = dataHref,
                     View = viewHref,
-                    State = currentState ?? string.Empty,
-                    Status = status,
-                    ActiveCorrelations = activeCorrelationHrefs,
+                    State = subFlowStateInfo.CurrentState ?? string.Empty,
+                    Status = subFlowStateInfo.Status,
+                    ActiveCorrelations = allActiveCorrelations,
                     Transitions = transitionItems,
                     ETag = instance.LatestData?.ETag ?? string.Empty
                 };
             });
+    }
+
+    /// <summary>
+    /// Extracts extension parameters from a data href URL.
+    /// </summary>
+    /// <param name="dataHref">The data href URL potentially containing extensions</param>
+    /// <returns>Array of extension names extracted from the URL</returns>
+    private static string[] ExtractExtensionsFromDataHref(string? dataHref)
+    {
+        if (string.IsNullOrEmpty(dataHref))
+        {
+            return [];
+        }
+
+        var queryIndex = dataHref.IndexOf('?');
+        if (queryIndex == -1)
+        {
+            return [];
+        }
+
+        var query = dataHref.Substring(queryIndex);
+        var queryParams = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(query);
+
+        if (queryParams.TryGetValue("extensions", out var extensionsValues))
+        {
+            return extensionsValues.SelectMany(v => v?.Split(',', StringSplitOptions.RemoveEmptyEntries) ?? []).ToArray();
+        }
+
+        return [];
     }
 
     public async Task<Result<GetViewOutput>> GetPlatformSpecificViewAsync(
@@ -566,7 +620,97 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
+    /// Retrieves and executes extensions for an instance.
+    /// </summary>
+    /// <param name="input">The extensions request input containing domain, workflow, instance, and extensions to execute</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Result containing the executed extension results or error information</returns>
+    public async Task<Result<GetExtensionsOutput>> GetExtensionsAsync(
+        GetExtensionsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        // Railway chain: Get Instance → Get Workflow → Build Extensions Output
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, input.Version, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .ThenAsync(data =>
+                BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Builds the extensions output by executing the requested extensions.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow.
+    /// </summary>
+    private async Task<Result<GetExtensionsOutput>> BuildExtensionsOutputAsync(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        GetExtensionsInput input,
+        CancellationToken cancellationToken)
+    {
+        // Check if there's an active SubFlow - if so, forward the request to SubFlow
+        // instance.Subflow returns the first active subflow (Type: S and not completed)
+        if (instance.Subflow != null)
+        {
+            return await GetSubFlowExtensionsAsync(instance.Subflow, input.Extensions, cancellationToken);
+        }
+
+        // No active SubFlow - handle locally
+        var instanceData = instance.LatestData;
+
+        // Build script context for extension execution
+        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            .WithWorkflow(currentWorkflow)
+            .WithInstance(instance)
+            .WithRuntime(runtimeInfoProvider)
+            .WithTransition(string.Empty)
+            .WithBody(instanceData?.Data ?? new JsonData("{}"))
+            .WithHeaders(input.Headers)
+            .WithQueryParameters(input.QueryParameters)
+            .BuildAsync(cancellationToken);
+
+        // Execute extensions
+        var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
+            input.Extensions ?? [],
+            scriptContext,
+            currentWorkflow,
+            ExtensionScope.GetInstance,
+            cancellationToken);
+
+        // Return extension results
+        return Result<GetExtensionsOutput>.Ok(new GetExtensionsOutput
+        {
+            Extensions = extensionsResult.ValueOrDefault(new Dictionary<string, object>())!
+        });
+    }
+
+    /// <summary>
+    /// Gets extensions from a remote SubFlow instance.
+    /// </summary>
+    private async Task<Result<GetExtensionsOutput>> GetSubFlowExtensionsAsync(
+        InstanceCorrelation subflow,
+        string[]? extensions,
+        CancellationToken cancellationToken)
+    {
+        var subFlowInput = new GetFunctionWithInstanceInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            Version = subflow.SubFlowVersion,
+            Instance = subflow.SubFlowInstanceId.ToString(),
+            Extensions = extensions
+        };
+
+        return await instanceQueryGateway.GetFunctionWithExtensionsAsync(
+            subFlowInput,
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Builds the schema output for a specific transition.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow.
     /// Handles state resolution and schema lookup using Railway pattern.
     /// </summary>
     private async Task<Result<GetSchemaOutput>> BuildSchemaOutputAsync(
@@ -576,6 +720,20 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrEmpty(transitionKey))
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.Validation("validation", "Transition key is required to get schema"));
+        }
+
+        // Check if there's an active SubFlow - if so, forward the request to SubFlow
+        // instance.Subflow returns the first active subflow (Type: S and not completed)
+        if (instance.Subflow != null)
+        {
+            return await GetSubFlowSchemaAsync(instance.Subflow, transitionKey, cancellationToken);
+        }
+
+        // No active SubFlow - handle locally
         // Get current state using Railway pattern
         var currentStateResult = currentWorkflow.GetState(instance.GetCurrentState);
         if (!currentStateResult.IsSuccess || currentStateResult.Value == null)
@@ -585,12 +743,6 @@ public sealed class InstanceQueryAppService(
         }
 
         var currentState = currentStateResult.Value;
-
-        if (string.IsNullOrEmpty(transitionKey))
-        {
-            return Result<GetSchemaOutput>.Fail(
-                Error.Validation("validation", "Transition key is required to get schema"));
-        }
 
         var transition = currentWorkflow.ResolveTransition(transitionKey, currentState);
 
@@ -613,6 +765,28 @@ public sealed class InstanceQueryAppService(
                 Type = schema.Type,
                 Schema = schema.Schema
             });
+    }
+
+    /// <summary>
+    /// Gets schema from a remote SubFlow instance.
+    /// </summary>
+    private async Task<Result<GetSchemaOutput>> GetSubFlowSchemaAsync(
+        InstanceCorrelation subflow,
+        string transitionKey,
+        CancellationToken cancellationToken)
+    {
+        var subFlowInput = new GetFunctionWithInstanceInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            Version = subflow.SubFlowVersion,
+            Instance = subflow.SubFlowInstanceId.ToString()
+        };
+
+        return await instanceQueryGateway.GetFunctionWithSchemaAsync(
+            subFlowInput,
+            transitionKey,
+            cancellationToken);
     }
 
     /// <summary>
@@ -689,7 +863,7 @@ public sealed class InstanceQueryAppService(
         string? transitionKey = null,
         CancellationToken cancellationToken = default)
     {
-        var subFlowViewResult = await remoteInstanceQueryAppService.GetFunctionWithViewAsync(
+        var subFlowViewResult = await instanceQueryGateway.GetFunctionWithViewAsync(
             new GetFunctionWithInstanceInput
             {
                 Instance = instance.Subflow!.SubFlowInstanceId.ToString(),
@@ -776,4 +950,22 @@ public sealed class InstanceQueryAppService(
             _ => view.Content
         };
     }
+
+    /// <summary>
+    /// Represents the complete state information retrieved from a SubFlow or main flow.
+    /// Used to pass transitions, state, status, and additional SubFlow-specific data like view extensions and active correlations.
+    /// </summary>
+    /// <param name="AvailableTransitions">Available transitions from the flow</param>
+    /// <param name="CurrentState">Current state of the flow</param>
+    /// <param name="Status">Status of the instance (always from main instance)</param>
+    /// <param name="SubFlowData">Data href from SubFlow (contains extensions info) - null for main flow</param>
+    /// <param name="SubFlowView">View href from SubFlow - null for main flow</param>
+    /// <param name="SubFlowActiveCorrelations">Active correlations from SubFlow - empty for main flow</param>
+    private sealed record SubFlowStateInfo(
+        List<string> AvailableTransitions,
+        string? CurrentState,
+        InstanceStatus? Status,
+        DataHref? SubFlowData = null,
+        ViewHref? SubFlowView = null,
+        List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null);
 }

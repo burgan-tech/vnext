@@ -1,13 +1,26 @@
-using BBT.Workflow.Execution.ReEntry;
+using BBT.Workflow.Execution.PostCommit;
 
 namespace BBT.Workflow.Execution;
 
 /// <summary>
+/// Represents a request for the next transition in sync dispatch chain.
+/// Contains only identity information - full context is rebuilt by TransitionContextFactory.
+/// </summary>
+/// <param name="TransitionKey">The key of the next transition to execute.</param>
+/// <param name="Reason">Optional reason for the transition request (e.g., "auto", "schedule").</param>
+public sealed record NextTransitionRequest(
+    string TransitionKey,
+    string? Reason = null);
+
+/// <summary>
 /// Controls pipeline execution flow and behavior through directives.
-/// Manages resume points, epilogue modes, inline automatic transitions, and terminal state tracking.
+/// Manages resume points, epilogue modes, next transition requests, post-commit jobs, and terminal state tracking.
 /// </summary>
 public sealed class PipelineDirectives
 {
+    private readonly List<IPostCommitJob> _postCommitJobs = new();
+    private readonly HashSet<string> _postCommitJobKeys = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Gets the order number from which to resume pipeline execution.
     /// Used for scenarios like subflow completion or re-planning.
@@ -21,9 +34,10 @@ public sealed class PipelineDirectives
     public EpilogueMode Epilogue { get; private set; } = EpilogueMode.Run;
 
     /// <summary>
-    /// Gets the queue of re-entry commands for inline automatic transition chain execution.
+    /// Gets the next transition request for sync dispatch chain.
+    /// Set by auto/scheduled steps when a chained transition should execute.
     /// </summary>
-    public Queue<ReentryCommand> InlineAutoQueue { get; } = new();
+    public NextTransitionRequest? NextTransition { get; private set; }
 
     /// <summary>
     /// Gets a value indicating whether the pipeline has reached a terminal state.
@@ -64,33 +78,57 @@ public sealed class PipelineDirectives
     public void MarkTerminal() => TerminalReached = true;
     
     /// <summary>
-    /// Enqueues a re-entry command for inline automatic transition execution.
+    /// Requests a next transition to be executed in the sync dispatch chain.
+    /// The current transition will complete (including Finalize), then the next transition starts.
     /// </summary>
-    /// <param name="command">The re-entry command to enqueue.</param>
-    public void EnqueueInlineAuto(ReentryCommand command) => InlineAutoQueue.Enqueue(command);
+    /// <param name="request">The next transition request containing transition key and reason.</param>
+    public void RequestNextTransition(NextTransitionRequest request) => NextTransition = request;
+    
+    /// <summary>
+    /// Consumes and clears the next transition request.
+    /// Called by the pipeline after current transition completes to check for chained execution.
+    /// </summary>
+    /// <returns>The next transition request, or null if none was set.</returns>
+    public NextTransitionRequest? ConsumeNextTransition()
+    {
+        var t = NextTransition;
+        NextTransition = null;
+        return t;
+    }
     
     /// <summary>
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
-    
-    /// <summary>
-    /// Creates a snapshot of the current directives state for post-commit processing.
-    /// The snapshot captures the inline auto queue for execution after UoW commit.
-    /// </summary>
-    /// <returns>A snapshot containing the queued re-entry commands.</returns>
-    public DirectivesSnapshot CreateSnapshot() => new(InlineAutoQueue.ToArray());
-}
 
-/// <summary>
-/// Immutable snapshot of pipeline directives for post-commit processing.
-/// Used to transfer inline auto queue state across UoW boundaries.
-/// </summary>
-/// <param name="InlineAutoQueue">Array of re-entry commands to process after commit.</param>
-public sealed record DirectivesSnapshot(ReentryCommand[] InlineAutoQueue)
-{
     /// <summary>
-    /// Gets a value indicating whether there are any queued inline auto transitions.
+    /// Enqueues a post-commit job to be executed after the distributed lock is released.
+    /// Post-commit jobs are used for side effects like remote calls that shouldn't block the lock.
+    /// For idempotent jobs, duplicate enqueueing within the same transition is prevented.
     /// </summary>
-    public bool HasQueuedTransitions => InlineAutoQueue.Length > 0;
+    /// <param name="job">The post-commit job to enqueue.</param>
+    public void EnqueuePostCommit(IPostCommitJob job)
+    {
+        // Enqueue-level idempotency: prevent duplicate jobs in the same transition
+        if (job is IIdempotentPostCommitJob idempotentJob &&
+            !_postCommitJobKeys.Add(idempotentJob.IdempotencyKey))
+        {
+            return; // Same job already queued in this transition
+        }
+
+        _postCommitJobs.Add(job);
+    }
+
+    /// <summary>
+    /// Consumes and clears all post-commit jobs.
+    /// Called by the pipeline after transition completes to get jobs for execution outside the lock.
+    /// </summary>
+    /// <returns>A read-only list of post-commit jobs.</returns>
+    public IReadOnlyList<IPostCommitJob> ConsumePostCommitJobs()
+    {
+        var copy = _postCommitJobs.ToArray();
+        _postCommitJobs.Clear();
+        _postCommitJobKeys.Clear();
+        return copy;
+    }
 }

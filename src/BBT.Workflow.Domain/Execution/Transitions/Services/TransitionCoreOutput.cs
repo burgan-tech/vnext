@@ -7,6 +7,5 @@ namespace BBT.Workflow.Execution.Services;
 /// and the directives snapshot for post-commit inline auto chain processing.
 /// </summary>
 /// <param name="Output">The transition output containing instance ID and status.</param>
-/// <param name="DirectivesSnapshot">Snapshot of pipeline directives including inline auto queue.</param>
-public sealed record TransitionCoreOutput(TransitionOutput Output, DirectivesSnapshot DirectivesSnapshot);
+public sealed record TransitionCoreOutput(TransitionOutput Output);
 

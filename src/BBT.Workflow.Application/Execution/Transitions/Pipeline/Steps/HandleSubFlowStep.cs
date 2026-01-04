@@ -3,26 +3,22 @@ using BBT.Aether.Aspects;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Scripting;
-using BBT.Workflow.SubFlow;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
 /// <summary>
 /// Pipeline step that handles SubFlow operations.
-/// Manages sub-process initiation when the target state type is SubFlow.
+/// Creates correlation and enqueues a post-commit job for subflow start.
+/// The actual subflow start happens after the distributed lock is released.
 /// </summary>
 public sealed class HandleSubFlowStep(
     IInstanceRepository instanceRepository,
-    ISubflowStarter subflowStarter,
     IGuidGenerator guidGenerator,
-    IScriptContextFactory scriptContextFactory,
-    ILogger<HandleSubFlowStep> logger,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    ILogger<HandleSubFlowStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.SubFlow;
@@ -88,7 +84,8 @@ public sealed class HandleSubFlowStep(
     }
 
     /// <summary>
-    /// Executes the SubFlow operations: creates correlation, updates instance, and starts SubFlow.
+    /// Executes the SubFlow operations: creates correlation, updates instance, and enqueues post-commit job.
+    /// The actual subflow start happens after the lock is released via the post-commit handler.
     /// </summary>
     private async Task ExecuteSubFlowOperationsAsync(
         TransitionExecutionContext context,
@@ -99,18 +96,14 @@ public sealed class HandleSubFlowStep(
 
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
-        var scriptContext = await context.GetOrBuildScriptContextAsync(
-            ct => CreateScriptContextAsync(context, ct),
-            cancellationToken);
-        
-        await subflowStarter.StartAsync(
-            context.Workflow,
-            context.Instance,
-            context.Target!,
-            context.Transition!,
-            correlation,
-            scriptContext,
-            cancellationToken);
+        // Enqueue post-commit job - actual subflow start happens after lock release
+        context.Directives.EnqueuePostCommit(new StartSubflowJob(correlation.Id, context.Target!.Key));
+
+        logger.LogDebug(
+            "Subflow job enqueued for instance {InstanceId}, correlation {CorrelationId}, target {TargetStateKey}",
+            context.InstanceId,
+            correlation.Id,
+            context.Target.Key);
     }
 
     /// <summary>
@@ -127,22 +120,5 @@ public sealed class HandleSubFlowStep(
             context.Target.SubFlow.Process.Domain,
             context.Target.SubFlow.Process.Key,
             context.Target.SubFlow.Process.Version);
-    }
-
-    /// <summary>
-    /// Creates a script context for SubFlow operations.
-    /// </summary>
-    private async Task<ScriptContext> CreateScriptContextAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        return await scriptContextFactory.NewBuilder(instanceRepository)
-            .WithWorkflow(context.Workflow)
-            .WithInstance(context.Instance)
-            .WithTransition(context.Transition!)
-            .WithRuntime(runtimeInfoProvider)
-            .WithBody(context.Data)
-            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
-            .BuildAsync(cancellationToken);
     }
 }

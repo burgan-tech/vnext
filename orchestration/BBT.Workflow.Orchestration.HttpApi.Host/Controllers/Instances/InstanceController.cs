@@ -1,11 +1,11 @@
 using System.ComponentModel.DataAnnotations;
-using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Pagination;
 using BBT.Aether.AspNetCore.Results;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -195,6 +195,12 @@ public sealed class InstanceController(
         };
 
         var result = await queryAppService.GetInstanceAsync(input, cancellationToken);
+        
+        if (result.Result.IsSuccess && !string.IsNullOrEmpty(result.Result.Value?.Etag))
+        {
+            HttpContext.Response.Headers[HeadersConstants.ETag] = result.Result.Value.Etag;
+        }
+        
         return FromResult(result.Result);
     }
 
@@ -259,6 +265,7 @@ public sealed class InstanceController(
         var response = await queryAppService.GetInstanceHistoryAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
+    
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data")]
     public async Task<IActionResult> GetInstanceDataAsync(
@@ -281,6 +288,12 @@ public sealed class InstanceController(
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
+        
+        if (result.Result.IsSuccess && !string.IsNullOrEmpty(result.Result.Value?.Etag))
+        {
+            HttpContext.Response.Headers[HeadersConstants.ETag] = result.Result.Value.Etag;
+        }
+        
         return FromResult(result.Result);
     }
 } 
