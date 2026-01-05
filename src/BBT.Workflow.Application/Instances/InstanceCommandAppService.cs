@@ -1,7 +1,7 @@
+using System.Diagnostics;
 using BBT.Aether;
 using BBT.Aether.Application.Services;
 using BBT.Aether.BackgroundJob;
-using BBT.Aether.DistributedLock;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
@@ -21,6 +21,10 @@ using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Instances;
 
+/// <summary>
+/// Application service for workflow instance commands (start, transition).
+/// Lock management is delegated to TransitionPipeline for proper lifecycle scoping.
+/// </summary>
 public sealed class InstanceCommandAppService(
     IServiceProvider serviceProvider,
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -33,7 +37,6 @@ public sealed class InstanceCommandAppService(
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
-    IDistributedLockService distributedLockService,
     ISchemaMigrationOrchestrator schemaMigrationOrchestrator,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
@@ -44,7 +47,13 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
-        // Set schema context once at the beginning
+        
+        // Check existing instance BEFORE entering railway chain
+        var existingInstanceResult = await CheckExistingInstanceAsync(input, cancellationToken);
+        if (existingInstanceResult.HasValue)
+            return existingInstanceResult.Value;
+        
+        // Continue with normal railway flow for NEW instances only
         return await LoadWorkflowAsync(input, cancellationToken)
             .OnSuccessAsync(async _ =>
                 await schemaMigrationOrchestrator.MigrateSchemaWithLockAsync(input.Workflow, cancellationToken))
@@ -56,6 +65,40 @@ public sealed class InstanceCommandAppService(
             })
             .ThenAsync(data => ExecuteStartTransitionAsync(data, input, cancellationToken))
             .OnSuccess(output => AddWorkflowHeader(output, input));
+    }
+
+    /// <summary>
+    /// Checks if an active instance already exists before starting workflow creation.
+    /// Implements idempotent behavior for active instances only.
+    /// </summary>
+    /// <returns>
+    /// - null: No existing instance OR existing completed instance, continue with creation
+    /// - Ok: Existing active instance found, return its current status (idempotent)
+    /// </returns>
+    private async Task<Result<StartInstanceOutput>?> CheckExistingInstanceAsync(
+        StartInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        var instanceId = input.Instance.Id;
+        var instanceKey = input.Instance.Key;
+        
+        var existingInstance = !instanceKey.IsNullOrWhiteSpace()
+            ? await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken)
+            : instanceId.HasValue 
+                ? await instanceRepository.FindByIdentifierAsync(instanceId.Value.ToString(), cancellationToken)
+                : null;
+
+        if (existingInstance is null)
+            return null; // No existing instance, continue with creation
+
+        if (existingInstance.IsCompleted)
+            return null; // Completed instance, allow creating new one
+            
+        return Result<StartInstanceOutput>.Ok(new StartInstanceOutput
+        {
+            Id = existingInstance.Id,
+            Status = existingInstance.Status
+        });
     }
 
     /// <summary>
@@ -170,42 +213,25 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Step 4: Executes the start transition with distributed lock.
+    /// Step 4: Executes the start transition.
+    /// Lock management is handled by TransitionPipeline for proper lifecycle scoping.
     /// Underlying service returns Result - unexpected exceptions propagate to middleware.
     /// </summary>
-    private async Task<Result<StartInstanceOutput>> ExecuteStartTransitionAsync(
+    private Task<Result<StartInstanceOutput>> ExecuteStartTransitionAsync(
         (Definitions.Workflow Workflow, Instance Instance) data,
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
-        var resourceId = $"instance:{data.Instance.Id}";
 
-        // Execute transition with distributed lock
-        var lockOutcome = await distributedLockService.ExecuteWithLockAsync(
-            resourceId,
-            () => workflowExecutionService
-                .ExecuteTransitionAsync(context, cancellationToken)
-                .MapAsync(transitionOutput => new StartInstanceOutput
-                {
-                    Id = data.Instance.Id,
-                    Status = transitionOutput.Status
-                }),
-            InstanceConstants.TransitionLockExpiryInSeconds,
-            cancellationToken);
-
-        // Lock acquisition failure is a domain error → Result.Fail
-        if (!lockOutcome.Acquired)
-        {
-            logger.InstanceLockFailed(data.Instance.Id.ToString());
-            return Result<StartInstanceOutput>.Fail(
-                Error.Conflict(
-                    WorkflowErrorCodes.ConflictWorkflow,
-                    "Failed to acquire lock for instance",
-                    data.Instance.Id.ToString()));
-        }
-
-        return lockOutcome.Result;
+        // Execute transition - lock is managed by TransitionPipeline
+        return workflowExecutionService
+            .ExecuteTransitionAsync(context, cancellationToken)
+            .MapAsync(transitionOutput => new StartInstanceOutput
+            {
+                Id = data.Instance.Id,
+                Status = transitionOutput.Status
+            });
     }
 
     /// <summary>
@@ -225,13 +251,16 @@ public sealed class InstanceCommandAppService(
         try
         {
             var jobName = $"timeout-{instance.Id}";
+            var activity = Activity.Current;
             var payload = new WorkflowTimeoutPayload
             {
                 JobName = jobName,
                 Domain = workflow.Domain,
                 InstanceId = instance.Id,
                 FlowName = workflow.Key,
-                Version = workflow.Version
+                Version = workflow.Version,
+                TraceParent = activity?.Id,
+                TraceState = activity?.TraceStateString
             };
 
             // Parse ISO 8601 duration string to TimeSpan
@@ -305,36 +334,19 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Executes the transition with distributed lock and returns the output.
+    /// Executes the transition and returns the output.
+    /// Lock management is handled by TransitionPipeline for proper lifecycle scoping.
     /// </summary>
-    private async Task<Result<TransitionOutput>> ExecuteTransitionAsync(
+    private Task<Result<TransitionOutput>> ExecuteTransitionAsync(
         string instanceId,
         string transitionKey,
         TransitionInput input,
         CancellationToken cancellationToken)
     {
         var context = input.ToExecutionContext(instanceId, transitionKey);
-        var resourceId = $"instance:{instanceId}";
 
-        // Execute transition with distributed lock
-        var lockOutcome = await distributedLockService.ExecuteWithLockAsync(
-            resourceId,
-            async () => await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken),
-            InstanceConstants.TransitionLockExpiryInSeconds,
-            cancellationToken);
-
-        // Validate lock acquisition
-        if (!lockOutcome.Acquired)
-        {
-            logger.InstanceLockFailed(instanceId);
-            return Result<TransitionOutput>.Fail(
-                Error.Conflict(
-                    WorkflowErrorCodes.ConflictWorkflow,
-                    "Failed to acquire lock for instance",
-                    instanceId));
-        }
-
-        return lockOutcome.Result;
+        // Execute transition - lock is managed by TransitionPipeline
+        return workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
     }
 
     /// <summary>
@@ -350,9 +362,9 @@ public sealed class InstanceCommandAppService(
 
     /// <summary>
     /// Creates and prepares a new instance with the provided parameters.
-    /// Railway chain: Get Initial State → Check Existing → Create Instance → Configure
+    /// Note: Existing instance check is done in CheckExistingInstanceAsync (idempotent behavior).
     /// </summary>
-    private async Task<Result<Instance>> CreateAndPrepareInstanceAsync(
+    private Task<Result<Instance>> CreateAndPrepareInstanceAsync(
         Definitions.Workflow workflow,
         Guid instanceId,
         string? instanceKey,
@@ -362,17 +374,8 @@ public sealed class InstanceCommandAppService(
         string? callback,
         CancellationToken cancellationToken = default)
     {
-        // Check for existing active instance first
-        var existingInstance = !instanceKey.IsNullOrWhiteSpace()
-            ? await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken)
-            : await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
-        if (existingInstance is { IsCompleted: false })
-            return Result<Instance>.Fail(WorkflowErrors.InstanceAlreadyExists(
-                instanceKey.IsNullOrWhiteSpace() ? instanceId.ToString() : instanceKey)
-            );
-
-        // Railway chain: Get initial state → Create and configure instance
-        return workflow.GetInitialState()
+        // Get initial state and create instance
+        return Task.FromResult(workflow.GetInitialState()
             .Map(initialState =>
             {
                 var instance = Instance.Create(instanceId, workflow.Key, instanceKey);
@@ -383,6 +386,6 @@ public sealed class InstanceCommandAppService(
                     instance.AddTags(tags.ToArray());
 
                 return instance;
-            });
+            }));
     }
 }

@@ -11,6 +11,12 @@
 @appDomain = core
 @npmRegistry = https://registry.npmjs.org/
 
+### TFS/Azure DevOps Artifacts Variables
+@tfsRegistry = https://pkgs.dev.azure.com/org/project/_packaging/feed/npm/registry/
+@tfsUsername = my-user
+@tfsPassword = my-password-or-pat
+@tfsEmail = user@example.com
+
 ############################################################
 ### Health Check - Checks API server and vnext app health
 ############################################################
@@ -94,6 +100,36 @@ Content-Type: application/json
 }
 
 ############################################################
+###         TFS/AZURE DEVOPS ARTIFACTS EXAMPLES            ###
+###         (Username + Password Authentication)           ###
+############################################################
+
+### Runtime Publish - TFS Artifacts authentication
+POST {{baseUrl}}/api/package/runtime/publish
+Content-Type: application/json
+
+{
+  "version": "{{version}}",
+  "npmRegistry": "{{tfsRegistry}}",
+  "npmUsername": "{{tfsUsername}}",
+  "npmPassword": "{{tfsPassword}}",
+  "npmEmail": "{{tfsEmail}}",
+  "appDomain": "{{appDomain}}"
+}
+
+### Runtime Publish - TFS Artifacts (without email, uses default)
+POST {{baseUrl}}/api/package/runtime/publish
+Content-Type: application/json
+
+{
+  "version": "{{version}}",
+  "npmRegistry": "{{tfsRegistry}}",
+  "npmUsername": "{{tfsUsername}}",
+  "npmPassword": "{{tfsPassword}}",
+  "appDomain": "{{appDomain}}"
+}
+
+############################################################
 ###              STANDARD PACKAGE ENDPOINT                 ###
 ###           POST /api/package/publish                    ###
 ###  - For any npm package                                 ###
@@ -171,6 +207,32 @@ Content-Type: application/json
   "version": "{{version}}"
 }
 
+### Package Publish - TFS Artifacts authentication
+POST {{baseUrl}}/api/package/publish
+Content-Type: application/json
+
+{
+  "packageName": "@my-org/my-workflow-package",
+  "version": "{{version}}",
+  "npmRegistry": "{{tfsRegistry}}",
+  "npmUsername": "{{tfsUsername}}",
+  "npmPassword": "{{tfsPassword}}",
+  "npmEmail": "{{tfsEmail}}",
+  "appDomain": "my-domain"
+}
+
+### Package Publish - TFS Artifacts (without domain replacement)
+POST {{baseUrl}}/api/package/publish
+Content-Type: application/json
+
+{
+  "packageName": "@my-org/my-workflow-package",
+  "version": "{{version}}",
+  "npmRegistry": "{{tfsRegistry}}",
+  "npmUsername": "{{tfsUsername}}",
+  "npmPassword": "{{tfsPassword}}"
+}
+
 ############################################################
 ###                   ERROR CASES                          ###
 ############################################################
@@ -221,5 +283,22 @@ Origin: http://localhost:3001
 #
 # 3. Health Check
 #    GET /health
+#
+############################################################
+###               NPM AUTHENTICATION SUMMARY               ###
+############################################################
+#
+# Strategy 1: Token-based (npmjs.org, GitHub Packages, etc.)
+#    - npmToken: Your npm token
+#    - Generates: _authToken in .npmrc
+#
+# Strategy 2: TFS/Azure DevOps Artifacts
+#    - npmUsername: Your username
+#    - npmPassword: Your password/PAT (Base64 encoded automatically)
+#    - npmEmail: Your email (optional, defaults to unused@dev.azure.com)
+#    - Generates: _password + username + email in .npmrc
+#
+# Priority: If both npmToken and npmUsername are provided,
+#           npmToken takes precedence.
 #
 ############################################################

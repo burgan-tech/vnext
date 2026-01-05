@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
@@ -26,14 +27,20 @@ public sealed class FlowTimeoutJobHandler(
 
     public async Task HandleAsync(WorkflowTimeoutPayload args, CancellationToken cancellationToken)
     {
+        // Restore trace context from the original request for distributed tracing correlation
+        using var activity = BackgroundJobActivityHelper.StartActivityWithTraceContext("TimeoutJob.Execute", args);
+
         try
         {
+            BackgroundJobActivityHelper.EnrichActivity(activity, args);
+
             var workflowResult = await componentCacheStore.GetFlowAsync(args.Domain, args.FlowName,
                 args.Version, cancellationToken);
 
             if (!workflowResult.IsSuccess)
             {
                 logger.WorkflowNotFoundWarning(args.FlowName, workflowResult.Error.Code);
+                activity?.SetStatus(ActivityStatusCode.Error, "Workflow not found");
                 return;
             }
 
@@ -45,6 +52,7 @@ public sealed class FlowTimeoutJobHandler(
             if (instance == null)
             {
                 logger.InstanceNotFound(args.InstanceId, args.FlowName);
+                activity?.SetStatus(ActivityStatusCode.Error, "Instance not found");
                 return;
             }
 
@@ -56,6 +64,7 @@ public sealed class FlowTimeoutJobHandler(
                 if (workflow.Timeout is null)
                 {
                     logger.TimeoutConfigMissing(instance.Flow);
+                    activity?.SetStatus(ActivityStatusCode.Error, "Timeout config missing");
                     return;
                 }
 
@@ -68,15 +77,20 @@ public sealed class FlowTimeoutJobHandler(
                     durationSeconds);
                 await instanceRepository.UpdateAsync(instance, true, cancellationToken);
                 await jobRepository.MarkAsProcessedAsync(args.JobName, cancellationToken);
+
+                activity?.SetStatus(ActivityStatusCode.Ok);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
             logger.JobCancelled(args.JobName, "timeout", args.InstanceId);
             throw; // Re-throw cancellation exceptions
         }
         catch (Exception e)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+            activity?.AddTag("error.type", e.GetType().Name);
             logger.JobFailed(e, args.JobName, args.InstanceId);
             throw;
         }

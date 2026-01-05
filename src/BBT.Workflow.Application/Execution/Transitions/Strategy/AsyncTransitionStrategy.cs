@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Handlers;
@@ -25,12 +27,14 @@ public sealed class AsyncTransitionStrategy(
     /// Executes transition asynchronously by enqueuing a background job.
     /// Railway chain: Create Context → Enqueue Job → Return Context
     /// </summary>
+    [Trace]
     public Task<Result<TransitionExecutionContext>> ExecuteAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var activity = Activity.Current;
         return ctxFactory.CreateAsync(context, cancellationToken)
-            .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, cancellationToken));
+            .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, activity, cancellationToken));
     }
 
     /// <summary>
@@ -40,19 +44,24 @@ public sealed class AsyncTransitionStrategy(
     private async Task<Result<TransitionExecutionContext>> EnqueueJobAndReturnContextAsync(
         TransitionExecutionContext ctx,
         WorkflowExecutionContext context,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
-        var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, cancellationToken);
+        var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
+        EnrichTelemetry(activity, ctx, jobName);
+        var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
 
         return enqueueResult.Match(
-            onSuccess: jobName =>
+            onSuccess: _ =>
             {
                 LogEnqueueSuccess(context, jobName);
+                SetActivityStatus(activity, enqueueResult);
                 return Result<TransitionExecutionContext>.Ok(ctx);
             },
             onFailure: error =>
             {
                 LogEnqueueFailure(context);
+                SetActivityStatus(activity, enqueueResult);
                 return Result<TransitionExecutionContext>.Fail(error);
             });
     }
@@ -64,9 +73,10 @@ public sealed class AsyncTransitionStrategy(
     private async Task<Result<string>> EnqueueAndSaveJobAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
-        var (jobName, jobPayload, schedule, metadata) = BuildJobPayload(context, transContext);
+        var (jobName, jobPayload, schedule, metadata) = BuildJobPayload(context, transContext, activity);
 
         // Enqueue to Dapr - external service, TryAsync is appropriate
         var enqueueResult = await EnqueueToDaprAsync(jobName, jobPayload, schedule, metadata, cancellationToken);
@@ -133,7 +143,7 @@ public sealed class AsyncTransitionStrategy(
     /// Pure function - no side effects.
     /// </summary>
     private static (string JobName, TransitionJobPayload Payload, string Schedule, Dictionary<string, object> Metadata)
-        BuildJobPayload(WorkflowExecutionContext context, TransitionExecutionContext transContext)
+        BuildJobPayload(WorkflowExecutionContext context, TransitionExecutionContext transContext, Activity? activity)
     {
         var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
 
@@ -150,7 +160,9 @@ public sealed class AsyncTransitionStrategy(
             Tags = context.Data?.Tags,
             Headers = context.Headers,
             RouteValues = context.RouteValues,
-            ExecutionActor = context.Actor
+            ExecutionActor = context.Actor,
+            TraceParent = activity?.Id,
+            TraceState = activity?.TraceStateString
         };
 
         var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow).ExpressionValue;
@@ -162,6 +174,12 @@ public sealed class AsyncTransitionStrategy(
             ["instanceId"] = context.InstanceId.ToString()
         };
 
+        // Add trace context to metadata for Dapr job correlation
+        if (activity?.TraceId.ToString() is { } traceId)
+        {
+            metadata["traceId"] = traceId;
+        }
+
         return (jobName, jobPayload, schedule, metadata);
     }
 
@@ -172,7 +190,63 @@ public sealed class AsyncTransitionStrategy(
     {
         logger.TransitionEnqueued(context.TransitionKey, context.InstanceId, jobName);
     }
+    
+    /// <summary>
+    /// Enriches the activity with telemetry tags and baggage for distributed tracing correlation.
+    /// Includes job name for async job correlation.
+    /// </summary>
+    private static void EnrichTelemetry(
+        Activity? activity,
+        TransitionExecutionContext ctx,
+        string jobName)
+    {
+        if (activity is null) return;
 
+        // Set tags for current span
+        activity.SetTag(TelemetryConstants.TagNames.Domain, ctx.Workflow.Domain);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
+        activity.SetTag(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
+        activity.SetTag(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
+        activity.SetTag(TelemetryConstants.TagNames.JobName, jobName);
+
+        // Set baggage for propagation across service boundaries
+        activity.SetBaggage(TelemetryConstants.TagNames.Domain, ctx.Workflow.Domain);
+        activity.SetBaggage(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
+        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
+        activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId.ToString());
+        activity.SetBaggage(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
+        activity.SetBaggage(TelemetryConstants.TagNames.JobName, jobName);
+    }
+    
+    /// <summary>
+    /// Sets activity status based on result.
+    /// </summary>
+    private static void SetActivityStatus<T>(Activity? activity, Result<T> result)
+    {
+        if (activity is null) return;
+
+        if (result.IsSuccess)
+        {
+            activity.SetStatus(ActivityStatusCode.Ok);
+        }
+        else
+        {
+            SetActivityError(activity, result.Error);
+        }
+    }
+    
+    /// <summary>
+    /// Sets activity error status with error details.
+    /// </summary>
+    private static void SetActivityError(Activity? activity, Error error)
+    {
+        if (activity is null) return;
+
+        activity.SetStatus(ActivityStatusCode.Error, error.Message);
+        activity.AddTag("error.code", error.Code);
+    }
+    
     /// <summary>
     /// Logs failed job enqueue.
     /// </summary>

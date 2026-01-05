@@ -1,17 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting.Functions;
-using Microsoft.CodeAnalysis;
-using Microsoft.Extensions.DependencyInjection;
 using Moq;
-using IRuntimeInfoProvider = BBT.Workflow.Runtime.IRuntimeInfoProvider;
-using Dapr.Client;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Scripting;
@@ -34,18 +29,6 @@ public static class ScriptValidationHelper
         lock (_lockObject)
         {
             _scriptEngine = serviceProvider.GetRequiredService<IScriptEngine>();
-            
-            // Setup mock DaprClient if not already configured
-            var mockDaprClient = new Mock<DaprClient>();
-            mockDaprClient
-                .Setup(x => x.GetSecretAsync(
-                    It.IsAny<string>(), 
-                    It.IsAny<string>(), 
-                    It.IsAny<IReadOnlyDictionary<string, string>>(), 
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new Dictionary<string, string> { { "test_key", "mock_secret_value" } });
-
-            ScriptHelper.SetDaprClient(mockDaprClient.Object);
         }
     }
 
@@ -97,7 +80,7 @@ public static class ScriptValidationHelper
                 .SetWorkflow(CreateMockWorkflow())
                 .SetInstance(CreateMockInstance(mockInstanceData))
                 .SetTransition(CreateMockTransition())
-                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+                .SetRuntime(Mock.Of<Runtime.IRuntimeInfoProvider>())
                 .SetHeaders(mockHeaders)
                 .SetBody(mockInstanceData)
                 .SetDefinitions(new Dictionary<string, object>())
@@ -234,4 +217,4 @@ internal class ValidationResult
 
     public static ValidationResult Failed(string errorMessage)
         => new() { IsValid = false, ErrorMessage = errorMessage, Message = "Validation failed" };
-} 
+}

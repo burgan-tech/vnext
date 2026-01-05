@@ -1,5 +1,7 @@
+using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Uow;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -20,7 +22,8 @@ internal sealed class InstanceSubCompletedEventHandler(
     /// <summary>
     /// Handles the InstanceSubCompletedEvent by delegating to the subflow completion service.
     /// </summary>
-    public async Task HandleAsync(CloudEventEnvelope<InstanceSubCompletedEvent> envelope, CancellationToken cancellationToken)
+    public async Task HandleAsync(CloudEventEnvelope<InstanceSubCompletedEvent> envelope,
+        CancellationToken cancellationToken)
     {
         var eventData = envelope.Data;
 
@@ -33,7 +36,7 @@ internal sealed class InstanceSubCompletedEventHandler(
                 eventData.InstanceId);
             return;
         }
-        
+
         logger.SubFlowEventReceived(
             eventData.SubInstanceId,
             eventData.InstanceId,
@@ -56,8 +59,17 @@ internal sealed class InstanceSubCompletedEventHandler(
             };
 
             await using var scope = scopeFactory.CreateAsyncScope();
-            var subflowCompletionService = scope.ServiceProvider.GetRequiredService<ISubflowCompletionService>();
+            var sp = scope.ServiceProvider;
+            AmbientServiceProvider.Root = sp; // TODO: WARN: This configuration will be configured within Aether.
+            var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+            var subflowCompletionService = sp.GetRequiredService<ISubflowCompletionService>();
+            
+            await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+            {
+                Scope = UnitOfWorkScopeOption.RequiresNew
+            }, cancellationToken);
             await subflowCompletionService.CompletionAsync(completedData, cancellationToken);
+            await uow.CommitAsync(cancellationToken);
         }
     }
 }

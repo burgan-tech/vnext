@@ -174,7 +174,8 @@ public sealed class DefinitionAppService(
         instance.AddDataWithVersion(
             GuidGenerator.Create(),
             new JsonData(input.Attributes),
-            input.Version
+            input.Version,
+            false
         );
 
         await instanceRepository.UpdateAsync(instance, true, cancellationToken);

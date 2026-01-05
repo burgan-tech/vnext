@@ -7,7 +7,7 @@ namespace BBT.Workflow.BackgroundJobs.Payloads;
 /// Payload for asynchronous transition background jobs.
 /// Contains all necessary information to execute a workflow transition in the background.
 /// </summary>
-public sealed class TransitionJobPayload
+public sealed class TransitionJobPayload : ITraceableJobPayload
 {
     public string JobName { get; set; }
     
@@ -30,7 +30,13 @@ public sealed class TransitionJobPayload
     /// Gets or sets the workflow name.
     /// </summary>
     public string Workflow { get; set; } = default!;
-    
+
+    /// <summary>
+    /// Gets the workflow name for tracing purposes.
+    /// Maps to <see cref="Workflow"/> property for ITraceableJobPayload compatibility.
+    /// </summary>
+    string ITraceableJobPayload.FlowName => Workflow;
+
     /// <summary>
     /// Gets or sets the workflow version.
     /// </summary>
@@ -65,4 +71,15 @@ public sealed class TransitionJobPayload
     /// Gets or sets the execution context for the transition.
     /// </summary>
     public ExecutionActor ExecutionActor { get; set; } = ExecutionActor.User;
+
+    /// <summary>
+    /// Gets or sets the W3C Trace Context traceparent header for distributed tracing correlation.
+    /// Format: {version}-{trace-id}-{parent-id}-{trace-flags}
+    /// </summary>
+    public string? TraceParent { get; set; }
+
+    /// <summary>
+    /// Gets or sets the W3C Trace Context tracestate header for vendor-specific trace data.
+    /// </summary>
+    public string? TraceState { get; set; }
 }

@@ -4,6 +4,7 @@ using BBT.Aether.Guids;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Instances;
@@ -28,6 +29,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     private readonly IInstanceRepository _instanceRepository;
     private readonly IGuidGenerator _guidGenerator;
     private readonly IConfiguration _configuration;
+    private readonly IDomainDiscoveryResolver _endpointResolver;
 
     /// <summary>
     /// Initializes a new instance of SubProcessTaskExecutor.
@@ -40,6 +42,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         IInstanceRepository instanceRepository,
         IGuidGenerator guidGenerator,
         IConfiguration configuration,
+        IDomainDiscoveryResolver endpointResolver,
         ILogger<SubProcessTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
@@ -47,6 +50,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         _instanceRepository = instanceRepository;
         _guidGenerator = guidGenerator;
         _configuration = configuration;
+        _endpointResolver = endpointResolver;
     }
 
     /// <inheritdoc />
@@ -196,7 +200,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     {
         Logger.LogDebug("Using RemoteInvokerService for SubProcess task {TaskKey}", task.Key);
 
-        var binding = BuildSubProcessBinding(task, context.ScriptContext, subFlowInstanceId);
+        var binding = await BuildSubProcessBindingAsync(task, context.ScriptContext, subFlowInstanceId, cancellationToken);
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.SubProcess,
@@ -276,9 +280,18 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             };
     }
 
-    private SubProcessBinding BuildSubProcessBinding(SubProcessTask task, ScriptContext context, Guid subFlowInstanceId)
+    private async Task<SubProcessBinding> BuildSubProcessBindingAsync(
+        SubProcessTask task,
+        ScriptContext context,
+        Guid subFlowInstanceId,
+        CancellationToken cancellationToken)
     {
         var headers = ExtractHeaders(context);
+
+        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        var endpoint = await _endpointResolver.GetEndpointAsync(
+            task.TriggerDomain, preferredKind, cancellationToken);
+
         return new SubProcessBinding
         {
             Domain = task.TriggerDomain,
@@ -291,7 +304,10 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Tags = task.TriggerTags,
             Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
             ExtraProperties = BuildExtraPropertiesAsDictionary(context, task),
-            Sync = false // Always Async
+            Sync = false, // Always Async
+            UseDapr = task.UseDapr,
+            BaseUrl = endpoint.BaseUrl.ToString(),
+            DaprAppId = endpoint.DaprAppId
         };
     }
 

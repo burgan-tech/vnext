@@ -1,5 +1,7 @@
+using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Uow;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
@@ -42,11 +44,18 @@ internal sealed class InstanceCanceledEventHandler(
         using (currentSchema.Use(eventData.Flow))
         {
             await using var scope = scopeFactory.CreateAsyncScope();
-            var cancellationService = scope.ServiceProvider.GetRequiredService<IInstanceCancellationService>();
+            var sp = scope.ServiceProvider;
+            AmbientServiceProvider.Root = sp; // TODO: WARN: This configuration will be configured within Aether.
+            var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+            var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
+            await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+            {
+                Scope = UnitOfWorkScopeOption.RequiresNew
+            }, cancellationToken);
             var result = await cancellationService.ProcessCancellationAsync(
                 eventData.InstanceId,
                 cancellationToken);
-
+            await uow.CommitAsync(cancellationToken);
             if (!result.IsSuccess)
             {
                 logger.InstanceCanceledProcessingFailed(

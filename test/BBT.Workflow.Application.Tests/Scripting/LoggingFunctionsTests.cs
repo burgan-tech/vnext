@@ -19,18 +19,11 @@ namespace BBT.Workflow.Scripting;
 public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
 {
     private readonly IScriptEngine _scriptEngine;
-    private Mock<ILogger>? _mockLogger;
+    private Mock<ILogger<ScriptServices>>? _mockLogger;
 
     public LoggingFunctionsTests()
     {
         _scriptEngine = GetRequiredService<IScriptEngine>();
-    }
-
-    public override void Dispose()
-    {
-        // Reset static state to prevent test interference
-        ScriptHelper.Reset();
-        base.Dispose();
     }
 
     protected override void AddApplication(IServiceCollection services)
@@ -46,10 +39,9 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
             .ReturnsAsync(new Dictionary<string, string> { { "test_key", "mock_secret_value" } });
 
         services.AddSingleton(mockDaprClient.Object);
-        ScriptHelper.SetDaprClient(mockDaprClient.Object);
 
-        // Mock Logger
-        _mockLogger = new Mock<ILogger>();
+        // Mock Logger for IScriptServices
+        _mockLogger = new Mock<ILogger<ScriptServices>>();
         _mockLogger
             .Setup(x => x.Log(
                 It.IsAny<LogLevel>(),
@@ -58,7 +50,7 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
 
-        ScriptHelper.SetLogger(_mockLogger.Object);
+        services.AddSingleton(_mockLogger.Object);
 
         // Mock Configuration
         var mockConfiguration = new Mock<IConfiguration>();
@@ -67,7 +59,6 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
             .Returns((string key) => key == "TestKey" ? "TestValue" : null);
 
         services.AddSingleton(mockConfiguration.Object);
-        ScriptHelper.SetConfiguration(mockConfiguration.Object);
 
         // Mock IWorkflowMetrics
         var mockWorkflowMetrics = new Mock<IWorkflowMetrics>();
@@ -113,7 +104,7 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -188,7 +179,7 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -263,7 +254,7 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -338,7 +329,7 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -413,7 +404,7 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -451,4 +442,3 @@ public class LoggingFunctionsTests : ApplicationTestBase<ApplicationEntryPoint>
             Times.Once);
     }
 }
-

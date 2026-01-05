@@ -6,7 +6,7 @@ namespace BBT.Workflow.ExceptionHandling;
 /// Exception thrown when the transition chain depth exceeds the maximum allowed limit.
 /// This prevents infinite loops and excessive recursion in automatic transition chains.
 /// </summary>
-public sealed class TransitionChainDepthExceededException : UserFriendlyException, IBusinessException
+public sealed class TransitionChainDepthExceededException : UserFriendlyException
 {
     /// <summary>
     /// Gets the maximum allowed chain depth.
@@ -43,4 +43,3 @@ public sealed class TransitionChainDepthExceededException : UserFriendlyExceptio
         TransitionKey = transitionKey;
     }
 }
-

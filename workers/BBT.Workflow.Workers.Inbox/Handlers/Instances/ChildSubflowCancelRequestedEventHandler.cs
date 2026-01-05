@@ -1,4 +1,6 @@
+using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
+using BBT.Aether.Uow;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -40,12 +42,20 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
             eventData.Flow);
 
         await using var scope = scopeFactory.CreateAsyncScope();
-        var cancellationService = scope.ServiceProvider.GetRequiredService<IChildSubflowCancellationService>();
+        var sp = scope.ServiceProvider;
+        AmbientServiceProvider.Root = sp; // TODO: WARN: This configuration will be configured within Aether.
+        var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+        var cancellationService = sp.GetRequiredService<IChildSubflowCancellationService>();
+        await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+        {
+            Scope = UnitOfWorkScopeOption.RequiresNew
+        }, cancellationToken);
         await cancellationService.CancelChildSubflowAsync(
             eventData.InstanceId,
             eventData.Domain,
             eventData.Flow,
             eventData.Version,
             cancellationToken);
+        await uow.CommitAsync(cancellationToken);
     }
 }

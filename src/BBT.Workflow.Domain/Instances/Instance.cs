@@ -364,6 +364,32 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         return correlation;
     }
 
+    /// <summary>
+    /// Reverts a previously completed correlation for the given SubFlow instance ID.
+    /// Marks the correlation as incomplete and returns it.
+    /// If the correlation is a SubFlow type, sets the instance back to Busy status.
+    /// </summary>
+    /// <param name="subInstanceId">The SubFlow instance ID to revert</param>
+    /// <returns>The reverted correlation if found and was completed, otherwise null</returns>
+    public InstanceCorrelation? RevertCorrelation(Guid subInstanceId)
+    {
+        var correlation = FindCorrelationBySubInstanceId(subInstanceId);
+        if (correlation == null || !correlation.IsCompleted)
+        {
+            return null;
+        }
+
+        correlation.Revert();
+
+        // If this is a SubFlow (blocking), set instance back to Busy
+        if (correlation.SubFlowType.Equals(SubFlowType.SubFlow))
+        {
+            Busy();
+        }
+
+        return correlation;
+    }
+
     public void SetKey(string key)
     {
         Key = Check.NotNullOrWhiteSpace(key, nameof(key), InstanceConstants.MaxKeyLength);
@@ -424,12 +450,12 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         return policy.Validate(state, transition, executionActor);
     }
 
-    public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version)
+    public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)
     {
         lock (_dataListLock)
         {
             var latestData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
-            if (latestData?.HasSameData(inputData) == true)
+            if (ignoreSameData && latestData?.HasSameData(inputData) == true)
             {
                 // Data hasn't changed, return the existing latest data
                 return latestData;
@@ -495,63 +521,40 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
 
     /// <summary>
     /// Finds instance data by version.
+    /// Delegates version resolution to <see cref="InstanceDataVersionComparer.FindBestMatch"/> for consistency.
+    /// </summary>
+    /// <param name="version">Version string to search for (null, empty, or "latest" returns the highest version)</param>
+    /// <returns>The matching InstanceData or null if not found</returns>
+    /// <remarks>
     /// Supports multiple version formats:
     /// <list type="bullet">
+    ///     <item><description>null/empty or "latest": Returns the highest available version</description></item>
     ///     <item><description>Exact match: "1.0.0-pkg.1.17.0+account" or "1.0.0-alpha.1-pkg.1.17.0+account"</description></item>
     ///     <item><description>Artifact version only: "1.0.0" or "1.0.0-alpha.1" → finds highest pkg version for that artifact</description></item>
     ///     <item><description>Partial version: "1.0" → finds highest version among all 1.0.x versions</description></item>
+    ///     <item><description>Major-only version: "1" → finds highest version among all 1.x.x versions</description></item>
     /// </list>
-    /// </summary>
-    /// <param name="version">Version string to search for</param>
-    /// <returns>The matching InstanceData or null if not found</returns>
-    public InstanceData? FindData(string version)
+    /// </remarks>
+    public InstanceData? FindData(string? version)
     {
-        if (string.IsNullOrWhiteSpace(version))
-            return null;
-
         lock (_dataListLock)
         {
-            // 1. Try exact match first
-            var exactMatch = _dataList.FirstOrDefault(x => x.Version == version);
-            if (exactMatch != null)
-                return exactMatch;
+            if (_dataList.Count == 0)
+                return null;
 
-            // 2. Check if this is a full artifact version (MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE)
-            //    Client sends only artifact version, we need to find the highest pkg version
-            //    Supports: 1.0.0, 1.0.0-alpha.1, 1.0.0-beta, 1.0.0-rc.1, etc.
-            var artifactMatch = Regex.Match(version, @"^(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?)$");
-            if (artifactMatch.Success)
-            {
-                // Find all data entries that match this artifact version
-                // They could be either:
-                // - Simple format: "1.0.0" or "1.0.0-alpha.1" (exact match, already checked above)
-                // - Extended format: "1.0.0-pkg.x.y.z+name" or "1.0.0-alpha.1-pkg.x.y.z+name"
-                var artifactPrefix = $"{version}-pkg.";
-                
-                var matched = _dataList
-                    .Where(d => d.Version.StartsWith(artifactPrefix, StringComparison.Ordinal))
-                    .OrderByDescending(d => d, InstanceDataVersionComparer.Instance)
-                    .FirstOrDefault();
+            // Delegate version resolution to centralized FindBestMatch
+            var availableVersions = _dataList.Select(d => d.Version);
+            var bestVersion = InstanceDataVersionComparer.FindBestMatch(availableVersions, version);
 
-                return matched;
-            }
+            if (string.IsNullOrEmpty(bestVersion))
+                return null;
 
-            // 3. Partial version: 1.0 → find the highest version among all 1.0.x versions
-            var partialMatch = Regex.Match(version, @"^(\d+)\.(\d+)$");
-            if (partialMatch.Success)
-            {
-                var prefix = $"{partialMatch.Groups[1].Value}.{partialMatch.Groups[2].Value}.";
-
-                var matched = _dataList
-                    .Where(d => d.Version.StartsWith(prefix, StringComparison.Ordinal) || 
-                               InstanceDataVersionComparer.GetArtifactVersion(d.Version).StartsWith(prefix, StringComparison.Ordinal))
-                    .OrderByDescending(d => d, InstanceDataVersionComparer.Instance)
-                    .FirstOrDefault();
-
-                return matched;
-            }
-
-            return null;
+            // Resolve the selected version back to InstanceData
+            // If multiple entries exist with the same version, return the highest by HistorySequence
+            return _dataList
+                .Where(d => d.Version == bestVersion)
+                .OrderByDescending(d => d, InstanceDataVersionComparer.Instance)
+                .FirstOrDefault();
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Remote.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -27,11 +28,13 @@ internal sealed record ServiceErrorInfo
 }
 
 /// <summary>
-/// Remote implementation of instance query operations using HTTP client calls to InstanceController
+/// Remote implementation of instance query operations using HTTP client calls to InstanceController.
+/// Uses IDomainDiscoveryResolver to dynamically resolve endpoint URLs based on target domain.
 /// </summary>
 public sealed class RemoteInstanceQueryAppService(
     HttpClient httpClient,
-    IOptions<RemoteOptions> options)
+    IOptions<RemoteOptions> options,
+    IDomainDiscoveryResolver endpointResolver)
     : IRemoteInstanceQueryAppService
 {
     private readonly RemoteOptions _options = options.Value;
@@ -54,7 +57,10 @@ public sealed class RemoteInstanceQueryAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.Instance(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Instance(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (input.Extension?.Length > 0)
@@ -66,9 +72,10 @@ public sealed class RemoteInstanceQueryAppService(
             }
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
 
             // Add If-None-Match header for ETag support
             if (!string.IsNullOrEmpty(input.IfNoneMatch))
@@ -104,7 +111,10 @@ public sealed class RemoteInstanceQueryAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.Data(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Data(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (input.Extensions?.Length > 0)
@@ -116,9 +126,10 @@ public sealed class RemoteInstanceQueryAppService(
             }
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
 
             // Add If-None-Match header for ETag support
             if (!string.IsNullOrEmpty(input.IfNoneMatch))
@@ -154,7 +165,10 @@ public sealed class RemoteInstanceQueryAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.InstanceHistory(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.InstanceHistory(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (input.Extension?.Length > 0)
@@ -166,9 +180,10 @@ public sealed class RemoteInstanceQueryAppService(
             }
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
 
-            var response = await httpClient.GetAsync(url, cancellationToken);
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var response = await httpClient.GetAsync(requestUri, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<GetInstanceHistoryOutput>(response, cancellationToken);
@@ -190,7 +205,10 @@ public sealed class RemoteInstanceQueryAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.State(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.State(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (!string.IsNullOrEmpty(input.Version))
@@ -207,9 +225,10 @@ public sealed class RemoteInstanceQueryAppService(
             }
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
 
-            var response = await httpClient.GetAsync(url, cancellationToken);
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var response = await httpClient.GetAsync(requestUri, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<GetInstanceStateOutput>(response, cancellationToken);
@@ -233,7 +252,10 @@ public sealed class RemoteInstanceQueryAppService(
     {
         try
         {
-            var url = InstanceUrlTemplates.View(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.View(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
             if (!string.IsNullOrEmpty(input.Version))
@@ -260,9 +282,10 @@ public sealed class RemoteInstanceQueryAppService(
             }
 
             if (queryParams.Count > 0)
-                url += "?" + string.Join("&", queryParams);
+                relativePath += "?" + string.Join("&", queryParams);
 
-            var response = await httpClient.GetAsync(url, cancellationToken);
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var response = await httpClient.GetAsync(requestUri, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<GetViewOutput>(response, cancellationToken);
@@ -271,6 +294,89 @@ public sealed class RemoteInstanceQueryAppService(
         {
             // Network errors → Transient error (per Railway Pattern)
             return Result<GetViewOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves schema function result for an instance (returns GetSchemaOutput with transition schema)
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/schema?transitionKey={transitionKey}
+    /// </summary>
+    public async Task<Result<DTOs.GetSchemaOutput>> GetFunctionWithSchemaAsync(
+        GetFunctionWithInstanceInput input,
+        string transitionKey,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Schema(input.Domain, input.Workflow, input.Instance, transitionKey, ApiVersionPrefix);
+
+            var queryParams = new List<string>();
+            if (!string.IsNullOrEmpty(input.Version))
+            {
+                queryParams.Add($"{nameof(input.Version).ToLowerInvariant()}={Uri.EscapeDataString(input.Version)}");
+            }
+
+            if (queryParams.Count > 0)
+                relativePath += "&" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var response = await httpClient.GetAsync(requestUri, cancellationToken);
+
+            // Status code → Result.Fail (per Railway Pattern)
+            return await HandleResponseAsync<DTOs.GetSchemaOutput>(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            // Network errors → Transient error (per Railway Pattern)
+            return Result<DTOs.GetSchemaOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves extensions function result for an instance (returns GetExtensionsOutput with executed extension results)
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/extensions?extensions={extensions}
+    /// </summary>
+    public async Task<Result<DTOs.GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.Extensions(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+
+            var queryParams = new List<string>();
+            if (!string.IsNullOrEmpty(input.Version))
+            {
+                queryParams.Add($"{nameof(input.Version).ToLowerInvariant()}={Uri.EscapeDataString(input.Version)}");
+            }
+
+            if (input.Extensions?.Length > 0)
+            {
+                foreach (var ext in input.Extensions)
+                {
+                    queryParams.Add($"{nameof(input.Extensions).ToLowerInvariant()}={Uri.EscapeDataString(ext)}");
+                }
+            }
+
+            if (queryParams.Count > 0)
+                relativePath += "?" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var response = await httpClient.GetAsync(requestUri, cancellationToken);
+
+            // Status code → Result.Fail (per Railway Pattern)
+            return await HandleResponseAsync<DTOs.GetExtensionsOutput>(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            // Network errors → Transient error (per Railway Pattern)
+            return Result<DTOs.GetExtensionsOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
         }
     }
 

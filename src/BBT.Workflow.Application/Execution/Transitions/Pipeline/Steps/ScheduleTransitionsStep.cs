@@ -130,6 +130,7 @@ public sealed class ScheduleTransitionsStep(
         TimerSchedule timerSchedule)
     {
         var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
+        var activity = Activity.Current;
         
         var payload = new TransitionTimerPayload
         {
@@ -138,7 +139,9 @@ public sealed class ScheduleTransitionsStep(
             FlowName = context.WorkflowKey,
             Version = context.Workflow.Version,
             TransitionKey = scheduledTransition.Key,
-            InstanceId = context.InstanceId
+            InstanceId = context.InstanceId,
+            TraceParent = activity?.Id,
+            TraceState = activity?.TraceStateString
         };
 
         var metadata = new Dictionary<string, object>

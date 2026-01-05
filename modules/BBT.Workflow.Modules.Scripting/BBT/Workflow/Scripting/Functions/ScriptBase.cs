@@ -1,15 +1,43 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-using System.Dynamic;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Scripting.Functions;
 
 /// <summary>
-/// Base class for scripts that provides access to global functions
+/// Base class for dynamically compiled scripts that provides access to runtime services.
+/// Scripts inherit from this class and receive dependencies through property injection
+/// after instantiation, enabling DI-compatible scripting.
 /// </summary>
 public abstract class ScriptBase
 {
+    /// <summary>
+    /// Runtime services injected after script instantiation.
+    /// Provides access to Dapr, logging, and configuration.
+    /// </summary>
+    protected IScriptServices? Services { get; private set; }
+    
+    /// <summary>
+    /// Indicates whether services have been injected into this script instance.
+    /// </summary>
+    public bool HasServices => Services != null;
+    
+    /// <summary>
+    /// Injects runtime services into the script instance.
+    /// Called by the script engine after instantiation.
+    /// </summary>
+    /// <param name="services">The runtime services to inject</param>
+    /// <exception cref="ArgumentNullException">Thrown when services is null</exception>
+    public void SetServices(IScriptServices services)
+    {
+        Services = services ?? throw new ArgumentNullException(nameof(services));
+    }
+
+    #region Secret Functions
+
     /// <summary>
     /// Gets a secret from Dapr secret store
     /// </summary>
@@ -19,7 +47,8 @@ public abstract class ScriptBase
     /// <returns>The secret value</returns>
     protected string GetSecret(string storeName, string secretStore, string secretKey)
     {
-        return ScriptHelper.GetSecret(storeName, secretStore, secretKey);
+        return GetSecretAsync(storeName, secretStore, secretKey)
+            .ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -31,7 +60,32 @@ public abstract class ScriptBase
     /// <returns>The secret value</returns>
     protected async Task<string> GetSecretAsync(string storeName, string secretStore, string secretKey)
     {
-        return await ScriptHelper.GetSecretAsync(storeName, secretStore, secretKey);
+        if (Services?.DaprClient == null)
+            throw new InvalidOperationException("Dapr client is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(storeName))
+            throw new ArgumentException("Dapr Store name cannot be null or empty", nameof(storeName));
+
+        if (string.IsNullOrWhiteSpace(secretStore))
+            throw new ArgumentException("Store name cannot be null or empty", nameof(secretStore));
+
+        if (string.IsNullOrWhiteSpace(secretKey))
+            throw new ArgumentException("Secret key cannot be null or empty", nameof(secretKey));
+
+        try
+        {
+            var secretsResponse = await Services.DaprClient.GetSecretAsync(storeName, secretStore);
+
+            if (secretsResponse == null)
+                return string.Empty;
+
+            return secretsResponse.TryGetValue(secretKey, out var value) ? value : string.Empty;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to retrieve secret '{secretKey}' from store '{storeName}': {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -42,7 +96,8 @@ public abstract class ScriptBase
     /// <returns>Dictionary of secret keys and values</returns>
     protected Dictionary<string, string> GetSecrets(string storeName, string secretStore)
     {
-        return ScriptHelper.GetSecrets(storeName, secretStore);
+        return GetSecretsAsync(storeName, secretStore)
+            .ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -51,11 +106,24 @@ public abstract class ScriptBase
     /// <param name="storeName">The name of the dapr secret store</param>
     /// <param name="secretStore">The name of the secret store</param>
     /// <returns>Dictionary of secret keys and values</returns>
-    protected async Task<Dictionary<string, string>> GetSecretsAsync(string storeName,
-        string secretStore)
+    protected async Task<Dictionary<string, string>> GetSecretsAsync(string storeName, string secretStore)
     {
-        return await ScriptHelper.GetSecretsAsync(storeName, secretStore);
+        if (Services?.DaprClient == null)
+            throw new InvalidOperationException("Dapr client is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(storeName))
+            throw new ArgumentException("Dapr Store name cannot be null or empty", nameof(storeName));
+
+        if (string.IsNullOrWhiteSpace(secretStore))
+            throw new ArgumentException("Store name cannot be null or empty", nameof(secretStore));
+
+        var secretsResponse = await Services.DaprClient.GetSecretAsync(storeName, secretStore);
+        return secretsResponse ?? new Dictionary<string, string>();
     }
+
+    #endregion
+
+    #region Property Helper Functions
 
     /// <summary>
     /// Checks if a dynamic object has a specific property
@@ -65,7 +133,22 @@ public abstract class ScriptBase
     /// <returns>True if the property exists, false otherwise</returns>
     protected bool HasProperty(object obj, string propertyName)
     {
-        return ScriptHelper.HasProperty(obj, propertyName);
+        if (obj == null || string.IsNullOrWhiteSpace(propertyName)) return false;
+
+        // Check if it's an ExpandoObject or IDictionary<string, object>
+        if (obj is IDictionary<string, object> dict)
+        {
+            return dict.ContainsKey(propertyName);
+        }
+
+        // For other dynamic objects, try to access the property using reflection
+        var objType = obj.GetType();
+        return objType.GetProperty(propertyName,
+                   System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance |
+                   System.Reflection.BindingFlags.IgnoreCase) != null ||
+               objType.GetField(propertyName,
+                   System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance |
+                   System.Reflection.BindingFlags.IgnoreCase) != null;
     }
 
     /// <summary>
@@ -74,9 +157,33 @@ public abstract class ScriptBase
     /// <param name="obj">The dynamic object</param>
     /// <param name="propertyName">The property name</param>
     /// <returns>The property value or null if not found</returns>
-    protected object? GetPropertyValue(object obj, string propertyName)
+    protected static object? GetPropertyValue(object obj, string propertyName)
     {
-        return ScriptHelper.GetPropertyValue(obj, propertyName);
+        if (obj == null || string.IsNullOrWhiteSpace(propertyName)) return null;
+
+        if (obj is IDictionary<string, object> dict)
+        {
+            return dict.TryGetValue(propertyName, out var value) ? value : null;
+        }
+
+        var objType = obj.GetType();
+        var property = objType.GetProperty(propertyName,
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.IgnoreCase);
+        if (property != null)
+        {
+            return property.GetValue(obj);
+        }
+        
+        var field = objType.GetField(propertyName,
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.IgnoreCase);
+        if (field != null)
+        {
+            return field.GetValue(obj);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -86,9 +193,24 @@ public abstract class ScriptBase
     /// <param name="obj">The dynamic object</param>
     /// <param name="propertyName">The property name</param>
     /// <returns>The property value converted to type T or default(T) if not found or null</returns>
-    protected T? GetPropertyValue<T>(object obj, string propertyName)
+    protected static T? GetPropertyValue<T>(object obj, string propertyName)
     {
-        return ScriptHelper.GetPropertyValue<T>(obj, propertyName);
+        var value = GetPropertyValue(obj, propertyName);
+
+        if (value == null)
+            return default;
+
+        if (value is T tValue)
+            return tValue;
+
+        try
+        {
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch
+        {
+            return default;
+        }
     }
 
     /// <summary>
@@ -111,10 +233,30 @@ public abstract class ScriptBase
     /// var isActive = GetPropertyValue(context.Instance.Data, "isActive", false);
     /// </code>
     /// </example>
-    protected T GetPropertyValue<T>(object obj, string propertyName, T defaultValue)
+    protected static T GetPropertyValue<T>(object obj, string propertyName, T defaultValue)
     {
-        return ScriptHelper.GetPropertyValue(obj, propertyName, defaultValue);
+        if (obj == null || string.IsNullOrWhiteSpace(propertyName))
+            return defaultValue;
+
+        var value = GetPropertyValue(obj, propertyName);
+
+        if (value == null)
+            return defaultValue;
+
+        if (value is T tValue)
+            return tValue;
+
+        try
+        {
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch
+        {
+            return defaultValue;
+        }
     }
+
+    #endregion
 
     #region Logging Functions
 
@@ -145,7 +287,7 @@ public abstract class ScriptBase
         [CallerLineNumber] int line = 0,
         params object[] args)
     {
-        ScriptHelper.LogTrace(message, string.IsNullOrEmpty(file) ? GetType().Name : file, method, line, args);
+        LogWithScope(Microsoft.Extensions.Logging.LogLevel.Trace, message, file, method, line, args);
     }
 
     /// <summary>
@@ -156,18 +298,6 @@ public abstract class ScriptBase
     /// <param name="method">Method name (automatically captured)</param>
     /// <param name="line">Line number (automatically captured)</param>
     /// <param name="args">Optional arguments for structured logging. IMPORTANT: Use named argument syntax: args: new object[] { value1, value2 }</param>
-    /// <example>
-    /// <code>
-    /// // No arguments
-    /// LogDebug("Processing started");
-    /// 
-    /// // With arguments - use named parameter!
-    /// LogDebug("Status: {status}", args: new object[] { context.Instance?.Data?.status });
-    /// 
-    /// // Multiple arguments
-    /// LogDebug("User {userId} at {time}", args: new object[] { userId, DateTime.Now });
-    /// </code>
-    /// </example>
     protected void LogDebug(
         string message,
         [CallerFilePath] string? file = null,
@@ -175,7 +305,7 @@ public abstract class ScriptBase
         [CallerLineNumber] int line = 0,
         params object[] args)
     {
-        ScriptHelper.LogDebug(message, string.IsNullOrEmpty(file) ? GetType().Name : file, method, line, args);
+        LogWithScope(Microsoft.Extensions.Logging.LogLevel.Debug, message, file, method, line, args);
     }
 
     /// <summary>
@@ -186,18 +316,6 @@ public abstract class ScriptBase
     /// <param name="method">Method name (automatically captured)</param>
     /// <param name="line">Line number (automatically captured)</param>
     /// <param name="args">Optional arguments for structured logging. IMPORTANT: Use named argument syntax: args: new object[] { value1, value2 }</param>
-    /// <example>
-    /// <code>
-    /// // No arguments
-    /// LogInformation("Processing started");
-    /// 
-    /// // With arguments - use named parameter!
-    /// LogInformation("Status: {status}", args: new object[] { context.Instance?.Data?.status });
-    /// 
-    /// // Multiple arguments
-    /// LogInformation("User {userId} at {time}", args: new object[] { userId, DateTime.Now });
-    /// </code>
-    /// </example>
     protected void LogInformation(
         string message,
         [CallerFilePath] string? file = null,
@@ -205,7 +323,7 @@ public abstract class ScriptBase
         [CallerLineNumber] int line = 0,
         params object[] args)
     {
-        ScriptHelper.LogInformation(message, string.IsNullOrEmpty(file) ? GetType().Name : file, method, line, args);
+        LogWithScope(Microsoft.Extensions.Logging.LogLevel.Information, message, file, method, line, args);
     }
 
     /// <summary>
@@ -216,18 +334,6 @@ public abstract class ScriptBase
     /// <param name="method">Method name (automatically captured)</param>
     /// <param name="line">Line number (automatically captured)</param>
     /// <param name="args">Optional arguments for structured logging. IMPORTANT: Use named argument syntax: args: new object[] { value1, value2 }</param>
-    /// <example>
-    /// <code>
-    /// // No arguments
-    /// LogWarning("Processing started");
-    /// 
-    /// // With arguments - use named parameter!
-    /// LogWarning("Status: {status}", args: new object[] { context.Instance?.Data?.status });
-    /// 
-    /// // Multiple arguments
-    /// LogWarning("User {userId} at {time}", args: new object[] { userId, DateTime.Now });
-    /// </code>
-    /// </example>
     protected void LogWarning(
         string message,
         [CallerFilePath] string? file = null,
@@ -235,7 +341,7 @@ public abstract class ScriptBase
         [CallerLineNumber] int line = 0,
         params object[] args)
     {
-        ScriptHelper.LogWarning(message, string.IsNullOrEmpty(file) ? GetType().Name : file, method, line, args);
+        LogWithScope(Microsoft.Extensions.Logging.LogLevel.Warning, message, file, method, line, args);
     }
 
     /// <summary>
@@ -246,18 +352,6 @@ public abstract class ScriptBase
     /// <param name="method">Method name (automatically captured)</param>
     /// <param name="line">Line number (automatically captured)</param>
     /// <param name="args">Optional arguments for structured logging. IMPORTANT: Use named argument syntax: args: new object[] { value1, value2 }</param>
-    /// <example>
-    /// <code>
-    /// // No arguments
-    /// LogError("Processing started");
-    /// 
-    /// // With arguments - use named parameter!
-    /// LogError("Status: {status}", args: new object[] { context.Instance?.Data?.status });
-    /// 
-    /// // Multiple arguments
-    /// LogError("User {userId} at {time}", args: new object[] { userId, DateTime.Now });
-    /// </code>
-    /// </example>
     protected void LogError(
         string message,
         [CallerFilePath] string? file = null,
@@ -265,7 +359,7 @@ public abstract class ScriptBase
         [CallerLineNumber] int line = 0,
         params object[] args)
     {
-        ScriptHelper.LogError(message, string.IsNullOrEmpty(file) ? GetType().Name : file, method, line, args);
+        LogWithScope(Microsoft.Extensions.Logging.LogLevel.Error, message, file, method, line, args);
     }
 
     /// <summary>
@@ -276,18 +370,6 @@ public abstract class ScriptBase
     /// <param name="method">Method name (automatically captured)</param>
     /// <param name="line">Line number (automatically captured)</param>
     /// <param name="args">Optional arguments for structured logging. IMPORTANT: Use named argument syntax: args: new object[] { value1, value2 }</param>
-    /// <example>
-    /// <code>
-    /// // No arguments
-    /// LogCritical("Processing started");
-    /// 
-    /// // With arguments - use named parameter!
-    /// LogCritical("Status: {status}", args: new object[] { context.Instance?.Data?.status });
-    /// 
-    /// // Multiple arguments
-    /// LogCritical("User {userId} at {time}", args: new object[] { userId, DateTime.Now });
-    /// </code>
-    /// </example>
     protected void LogCritical(
         string message,
         [CallerFilePath] string? file = null,
@@ -295,7 +377,38 @@ public abstract class ScriptBase
         [CallerLineNumber] int line = 0,
         params object[] args)
     {
-        ScriptHelper.LogCritical(message, string.IsNullOrEmpty(file) ? GetType().Name : file, method, line, args);
+        LogWithScope(Microsoft.Extensions.Logging.LogLevel.Critical, message, file, method, line, args);
+    }
+
+    /// <summary>
+    /// Internal method that handles logging with scope information.
+    /// Gracefully degrades if services are not available.
+    /// </summary>
+    private void LogWithScope(
+        Microsoft.Extensions.Logging.LogLevel level,
+        string message,
+        string? file,
+        string? method,
+        int line,
+        object[] args)
+    {
+        if (Services?.Logger == null)
+            return; // Graceful degradation - no logging if services unavailable
+            
+        var scriptFile = string.IsNullOrEmpty(file) ? GetType().Name : file;
+        
+        using (Services.Logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["ScriptFile"] = scriptFile,
+            ["ScriptMethod"] = method,
+            ["ScriptLine"] = line
+        }))
+        {
+            // Use LoggerExtensions to properly handle message template with args
+#pragma warning disable CA2254
+            Services.Logger.Log(level, message, args);
+#pragma warning restore CA2254
+        }
     }
 
     #endregion
@@ -309,7 +422,13 @@ public abstract class ScriptBase
     /// <returns>The configuration value or null if not found</returns>
     protected string? GetConfigValue(string key)
     {
-        return ScriptHelper.GetConfigValue(key);
+        if (Services?.Configuration == null)
+            throw new InvalidOperationException("Configuration is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(key))
+            throw new ArgumentException("Configuration key cannot be null or empty", nameof(key));
+
+        return Services.Configuration[key];
     }
 
     /// <summary>
@@ -320,7 +439,13 @@ public abstract class ScriptBase
     /// <returns>The configuration value or default value if not found</returns>
     protected string GetConfigValue(string key, string defaultValue)
     {
-        return ScriptHelper.GetConfigValue(key, defaultValue);
+        if (Services?.Configuration == null)
+            throw new InvalidOperationException("Configuration is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(key))
+            throw new ArgumentException("Configuration key cannot be null or empty", nameof(key));
+
+        return Services.Configuration[key] ?? defaultValue;
     }
 
     /// <summary>
@@ -331,7 +456,32 @@ public abstract class ScriptBase
     /// <returns>The configuration value converted to type T</returns>
     protected T? GetConfigValue<T>(string key)
     {
-        return ScriptHelper.GetConfigValue<T>(key);
+        if (Services?.Configuration == null)
+            throw new InvalidOperationException("Configuration is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(key))
+            throw new ArgumentException("Configuration key cannot be null or empty", nameof(key));
+
+        var value = Services.Configuration[key];
+        if (value == null)
+            return default;
+
+        try
+        {
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch (Exception ex)
+        {
+            Services.Logger?.LogWarning(
+                ex,
+                "Failed to convert configuration value for key '{ConfigKey}' to type {TargetType}. Raw value: '{RawValue}'. Returning default.",
+                key,
+                typeof(T).FullName,
+                value
+            );
+
+            return default;
+        }
     }
 
     /// <summary>
@@ -343,7 +493,32 @@ public abstract class ScriptBase
     /// <returns>The configuration value converted to type T or default value if not found</returns>
     protected T GetConfigValue<T>(string key, T defaultValue)
     {
-        return ScriptHelper.GetConfigValue<T>(key, defaultValue);
+        if (Services?.Configuration == null)
+            throw new InvalidOperationException("Configuration is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(key))
+            throw new ArgumentException("Configuration key cannot be null or empty", nameof(key));
+
+        var value = Services.Configuration[key];
+        if (value == null)
+            return defaultValue;
+
+        try
+        {
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch (Exception ex)
+        {
+            Services.Logger?.LogWarning(
+                ex,
+                "Failed to convert configuration value for key '{ConfigKey}' to type {TargetType}. Raw value: '{RawValue}'. Returning provided default.",
+                key,
+                typeof(T).FullName,
+                value
+            );
+
+            return defaultValue;
+        }
     }
 
     /// <summary>
@@ -353,7 +528,13 @@ public abstract class ScriptBase
     /// <returns>The connection string or null if not found</returns>
     protected string? GetConnectionString(string name)
     {
-        return ScriptHelper.GetConnectionString(name);
+        if (Services?.Configuration == null)
+            throw new InvalidOperationException("Configuration is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Connection string name cannot be null or empty", nameof(name));
+
+        return Services.Configuration.GetConnectionString(name);
     }
 
     /// <summary>
@@ -363,7 +544,13 @@ public abstract class ScriptBase
     /// <returns>True if the key exists, false otherwise</returns>
     protected bool ConfigExists(string key)
     {
-        return ScriptHelper.ConfigExists(key);
+        if (Services?.Configuration == null)
+            throw new InvalidOperationException("Configuration is not available. Ensure services are injected.");
+
+        if (string.IsNullOrWhiteSpace(key))
+            return false;
+
+        return Services.Configuration[key] != null;
     }
 
     #endregion

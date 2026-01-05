@@ -7,28 +7,46 @@ This module provides the necessary infrastructure to run dynamic C# scripts with
 - **Dynamic C# Script Compilation**: Compile and run C# code at runtime
 - **Custom Functions**: Special functions available for use within scripts
 - **Dapr Integration**: Secure data access via Dapr secret store
+- **Dependency Injection**: Full DI support with IScriptServices injection
 - **Caching**: Caching to improve script compilation performance
+
+## Architecture
+
+Scripts inherit from `ScriptBase` and receive runtime services via property injection:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ScriptEngine                              │
+│  (Gets IScriptServices from DI, passes to Evaluator)        │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   CSharpEvaluator                            │
+│  (Calls ScriptBase.SetServices() after compilation)         │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     ScriptBase                               │
+│  Accesses Logger, Dapr, Config via Services property        │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Custom Functions
 
 `ScriptBase` provides access to various helper functions including secret management, logging, configuration access, and dynamic object helpers.
 
-### Three Ways to Use Custom Functions
+### Using ScriptBase (Recommended)
 
-**1. Static ScriptHelper (Recommended for most cases)**
-```csharp
-var apiKey = ScriptHelper.GetSecret("dapr_store", "secret_store", "Asgard_ApiKey");
-ScriptHelper.LogInformation("Processing started");
-var endpoint = ScriptHelper.GetConfigValue("Api:Endpoint");
-```
+Inherit from `ScriptBase` to access all helper functions. Services are automatically injected when the script is compiled:
 
-**2. ScriptBase Inheritance (Clean syntax for compiled scripts - Recommended)**
 ```csharp
 public class MyMapping : ScriptBase, IMapping
 {
     public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
     {
-        // All functions available without ScriptHelper prefix
+        // All functions available via ScriptBase
         var apiKey = GetSecret("dapr_store", "secret_store", "Asgard_ApiKey");
         LogInformation("Processing customer request");
         var endpoint = GetConfigValue("Api:Endpoint");
@@ -37,34 +55,21 @@ public class MyMapping : ScriptBase, IMapping
 }
 ```
 
-**3. GlobalScriptFunctions (For simple script evaluations)**
-```csharp
-// Available in EvaluateAsync calls as global functions
-string code = @"GetSecret(""dapr_store"", ""secret_store"", ""Asgard_ApiKey"")";
-var result = await scriptEngine.EvaluateAsync<string>(code);
-```
-
 ### Secret Management Functions
-
-#### Secret Function Signatures
 
 #### `GetSecret(storeName, secretStore, secretKey)`
 
 Retrieves a single secret value (synchronous).
 
 ```csharp
-var apiKey = ScriptHelper.GetSecret("dapr_store", "secret_store", "Asgard_ApiKey");
-// OR (when inheriting from ScriptBase)
 var apiKey = GetSecret("dapr_store", "secret_store", "Asgard_ApiKey");
 ```
 
-#### `GetSecretAsync(storeName, secretKey)`
+#### `GetSecretAsync(storeName, secretStore, secretKey)`
 
 Retrieves a single secret value (asynchronous).
 
 ```csharp
-var apiKey = await ScriptHelper.GetSecretAsync("dapr_store", "secret_store", "Asgard_ApiKey");
-// OR (when inheriting from ScriptBase)
 var apiKey = await GetSecretAsync("dapr_store", "secret_store", "Asgard_ApiKey");
 ```
 
@@ -73,18 +78,14 @@ var apiKey = await GetSecretAsync("dapr_store", "secret_store", "Asgard_ApiKey")
 Retrieves bulk secret values (synchronous).
 
 ```csharp
-var secrets = ScriptHelper.GetSecrets("dapr_store", "secret_store");
-// OR (when inheriting from ScriptBase)
 var secrets = GetSecrets("dapr_store", "secret_store");
 ```
 
-#### `GetSecretsAsync(storeName, ...secretKeys)`
+#### `GetSecretsAsync(storeName, secretStore)`
 
 Retrieves bulk secret values (asynchronous).
 
 ```csharp
-var secrets = await ScriptHelper.GetSecretsAsync("dapr_store", "secret_store");
-// OR (when inheriting from ScriptBase)
 var secrets = await GetSecretsAsync("dapr_store", "secret_store");
 ```
 
@@ -95,8 +96,8 @@ Scripts can output diagnostic information using standard logging functions:
 #### Function Signatures
 
 ```csharp
-void LogTrace(string message)      // Detailed debugging information
-void LogDebug(string message)      // Diagnostic information
+void LogTrace(string message)       // Detailed debugging information
+void LogDebug(string message)       // Diagnostic information
 void LogInformation(string message) // General information
 void LogWarning(string message)     // Warning messages
 void LogError(string message)       // Error messages
@@ -147,6 +148,7 @@ Scripts can access application configuration values at runtime:
 string? GetConfigValue(string key)
 string GetConfigValue(string key, string defaultValue)
 T? GetConfigValue<T>(string key)
+T GetConfigValue<T>(string key, T defaultValue)
 ```
 
 #### Usage Example
@@ -180,18 +182,6 @@ public class ConfigurableMapping : ScriptBase, IMapping
 - Case-insensitive
 - Returns `null` if not found (unless default provided)
 
-**Common Patterns:**
-```csharp
-// Service endpoints
-var apiUrl = GetConfigValue("Services:PaymentApi:Url");
-
-// Feature flags
-var enabled = GetConfigValue<bool>("Features:NewEngine");
-
-// Business rules
-var limit = GetConfigValue<decimal>("BusinessRules:CreditLimit");
-```
-
 ### Dynamic Object Helper Functions
 
 Work safely with dynamic objects and JSON data:
@@ -201,6 +191,8 @@ Work safely with dynamic objects and JSON data:
 ```csharp
 bool HasProperty(object obj, string propertyName)
 object? GetPropertyValue(object obj, string propertyName)
+T? GetPropertyValue<T>(object obj, string propertyName)
+T GetPropertyValue<T>(object obj, string propertyName, T defaultValue)
 ```
 
 #### Usage Example
@@ -216,6 +208,9 @@ public class SafeDataMapping : ScriptBase, IMapping
             var customerId = GetPropertyValue(context.Attributes, "customerId");
             LogInformation($"Processing customer: {customerId}");
         }
+        
+        // Get typed property with default
+        var priority = GetPropertyValue(context.Attributes, "priority", 0);
         
         return Task.FromResult(new ScriptResponse { Data = "processed" });
     }
@@ -301,6 +296,31 @@ public class AdvancedMapping : ScriptBase, IMapping
 }
 ```
 
+## Dependency Injection
+
+The scripting module uses dependency injection for runtime services:
+
+### IScriptServices Interface
+
+```csharp
+public interface IScriptServices
+{
+    DaprClient DaprClient { get; }
+    ILogger Logger { get; }
+    IConfiguration Configuration { get; }
+}
+```
+
+### Registration
+
+Services are registered in `TaskServiceCollectionExtensions.AddScriptingServices()`:
+
+```csharp
+services.TryAddScoped<IScriptServices, ScriptServices>();
+services.TryAddSingleton<IEvaluator, CSharpEvaluator>();
+services.TryAddScoped<IScriptEngine, ScriptEngine>();
+```
+
 ## Configuration
 
 ### Secret Store Configuration
@@ -323,24 +343,23 @@ spec:
     # ... other configurations
 ```
 
-### Application Startup
-
-The `ScriptingInitializationService` automatically initializes the `ScriptHelper` with a `DaprClient` during application startup.
-
 ## Security
 
 - All secret accesses are performed via Dapr
 - Secret values are not stored in the script cache
 - Secret values are not logged in case of errors
+- Services are scoped per-request for proper isolation
 
 ## Performance
 
 - Scripts are cached after the initial compilation
+- Compiled types are reused across requests
 - Async functions are recommended for I/O-bound operations
 - Secret accesses involve network calls and should be used carefully
 
 ## Error Handling
 
-- If the `DaprClient` is not initialized, an `InvalidOperationException is thrown
+- If services are not available, appropriate exceptions are thrown
 - `ArgumentException` is thrown for invalid parameter values
 - Detailed error messages are provided for secret access errors
+- Logging gracefully degrades if logger is unavailable

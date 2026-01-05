@@ -13,11 +13,14 @@ namespace BBT.Workflow.Scripting;
 /// Implementation of the script engine that provides C# script evaluation and compilation capabilities.
 /// Integrates with Dapr for distributed computing scenarios and provides global functions for scripts.
 /// Uses Roslyn's scripting APIs for dynamic C# code execution.
+/// Automatically injects services into ScriptBase instances for DI-compatible scripting.
 /// </summary>
 /// <param name="evaluator">The underlying C# evaluator responsible for script compilation and execution (injected as singleton for shared caching)</param>
+/// <param name="scriptServices">The script services to inject into compiled script instances</param>
 /// <param name="workflowMetrics">The workflow metrics service for recording script engine metrics</param>
 public sealed class ScriptEngine(
     IEvaluator evaluator,
+    IScriptServices scriptServices,
     IWorkflowMetrics workflowMetrics) : IScriptEngine
 {
     /// <summary>
@@ -25,6 +28,12 @@ public sealed class ScriptEngine(
     /// Injected as a singleton to share the script cache across all requests.
     /// </summary>
     private readonly IEvaluator _evaluator = evaluator;
+
+    /// <summary>
+    /// The script services to inject into compiled script instances.
+    /// Provides access to Dapr, logging, and configuration.
+    /// </summary>
+    private readonly IScriptServices _scriptServices = scriptServices;
 
     /// <summary>
     /// Lazily-initialized default metadata references used for script compilation.
@@ -38,7 +47,7 @@ public sealed class ScriptEngine(
         MetadataReference.CreateFromFile(typeof(Task).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(Dictionary<,>).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(Microsoft.CSharp.RuntimeBinder.CSharpArgumentInfo).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location),
+        MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(JsonSerializableAttribute).Assembly.Location),
     ]);
 
@@ -69,6 +78,7 @@ public sealed class ScriptEngine(
     /// Compiles C# code into an instance of the specified type asynchronously.
     /// Automatically includes default metadata references and using directives,
     /// merging them with any additional references and usings provided.
+    /// Services are automatically injected into ScriptBase instances.
     /// </summary>
     /// <typeparam name="T">The target type to compile the code into</typeparam>
     /// <param name="code">The C# code to compile</param>
@@ -101,7 +111,13 @@ public sealed class ScriptEngine(
                 .Concat(DefaultUsings)
                 .Distinct();
 
-            var result = await _evaluator.CompileToInstanceAsync<T>(code, mergedReferences, mergedUsings, cancellationToken);
+            // Pass script services to the evaluator for injection into ScriptBase instances
+            var result = await _evaluator.CompileToInstanceAsync<T>(
+                code, 
+                _scriptServices,
+                mergedReferences, 
+                mergedUsings, 
+                cancellationToken);
 
             stopwatch.Stop();
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;

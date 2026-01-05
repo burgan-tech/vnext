@@ -5,7 +5,7 @@ namespace BBT.Workflow.BackgroundJobs.Payloads;
 /// This class contains information needed to execute a specific workflow transition
 /// after a configured time delay.
 /// </summary>
-public sealed class TransitionTimerPayload
+public sealed class TransitionTimerPayload : ITraceableJobPayload
 {
     public string JobName { get; set; }
     /// <summary>
@@ -37,4 +37,15 @@ public sealed class TransitionTimerPayload
     /// </summary>
     /// <value>A string representing the transition key.</value>
     public string TransitionKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets the W3C Trace Context traceparent header for distributed tracing correlation.
+    /// Format: {version}-{trace-id}-{parent-id}-{trace-flags}
+    /// </summary>
+    public string? TraceParent { get; set; }
+
+    /// <summary>
+    /// Gets or sets the W3C Trace Context tracestate header for vendor-specific trace data.
+    /// </summary>
+    public string? TraceState { get; set; }
 }

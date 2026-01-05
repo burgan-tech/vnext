@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Services;
@@ -20,8 +21,14 @@ public sealed class TransitionJobHandler(
 
     public async Task HandleAsync(TransitionJobPayload args, CancellationToken cancellationToken)
     {
+        // Restore trace context from the original request for distributed tracing correlation
+        using var activity = BackgroundJobActivityHelper.StartActivityWithTraceContext("TransitionJob.Execute", args);
+
         try
         {
+            BackgroundJobActivityHelper.EnrichActivity(activity, args);
+            BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
+
             // For async processing, instance should already be pre-reserved and in Busy status
             // Reconstruct the original TransitionInput with Sync=true
             var transitionInput = new TransitionInput(
@@ -46,15 +53,20 @@ public sealed class TransitionJobHandler(
             // Use the background-specific method that handles pre-reserved instances
             var result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
             await jobRepository.MarkAsProcessedAsync(args.JobName, cancellationToken);
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
             logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
             logger.JobCancelled(args.JobName, args.TransitionKey, args.InstanceId);
             throw; // Re-throw cancellation exceptions
         }
         catch (Exception e)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+            activity?.AddTag("error.type", e.GetType().Name);
             logger.JobFailed(e, args.JobName, args.InstanceId);
             throw;
         }

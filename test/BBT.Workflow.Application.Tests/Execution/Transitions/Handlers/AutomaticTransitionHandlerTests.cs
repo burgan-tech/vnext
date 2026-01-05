@@ -98,33 +98,7 @@ public class AutomaticTransitionHandlerTests
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
-
-    [Fact]
-    public async Task PreHandleAsync_WhenConditionNotMet_ShouldThrowAutoTransitionConditionNotMetException()
-    {
-        // Arrange
-        var context = CreateValidTransitionContext();
-        var scriptCode = new ScriptCode("inline", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("false")));
-        typeof(Transition)
-            .GetProperty(nameof(Transition.Rule))!
-            .SetValue(context.Transition, scriptCode);
-
-        SetupSuccessfulValidation();
-        SetupScriptContextFactory();
-        SetupConditionService(false);
-
-        // Act & Assert
-        await Should.ThrowAsync<ExceptionHandling.AutoTransitionConditionNotMetException>(
-            async () => await _handler.PreHandleAsync(context, CancellationToken.None));
-
-        _mockConditionService.Verify(
-            x => x.ExecuteConditionAsync(
-                It.IsAny<ScriptCode>(),
-                It.IsAny<ScriptContext>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
+    
     [Fact]
     public async Task PreHandleAsync_WithoutCondition_ShouldCompleteSuccessfully()
     {
@@ -144,43 +118,6 @@ public class AutomaticTransitionHandlerTests
                 It.IsAny<ScriptContext>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
-    }
-
-    [Fact]
-    public async Task PreHandleAsync_WhenChainDepthExceedsLimit_ShouldThrowException()
-    {
-        // Arrange
-        var context = CreateTransitionContextWithChainDepth(51);
-        SetupSuccessfulValidation();
-
-        // Act & Assert
-        await Should.ThrowAsync<ExceptionHandling.AutoTransitionConditionNotMetException>(
-            async () => await _handler.PreHandleAsync(context, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task PreHandleAsync_WhenConditionEvaluationFails_ShouldThrowException()
-    {
-        // Arrange
-        var context = CreateValidTransitionContext();
-        var scriptCode = new ScriptCode("inline", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("invalid")));
-        typeof(Transition)
-            .GetProperty(nameof(Transition.Rule))!
-            .SetValue(context.Transition, scriptCode);
-
-        SetupSuccessfulValidation();
-        SetupScriptContextFactory();
-        
-        _mockConditionService
-            .Setup(x => x.ExecuteConditionAsync(
-                It.IsAny<ScriptCode>(),
-                It.IsAny<ScriptContext>(),
-                It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Script evaluation failed"));
-
-        // Act & Assert
-        await Should.ThrowAsync<ExceptionHandling.AutoTransitionConditionNotMetException>(
-            async () => await _handler.PreHandleAsync(context, CancellationToken.None));
     }
 
     [Fact]

@@ -180,6 +180,20 @@
           "uuid": "eb01a2c3-0005-4f67-8901-2345abcdef05"
         }
       ]
+    },
+    {
+      "uuid": "eb6d81ee-d6f6-434e-b825-c2f838480945",
+      "name": "discovery",
+      "children": [
+        {
+          "type": "route",
+          "uuid": "d417072e-9a13-49ff-9a4e-8ef223c1fae6"
+        },
+        {
+          "type": "route",
+          "uuid": "8fad1195-a086-405e-97ce-2979d66133d9"
+        }
+      ]
     }
   ],
   "routes": [
@@ -2049,6 +2063,138 @@
       "responseMode": null,
       "streamingMode": null,
       "streamingInterval": 0
+    },
+    {
+      "uuid": "d417072e-9a13-49ff-9a4e-8ef223c1fae6",
+      "type": "http",
+      "documentation": "Domain Resolver",
+      "method": "get",
+      "endpoint": "api/v1/discovery/workflows/domain/instances/:domain/functions/data",
+      "responses": [
+        {
+          "uuid": "7198d479-8589-4487-a458-d9454d94f398",
+          "body": "{{setVar 'eTag' (faker 'string.alphanumeric' 32)}}\n\n{{#if (eq (urlParam 'domain') 'core')}}\n  {{setVar 'port' 4201}}\n{{else}}\n  {{setVar 'port' (faker 'number.int' min=4200 max=5000)}}\n{{/if}}\n\n{\n    \"data\": {\n        \"eTag\": \"\\\"{{@eTag}}\\\"\",\n        \"appId\": \"vnext-{{urlParam 'domain'}}.test-vnext-{{urlParam 'domain'}}\",\n        \"baseUrl\": \"http://localhost:{{@port}}\",\n        \"healthUrl\": \"https://localhost:{{@port}}/health\",\n        \"domainName\": \"{{urlParam 'domain'}}\"\n    },\n    \"etag\":  \"\\\"{{@eTag}}\\\"\",\n    \"extensions\": {}\n}\n ",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Domain servis bilgisini döner",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "key": "x-change-port",
+              "value": "true"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "bf780c37-a1db-438a-a73d-b14967243c6f",
+          "body": "{}",
+          "latency": 0,
+          "statusCode": 404,
+          "label": "Domain bulunamadı",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        },
+        {
+          "uuid": "67e4407e-b6cf-4a0b-a8d3-60addf435143",
+          "body": "{}",
+          "latency": 0,
+          "statusCode": 304,
+          "label": "Değişiklik bulunamadı",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [
+            {
+              "target": "header",
+              "modifier": "If-None-Match",
+              "value": "",
+              "invert": true,
+              "operator": "null"
+            }
+          ],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": false,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "8fad1195-a086-405e-97ce-2979d66133d9",
+      "type": "http",
+      "documentation": "Domain Registration",
+      "method": "post",
+      "endpoint": "api/v1/discovery/workflows/domain-registration/instances/start",
+      "responses": [
+        {
+          "uuid": "a75c2b51-b7fa-43ef-b7d5-bc1a51d9c5d6",
+          "body": "{\n  \"id\": \"{{faker 'string.uuid'}}\",\n  \"status\": \"C\"\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
     }
   ],
   "rootChildren": [
@@ -2083,6 +2229,10 @@
     {
       "type": "folder",
       "uuid": "ad23cdc9-2552-4503-bead-579cff0ec274"
+    },
+    {
+      "type": "folder",
+      "uuid": "eb6d81ee-d6f6-434e-b825-c2f838480945"
     }
   ],
   "proxyMode": false,

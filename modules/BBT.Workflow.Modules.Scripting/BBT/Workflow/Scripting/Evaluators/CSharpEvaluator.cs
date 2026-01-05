@@ -9,10 +9,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Workflow.Scripting.Functions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Scripting;
 
 namespace BBT.Workflow.Scripting.Evaluators;
 
@@ -43,7 +43,8 @@ public class CSharpEvaluator : IEvaluator
 
     /// <inheritdoc />
     public Task<T> CompileToInstanceAsync<T>(
-        string code, 
+        string code,
+        IScriptServices? services = null,
         IEnumerable<MetadataReference>? extraReferences = null,
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default)
@@ -57,12 +58,32 @@ public class CSharpEvaluator : IEvaluator
         // Try to get cached type and create instance from it
         if (_typeCache.TryGetValue(cacheKey, out var cached))
         {
-            var instance = (T)Activator.CreateInstance(cached.CompiledType)!;
+            var instance = CreateAndInjectServices<T>(cached.CompiledType, services);
             return Task.FromResult(instance);
         }
 
         // Compile, cache the type, and return instance
-        return CompileAndCacheAsync<T>(code, cacheKey, extraReferences, usingDirectives, cancellationToken);
+        return CompileAndCacheAsync<T>(code, cacheKey, services, extraReferences, usingDirectives, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates an instance of the compiled type and injects services if applicable.
+    /// </summary>
+    /// <typeparam name="T">The target type</typeparam>
+    /// <param name="compiledType">The compiled type to instantiate</param>
+    /// <param name="services">Optional services to inject</param>
+    /// <returns>The created instance with services injected</returns>
+    private static T CreateAndInjectServices<T>(Type compiledType, IScriptServices? services)
+    {
+        var instance = (T)Activator.CreateInstance(compiledType)!;
+        
+        // Inject services if the instance is a ScriptBase and services are provided
+        if (instance is ScriptBase scriptBase && services != null)
+        {
+            scriptBase.SetServices(services);
+        }
+        
+        return instance;
     }
 
     /// <summary>
@@ -71,6 +92,7 @@ public class CSharpEvaluator : IEvaluator
     private Task<T> CompileAndCacheAsync<T>(
         string code,
         string cacheKey,
+        IScriptServices? services,
         IEnumerable<MetadataReference>? extraReferences,
         IEnumerable<string>? usingDirectives,
         CancellationToken cancellationToken)
@@ -137,8 +159,8 @@ public class CSharpEvaluator : IEvaluator
         // Cache the type for future reuse (same script = same assembly = same type)
         _typeCache.TryAdd(cacheKey, (loadContext, matchedType));
 
-        // Create and return instance
-        return Task.FromResult((T)Activator.CreateInstance(matchedType)!);
+        // Create instance and inject services
+        return Task.FromResult(CreateAndInjectServices<T>(matchedType, services));
     }
 
     /// <summary>
@@ -249,14 +271,5 @@ public class CSharpEvaluator : IEvaluator
         }
         
         return false;
-    }
-
-    /// <summary>
-    /// Creates default script options with standard imports.
-    /// </summary>
-    private static ScriptOptions CreateDefaultOptions(Func<ScriptOptions, ScriptOptions>? configureScriptOptions)
-    {
-        var defaultOptions = CSharpScriptOptionProvider.Default;
-        return configureScriptOptions?.Invoke(defaultOptions) ?? defaultOptions;
     }
 }

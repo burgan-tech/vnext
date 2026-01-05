@@ -142,6 +142,20 @@ public static partial class WorkflowLogs
         string? executionChainId);
 
     /// <summary>
+    /// Logs when transition chain depth limit is exceeded in the pipeline.
+    /// This indicates a potential infinite loop in automatic transition chains.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10053,
+        Level = LogLevel.Warning,
+        Message = "Transition chain depth limit exceeded ({CurrentDepth}/{MaxDepth}) for transition '{TransitionKey}'")]
+    public static partial void TransitionChainDepthExceeded(
+        this ILogger logger,
+        int currentDepth,
+        int maxDepth,
+        string? transitionKey);
+
+    /// <summary>
     /// Logs when asynchronous transition enqueue fails.
     /// </summary>
     [LoggerMessage(
@@ -446,10 +460,22 @@ public static partial class WorkflowLogs
     /// Logs when a correlation is marked as completed.
     /// </summary>
     [LoggerMessage(
-        EventId = 40012,
+        EventId = 40022,
         Level = LogLevel.Information,
         Message = "SubFlow correlation completed for SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
     public static partial void SubFlowCorrelationCompleted(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a SubFlow correlation is reverted due to pipeline failure.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40023,
+        Level = LogLevel.Warning,
+        Message = "SubFlow correlation reverted for SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
+    public static partial void SubFlowCorrelationReverted(
         this ILogger logger,
         Guid subInstanceId,
         Guid parentInstanceId);
@@ -677,7 +703,7 @@ public static partial class WorkflowLogs
     /// Logs when child subflow cancellation succeeds.
     /// </summary>
     [LoggerMessage(
-        EventId = 40021,
+        EventId = 40024,
         Level = LogLevel.Information,
         Message = "Child subflow cancellation succeeded for instance {InstanceId}")]
     public static partial void ChildSubflowCancelSucceeded(
@@ -798,6 +824,59 @@ public static partial class WorkflowLogs
         string subFlowDomain,
         string subFlowName,
         Guid instanceId);
+
+    #endregion
+
+    #region Post-Commit Execution
+
+    /// <summary>
+    /// Logs when post-commit executor starts processing jobs.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10090,
+        Level = LogLevel.Debug,
+        Message = "Post-commit executor starting for instance {InstanceId}, processing {JobCount} job(s)")]
+    public static partial void PostCommitExecutorStarting(
+        this ILogger logger,
+        Guid instanceId,
+        int jobCount);
+
+    /// <summary>
+    /// Logs when a post-commit job completes successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10091,
+        Level = LogLevel.Debug,
+        Message = "Post-commit job {JobType} completed for instance {InstanceId}")]
+    public static partial void PostCommitJobCompleted(
+        this ILogger logger,
+        Guid instanceId,
+        string jobType);
+
+    /// <summary>
+    /// Logs when a post-commit job fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10092,
+        Level = LogLevel.Error,
+        Message = "Post-commit job {JobType} failed for instance {InstanceId}: {ErrorMessage}")]
+    public static partial void PostCommitJobFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string jobType,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when post-commit executor completes all jobs.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10093,
+        Level = LogLevel.Debug,
+        Message = "Post-commit executor completed for instance {InstanceId}, processed {JobCount} job(s)")]
+    public static partial void PostCommitExecutorCompleted(
+        this ILogger logger,
+        Guid instanceId,
+        int jobCount);
 
     #endregion
 }

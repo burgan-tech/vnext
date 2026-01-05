@@ -3,7 +3,11 @@ FROM node:20-slim
 ENV VNEXT_CORE_RUNTIME_VERSION=latest \
     NPM_REGISTRY=https://registry.npmjs.org/ \
     NPM_CONFIG_CACHE=/app/.npm-cache \
-    HOME=/app
+    HOME=/app \
+    # Server timeout configuration (milliseconds) - default 10 minutes
+    SERVER_TIMEOUT_MS=600000 \
+    SERVER_KEEP_ALIVE_TIMEOUT_MS=600000 \
+    SERVER_HEADERS_TIMEOUT_MS=610000
 
 WORKDIR /app
 

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
-using BBT.Workflow.Execution.ReEntry;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -9,7 +8,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 
 /// <summary>
 /// Pipeline step that evaluates and executes automatic transitions.
-/// Evaluates all automatic transition conditions and dispatches the first satisfied transition.
+/// Evaluates all automatic transition conditions and requests the first satisfied transition
+/// to be executed via sync dispatch chain.
 /// </summary>
 public sealed class RunAutomaticTransitionsStep(
     IAutoConditionEvaluator autoConditionEvaluator,
@@ -36,8 +36,8 @@ public sealed class RunAutomaticTransitionsStep(
     }
 
     /// <summary>
-    /// Processes evaluation results and enqueues the winning transition if found.
-    /// Returns Continue regardless of whether a winner was found (soft-fail behavior).
+    /// Processes evaluation results and requests the winning transition for sync dispatch.
+    /// If a winner is found, requests next transition and skips to Finalize step.
     /// </summary>
     private StepOutcome ProcessEvaluationResults(
         TransitionExecutionContext context,
@@ -57,8 +57,13 @@ public sealed class RunAutomaticTransitionsStep(
         }
 
         logger.AutoTransitionSelected(winner.TransitionKey, context.Target!.Key, context.InstanceId);
-        EnqueueWinningTransition(context, winner);
+        
+        // Request next transition for sync dispatch chain
+        context.Directives.RequestNextTransition(
+            new NextTransitionRequest(winner.TransitionKey, "auto"));
 
+        // Skip to Finalize to complete current transition, then pipeline will chain to next
+        // return StepOutcome.SkipTo(LifecycleOrder.Finalize);
         return StepOutcome.Continue();
     }
 
@@ -92,22 +97,5 @@ public sealed class RunAutomaticTransitionsStep(
         }
 
         return Result<List<AutoConditionEvaluation>>.Ok(evaluations);
-    }
-
-    /// <summary>
-    /// Enqueues the winning transition for inline execution.
-    /// </summary>
-    private static void EnqueueWinningTransition(TransitionExecutionContext context, AutoConditionEvaluation winner)
-    {
-        var command = ReentryCommand.ForAutomatic(
-            context.InstanceId,
-            context.Domain,
-            context.WorkflowKey,
-            winner.TransitionKey,
-            context.ExecutionChainId,
-            context.ChainDepth,
-            context.Headers);
-
-        context.Directives.EnqueueInlineAuto(command);
     }
 }

@@ -27,13 +27,6 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         _scriptEngine = GetRequiredService<IScriptEngine>();
     }
 
-    public override void Dispose()
-    {
-        // Reset static state to prevent test interference
-        ScriptHelper.Reset();
-        base.Dispose();
-    }
-
     protected override void AddApplication(IServiceCollection services)
     {
         // Mock DaprClient
@@ -47,10 +40,9 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
             .ReturnsAsync(new Dictionary<string, string> { { "test_key", "mock_secret_value" } });
 
         services.AddSingleton(mockDaprClient.Object);
-        ScriptHelper.SetDaprClient(mockDaprClient.Object);
 
-        // Mock Logger
-        var mockLogger = new Mock<ILogger>();
+        // Mock Logger for IScriptServices
+        var mockLogger = new Mock<ILogger<ScriptServices>>();
         mockLogger
             .Setup(x => x.Log(
                 It.IsAny<LogLevel>(),
@@ -59,7 +51,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
 
-        ScriptHelper.SetLogger(mockLogger.Object);
+        services.AddSingleton(mockLogger.Object);
 
         // Mock Configuration
         _mockConfiguration = new Mock<IConfiguration>();
@@ -81,7 +73,6 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
             .Returns((string key) => Mock.Of<IConfigurationSection>());
 
         services.AddSingleton(_mockConfiguration.Object);
-        ScriptHelper.SetConfiguration(_mockConfiguration.Object);
 
         // Mock IWorkflowMetrics
         var mockWorkflowMetrics = new Mock<IWorkflowMetrics>();
@@ -127,7 +118,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -155,7 +146,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         // Assert
         Assert.NotNull(response);
         Assert.Equal("TestValue", response.Data);
-            _mockConfiguration!.Verify(x => x["TestKey"], Times.Once);
+        _mockConfiguration!.Verify(x => x["TestKey"], Times.Once);
     }
 
     [Fact]
@@ -195,7 +186,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -262,7 +253,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -330,7 +321,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -397,7 +388,7 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-            MetadataReference.CreateFromFile(typeof(ScriptHelper).Assembly.Location)
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
         };
 
         var usings = new[]
@@ -427,4 +418,3 @@ public class ConfigurationFunctionsTests : ApplicationTestBase<ApplicationEntryP
         Assert.Equal("Key not found", response.Data);
     }
 }
-

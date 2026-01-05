@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Instances;
@@ -24,6 +25,7 @@ namespace BBT.Workflow.Tasks.Executors;
 public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTriggerTask>
 {
     private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IDomainDiscoveryResolver _endpointResolver;
     private readonly ResiliencePipeline<Result<TransitionOutput>> _retryPipeline;
 
     /// <summary>
@@ -34,11 +36,13 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
         ILogger<DirectTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _serviceScopeFactory = scopeFactory;
+        _endpointResolver = endpointResolver;
         _retryPipeline = resilienceFactory.CreatePipeline<TransitionOutput>(
             operationName: "DirectTrigger.ExecuteLocal");
     }
@@ -211,7 +215,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     {
         Logger.LogDebug("Using RemoteInvokerService for DirectTrigger task {TaskKey}", task.Key);
 
-        var binding = BuildDirectTriggerBinding(task, context);
+        var binding = await BuildDirectTriggerBindingAsync(task, context, cancellationToken);
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.DirectTrigger,
@@ -239,22 +243,32 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         return result;
     }
 
-    private DirectTriggerBinding BuildDirectTriggerBinding(DirectTriggerTask task, TaskExecutorContext context)
+    private async Task<DirectTriggerBinding> BuildDirectTriggerBindingAsync(
+        DirectTriggerTask task,
+        TaskExecutorContext context,
+        CancellationToken cancellationToken)
     {
         var headers = ExtractHeaders(context.ScriptContext);
+
+        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        var endpoint = await _endpointResolver.GetEndpointAsync(
+            task.TriggerDomain, preferredKind, cancellationToken);
 
         return new DirectTriggerBinding
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
             InstanceId = task.TriggerInstanceId,
-            Key = task.Key,
+            Key = task.TriggerKey,
             TransitionName = task.TransitionName,
             Tags = task.TriggerTags,
             Version = task.TriggerVersion,
             Body = task.Body,
             Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
-            Sync = task.TriggerSync
+            Sync = task.TriggerSync,
+            UseDapr = task.UseDapr,
+            BaseUrl = endpoint.BaseUrl.ToString(),
+            DaprAppId = endpoint.DaprAppId
         };
     }
 }

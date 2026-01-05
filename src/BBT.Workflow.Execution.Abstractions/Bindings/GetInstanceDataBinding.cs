@@ -30,5 +30,20 @@ public sealed class GetInstanceDataBinding
     /// Optional ETag for conditional request.
     /// </summary>
     public string? ETag { get; init; }
+
+    /// <summary>
+    /// Whether to use Dapr service invocation instead of direct HTTP.
+    /// </summary>
+    public bool UseDapr { get; init; } = false;
+
+    /// <summary>
+    /// Resolved base URL for HTTP requests.
+    /// </summary>
+    public string? BaseUrl { get; init; }
+
+    /// <summary>
+    /// Dapr application ID for service invocation.
+    /// </summary>
+    public string? DaprAppId { get; init; }
 }
 

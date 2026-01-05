@@ -59,6 +59,21 @@ public sealed class DirectTriggerBinding
     public bool Sync { get; init; } = true;
 
     /// <summary>
+    /// Whether to use Dapr service invocation instead of direct HTTP.
+    /// </summary>
+    public bool UseDapr { get; init; } = false;
+
+    /// <summary>
+    /// Resolved base URL for HTTP requests.
+    /// </summary>
+    public string? BaseUrl { get; init; }
+
+    /// <summary>
+    /// Dapr application ID for service invocation.
+    /// </summary>
+    public string? DaprAppId { get; init; }
+
+    /// <summary>
     /// Identifier of the target workflow instance.
     /// </summary>
     public string? Identifier => InstanceId.HasValue ? InstanceId.Value.ToString() : Key;

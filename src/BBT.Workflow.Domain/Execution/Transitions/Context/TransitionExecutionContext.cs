@@ -112,6 +112,12 @@ public sealed class TransitionExecutionContext
 
     public ClientResponse? ClientResponse { get; set; }
 
+    /// <summary>
+    /// Gets the distributed lock key for this instance.
+    /// Used by TransitionPipeline to acquire/release instance-level locks.
+    /// </summary>
+    public string LockKey => $"vnext:{Domain}:{WorkflowKey}:{InstanceId}";
+
     public JsonElement? DataElement => Data switch
     {
         JsonElement element => element,

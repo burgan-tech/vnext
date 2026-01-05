@@ -25,6 +25,15 @@ const VNEXT_APP_URL = process.env.VNEXT_APP_URL || 'http://host.docker.internal:
 const API_ENDPOINT = `${VNEXT_APP_URL}/api/v1/definitions/publish`;
 const DEFAULT_REGISTRY = process.env.NPM_REGISTRY || 'https://registry.npmjs.org/';
 
+/**
+ * Server timeout configuration (in milliseconds)
+ * These can be overridden via environment variables for long-running pipelines
+ * Default: 10 minutes (600000ms)
+ */
+const SERVER_TIMEOUT_MS = parseInt(process.env.SERVER_TIMEOUT_MS, 10) || 600000;
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = parseInt(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS, 10) || 600000;
+const SERVER_HEADERS_TIMEOUT_MS = parseInt(process.env.SERVER_HEADERS_TIMEOUT_MS, 10) || (SERVER_KEEP_ALIVE_TIMEOUT_MS + 10000);
+
 /** 
  * The special core runtime package that requires domain replacement for SYS files
  */
@@ -338,15 +347,57 @@ function httpRequest(url, options = {}) {
 
 /**
  * Setup npm registry configuration
+ * 
+ * Supports two authentication strategies:
+ * 1. Token-based authentication (_authToken) - for npmjs.org and compatible registries
+ * 2. Username/Password authentication (_password + username + email) - for Azure DevOps / TFS Artifacts
+ * 
+ * Auth Strategy Decision:
+ * - If npmToken exists → use _authToken
+ * - If npmUsername + npmPassword exists → use _password (Base64 encoded)
+ * - If neither exists → only set registry=
+ * 
+ * @param {string} registry - NPM registry URL
+ * @param {Object} authOptions - Authentication options
+ * @param {string} [authOptions.token] - NPM token for _authToken based auth
+ * @param {string} [authOptions.username] - Username for TFS Artifacts auth
+ * @param {string} [authOptions.password] - Password for TFS Artifacts auth (will be Base64 encoded)
+ * @param {string} [authOptions.email] - Email for TFS Artifacts auth (optional, defaults to 'unused@dev.azure.com')
  */
-async function setupNpmRegistry(registry, token) {
+async function setupNpmRegistry(registry, authOptions = {}) {
     const npmrcPath = path.join(process.env.HOME || '/app', '.npmrc');
+    const registryHost = registry.replace(/^https?:\/\//, '').replace(/\/$/, '');
     let npmrcContent = '';
     
+    const { token, username, password, email } = authOptions;
+    
     if (token) {
-        const registryHost = registry.replace(/^https?:\/\//, '').replace(/\/$/, '');
-        npmrcContent = `//${registryHost}:_authToken=${token}\nregistry=${registry}\n`;
+        // Strategy 1: Token-based authentication (_authToken)
+        // Compatible with npmjs.org and registries that support tokens
+        log.info('Using token-based authentication (_authToken)');
+        npmrcContent = [
+            `registry=${registry}`,
+            `//${registryHost}/:_authToken=${token}`,
+            ''
+        ].join('\n');
+    } else if (username && password) {
+        // Strategy 2: Username/Password authentication for Azure DevOps / TFS Artifacts
+        // Uses _password (Base64 encoded) + username + email
+        log.info('Using TFS Artifacts authentication (_password + username)');
+        const base64Password = Buffer.from(password).toString('base64');
+        const authEmail = email || 'unused@dev.azure.com';
+        
+        npmrcContent = [
+            `registry=${registry}`,
+            `//${registryHost}/:username=${username}`,
+            `//${registryHost}/:_password=${base64Password}`,
+            `//${registryHost}/:email=${authEmail}`,
+            'always-auth=true',
+            ''
+        ].join('\n');
     } else {
+        // No authentication - public registry
+        log.info('No authentication configured - using public registry');
         npmrcContent = `registry=${registry}\n`;
     }
     
@@ -357,12 +408,21 @@ async function setupNpmRegistry(registry, token) {
 /**
  * Download and install npm package
  * ONLY called from API request handler - never automatically
+ * 
+ * @param {string} packageName - Name of the npm package to download
+ * @param {string} version - Version of the package (e.g., 'latest', '1.0.0')
+ * @param {string} registry - NPM registry URL
+ * @param {Object} authOptions - Authentication options
+ * @param {string} [authOptions.token] - NPM token for _authToken based auth
+ * @param {string} [authOptions.username] - Username for TFS Artifacts auth
+ * @param {string} [authOptions.password] - Password for TFS Artifacts auth
+ * @param {string} [authOptions.email] - Email for TFS Artifacts auth
  */
-async function downloadPackage(packageName, version, registry, token) {
+async function downloadPackage(packageName, version, registry, authOptions = {}) {
     log.section(`Downloading Package: ${packageName}@${version}`);
     log.info('This download was triggered by an API call');
     
-    await setupNpmRegistry(registry, token);
+    await setupNpmRegistry(registry, authOptions);
     
     // Ensure package.json exists
     const packageJsonPath = '/app/package.json';
@@ -826,6 +886,9 @@ async function handleRuntimePublish(req, res) {
             version = 'latest',
             npmRegistry = DEFAULT_REGISTRY,
             npmToken,
+            npmUsername,
+            npmPassword,
+            npmEmail,
             appDomain
         } = body;
         
@@ -847,8 +910,16 @@ async function handleRuntimePublish(req, res) {
         // Wait for vnext app to be ready
         await waitForVNextApp();
         
+        // Build auth options
+        const authOptions = {
+            token: npmToken,
+            username: npmUsername,
+            password: npmPassword,
+            email: npmEmail
+        };
+        
         // Download package
-        const packagePath = await downloadPackage(VNEXT_CORE_RUNTIME_PACKAGE, version, npmRegistry, npmToken);
+        const packagePath = await downloadPackage(VNEXT_CORE_RUNTIME_PACKAGE, version, npmRegistry, authOptions);
         
         // Verify package structure
         await verifyPackageStructure(packagePath);
@@ -914,6 +985,9 @@ async function handlePackagePublish(req, res) {
             version = 'latest',
             npmRegistry = DEFAULT_REGISTRY,
             npmToken,
+            npmUsername,
+            npmPassword,
+            npmEmail,
             appDomain
         } = body;
         
@@ -938,8 +1012,16 @@ async function handlePackagePublish(req, res) {
         // Wait for vnext app to be ready
         await waitForVNextApp();
         
+        // Build auth options
+        const authOptions = {
+            token: npmToken,
+            username: npmUsername,
+            password: npmPassword,
+            email: npmEmail
+        };
+        
         // Download package
-        const packagePath = await downloadPackage(packageName, version, npmRegistry, npmToken);
+        const packagePath = await downloadPackage(packageName, version, npmRegistry, authOptions);
         
         // Verify package structure
         await verifyPackageStructure(packagePath);
@@ -1083,6 +1165,12 @@ async function runAutomaticInit() {
 function startServer() {
     const server = http.createServer(handleRequest);
     
+    // Increase timeouts for long-running package publish operations
+    // Configurable via env vars: SERVER_TIMEOUT_MS, SERVER_KEEP_ALIVE_TIMEOUT_MS, SERVER_HEADERS_TIMEOUT_MS
+    server.timeout = SERVER_TIMEOUT_MS;
+    server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS;
+    
     server.listen(PORT, () => {
         log.section('Package API Server Started');
         log.success(`Server running on port ${PORT}`);
@@ -1097,6 +1185,11 @@ function startServer() {
         log.detail(`  - appDomain is OPTIONAL`);
         log.detail(`  - If appDomain provided, replaces all domains`);
         log.info(`VNext App URL: ${VNEXT_APP_URL}`);
+        log.subsection('Timeout Configuration');
+        log.info(`Server Timeout: ${SERVER_TIMEOUT_MS}ms (${SERVER_TIMEOUT_MS / 60000} min)`);
+        log.info(`Keep-Alive Timeout: ${SERVER_KEEP_ALIVE_TIMEOUT_MS}ms (${SERVER_KEEP_ALIVE_TIMEOUT_MS / 60000} min)`);
+        log.info(`Headers Timeout: ${SERVER_HEADERS_TIMEOUT_MS}ms`);
+        log.detail(`  - Override via: SERVER_TIMEOUT_MS, SERVER_KEEP_ALIVE_TIMEOUT_MS, SERVER_HEADERS_TIMEOUT_MS`);
     });
     
     server.on('error', (err) => {

@@ -5,10 +5,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.ReEntry;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Logging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Services;
 
@@ -27,79 +24,30 @@ public sealed class TransitionRunner(
     IOptions<ReentryOptions> options,
     ILogger<TransitionRunner> logger) : ITransitionRunner
 {
-    private readonly ReentryOptions _options = options.Value;
-
     /// <inheritdoc />
     /// <summary>
-    /// Runs transitions in a loop, each in its own DI scope + RequiresNew UoW.
-    /// Post-commit: enqueues inline auto chain transitions from DirectivesSnapshot.
+    /// Runs a transition in its own DI scope + RequiresNew UoW.
+    /// Sync dispatch chain for auto transitions is managed by TransitionPipeline.
     /// </summary>
-    [Trace]
     public async Task<Result<TransitionOutput>> RunAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var queue = new Queue<WorkflowExecutionContext>();
-        queue.Enqueue(context);
+        // Execute in isolated scope + UoW
+        var hopResult = await ExecuteWithScopeAsync(context, cancellationToken);
+        if (!hopResult.IsSuccess)
+            return Result<TransitionOutput>.Fail(hopResult.Error);
 
-        var hop = 0;
-        TransitionOutput? lastOutput = null;
-
-        while (queue.TryDequeue(out var current))
-        {
-            hop++;
-
-            // Guard: prevent infinite loops
-            if (hop > _options.MaxAutoHops)
-            {
-                if (Guid.TryParse(current.InstanceId, out var instanceGuid))
-                {
-                    logger.MaxAutoHopsExceeded(_options.MaxAutoHops, instanceGuid, current.Execution?.ExecutionChainId);
-                }
-                return Result<TransitionOutput>.Fail(
-                    Error.Validation("auto.chain.maxhops", $"Auto chain exceeded max hops: {_options.MaxAutoHops}"));
-            }
-
-            // Execute in isolated scope + UoW
-            var hopResult = await ExecuteHopAsync(current, cancellationToken);
-            if (!hopResult.IsSuccess)
-                return Result<TransitionOutput>.Fail(hopResult.Error);
-
-            var coreOutput = hopResult.Value!;
-            lastOutput = coreOutput.Output;
-
-            // POST-COMMIT: enqueue inline auto chain transitions
-            if (coreOutput.DirectivesSnapshot.HasQueuedTransitions)
-            {
-                foreach (var cmd in coreOutput.DirectivesSnapshot.InlineAutoQueue)
-                {
-                    // Increment chain depth for the next hop
-                    var nextCmd = cmd with { ChainDepth = cmd.ChainDepth + 1 };
-                    
-                    // Guard: check chain depth before enqueueing
-                    if (nextCmd.ChainDepth <= _options.MaxAutoHops)
-                    {
-                        queue.Enqueue(WorkflowExecutionContext.From(nextCmd));
-                    }
-                    else
-                    {
-                        logger.MaxAutoHopsExceeded(_options.MaxAutoHops, nextCmd.InstanceId, nextCmd.ExecutionChainId);
-                    }
-                }
-            }
-        }
-
-        return lastOutput is null
-            ? Result<TransitionOutput>.Fail(Error.Failure("transition.output.missing", "Transition output missing"))
-            : Result<TransitionOutput>.Ok(lastOutput);
+        var coreOutput = hopResult.Value!;
+        return Result<TransitionOutput>.Ok(coreOutput.Output);
     }
 
     /// <summary>
-    /// Executes a single transition hop in a new DI scope with RequiresNew UoW.
+    /// Executes the transition in a new DI scope with RequiresNew UoW.
     /// This ensures complete isolation from any ambient UoW.
     /// Applies Global Error Boundary for errors that escape State-level handling.
     /// </summary>
-    private async Task<Result<TransitionCoreOutput>> ExecuteHopAsync(
+    private async Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
@@ -148,7 +96,7 @@ public sealed class TransitionRunner(
             return Result<TransitionCoreOutput>.Fail(coreResult.Error);
         }
 
-        // Commit is THE boundary - post-commit processing happens after this
+        // Commit is THE boundary
         await uow.CommitAsync(cancellationToken);
 
         return coreResult;

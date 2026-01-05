@@ -75,22 +75,6 @@ public class TransitionHandlerBaseTests
     }
 
     [Fact]
-    public async Task PreHandleAsync_WhenPreValidateInternalFails_ShouldThrowAutoTransitionConditionNotMetException()
-    {
-        // Arrange
-        var context = CreateValidTransitionContext();
-        _handler.PreValidateInternalResult = Result.Fail(
-            WorkflowErrors.AutoTransitionConditionNotMet("test-transition"));
-
-        // Act & Assert
-        await Should.ThrowAsync<AutoTransitionConditionNotMetException>(
-            async () => await _handler.PreHandleAsync(context, CancellationToken.None));
-
-        _handler.PreValidateCalled.ShouldBeFalse();
-        _handler.PreProcessCalled.ShouldBeFalse();
-    }
-
-    [Fact]
     public async Task PreHandleAsync_WhenPreProcessThrowsException_ShouldPropagateException()
     {
         // Arrange

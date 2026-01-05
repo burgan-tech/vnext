@@ -1,7 +1,7 @@
 namespace BBT.Workflow.Execution.Configuration;
 
 /// <summary>
-/// Configuration options for Trigger Tasks retry policy.
+/// Configuration options for Trigger Tasks retry and resilience policies.
 /// </summary>
 public sealed class TriggerRetryOptions
 {
@@ -29,4 +29,19 @@ public sealed class TriggerRetryOptions
     /// Enable jitter for retry delays to prevent thundering herd (default: true)
     /// </summary>
     public bool UseJitter { get; set; } = true;
+
+    /// <summary>
+    /// Timeout in seconds for HTTP requests (default: 30)
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Number of failures before the circuit breaker opens (default: 5)
+    /// </summary>
+    public int CircuitBreakerFailureThreshold { get; set; } = 5;
+
+    /// <summary>
+    /// Duration in seconds the circuit breaker stays open (default: 30)
+    /// </summary>
+    public int CircuitBreakerTimeoutSeconds { get; set; } = 30;
 }

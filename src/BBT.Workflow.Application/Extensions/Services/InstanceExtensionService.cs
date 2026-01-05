@@ -1,13 +1,11 @@
 using System.Extensions;
 using System.Text;
-using System.Text.Json;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
 
@@ -34,14 +32,18 @@ public sealed class InstanceExtensionService(
         var context = new ExtensionProcessingContext(
             new Dictionary<string, object>(),
             new HashSet<string>());
+        
+        var requestedSet = extensionRequested is { Length: > 0 }
+            ? new HashSet<string>(extensionRequested, StringComparer.OrdinalIgnoreCase)
+            : null;
 
         // Process core system extensions first (runtime-wide, always included)
         // Core extensions failing should not block workflow extensions
-        await ProcessCoreExtensionsAsync(scriptContext, currentScope, context, cancellationToken);
+        await ProcessCoreExtensionsAsync(requestedSet, scriptContext, currentScope, context, cancellationToken);
 
         // Process workflow-specific extensions (excluding already executed core extensions)
         await ProcessWorkflowExtensionsAsync(
-            extensionRequested,
+            requestedSet,
             scriptContext,
             workflow,
             currentScope,
@@ -57,12 +59,13 @@ public sealed class InstanceExtensionService(
     /// Failures here are logged but don't break the flow - the system continues without core extensions.
     /// </summary>
     private async Task ProcessCoreExtensionsAsync(
+        HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         ExtensionScope currentScope,
         ExtensionProcessingContext context,
         CancellationToken cancellationToken)
     {
-        var coreExtensionsResult = await GetCoreExtensionsAsync(cancellationToken);
+        var coreExtensionsResult = await GetCoreExtensionsAsync(extensionRequested, cancellationToken);
 
         if (!coreExtensionsResult.IsSuccess || coreExtensionsResult.Value!.Count == 0)
             return;
@@ -80,7 +83,7 @@ public sealed class InstanceExtensionService(
     /// Processes workflow-specific extensions excluding already executed core extensions.
     /// </summary>
     private async Task ProcessWorkflowExtensionsAsync(
-        string[]? extensionRequested,
+        HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         Definitions.Workflow workflow,
         ExtensionScope currentScope,
@@ -106,21 +109,47 @@ public sealed class InstanceExtensionService(
 
     /// <summary>
     /// Retrieves all core extensions from the cache using Railway pattern.
-    /// Core extensions are identified by Global or GlobalAndRequested ExtensionType.
+    /// - Global extensions are always included.
+    /// - GlobalAndRequested extensions are included only if they are in the extensionRequested list.
     /// </summary>
-    private async Task<Result<List<Extension>>> GetCoreExtensionsAsync(CancellationToken cancellationToken)
+    /// <param name="extensionRequested">The list of requested extension keys.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private async Task<Result<List<Extension>>> GetCoreExtensionsAsync(
+        HashSet<string>? extensionRequested,
+        CancellationToken cancellationToken)
     {
         using (currentSchema.Use(RuntimeSysSchemaInfo.Extensions))
         {
             var allExtensionsResult = await componentCacheStore.GetAllExtensionsAsync(
                 runtimeInfoProvider.Domain,
                 cancellationToken);
-
+            
             return allExtensionsResult
                 .Map(extensions => extensions
-                    .Where(ext => ext.Type == ExtensionType.Global || ext.Type == ExtensionType.GlobalAndRequested)
+                    .Where(ext => IsGlobalExtensionIncluded(ext, extensionRequested))
                     .ToList());
         }
+    }
+
+    /// <summary>
+    /// Determines if a global extension should be included based on its type and request status.
+    /// </summary>
+    /// <param name="extension">The extension to check.</param>
+    /// <param name="requestedSet">The set of requested extension keys (null if none requested).</param>
+    /// <returns>True if the extension should be included.</returns>
+    private static bool IsGlobalExtensionIncluded(Extension extension, HashSet<string>? requestedSet)
+    {
+        return extension.Type switch
+        {
+            // Global extensions are always included
+            ExtensionType.Global => true,
+
+            // GlobalAndRequested extensions are included only if explicitly requested
+            ExtensionType.GlobalAndRequested => requestedSet?.Contains(extension.Key) == true,
+
+            // Other types are not core extensions
+            _ => false
+        };
     }
 
     /// <summary>
@@ -149,7 +178,7 @@ public sealed class InstanceExtensionService(
     /// Extension execution errors are logged but don't propagate - extensions are best-effort enrichment.
     /// </summary>
     private async Task ExecuteExtensionsInternalAsync(
-        string[]? extensionRequested,
+        HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         List<Extension> extensions,
         ExtensionScope currentScope,
@@ -199,28 +228,11 @@ public sealed class InstanceExtensionService(
         var variableKeyExtension = extension.Key.ToVariableName();
         var variableKeyTask = extension.Task.Task.Key.ToVariableName();
 
-        if (!scriptContext.TaskResponse.TryGetValue(variableKeyTask, out var value))
+        if (!scriptContext.OutputResponse.TryGetValue(variableKeyTask, out var value))
             return;
 
-        // Extract data property if available, otherwise use raw value
-        var extractedValue = TryExtractDataProperty(value);
-
-        context.Response[variableKeyExtension] = extractedValue!;
+        context.Response[variableKeyExtension] = value!;
         context.ExecutedKeys.Add(extension.Key);
-    }
-
-    /// <summary>
-    /// Extracts the "data" property from a dynamic object if available.
-    /// Supports ExpandoObject (IDictionary), JsonElement, and falls back to raw value.
-    /// </summary>
-    private static object? TryExtractDataProperty(object? value)
-    {
-        return value switch
-        {
-            IDictionary<string, object?> dict when dict.TryGetValue("data", out var data) => data,
-            JsonElement { ValueKind: JsonValueKind.Object } element when element.TryGetProperty("data", out var prop) => prop,
-            _ => value
-        };
     }
 
     /// <summary>
