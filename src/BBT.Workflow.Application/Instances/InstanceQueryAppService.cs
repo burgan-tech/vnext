@@ -204,7 +204,7 @@ public sealed class InstanceQueryAppService(
                 return new SubFlowStateInfo(
                     AvailableTransitions: transitionNames,
                     CurrentState: subFlowValue.State,
-                    Status: mainInstance.Status,
+                    Status: subFlowValue.Status,
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
                     SubFlowActiveCorrelations: subFlowValue.ActiveCorrelations);
@@ -390,7 +390,7 @@ public sealed class InstanceQueryAppService(
 
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
-                onFailure: error => ConditionalResult<GetInstanceDataOutput>.Fail(error));
+                onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
     }
 
     /// <summary>
@@ -501,7 +501,7 @@ public sealed class InstanceQueryAppService(
                 {
                     Href = allExtensions.Length > 0
                         ? InstanceUrlTemplates.DataWithExtensions(input.Domain, input.Workflow, instance.Id.ToString(),
-                            string.Join(",", allExtensions))
+                            allExtensions)
                         : InstanceUrlTemplates.Data(input.Domain, input.Workflow, instance.Id.ToString())
                 };
 
@@ -527,7 +527,7 @@ public sealed class InstanceQueryAppService(
                         Href = allExtensions.Length > 0
                             ? InstanceUrlTemplates.DataWithExtensions(correlation.SubFlowDomain, correlation.SubFlowName,
                                 correlation.SubFlowInstanceId.ToString(),
-                                string.Join(",", allExtensions))
+                                allExtensions)
                             : InstanceUrlTemplates.Data(correlation.SubFlowDomain, correlation.SubFlowName,
                                 correlation.SubFlowInstanceId.ToString())
                     }).ToList();

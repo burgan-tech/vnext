@@ -204,10 +204,10 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
     {
         var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/{binding.Instance}/data";
 
-        if (binding.Extensions != null && binding.Extensions.Length > 0)
+        if (binding.Extensions is { Length: > 0 })
         {
-            var extensionsParam = string.Join(",", binding.Extensions);
-            path += $"?extensions={Uri.EscapeDataString(extensionsParam)}";
+            var extensionsParam = string.Join("&", binding.Extensions.Where(e => !string.IsNullOrEmpty(e)).Select(e => $"extensions={Uri.EscapeDataString(e)}"));
+            path += $"?{extensionsParam}";
         }
 
         return path;

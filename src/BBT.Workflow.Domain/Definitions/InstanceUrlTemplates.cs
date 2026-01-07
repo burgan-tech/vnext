@@ -46,10 +46,11 @@ public static class InstanceUrlTemplates
     public const string DataTemplate = "/{0}/workflows/{1}/instances/{2}/functions/data";
 
     /// <summary>
-    /// URL template for instance data endpoints with extensions.
-    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/data?extensions={extensions}
+    /// URL template for instance data endpoints with extensions (base path only).
+    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/data
+    /// Extensions are added as separate query parameters: ?extensions=ext1&amp;extensions=ext2
     /// </summary>
-    public const string DataWithExtensionsTemplate = "/{0}/workflows/{1}/instances/{2}/functions/data?extensions={3}";
+    public const string DataWithExtensionsTemplate = "/{0}/workflows/{1}/instances/{2}/functions/data";
 
     /// <summary>
     /// URL template for instance view endpoints.
@@ -165,15 +166,20 @@ public static class InstanceUrlTemplates
 
     /// <summary>
     /// Generates URL for instance data function endpoint with extensions.
+    /// Each extension is added as a separate query parameter: ?extensions=ext1&amp;extensions=ext2
     /// </summary>
     /// <param name="domain">The domain name</param>
     /// <param name="workflow">The workflow name</param>
     /// <param name="instance">The instance key or ID</param>
-    /// <param name="extensions">The extensions parameter</param>
+    /// <param name="extensions">The collection of extension names</param>
     /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
-    /// <returns>Generated URL</returns>
-    public static string DataWithExtensions(string domain, string workflow, string instance, string extensions, string? apiVersionPrefix = null)
-        => BuildUrl(DataWithExtensionsTemplate, apiVersionPrefix, domain, workflow, instance, extensions);
+    /// <returns>Generated URL with each extension as a separate query parameter</returns>
+    public static string DataWithExtensions(string domain, string workflow, string instance, IEnumerable<string> extensions, string? apiVersionPrefix = null)
+    {
+        var basePath = BuildUrl(DataWithExtensionsTemplate, apiVersionPrefix, domain, workflow, instance);
+        var extensionParams = string.Join("&", extensions.Where(e => !string.IsNullOrEmpty(e)).Select(e => $"extensions={Uri.EscapeDataString(e)}"));
+        return string.IsNullOrEmpty(extensionParams) ? basePath : $"{basePath}?{extensionParams}";
+    }
 
     /// <summary>
     /// Generates URL for instance view function endpoint.
