@@ -1,3 +1,4 @@
+using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Outbox.HostedServices;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -22,13 +23,20 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddAspNetCoreModules(configuration)
             .AddResultResilience(configuration)
             .AddDaprClients()
-            .AddAetherEventBus()
+            .AddAetherEventBus(options =>
+            {
+                options.DefaultSource =
+                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
+                options.PrefixEnvironmentToTopic = true;
+                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
+            })
             .AddDbContext(configuration)
             .AppMapper()
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
-            .AddBackgroundJob()
+            .AddAetherBackgroundJob<WorkflowDbContext>()
+            .AddDaprJobScheduler()
             .AddRedis()
             .AddExceptionHandling()
             .AddRuntimeMiddleware()

@@ -12,6 +12,8 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 using BBT.Workflow.Shared;
+using System.Text.Json;
+using BBT.Workflow.Definitions.GraphQL;
 
 namespace BBT.Workflow.Instances;
 
@@ -60,7 +62,7 @@ public sealed class InstanceQueryAppService(
                 onFailure: error => ConditionalResult<GetInstanceOutput>.Fail(error));
     }
 
-    public async Task<Result<HateoasPagedList<GetInstanceOutput>>> GetInstanceListAsync(
+    public async Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
         GetInstanceListInput input,
         CancellationToken cancellationToken = default)
     {
@@ -69,12 +71,81 @@ public sealed class InstanceQueryAppService(
         return await ResultExtensions.TryAsync(
             async ct =>
             {
-                var pagedList = await instanceRepository.GetPagedResultsAsync(
-                    input.Page,
-                    input.PageSize,
-                    input.Filter,
-                    ct);
+                // Parse filter parameter - check if it's in GraphQLFilterRequest format
+                string[]? filters = input.Filter;
+                string? groupBy = input.GroupBy;
+                string? aggregations = input.Aggregations;
 
+                // If filter array has one element, check if it's GraphQLFilterRequest format
+                Definitions.GraphQL.GraphQLFilterRequest? parsedRequest = null;
+                if (input.Filter != null && input.Filter.Length == 1 && string.IsNullOrWhiteSpace(groupBy))
+                {
+                    var filterString = input.Filter[0];
+                    if (GraphQLFilterParser.TryParseRequest(filterString, out var request) && request != null)
+                    {
+                        parsedRequest = request;
+                        // Extract filter and groupBy from GraphQLFilterRequest for backward compatibility path
+                        filters = request.Filter != null
+                            ? new[] { JsonSerializer.Serialize(request.Filter, new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false
+                            }) }
+                            : null;
+
+                        if (request.GroupBy != null)
+                        {
+                            groupBy = JsonSerializer.Serialize(request.GroupBy, new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false
+                            });
+                        }
+
+                        if (request.Aggregations != null)
+                        {
+                            aggregations = JsonSerializer.Serialize(request.Aggregations, new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false
+                            });
+                        }
+                    }
+                }
+
+                // Use optimized path if we have a parsed request (avoids parse-serialize-parse cycle)
+                HateoasPagedList<Instance> pagedList;
+                List<GroupSummary>? groups;
+                if (parsedRequest != null)
+                {
+                    var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                        input.Page,
+                        input.PageSize,
+                        parsedRequest,
+                        ct);
+                    pagedList = result.PagedList;
+                    groups = result.Groups;
+                }
+                else
+                {
+                    var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                        input.Page,
+                        input.PageSize,
+                        filters,
+                        groupBy,
+                        aggregations,
+                        ct);
+                    pagedList = result.PagedList;
+                    groups = result.Groups;
+                }
+
+                // If groups are present, populate items with groups instead of instances
+                if (groups != null && groups.Count > 0)
+                {
+                    return InstanceListWithGroupsResponse<GetInstanceOutput>.FromGroups(groups);
+                }
+
+                // Normal flow: build instance outputs
                 var list = new List<GetInstanceOutput>();
                 foreach (var instance in pagedList.Items)
                 {
@@ -92,8 +163,10 @@ public sealed class InstanceQueryAppService(
                     list.Add(instanceOutput);
                 }
 
-                return new HateoasPagedList<GetInstanceOutput>(list, pagedList.CurrentPage, pagedList.PageSize,
+                var resultPagedList = new HateoasPagedList<GetInstanceOutput>(list, pagedList.CurrentPage, pagedList.PageSize,
                     pagedList.HasNext);
+
+                return InstanceListWithGroupsResponse<GetInstanceOutput>.FromPagedList(resultPagedList, null);
             },
             cancellationToken);
     }
@@ -196,9 +269,9 @@ public sealed class InstanceQueryAppService(
                 var subFlowValue = subFlowResult.Value;
                 
                 // Extract transition names from TransitionItem list
-                var transitionNames = subFlowValue.Transitions
+                var transitionNames = subFlowValue.Transitions?
                     .Select(t => t.Name)
-                    .ToList();
+                    .ToList() ?? new List<string>();
 
                 // Return complete SubFlow state including view extensions and active correlations
                 return new SubFlowStateInfo(
@@ -265,7 +338,7 @@ public sealed class InstanceQueryAppService(
         string instanceIdentifier,
         CancellationToken cancellationToken)
     {
-        var instance = await instanceRepository.FindByIdentifierAsync(instanceIdentifier, cancellationToken);
+        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceIdentifier, cancellationToken);
         return instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
     }
 

@@ -64,11 +64,20 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
     public string Flow { get; private set; }
 
     /// <summary>
-    /// Current state key
+    /// Current state key - engine internal state (hidden from external world)
     /// </summary>
     public string? CurrentState { get; private set; }
 
+    /// <summary>
+    /// Effective state - the state exposed to the external world (persisted in DB)
+    /// For parent: SubFlow's state if active SubFlow exists, otherwise own state
+    /// For SubFlow: Own state
+    /// </summary>
+    public string? EffectiveState { get; private set; }
+
     public string GetCurrentState => string.IsNullOrWhiteSpace(CurrentState) ? string.Empty : CurrentState;
+    
+    public string GetEffectiveState => string.IsNullOrWhiteSpace(EffectiveState) ? string.Empty : EffectiveState;
 
     /// <summary>
     /// Status
@@ -197,6 +206,7 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
             Status = Status,
             CompletedAt = CompletedAt,
             CurrentState = CurrentState,
+            EffectiveState = EffectiveState,
             Duration = Duration,
             Tags = [.. Tags],
             ExtraProperties = new ExtraPropertyDictionary(ExtraProperties)
@@ -400,9 +410,54 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         CurrentState = Check.Length(currentState, nameof(currentState), StateConstants.MaxKeyLength);
     }
 
+    /// <summary>
+    /// Sets the effective state (external world state).
+    /// Called when state changes or when SubFlow state is propagated to parent.
+    /// </summary>
+    /// <param name="effectiveState">The new effective state</param>
+    public void SetEffectiveState(string effectiveState)
+    {
+        EffectiveState = Check.Length(effectiveState, nameof(effectiveState), StateConstants.MaxKeyLength);
+    }
+
+    /// <summary>
+    /// Publishes an event to notify the parent instance about SubFlow state change.
+    /// This enables cross-domain communication for state synchronization.
+    /// </summary>
+    /// <param name="previousState">The previous state before the change</param>
+    /// <param name="newState">The new state after the change</param>
+    private void PublishSubStateChangedEvent(string previousState, string newState)
+    {
+        var contractInfo = ExtraProperties.ToSubFlowContractInfo();
+        AddDistributedEvent(new InstanceSubStateChangedEvent
+        {
+            ParentInstanceId = contractInfo.Id,
+            SubInstanceId = Id,
+            Domain = contractInfo.Domain,
+            Flow = contractInfo.Flow,
+            Version = contractInfo.Version,
+            NewState = newState,
+            PreviousState = previousState,
+            ChangedAt = DateTime.UtcNow
+        });
+    }
+
     public void ChangeState(State state)
     {
+        var previousState = GetCurrentState;
         SetState(state.Key);
+
+        // Domain Logic: Update EffectiveState if no active SubFlow
+        if (!HasActiveSubFlow)
+        {
+            SetEffectiveState(state.Key);
+        }
+
+        // Domain Logic: Publish state change event if this is a SubFlow
+        if (IsSubFlow)
+        {
+            PublishSubStateChangedEvent(previousState, state.Key);
+        }
     }
 
     public void ChangeState(Transition transition)
@@ -412,12 +467,38 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
             return;
         }
 
+        var previousState = GetCurrentState;
         SetState(transition.Target);
+
+        // Domain Logic: Update EffectiveState if no active SubFlow
+        if (!HasActiveSubFlow)
+        {
+            SetEffectiveState(transition.Target);
+        }
+
+        // Domain Logic: Publish state change event if this is a SubFlow
+        if (IsSubFlow)
+        {
+            PublishSubStateChangedEvent(previousState, transition.Target);
+        }
     }
 
     public void ChangeState(WorkflowTimeout timeout)
     {
+        var previousState = GetCurrentState;
         SetState(timeout.Target);
+
+        // Domain Logic: Update EffectiveState if no active SubFlow
+        if (!HasActiveSubFlow)
+        {
+            SetEffectiveState(timeout.Target);
+        }
+
+        // Domain Logic: Publish state change event if this is a SubFlow
+        if (IsSubFlow)
+        {
+            PublishSubStateChangedEvent(previousState, timeout.Target);
+        }
     }
 
     public void AddTags(string[]? tags)

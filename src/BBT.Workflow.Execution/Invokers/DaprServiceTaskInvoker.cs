@@ -134,7 +134,7 @@ public sealed class DaprServiceTaskInvoker(
                     data: responseData,
                     metadata: metadata);
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "cancelled");
@@ -150,7 +150,8 @@ public sealed class DaprServiceTaskInvoker(
                     ["AppId"] = binding.AppId,
                     ["MethodName"] = binding.MethodName,
                     ["HttpVerb"] = binding.Method,
-                    ["Cancelled"] = true
+                    ["Cancelled"] = true,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)

@@ -29,10 +29,7 @@ public sealed class StartSubflowJobHandler(
         var instanceResult = await instanceRepository.GetResultAsync(context.InstanceId.ToString(), true, cancellationToken);
         if (!instanceResult.IsSuccess)
         {
-            logger.LogError(
-                "Instance {InstanceId} not found while starting subflow for correlation {CorrelationId}",
-                context.InstanceId,
-                job.CorrelationId);
+            logger.SubFlowInstanceNotFound(context.InstanceId, job.CorrelationId);
             return Result.Fail(instanceResult.Error);
         }
 
@@ -42,60 +39,37 @@ public sealed class StartSubflowJobHandler(
         var correlation = instance.ChildCorrelations.SingleOrDefault(x => x.Id == job.CorrelationId);
         if (correlation is null)
         {
-            logger.LogError(
-                "Correlation {CorrelationId} not found for instance {InstanceId}",
-                job.CorrelationId,
-                context.InstanceId);
-            return Result.Fail(WorkflowErrors.ConfigInvalid(context.InstanceId, $"Correlation {job.CorrelationId} not found"));
+            logger.SubFlowCorrelationNotFoundForStart(job.CorrelationId, context.InstanceId);
+            return Result.Fail(WorkflowErrors.SubFlowCorrelationNotFound(job.CorrelationId, context.InstanceId));
         }
 
         // Resolve target state from job's target state key
         var target = context.Workflow.States.SingleOrDefault(s => s.Key == job.TargetStateKey);
         if (target?.SubFlow is null)
         {
-            logger.LogError(
-                "Target state {TargetStateKey} not found or has no SubFlow configuration for instance {InstanceId}",
-                job.TargetStateKey,
-                context.InstanceId);
-            return Result.Fail(WorkflowErrors.ConfigInvalid(context.InstanceId, job.TargetStateKey));
+            logger.SubFlowTargetStateNotFound(job.TargetStateKey, context.InstanceId);
+            return Result.Fail(WorkflowErrors.SubFlowTargetStateNotFound(job.TargetStateKey, context.InstanceId));
         }
         
-        // Start the subflow (this is the remote call that was causing lock issues)
-        try
-        {
-            // Build script context for subflow mapping
-            await using var scriptContext = await CreateScriptContextAsync(context, instance, cancellationToken);
+        // Build script context for subflow mapping
+        await using var scriptContext = await CreateScriptContextAsync(context, instance, cancellationToken);
 
-            await subflowStarter.StartAsync(
-                context.Workflow,
-                instance,
-                target,
-                context.Transition!,
-                correlation,
-                scriptContext,
-                cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "Subflow start failed for instance {InstanceId}, correlation {CorrelationId}, target {TargetStateKey}",
-                context.InstanceId,
-                job.CorrelationId,
-                job.TargetStateKey);
+        // Start the subflow (Result pattern - no try-catch needed)
+        var startResult = await subflowStarter.StartAsync(
+            context.Workflow,
+            instance,
+            target,
+            context.Transition!,
+            correlation,
+            scriptContext,
+            cancellationToken);
 
-            return Result.Fail(Error.Failure(
-                WorkflowErrorCodes.SubflowStartFailed,
-                $"Failed to start subflow for correlation {job.CorrelationId}: {ex.Message}"));
+        if (startResult.IsSuccess)
+        {
+            logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
         }
 
-        logger.LogInformation(
-            "Subflow started for instance {InstanceId}, correlation {CorrelationId}, target {TargetStateKey}",
-            context.InstanceId,
-            job.CorrelationId,
-            job.TargetStateKey);
-
-        return Result.Ok();
+        return startResult;
     }
 
     /// <summary>

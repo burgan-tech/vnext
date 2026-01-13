@@ -98,7 +98,7 @@ services:
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
-      - "../../etc/workers/dapr/components:/components"
+      - "../../etc/workers/outbox/dapr/components:/components"
     ports:
       - "44110:44110"
       - "44111:44111"
@@ -127,7 +127,7 @@ services:
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
-      - "../../etc/workers/dapr/components:/components"
+      - "../../etc/workers/inbox/dapr/components:/components"
     ports:
       - "45110:45110"
       - "45111:45111"

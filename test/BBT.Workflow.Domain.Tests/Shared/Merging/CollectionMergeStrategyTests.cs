@@ -73,7 +73,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldMergeLists_WithSameLength()
+    public void Merge_ShouldReplaceLists_WithSameLength()
     {
         // Arrange
         var target = new List<object> { 1, 2, 3 };
@@ -82,7 +82,7 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
         Assert.Equal(3, result.Count);
         Assert.Equal(10, result[0]);
@@ -91,7 +91,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldMergeLists_WithDifferentLengths_TargetLonger()
+    public void Merge_ShouldReplaceLists_WithDifferentLengths_TargetLonger()
     {
         // Arrange
         var target = new List<object> { 1, 2, 3, 4, 5 };
@@ -100,18 +100,15 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
-        Assert.Equal(5, result.Count);
+        Assert.Equal(2, result.Count);
         Assert.Equal(10, result[0]);
         Assert.Equal(20, result[1]);
-        Assert.Equal(3, result[2]);
-        Assert.Equal(4, result[3]);
-        Assert.Equal(5, result[4]);
     }
 
     [Fact]
-    public void Merge_ShouldMergeLists_WithDifferentLengths_SourceLonger()
+    public void Merge_ShouldReplaceLists_WithDifferentLengths_SourceLonger()
     {
         // Arrange
         var target = new List<object> { 1, 2 };
@@ -120,7 +117,7 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
         Assert.Equal(4, result.Count);
         Assert.Equal(10, result[0]);
@@ -146,7 +143,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldHandleEmptySourceList()
+    public void Merge_ShouldReplaceWithEmptySourceList()
     {
         // Arrange
         var target = new List<object> { 1, 2, 3 };
@@ -155,9 +152,9 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, empty source replaces target
         Assert.NotNull(result);
-        Assert.Equal(3, result.Count);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -187,7 +184,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldHandleMixedTypesList()
+    public void Merge_ShouldReplaceMixedTypesList()
     {
         // Arrange
         var target = new List<object> { 1, "two", true };
@@ -196,7 +193,7 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
         Assert.Equal(3, result.Count);
         Assert.Equal(10, result[0]);
@@ -205,7 +202,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldHandleArrays()
+    public void Merge_ShouldReplaceArrays()
     {
         // Arrange
         var target = new[] { 1, 2, 3 };
@@ -214,9 +211,11 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Arrays are replaced, source completely replaces target
         Assert.NotNull(result);
-        Assert.Equal(3, result.Count);
+        Assert.Equal(2, result.Count);
+        Assert.Equal(10, result[0]);
+        Assert.Equal(20, result[1]);
     }
 
     [Fact]
@@ -292,7 +291,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldHandleListsWithNullElements()
+    public void Merge_ShouldReplaceListsWithNullElements()
     {
         // Arrange
         var target = new List<object?> { 1, null, 3 };
@@ -301,14 +300,12 @@ public class CollectionMergeStrategyTests
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target (including nulls)
         Assert.NotNull(result);
         Assert.Equal(3, result.Count);
         Assert.Equal(10, result[0]);
         Assert.Equal(20, result[1]);
-        // When source is null and target has value, ObjectMerger.MergeValues returns target
-        // So index 2 will keep the target value
-        Assert.Equal(3, result[2]);
+        Assert.Null(result[2]);
     }
 
     [Fact]
@@ -321,7 +318,7 @@ public class CollectionMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldDeepMergeNestedLists()
+    public void Merge_ShouldReplaceNestedLists()
     {
         // Arrange
         var target = new List<object>
@@ -331,19 +328,20 @@ public class CollectionMergeStrategyTests
 
         var source = new List<object>
         {
-            new Dictionary<string, object?> { { "Id", 1 }, { "Value", "Added" } }
+            new Dictionary<string, object?> { { "Id", 2 }, { "Value", "Added" } }
         };
 
         // Act
         var result = _strategy.Merge(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
         Assert.Single(result);
-        var item = result[0] as ExpandoObject;
+        var item = result[0] as Dictionary<string, object?>;
         Assert.NotNull(item);
-        var dict = (IDictionary<string, object?>)item;
-        Assert.Equal(3, dict.Count);
+        Assert.Equal(2, item.Count);
+        Assert.Equal(2, item["Id"]);
+        Assert.Equal("Added", item["Value"]);
     }
 }
 

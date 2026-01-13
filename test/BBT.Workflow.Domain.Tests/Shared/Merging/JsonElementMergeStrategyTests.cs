@@ -95,7 +95,7 @@ public class JsonElementMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldMergeJsonArrays()
+    public void Merge_ShouldReplaceJsonArrays()
     {
         // Arrange
         var targetJson = JsonDocument.Parse(@"[1, 2, 3]").RootElement;
@@ -108,13 +108,14 @@ public class JsonElementMergeStrategyTests
         Assert.NotNull(result);
         Assert.Equal(JsonValueKind.Array, result.Value.ValueKind);
         var array = result.Value.EnumerateArray().ToList();
-        Assert.Equal(3, array.Count);
-        // Arrays are merged, so we just check count
-        // The actual merge logic combines items at same positions
+        // Arrays are replaced, so source array completely replaces target
+        Assert.Equal(2, array.Count);
+        Assert.Equal(10, array[0].GetInt32());
+        Assert.Equal(20, array[1].GetInt32());
     }
 
     [Fact]
-    public void Merge_ShouldMergeJsonArrays_WithDifferentLengths()
+    public void Merge_ShouldReplaceJsonArrays_WithDifferentLengths()
     {
         // Arrange
         var targetJson = JsonDocument.Parse(@"[1, 2]").RootElement;
@@ -126,8 +127,12 @@ public class JsonElementMergeStrategyTests
         // Assert
         Assert.NotNull(result);
         var array = result.Value.EnumerateArray().ToList();
+        // Arrays are replaced, source array completely replaces target
         Assert.Equal(4, array.Count);
-        // Arrays are merged, checking count is sufficient
+        Assert.Equal(10, array[0].GetInt32());
+        Assert.Equal(20, array[1].GetInt32());
+        Assert.Equal(30, array[2].GetInt32());
+        Assert.Equal(40, array[3].GetInt32());
     }
 
     [Fact]
@@ -270,7 +275,7 @@ public class JsonElementMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldMergeNestedArraysInObjects()
+    public void Merge_ShouldReplaceNestedArraysInObjects()
     {
         // Arrange
         var targetJson = JsonDocument.Parse(@"{
@@ -288,6 +293,10 @@ public class JsonElementMergeStrategyTests
         Assert.NotNull(result);
         var dict = (IDictionary<string, object?>)result;
         Assert.True(dict.ContainsKey("items"));
+        // Nested arrays should be replaced, not merged
+        var items = dict["items"] as List<object>;
+        Assert.NotNull(items);
+        Assert.Equal(2, items.Count);
     }
 
     [Fact]
@@ -364,7 +373,7 @@ public class JsonElementMergeStrategyTests
     }
 
     [Fact]
-    public void Merge_ShouldMergeArraysWithObjectElements()
+    public void Merge_ShouldReplaceArraysWithObjectElements()
     {
         // Arrange
         var targetJson = JsonDocument.Parse(@"[
@@ -372,7 +381,7 @@ public class JsonElementMergeStrategyTests
         ]").RootElement;
 
         var sourceJson = JsonDocument.Parse(@"[
-            {""id"": 1, ""value"": ""Added""}
+            {""id"": 2, ""value"": ""Added""}
         ]").RootElement;
 
         // Act
@@ -382,6 +391,10 @@ public class JsonElementMergeStrategyTests
         Assert.NotNull(result);
         var array = result.Value.EnumerateArray().ToList();
         Assert.Single(array);
+        // Array is replaced, so we get the source array element
+        var firstItem = array[0];
+        Assert.Equal(2, firstItem.GetProperty("id").GetInt32());
+        Assert.Equal("Added", firstItem.GetProperty("value").GetString());
     }
 
     [Fact]
@@ -396,6 +409,49 @@ public class JsonElementMergeStrategyTests
 
         // Assert
         Assert.Equal(123, result);
+    }
+
+    /// <summary>
+    /// Test case for GitHub Issue #294: Array replacement behavior
+    /// Verifies that arrays are replaced entirely, not merged, allowing items to be removed.
+    /// </summary>
+    [Fact]
+    public void Merge_ShouldReplaceArrays_GitHubIssue294()
+    {
+        // Arrange - Issue scenario
+        // Current data: { "items": [{ "id": 1 }, { "id": 2 }] }
+        // Incoming payload: { "items": [{ "id": 2 }] }
+        // Expected result: { "items": [{ "id": 2 }] }
+        var targetJson = JsonDocument.Parse(@"{
+            ""items"": [
+                { ""id"": 1 },
+                { ""id"": 2 }
+            ]
+        }").RootElement;
+
+        var sourceJson = JsonDocument.Parse(@"{
+            ""items"": [
+                { ""id"": 2 }
+            ]
+        }").RootElement;
+
+        // Act
+        var result = _strategy.Merge(targetJson, sourceJson) as ExpandoObject;
+
+        // Assert - Arrays should be replaced, not merged
+        Assert.NotNull(result);
+        var dict = (IDictionary<string, object?>)result;
+        Assert.True(dict.ContainsKey("items"));
+        
+        var items = dict["items"] as List<object>;
+        Assert.NotNull(items);
+        Assert.Single(items); // Only one item, not two or three
+        
+        var item = items[0] as ExpandoObject;
+        Assert.NotNull(item);
+        var itemDict = (IDictionary<string, object?>)item;
+        // JSON deserialization may produce different numeric types, so we convert to string for comparison
+        Assert.Equal("2", itemDict["id"]?.ToString()); // The item from source with id: 2
     }
 }
 

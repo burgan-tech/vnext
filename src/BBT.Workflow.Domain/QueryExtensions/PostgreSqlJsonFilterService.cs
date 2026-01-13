@@ -3,8 +3,10 @@ using System.Text;
 using System.Text.Json;
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
+using BBT.Workflow.Security;
 
 namespace BBT.Workflow.Definitions;
 
@@ -23,22 +25,47 @@ public static class PostgreSqlJsonFilterService
     /// <param name="jsonColumnName">Name of the JSON column (e.g., "Data", "Json")</param>
     /// <param name="tableName">Name of the database table</param>
     /// <param name="schema">Database schema name</param>
+    /// <param name="schemaValidator">Optional schema validator for security validation</param>
+    /// <param name="logger">Optional logger for error tracking</param>
     /// <returns>Filtered queryable</returns>
     public static IQueryable<T> ApplyJsonFilters<T>(
         this DbSet<T> dbSet,
         string[] filters,
         string jsonColumnName = "Data",
         string tableName = "",
-        string schema = "public") where T : class
+        string schema = "public",
+        ISchemaValidator? schemaValidator = null,
+        ILogger? logger = null) where T : class
     {
         if (filters == null || !filters.Any())
             return dbSet;
 
-        var whereConditions = new List<string>();
+        // Validate inputs
+        InputValidator.ValidateFilters(filters);
+        
+        // Validate schema and table names
+        if (schemaValidator != null)
+        {
+            schema = schemaValidator.ValidateSchemaSync(schema);
+            tableName = schemaValidator.ValidateTableName(tableName);
+        }
+        else
+        {
+            // Fallback validation without DB lookup
+            schema = new SyncSchemaValidator().ValidateSchemaSync(schema);
+            tableName = new SyncSchemaValidator().ValidateTableName(tableName);
+        }
+
+        // Separate Instance column filters from JSON Data filters
+        var (instanceFilters, jsonFilters) = InstanceFieldDiscriminator.SeparateFilters(filters);
+
+        var jsonWhereConditions = new List<string>();
+        var instanceWhereConditions = new List<string>();
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
-        foreach (var filter in filters)
+        // Process JSON Data filters
+        foreach (var filter in jsonFilters)
         {
             try
             {
@@ -49,18 +76,52 @@ public static class PostgreSqlJsonFilterService
                 
                 if (!string.IsNullOrEmpty(condition))
                 {
-                    whereConditions.Add(condition);
+                    jsonWhereConditions.Add(condition);
                     parameters.AddRange(filterParameters);
                 }
             }
-            catch (Exception ex)
+            catch (ArgumentException ex)
             {
                 // Log error but continue with other filters
-                Console.WriteLine($"Error parsing filter '{filter}': {ex.Message}");
+                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filter);
+            }
+            catch (FormatException ex)
+            {
+                // Log error but continue with other filters
+                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filter);
             }
         }
 
-        if (!whereConditions.Any())
+        // Process Instance column filters
+        foreach (var filter in instanceFilters)
+        {
+            try
+            {
+                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filter);
+                
+                var (condition, filterParameters) = InstanceColumnConditionBuilder.BuildCondition(
+                    field, operatorType, operatorValue, ref parameterIndex);
+                
+                if (!string.IsNullOrEmpty(condition))
+                {
+                    instanceWhereConditions.Add(condition);
+                    parameters.AddRange(filterParameters);
+                }
+            }
+            catch (ArgumentException ex)
+            {
+                // Log error but continue with other filters
+                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filter);
+            }
+            catch (FormatException ex)
+            {
+                // Log error but continue with other filters
+                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filter);
+            }
+        }
+
+        // If no conditions at all, return unfiltered
+        if (!jsonWhereConditions.Any() && !instanceWhereConditions.Any())
             return dbSet;
 
         // Get table name if not provided
@@ -69,10 +130,18 @@ public static class PostgreSqlJsonFilterService
             tableName = typeof(T).Name + "s"; // Default convention: Entity + "s"
         }
 
-        // Build CTE-based SQL query - working pattern format
-        var whereClause = string.Join(" AND ", whereConditions);
+        // Build CTE-based SQL query with both JSON and Instance filters
+        var jsonWhereClause = jsonWhereConditions.Any() 
+            ? string.Join(" AND ", jsonWhereConditions) 
+            : string.Empty;
         
-        // Schema is not parameterized - use string interpolation like working pattern
+        var instanceWhereClause = instanceWhereConditions.Any()
+            ? string.Join(" AND ", instanceWhereConditions)
+            : string.Empty;
+
+        // Build SQL with conditional WHERE clauses
+        // If we have JSON filters, include them in the CTE WHERE clause
+        // If we have Instance filters, include them in the outer WHERE clause
         var rawSql = $@"
             WITH FilteredData AS (
                 SELECT DISTINCT ON (""InstanceId"") 
@@ -82,12 +151,13 @@ public static class PostgreSqlJsonFilterService
                     ""EnteredAt"",
                     ""IsLatest""
                 FROM ""{schema}"".""InstancesData""
-                WHERE ""IsLatest"" = true AND ({whereClause})
+                WHERE ""IsLatest"" = true{(string.IsNullOrEmpty(jsonWhereClause) ? "" : $" AND ({jsonWhereClause})")}
                 ORDER BY ""InstanceId"", ""EnteredAt"" DESC
             )
             SELECT s.*
             FROM ""{schema}"".""Instances"" s
             JOIN FilteredData d ON s.""Id"" = d.""InstanceId""
+            {(string.IsNullOrEmpty(instanceWhereClause) ? "" : $"WHERE {instanceWhereClause}")}
             ORDER BY s.""CreatedAt"" DESC";
 
         // Use exact working pattern - NpgsqlParameter array without @ in SQL
@@ -141,9 +211,15 @@ public static class PostgreSqlJsonFilterService
                     parameters.AddRange(filterParameters);
                 }
             }
-            catch (Exception ex)
+            catch (ArgumentException)
             {
-                Console.WriteLine($"Error parsing filter '{filter}': {ex.Message}");
+                // Silently skip invalid filters in BuildFilteredQuery
+                // Caller should handle validation before calling this method
+            }
+            catch (FormatException)
+            {
+                // Silently skip invalid filters in BuildFilteredQuery
+                // Caller should handle validation before calling this method
             }
         }
 
@@ -193,11 +269,33 @@ public static class PostgreSqlJsonFilterService
 
     private static string SanitizeFieldName(string field)
     {
-        // Only allow alphanumeric characters, dots, and underscores
-        if (!System.Text.RegularExpressions.Regex.IsMatch(field, @"^[a-zA-Z0-9._]+$"))
+        // Validate field name with comprehensive checks
+        InputValidator.ValidateFieldName(field);
+        
+        // Must start with a letter
+        if (!char.IsLetter(field[0]))
         {
-            throw new ArgumentException($"Invalid field name: {field}. Only alphanumeric, dots, and underscores allowed.");
+            throw new ArgumentException($"Invalid field name: {field}. Must start with a letter.");
         }
+        
+        // Only allow alphanumeric characters, dots, and underscores
+        var regex = new System.Text.RegularExpressions.Regex(
+            @"^[a-zA-Z][a-zA-Z0-9._]*$",
+            System.Text.RegularExpressions.RegexOptions.None,
+            TimeSpan.FromMilliseconds(100));
+            
+        try
+        {
+            if (!regex.IsMatch(field))
+            {
+                throw new ArgumentException($"Invalid field name: {field}. Only alphanumeric, dots, and underscores allowed.");
+            }
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            throw new ArgumentException($"Field name validation timeout: {field}");
+        }
+        
         return field;
     }
 
@@ -208,7 +306,7 @@ public static class PostgreSqlJsonFilterService
     private static bool IsNestedPath(string field) => field.Contains('.');
 
     /// <summary>
-    /// Build nested JSON containment pattern for @> operator
+    /// Build nested JSON containment pattern for @> operator using JsonSerializer for proper escaping
     /// Example: "parent.child" + "123" (numeric) -> {"parent":{"child":123}}
     /// Example: "parent.child" + "test" (string) -> {"parent":{"child":"test"}}
     /// </summary>
@@ -216,31 +314,35 @@ public static class PostgreSqlJsonFilterService
     {
         var parts = field.Split('.');
         
-        // Build the innermost value
-        string innerValue;
+        // Build the innermost value as proper object
+        object innerValue;
         if (isBoolean && bool.TryParse(value, out var boolVal))
         {
-            innerValue = boolVal.ToString().ToLower();
+            innerValue = boolVal;
         }
         else if (isNumeric && decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var numVal))
         {
-            innerValue = numVal.ToString(CultureInfo.InvariantCulture);
+            innerValue = numVal;
         }
         else
         {
-            innerValue = $"\"{value}\"";
+            innerValue = value; // JsonSerializer will properly escape strings
         }
         
-        // Build nested JSON from inside out
-        // For "parent.child.field" with value "123", build: {"parent":{"child":{"field":123}}}
-        var result = $"{{\"{parts[^1]}\":{innerValue}}}";
+        // Build nested object from inside out using Dictionary for proper JSON serialization
+        object currentLevel = new Dictionary<string, object> { [parts[^1]] = innerValue };
         
         for (int i = parts.Length - 2; i >= 0; i--)
         {
-            result = $"{{\"{parts[i]}\":{result}}}";
+            currentLevel = new Dictionary<string, object> { [parts[i]] = currentLevel };
         }
         
-        return result;
+        // Use JsonSerializer for proper escaping and formatting
+        return JsonSerializer.Serialize(currentLevel, new JsonSerializerOptions 
+        { 
+            WriteIndented = false,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        });
     }
 
     /// <summary>

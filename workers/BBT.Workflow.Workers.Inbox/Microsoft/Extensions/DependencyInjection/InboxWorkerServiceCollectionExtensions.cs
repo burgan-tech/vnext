@@ -1,3 +1,5 @@
+using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Inbox.HostedServices;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -22,13 +24,20 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddAspNetCoreModules(configuration)
             .AddResultResilience(configuration)
             .AddDaprClients()
-            .AddEventBus(configuration)
+            .AddAetherEventBus(options =>
+            {
+                options.DefaultSource =
+                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
+                options.PrefixEnvironmentToTopic = true;
+                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
+            })
             .AddDbContext(configuration)
             .AppMapper()
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
-            .AddBackgroundJob()
+            .AddAetherBackgroundJob<WorkflowDbContext>()
+            .AddDaprJobScheduler()
             .AddRedis()
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
@@ -36,6 +45,7 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddWorkflowHttpClient() // TODO: Düşün!!!!
             .AddHostedServices()
             .AddAppHealthChecks();
+        
         return services;
     }
     

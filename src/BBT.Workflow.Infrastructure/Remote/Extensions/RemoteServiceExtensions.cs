@@ -57,10 +57,17 @@ public static class RemoteServiceExtensions
                 {
                     client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
                 }
+                
+                // Increase buffer size limits to handle large responses
+                client.MaxResponseContentBufferSize = int.MaxValue;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
             {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                // Increase response headers length limit (default is 64KB)
+                MaxResponseHeadersLength = 1024 * 1024, // 1MB
+                // Increase request content buffer size limit (default is 2GB)
+                MaxRequestContentBufferSize = int.MaxValue
             })
             .AddPolicyHandler(GetTimeoutPolicy(options))
             .AddPolicyHandler(GetRetryPolicy(options))
@@ -83,10 +90,17 @@ public static class RemoteServiceExtensions
                 {
                     client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
                 }
+                
+                // Increase buffer size limits to handle large responses
+                client.MaxResponseContentBufferSize = int.MaxValue;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
             {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                // Increase response headers length limit (default is 64KB)
+                MaxResponseHeadersLength = 1024 * 1024, // 1MB
+                // Increase request content buffer size limit (default is 2GB)
+                MaxRequestContentBufferSize = int.MaxValue
             })
             .AddPolicyHandler(GetTimeoutPolicy(options))
             .AddPolicyHandler(GetRetryPolicy(options))

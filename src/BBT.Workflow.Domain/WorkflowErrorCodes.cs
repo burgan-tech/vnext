@@ -38,6 +38,8 @@ public static class WorkflowErrorCodes
     public const string ChildSubflowCancellationFailed = "Instance:100021";
     public const string SubflowCompletionFailed = "Instance:100022";
     public const string SubflowStartFailed = "Instance:100023";
+    public const string UpdateDataNotConfiguredForWorkflow = "Instance:100024";
+    public const string ActiveInstanceAlreadyExists = "Instance:100025";
     
     #endregion
     

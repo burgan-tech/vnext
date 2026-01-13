@@ -24,6 +24,28 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         int page, 
         int pageSize, 
         string[]? filters,
+        string? groupBy = null,
+        string? aggregations = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets paged results with optional groups for groupBy queries
+    /// </summary>
+    Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        string[]? filters,
+        string? groupBy = null,
+        string? aggregations = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
+    /// </summary>
+    Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        Definitions.GraphQL.GraphQLFilterRequest? request,
         CancellationToken cancellationToken = default);
 
     Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,

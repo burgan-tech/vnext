@@ -57,5 +57,13 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     {
         return _remoteService.CompleteAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> UpdateSubFlowStateAsync(
+        SubFlowStateChangedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.UpdateSubFlowStateAsync(input, cancellationToken);
+    }
 }
 

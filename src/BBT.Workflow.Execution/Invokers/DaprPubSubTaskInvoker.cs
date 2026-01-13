@@ -91,7 +91,7 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
                     ["Topic"] = binding.TopicName
                 });
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprPubSubPublish(binding.PubSubName, binding.TopicName, "cancelled");
@@ -107,7 +107,8 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
                     ["PubSubName"] = binding.PubSubName,
                     ["Topic"] = binding.TopicName,
                     ["Cancelled"] = true,
-                    ["Published"] = false
+                    ["Published"] = false,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)

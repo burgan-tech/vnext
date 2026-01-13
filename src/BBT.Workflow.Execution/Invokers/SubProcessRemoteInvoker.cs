@@ -213,6 +213,8 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         if (binding.Sync)
             queryParams.Add("sync=true");
 
+        queryParams.Add("strictIdempotency=true");
+
         if (queryParams.Count > 0)
             path += "?" + string.Join("&", queryParams);
 

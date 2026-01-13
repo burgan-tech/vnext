@@ -7,8 +7,15 @@ namespace BBT.Workflow.Definitions;
 
 public static class FilterOperatorParser
 {
-    private static readonly Regex OperatorRegex = new(@"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):(.+)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex BetweenRegex = new(@"^(.+),(.+)$", RegexOptions.Compiled);
+    private static readonly Regex OperatorRegex = new(
+        @"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):(.+)$", 
+        RegexOptions.Compiled | RegexOptions.IgnoreCase,
+        TimeSpan.FromMilliseconds(100));
+    
+    private static readonly Regex BetweenRegex = new(
+        @"^(.+),(.+)$", 
+        RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(100));
 
     public static (string Field, string Operator, string Value) ParseOperator(string input)
     {
@@ -18,19 +25,27 @@ public static class FilterOperatorParser
             input = input.Substring("attributes=".Length);
         }
 
-        var match = OperatorRegex.Match(input);
-        if (!match.Success)
+        try
         {
-            // Fallback to simple equals if no operator specified
-            var simpleMatch = Regex.Match(input, @"^([^=]+)=(.+)$");
-            if (simpleMatch.Success)
+            var match = OperatorRegex.Match(input);
+            if (!match.Success)
             {
-                return (simpleMatch.Groups[1].Value.Trim(), "eq", simpleMatch.Groups[2].Value.Trim());
+                // Fallback to simple equals if no operator specified
+                var simpleRegex = new Regex(@"^([^=]+)=(.+)$", RegexOptions.None, TimeSpan.FromMilliseconds(100));
+                var simpleMatch = simpleRegex.Match(input);
+                if (simpleMatch.Success)
+                {
+                    return (simpleMatch.Groups[1].Value.Trim(), "eq", simpleMatch.Groups[2].Value.Trim());
+                }
+                throw new ArgumentException($"Invalid filter format: {input}");
             }
-            throw new ArgumentException($"Invalid filter format: {input}");
-        }
 
-        return (match.Groups[1].Value.Trim(), match.Groups[2].Value.ToLower(), match.Groups[3].Value.Trim());
+            return (match.Groups[1].Value.Trim(), match.Groups[2].Value.ToLowerInvariant(), match.Groups[3].Value.Trim());
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            throw new ArgumentException($"Filter parsing timeout (possible ReDoS attack): {input}");
+        }
     }
 
     public static Expression<Func<T, bool>> CreateJsonPropertyExpression<T>(

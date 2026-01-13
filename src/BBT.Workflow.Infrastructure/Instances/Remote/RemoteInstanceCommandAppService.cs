@@ -112,6 +112,8 @@ public sealed class RemoteInstanceCommandAppService(
             if (input.Sync)
                 queryParams.Add($"sync={input.Sync}");
 
+            queryParams.Add("strictIdempotency=true");
+
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
@@ -229,6 +231,47 @@ public sealed class RemoteInstanceCommandAppService(
             var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
 
             var relativePath = InstanceUrlTemplates.Complete(input.Domain, input.Flow, input.InstanceId.ToString(),
+                ApiVersionPrefix);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+
+            var jsonContent = JsonSerializer.Serialize(input, JsonOptions);
+            var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = content
+            };
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+
+            // Status code → Result.Fail (per Railway Pattern)
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            // Network errors → Transient error (per Railway Pattern)
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Updates the parent instance with SubFlow's state change by calling the remote API
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/sub/state
+    /// </summary>
+    public async Task<Result> UpdateSubFlowStateAsync(
+        SubFlowStateChangedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Resolve endpoint dynamically based on target domain
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.SubFlowState(
+                input.Domain, 
+                input.Flow, 
+                input.ParentInstanceId.ToString(),
                 ApiVersionPrefix);
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));

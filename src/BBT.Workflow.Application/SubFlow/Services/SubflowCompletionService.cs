@@ -321,6 +321,7 @@ public sealed class SubflowCompletionService(
 
     /// <summary>
     /// Completes the SubFlow correlation and persists the changes to the repository.
+    /// Also resets the parent's EffectiveState back to its own CurrentState.
     /// </summary>
     /// <param name="parentInstance">The parent workflow instance</param>
     /// <param name="subInstanceId">The SubFlow instance identifier</param>
@@ -335,6 +336,10 @@ public sealed class SubflowCompletionService(
         var correlation = parentInstance.CompleteCorrelation(subInstanceId);
         if(correlation == null)
             return;
+
+        // Reset parent's EffectiveState back to its own CurrentState
+        // (SubFlow is now completed, so parent's state is no longer reflected from SubFlow)
+        parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
 
         logger.SubFlowCorrelationCompleted(subInstanceId, parentInstanceId);
 

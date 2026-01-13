@@ -59,5 +59,16 @@ public interface IInstanceCommandGateway
     Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Updates the parent instance with SubFlow's state change.
+    /// Routes to local or remote based on target domain in input.
+    /// </summary>
+    /// <param name="input">The SubFlow state change input containing parent and state information.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result indicating success or failure.</returns>
+    Task<Result> UpdateSubFlowStateAsync(
+        SubFlowStateChangedInput input,
+        CancellationToken cancellationToken = default);
 }
 

@@ -99,7 +99,7 @@ public sealed class TransitionContextFactory(
             InstanceId = data.Instance.Id,
             WorkflowKey = data.Workflow.Key,
             TransitionKey = data.Transition?.Key ?? input.TransitionKey,
-            Trigger = input.TriggerType,
+            Trigger = data.Transition?.TriggerType ?? input.TriggerType,
             Actor = input.Actor,
             CorrelationId = input.CorrelationId ?? Guid.NewGuid().ToString("N"),
             CausationId = input.CausationId,

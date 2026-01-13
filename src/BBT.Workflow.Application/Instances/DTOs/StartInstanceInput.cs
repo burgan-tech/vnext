@@ -21,6 +21,13 @@ public sealed class StartInstanceInput(
     public Dictionary<string, string?> RouteValues { get; set; } = new();
 
     /// <summary>
+    /// When true, returns 409 Conflict if an active instance with same key exists.
+    /// Used for service-to-service calls to prevent false positive correlations.
+    /// Default false preserves idempotent behavior for client calls.
+    /// </summary>
+    public bool StrictIdempotency { get; set; } = false;
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this StartInstanceInput for starting a new workflow instance.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>

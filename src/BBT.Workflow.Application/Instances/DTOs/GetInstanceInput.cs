@@ -93,6 +93,16 @@ public sealed class GetInstanceListInput : IHasDomain
     /// Query parameters from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Gets the groupBy parameter from QueryParameters
+    /// </summary>
+    public string? GroupBy => QueryParameters?.TryGetValue("groupBy", out var value) == true ? value : null;
+
+    /// <summary>
+    /// Gets the aggregations parameter from QueryParameters
+    /// </summary>
+    public string? Aggregations => QueryParameters?.TryGetValue("aggregations", out var value) == true ? value : null;
 }
 
 /// <summary>

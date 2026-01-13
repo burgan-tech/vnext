@@ -22,6 +22,7 @@ public sealed class InstanceController(
     IInstanceQueryAppService queryAppService,
     IHttpContextAccessor httpContextAccessor,
     ISubflowCompletionService subflowCompletionService,
+    ISubflowStateService subflowStateService,
     IPaginationLinkGenerator linkGenerator) : AetherControllerBase
 {
     /// <summary>
@@ -86,7 +87,8 @@ public sealed class InstanceController(
                 Attributes = request.Attributes,
                 Callback = request.Callback,
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
-            }
+            },
+            StrictIdempotency = true
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -110,6 +112,24 @@ public sealed class InstanceController(
     )
     {
         await subflowCompletionService.CompletionAsync(request, cancellationToken);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Updates parent instance with SubFlow's state change.
+    /// Internal endpoint for cross-domain SubFlow state synchronization.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/sub/state")]
+    public async Task<IActionResult> UpdateSubFlowStateAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromBody] SubFlowStateChangedInput request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
         return Ok();
     }
 
@@ -235,10 +255,41 @@ public sealed class InstanceController(
         if (response.IsSuccess)
         {
             var route = InstanceUrlTemplates.InstanceList(domain, workflow, InstanceUrlTemplates.GetApiVersionPrefix("1"));
-            var output = linkGenerator.CreateHateoasResult(response.Value!, response.Value!.Items.ToList(), route);
-            return Result.Ok(output).ToAcceptedResult(HttpContext);
+
+            // Check if items contain GroupSummary objects (groupBy case) or GetInstanceOutput objects (normal case)
+            var firstItem = response.Value!.Items.FirstOrDefault();
+            var isGroupByResponse = firstItem is GroupSummary;
+
+            if (isGroupByResponse)
+            {
+                // For groupBy responses, create a simple paged list structure for HATEOAS links
+                var groupSummaries = response.Value!.Items.Cast<GroupSummary>().ToList();
+                var tempPagedList = new HateoasPagedList<GroupSummary>(
+                    groupSummaries,
+                    input.Page,
+                    input.PageSize,
+                    groupSummaries.Count == input.PageSize);
+
+                var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, groupSummaries, route);
+                response.Value!.Links = hateoasResult.Links;
+            }
+            else
+            {
+                // Normal case: items are GetInstanceOutput objects
+                var instanceOutputs = response.Value!.Items.Cast<GetInstanceOutput>().ToList();
+                var tempPagedList = new HateoasPagedList<GetInstanceOutput>(
+                    instanceOutputs,
+                    input.Page,
+                    input.PageSize,
+                    instanceOutputs.Count == input.PageSize);
+
+                var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, instanceOutputs, route);
+                response.Value!.Links = hateoasResult.Links;
+            }
+
+            return Result.Ok(response.Value).ToAcceptedResult(HttpContext);
         }
-        
+
         return response.ToActionResult(HttpContext);
     }
 

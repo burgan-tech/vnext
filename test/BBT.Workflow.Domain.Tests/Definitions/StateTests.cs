@@ -401,5 +401,95 @@ public class StateTests
         // Assert
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnTrue_WhenNoTransitions()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+
+        // Act & Assert
+        Assert.True(state.HasOnlyManualOrEventTransitions);
+    }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnTrue_WhenOnlyManualTransitions()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+        var manualTransition1 = Transition.Create("submit", "test-state", "next", TriggerType.Manual, "Patch");
+        var manualTransition2 = Transition.Create("cancel", "test-state", "cancelled", TriggerType.Manual, "Patch");
+        state.AddTransition(manualTransition1);
+        state.AddTransition(manualTransition2);
+
+        // Act & Assert
+        Assert.True(state.HasOnlyManualOrEventTransitions);
+    }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnTrue_WhenOnlyEventTransitions()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+        var eventTransition = Transition.Create("on-event", "test-state", "next", TriggerType.Event, "Patch");
+        state.AddTransition(eventTransition);
+
+        // Act & Assert
+        Assert.True(state.HasOnlyManualOrEventTransitions);
+    }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnTrue_WhenMixOfManualAndEventTransitions()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+        var manualTransition = Transition.Create("submit", "test-state", "next", TriggerType.Manual, "Patch");
+        var eventTransition = Transition.Create("on-event", "test-state", "other", TriggerType.Event, "Patch");
+        state.AddTransition(manualTransition);
+        state.AddTransition(eventTransition);
+
+        // Act & Assert
+        Assert.True(state.HasOnlyManualOrEventTransitions);
+    }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnFalse_WhenHasAutomaticTransition()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+        var manualTransition = Transition.Create("submit", "test-state", "next", TriggerType.Manual, "Patch");
+        var autoTransition = Transition.Create("auto", "test-state", "other", TriggerType.Automatic, "Patch");
+        state.AddTransition(manualTransition);
+        state.AddTransition(autoTransition);
+
+        // Act & Assert
+        Assert.False(state.HasOnlyManualOrEventTransitions);
+    }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnFalse_WhenHasScheduledTransition()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+        var manualTransition = Transition.Create("submit", "test-state", "next", TriggerType.Manual, "Patch");
+        var scheduledTransition = Transition.Create("timeout", "test-state", "expired", TriggerType.Scheduled, "Patch");
+        state.AddTransition(manualTransition);
+        state.AddTransition(scheduledTransition);
+
+        // Act & Assert
+        Assert.False(state.HasOnlyManualOrEventTransitions);
+    }
+
+    [Fact]
+    public void HasOnlyManualOrEventTransitions_ShouldReturnFalse_WhenOnlyAutomaticTransitions()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+        var autoTransition = Transition.Create("auto", "test-state", "next", TriggerType.Automatic, "Patch");
+        state.AddTransition(autoTransition);
+
+        // Act & Assert
+        Assert.False(state.HasOnlyManualOrEventTransitions);
+    }
 }
 

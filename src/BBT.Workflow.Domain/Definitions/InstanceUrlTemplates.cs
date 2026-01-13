@@ -89,6 +89,12 @@ public static class InstanceUrlTemplates
     public const string CompleteTemplate = "/{0}/workflows/{1}/instances/{2}/complete";
 
     /// <summary>
+    /// URL template for subflow state update endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/sub/state
+    /// </summary>
+    public const string SubFlowStateTemplate = "/{0}/workflows/{1}/instances/{2}/sub/state";
+
+    /// <summary>
     /// URL template for function list endpoints.
     /// Format: /{domain}/workflows/{workflow}/functions/{function}
     /// </summary>
@@ -245,6 +251,17 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string Complete(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(CompleteTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for subflow state update endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance key or ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string SubFlowState(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(SubFlowStateTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for function list endpoint.

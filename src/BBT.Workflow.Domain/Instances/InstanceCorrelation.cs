@@ -84,6 +84,12 @@ public sealed class InstanceCorrelation : Entity<Guid>
     public SubFlowType SubFlowType { get; private set; }
 
     /// <summary>
+    /// SubFlow's current state - updated when SubFlow state changes.
+    /// Enables parent to track SubFlow progress without cross-domain queries.
+    /// </summary>
+    public string? SubFlowCurrentState { get; private set; }
+
+    /// <summary>
     /// Is completed
     /// </summary>
     public bool IsCompleted { get; private set; }
@@ -109,6 +115,16 @@ public sealed class InstanceCorrelation : Entity<Guid>
         CompletedAt = null;
     }
 
+    /// <summary>
+    /// Updates the SubFlow's current state.
+    /// Called when SubFlow state changes to keep parent informed.
+    /// </summary>
+    /// <param name="newState">The new state of the SubFlow</param>
+    public void UpdateSubFlowState(string newState)
+    {
+        SubFlowCurrentState = Check.Length(newState, nameof(newState), StateConstants.MaxKeyLength);
+    }
+
     internal InstanceCorrelation CreateSnapshot()
     {
         var snapshot = new InstanceCorrelation
@@ -121,6 +137,7 @@ public sealed class InstanceCorrelation : Entity<Guid>
             SubFlowName = SubFlowName,
             SubFlowVersion = SubFlowVersion,
             SubFlowType = SubFlowType,
+            SubFlowCurrentState = SubFlowCurrentState,
             IsCompleted = IsCompleted,
             CompletedAt = CompletedAt
         };

@@ -141,7 +141,7 @@ public sealed class NotificationTaskInvoker : ITaskInvoker<NotificationBinding>
                     ["Recipients"] = binding.To ?? Array.Empty<string>()
                 });
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordNotificationInvocation(bindingName, bindingKind, "cancelled");
@@ -158,7 +158,8 @@ public sealed class NotificationTaskInvoker : ITaskInvoker<NotificationBinding>
                 {
                     ["BindingName"] = bindingName,
                     ["BindingKind"] = bindingKind,
-                    ["Cancelled"] = true
+                    ["Cancelled"] = true,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)

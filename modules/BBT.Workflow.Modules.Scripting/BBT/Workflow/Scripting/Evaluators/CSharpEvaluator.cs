@@ -35,6 +35,11 @@ public class CSharpEvaluator : IEvaluator
     private static readonly Lazy<IReadOnlyList<MetadataReference>> DefaultMetadataReferences = new(
         CreateDefaultReferences, 
         LazyThreadSafetyMode.ExecutionAndPublication);
+    
+    /// <summary>
+    /// Parse options for C# 12 language features (collection expressions, etc.)
+    /// </summary>
+    private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.CSharp12);
 
     /// <summary>
     /// Gets the number of cached script types (unique scripts compiled).
@@ -97,7 +102,7 @@ public class CSharpEvaluator : IEvaluator
         IEnumerable<string>? usingDirectives,
         CancellationToken cancellationToken)
     {
-        var syntaxTree = CSharpSyntaxTree.ParseText(code, cancellationToken: cancellationToken);
+        var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions, cancellationToken: cancellationToken);
 
         // Add using directives if provided
         if (usingDirectives != null && usingDirectives.Any())

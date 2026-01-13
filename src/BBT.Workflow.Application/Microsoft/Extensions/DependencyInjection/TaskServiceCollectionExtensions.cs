@@ -1,3 +1,4 @@
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -30,18 +31,21 @@ public static class TaskServiceCollectionExtensions
     {
         // New Executor architecture
         services.AddTaskExecutors();
-        
+
         // Core unified infrastructure
         services.AddTaskEvaluators();
-        
+
+        // Error boundary services (consolidated in Execution/ErrorHandling)
+        services.AddErrorBoundaryServices();
+
         // Task coordination and orchestration
         services.AddTaskCoordination();
-        
+
         // Supporting services
         services.AddTaskFactories();
         services.AddTaskPersistence();
         services.AddScriptingServices();
-        
+
         return services;
     }
 
@@ -53,32 +57,33 @@ public static class TaskServiceCollectionExtensions
     {
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
-        
+
         // Executor registry
         services.TryAddScoped<ITaskExecutorRegistry, TaskExecutorRegistry>();
-        
+
         // Script executor (no remote - inline execution)
         services.AddTaskExecutor<ScriptTaskExecutor>();
-        
+
         // Human task executor (no remote - state change only)
         services.AddTaskExecutor<HumanTaskExecutor>();
-        
+
         // HTTP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
-        
+
         // Notification task executor (uses Dapr binding with runtime-resolved component)
         services.AddTaskExecutor<NotificationTaskExecutor>();
-        
+
         // Trigger task executors (domain-aware: local or remote)
-        services.AddTaskExecutor< SubProcessTaskExecutor>();
+        services.AddTaskExecutor<SubProcessTaskExecutor>();
         services.AddTaskExecutor<StartTriggerTaskExecutor>();
         services.AddTaskExecutor<DirectTriggerTaskExecutor>();
         services.AddTaskExecutor<GetInstanceDataTaskExecutor>();
-        
+        services.AddTaskExecutor<GetInstancesTaskExecutor>();
+
         return services;
     }
 
@@ -91,22 +96,53 @@ public static class TaskServiceCollectionExtensions
         // Evaluator implementations
         services.AddScoped<IConditionEvaluator, ScriptConditionEvaluator>();
         services.AddScoped<ITimerEvaluator, ScriptTimerEvaluator>();
-        
+
         // Unified evaluator registry
         services.AddScoped<ITaskEvaluatorRegistry, TaskEvaluatorRegistry>();
-        
+
+        return services;
+    }
+
+    /// <summary>
+    /// Adds consolidated error boundary services from Execution/ErrorHandling.
+    /// Provides hierarchical boundary resolution (Task -> State -> Global),
+    /// action execution, and Polly retry integration.
+    /// </summary>
+    private static IServiceCollection AddErrorBoundaryServices(this IServiceCollection services)
+    {
+        // Error normalization
+        services.TryAddScoped<IErrorNormalizer, ErrorNormalizer>();
+
+        // Boundary resolution with hierarchical lookup
+        services.TryAddScoped<IErrorBoundaryResolver, ErrorBoundaryResolver>();
+
+        // Execution Error Factory
+        services.TryAddScoped<IExecutionErrorFactory, ExecutionErrorFactory>();
+
+        // Action execution (Abort, Retry, Rollback, Notify, Log, Ignore)
+        services.TryAddScoped<IErrorActionExecutor, ErrorActionExecutor>();
+
+        // Polly retry policy factory
+        services.TryAddSingleton<IRetryPolicyFactory, PollyRetryPolicyFactory>();
+
         return services;
     }
 
     /// <summary>
     /// Adds task coordination services (ITaskCoordinator, ITaskConditionService, ITaskTimerService).
+    /// Uses consolidated error boundary services and TaskExecutionEngine.
     /// </summary>
     private static IServiceCollection AddTaskCoordination(this IServiceCollection services)
     {
+        // Task execution engine (single task lifecycle)
+        services.TryAddScoped<ITaskExecutionEngine, TaskExecutionEngine>();
+
+        // Coordinator services (orchestration only)
         services.AddScoped<ITaskCoordinator, TaskCoordinator>();
+        services.AddScoped<ITaskCoordinatorExtended, TaskCoordinator>();
         services.AddScoped<ITaskConditionService, TaskCoordinator>();
         services.AddScoped<ITaskTimerService, TaskCoordinator>();
-        
+
         return services;
     }
 
@@ -150,7 +186,7 @@ public static class TaskServiceCollectionExtensions
         services.AddScoped<ITaskPersistenceStrategy, StandardTaskPersistenceStrategy>();
         services.AddScoped<ITaskPersistenceStrategy, ExtensionTaskPersistenceStrategy>();
         services.AddScoped<ITaskPersistenceStrategyFactory, TaskPersistenceStrategyFactory>();
-        
+
         return services;
     }
 
@@ -163,15 +199,15 @@ public static class TaskServiceCollectionExtensions
     private static IServiceCollection AddScriptingServices(this IServiceCollection services)
     {
         services.TryAddSingleton<IScriptContextFactory, ScriptContextFactory>();
-        
+
         // Evaluator is stateless - singleton for efficiency (caches MetadataReferences only)
         services.TryAddSingleton<IEvaluator, CSharpEvaluator>();
-        
+
         // Script services - scoped for per-request isolation (requires DaprClient to be registered)
         services.TryAddScoped<IScriptServices, ScriptServices>();
-        
+
         services.TryAddScoped<IScriptEngine, ScriptEngine>();
-        
+
         return services;
     }
 

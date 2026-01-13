@@ -74,5 +74,15 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
             ? _local.CompleteAsync(input, cancellationToken)
             : _remote.CompleteAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> UpdateSubFlowStateAsync(
+        SubFlowStateChangedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.UpdateSubFlowStateAsync(input, cancellationToken)
+            : _remote.UpdateSubFlowStateAsync(input, cancellationToken);
+    }
 }
 

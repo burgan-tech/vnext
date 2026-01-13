@@ -6,5 +6,6 @@ namespace BBT.Workflow.Definitions;
 /// </summary>
 public static class WellKnownStateKeys
 {
-    public static readonly string[] ReservedTargetKeys = ["$self"];
+    public static readonly string[] ReservedTargetKeys = [Self];
+    public const string Self = "$self";
 }

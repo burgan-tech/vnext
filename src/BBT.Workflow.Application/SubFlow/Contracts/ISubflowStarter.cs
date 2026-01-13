@@ -1,10 +1,9 @@
+using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
 
 namespace BBT.Workflow.SubFlow;
-
-//TODO: Result implementation 
 
 /// <summary>
 /// Interface for service managing SubFlow and SubProcess workflows.
@@ -21,12 +20,10 @@ public interface ISubflowStarter
     /// <param name="parentInstance">The main workflow instance that initiates the sub-flow.</param>
     /// <param name="targetState">The target state containing SubFlow configuration.</param>
     /// <param name="transition">The current transition.</param>
-    /// <param name="correlation"></param>
+    /// <param name="correlation">Correlation information for tracking.</param>
     /// <param name="context">The script context containing execution data and headers.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
-    /// <returns>A task representing the asynchronous sub-flow initiation operation.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when required parameters are null.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when the SubFlow configuration is invalid.</exception>
+    /// <returns>Result indicating success or failure of the sub-flow initiation.</returns>
     /// <remarks>
     /// <para>
     /// SubFlow (Type: "S"): Creates a separate instance and blocks the parent workflow until completion. 
@@ -37,7 +34,7 @@ public interface ISubflowStarter
     /// The parent workflow can continue immediately after starting the SubProcess.
     /// </para>
     /// </remarks>
-    Task StartAsync(
+    Task<Result> StartAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         State targetState,
@@ -58,8 +55,8 @@ public interface ISubflowStarter
     /// <param name="subFlowType">Type code of the SubFlow ("S" or "P").</param>
     /// <param name="inputMappingResult">Optional input mapping result containing data, headers, and key information.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A task representing the asynchronous sub-flow initiation operation.</returns>
-    Task SubStartAsync(
+    /// <returns>Result indicating success or failure of the sub-flow initiation.</returns>
+    Task<Result> SubStartAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         Reference subFlowReference,

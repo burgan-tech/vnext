@@ -1,8 +1,10 @@
 using System.Text.Json;
 using BBT.Aether;
+using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -26,7 +28,7 @@ public sealed class SubflowStarter(
     ILogger<SubflowStarter> logger) : ISubflowStarter
 {
     /// <inheritdoc />
-    public async Task StartAsync(
+    public async Task<Result> StartAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         State targetState,
@@ -41,10 +43,15 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult = null;
         if (subFlowConfig.Mapping != null)
         {
-            inputMappingResult = await HandleInputMappingAsync(subFlowConfig, context, cancellationToken);
+            var mappingResult = await HandleInputMappingAsync(subFlowConfig, context, cancellationToken);
+            if (!mappingResult.IsSuccess)
+            {
+                return Result.Fail(mappingResult.Error);
+            }
+            inputMappingResult = mappingResult.Value;
         }
 
-        await StartSubFlowInternalAsync(
+        return await StartSubFlowInternalAsync(
             workflow,
             parentInstance,
             subFlowConfig.Process,
@@ -56,19 +63,8 @@ public sealed class SubflowStarter(
             cancellationToken);
     }
 
-    /// <summary>
-    /// Starts a SubProcess workflow without requiring a target state or mapping.
-    /// Used for triggering SubProcess workflows from tasks.
-    /// </summary>
-    /// <param name="workflow">The parent workflow.</param>
-    /// <param name="parentInstance">The parent instance.</param>
-    /// <param name="subFlowReference">Reference to the SubFlow/SubProcess to start.</param>
-    /// <param name="transition">The transition triggering the SubProcess.</param>
-    /// <param name="correlation">Correlation information for tracking.</param>
-    /// <param name="subFlowType">Type code of the SubFlow ("S" or "P").</param>
-    /// <param name="inputMappingResult">Optional input mapping result containing data, headers, and key information.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    public async Task SubStartAsync(
+    /// <inheritdoc />
+    public async Task<Result> SubStartAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         Reference subFlowReference,
@@ -78,7 +74,7 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult = null,
         CancellationToken cancellationToken = default)
     {
-        await StartSubFlowInternalAsync(
+        return await StartSubFlowInternalAsync(
             workflow,
             parentInstance,
             subFlowReference,
@@ -93,7 +89,8 @@ public sealed class SubflowStarter(
     /// <summary>
     /// Internal method that contains the common logic for starting SubFlow/SubProcess workflows.
     /// </summary>
-    private async Task StartSubFlowInternalAsync(
+    /// <returns>Result indicating success or failure of the SubFlow start operation.</returns>
+    private async Task<Result> StartSubFlowInternalAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         Reference subFlowReference,
@@ -115,99 +112,83 @@ public sealed class SubflowStarter(
         activity?.SetTag("vnext.subflow.parent.state", stateKey);
         activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
 
-        try
+        // Prepare instance creation input
+        var createInstanceInput = new CreateInstanceInput
         {
-            // Prepare instance creation input
-            var createInstanceInput = new CreateInstanceInput
+            Id = correlation.SubFlowInstanceId,
+            Callback = configuration["DAPR_APP_ID"],
+            Key = parentInstance.Key ?? string.Empty,
+            Attributes = inputMappingResult?.Data != null
+                ? JsonSerializer.SerializeToElement(inputMappingResult.Data)
+                : null,
+            Tags =
+            [
+                $"parent.key:{parentInstance.Key}",
+                $"parent.domain:{workflow.Domain}",
+                $"parent.flow:{workflow.Key}"
+            ],
+            ExtraProperties = new ExtraPropertyDictionary
             {
-                Id = correlation.SubFlowInstanceId,
-                Callback = configuration["DAPR_APP_ID"],
-                Key = parentInstance.Key ?? string.Empty,
-                Attributes = inputMappingResult?.Data != null
-                    ? JsonSerializer.SerializeToElement(inputMappingResult.Data)
-                    : null,
-                Tags =
-                [
-                    $"parent.key:{parentInstance.Key}",
-                    $"parent.domain:{workflow.Domain}",
-                    $"parent.flow:{workflow.Key}"
-                ],
-                ExtraProperties = new ExtraPropertyDictionary
-                {
-                    [DomainConsts.MetaDataKeys.Id] = parentInstance.Id,
-                    [DomainConsts.MetaDataKeys.Key] = parentInstance.Key ?? string.Empty,
-                    [DomainConsts.MetaDataKeys.Domain] = workflow.Domain,
-                    [DomainConsts.MetaDataKeys.Flow] = workflow.Key,
-                    [DomainConsts.MetaDataKeys.Version] = workflow.Version,
-                    [DomainConsts.MetaDataKeys.State] = stateKey,
-                    [DomainConsts.MetaDataKeys.Transition] = transitionKey,
-                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode
-                }
-            };
+                [DomainConsts.MetaDataKeys.Id] = parentInstance.Id,
+                [DomainConsts.MetaDataKeys.Key] = parentInstance.Key ?? string.Empty,
+                [DomainConsts.MetaDataKeys.Domain] = workflow.Domain,
+                [DomainConsts.MetaDataKeys.Flow] = workflow.Key,
+                [DomainConsts.MetaDataKeys.Version] = workflow.Version,
+                [DomainConsts.MetaDataKeys.State] = stateKey,
+                [DomainConsts.MetaDataKeys.Transition] = transitionKey,
+                [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode
+            }
+        };
 
-            // Apply additional properties from input mapping if available
-            if (inputMappingResult != null)
+        // Apply additional properties from input mapping if available
+        if (inputMappingResult != null)
+        {
+            if (!inputMappingResult.Key.IsNullOrEmpty())
             {
-                if (!inputMappingResult.Key.IsNullOrEmpty())
-                {
-                    createInstanceInput.Key = inputMappingResult.Key;
-                }
-
-                if (!inputMappingResult.Tags.IsNullOrEmpty())
-                {
-                    var existingTags = createInstanceInput.Tags?.ToList() ?? new List<string>();
-                    existingTags.AddRange(inputMappingResult.Tags);
-                    createInstanceInput.Tags = existingTags.ToArray();
-                }
+                createInstanceInput.Key = inputMappingResult.Key;
             }
 
-            var subFlowStartInput = new StartInstanceInput(
-                subFlowReference.Domain,
-                subFlowReference.Key,
-                subFlowReference.Version,
-                sync: true
-            )
+            if (!inputMappingResult.Tags.IsNullOrEmpty())
             {
-                Instance = createInstanceInput,
-                Headers = inputMappingResult?.Headers ?? new Dictionary<string, string?>(),
-                RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>()
-            };
-
-            var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
-
-            if (!startResult.IsSuccess)
-            {
-                var error = startResult.Error;
-
-                SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
-                logger.LogError(
-                    "SubFlow {SubFlowKey} start failed for instance {InstanceId}: {ErrorCode} - {ErrorMessage}",
-                    subFlowReference.Key,
-                    parentInstance.Id,
-                    error.Code,
-                    error.Message);
-
-                throw new InvalidOperationException(
-                    $"Failed to start SubFlow {subFlowReference.Key}: {error.Message}",
-                    new Exception(error.Code));
+                var existingTags = createInstanceInput.Tags?.ToList() ?? new List<string>();
+                existingTags.AddRange(inputMappingResult.Tags);
+                createInstanceInput.Tags = existingTags.ToArray();
             }
-
-            SubFlowActivityHelper.SetSuccess(activity);
-            logger.LogInformation(
-                "SubFlow {SubFlowKey} started successfully for instance {InstanceId}",
-                subFlowReference.Key,
-                parentInstance.Id);
         }
-        catch (Exception ex)
+
+        var subFlowStartInput = new StartInstanceInput(
+            subFlowReference.Domain,
+            subFlowReference.Key,
+            subFlowReference.Version,
+            sync: true
+        )
         {
-            SubFlowActivityHelper.SetError(activity, ex.Message, ex);
-            logger.LogError(ex,
-                "SubFlow {SubFlowKey} start failed for instance {InstanceId}",
-                subFlowReference.Key,
-                parentInstance.Id);
+            Instance = createInstanceInput,
+            Headers = inputMappingResult?.Headers ?? new Dictionary<string, string?>(),
+            RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>(),
+            StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
+        };
 
-            throw;
+        var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
+
+        if (!startResult.IsSuccess)
+        {
+            var error = startResult.Error;
+
+            SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
+            logger.SubFlowStartFailed(
+                subFlowReference.Key,
+                parentInstance.Id,
+                error.Code,
+                error.Message ?? string.Empty);
+
+            return Result.Fail(error);
         }
+
+        SubFlowActivityHelper.SetSuccess(activity);
+        logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
+
+        return Result.Ok();
     }
 
     /// <summary>
@@ -216,8 +197,8 @@ public sealed class SubflowStarter(
     /// <param name="subFlowConfig">The SubFlow configuration containing mapping information.</param>
     /// <param name="context">The script context for mapping execution.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
-    /// <returns>The result of the input mapping handler.</returns>
-    private async Task<ScriptResponse?> HandleInputMappingAsync(
+    /// <returns>Result containing the mapping response or error.</returns>
+    private async Task<Result<ScriptResponse?>> HandleInputMappingAsync(
         Definitions.SubFlow subFlowConfig,
         ScriptContext context,
         CancellationToken cancellationToken = default)
@@ -229,23 +210,27 @@ public sealed class SubflowStarter(
             ? typeof(ISubFlowMapping)
             : typeof(ISubProcessMapping);
 
-        // Compile the mapping script to the appropriate interface
-        var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-            mappingCode,
-            cancellationToken: cancellationToken);
-
-        // Cast to the appropriate mapping interface and execute InputHandler
-        if (subFlowConfig.Type.Code == "S" && mappingInstance is ISubFlowMapping subFlowMapping)
+        return await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            return await subFlowMapping.InputHandler(context);
-        }
+            // Compile the mapping script to the appropriate interface
+            var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
+                mappingCode,
+                cancellationToken: ct);
 
-        if (subFlowConfig.Type.Code == "P" && mappingInstance is ISubProcessMapping subProcessMapping)
-        {
-            return await subProcessMapping.InputHandler(context);
-        }
+            // Cast to the appropriate mapping interface and execute InputHandler
+            if (subFlowConfig.Type.Code == "S" && mappingInstance is ISubFlowMapping subFlowMapping)
+            {
+                return await subFlowMapping.InputHandler(context);
+            }
 
-        throw new InvalidOperationException(
-            $"Failed to cast mapping instance to {mappingInterfaceType.Name} for SubFlow type '{subFlowConfig.Type.Code}'");
+            if (subFlowConfig.Type.Code == "P" && mappingInstance is ISubProcessMapping subProcessMapping)
+            {
+                return await subProcessMapping.InputHandler(context);
+            }
+
+            // If we reach here, casting failed
+            throw new InvalidOperationException(
+                $"Failed to cast mapping instance to {mappingInterfaceType.Name} for SubFlow type '{subFlowConfig.Type.Code}'");
+        }, cancellationToken, ex => WorkflowErrors.SubFlowInputMappingFailed(subFlowConfig.Process.Key, ex.Message));
     }
 }

@@ -58,18 +58,19 @@ internal sealed class InstanceSubCompletedEventHandler(
                 Duration = eventData.Duration
             };
 
-            await using var scope = scopeFactory.CreateAsyncScope();
-            var sp = scope.ServiceProvider;
-            AmbientServiceProvider.Root = sp; // TODO: WARN: This configuration will be configured within Aether.
-            var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-            var subflowCompletionService = sp.GetRequiredService<ISubflowCompletionService>();
-            
-            await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+            await scopeFactory.ExecuteInNewScopeAsync(async sp =>
             {
-                Scope = UnitOfWorkScopeOption.RequiresNew
-            }, cancellationToken);
-            await subflowCompletionService.CompletionAsync(completedData, cancellationToken);
-            await uow.CommitAsync(cancellationToken);
+                var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+                var subflowCompletionService = sp.GetRequiredService<ISubflowCompletionService>();
+
+                await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+                {
+                    Scope = UnitOfWorkScopeOption.RequiresNew
+                }, cancellationToken);
+
+                await subflowCompletionService.CompletionAsync(completedData, cancellationToken);
+                await uow.CommitAsync(cancellationToken);
+            });
         }
     }
 }

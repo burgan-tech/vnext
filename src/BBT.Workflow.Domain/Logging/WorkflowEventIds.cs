@@ -27,6 +27,8 @@ public static class WorkflowEventIds
     public static readonly EventId InstanceCompleting = new(10008, nameof(InstanceCompleting));
     public static readonly EventId AutoTransitionSelected = new(10009, nameof(AutoTransitionSelected));
     public static readonly EventId TransitionTimerSkipped = new(10010, nameof(TransitionTimerSkipped));
+    public static readonly EventId UpdateDataTransitionDetected = new(10011, nameof(UpdateDataTransitionDetected));
+    public static readonly EventId UpdateDataSkipToFinish = new(10012, nameof(UpdateDataSkipToFinish));
 
     // Warning (10040-10069)
     public static readonly EventId TransitionRuleFailed = new(10040, nameof(TransitionRuleFailed));
@@ -36,6 +38,7 @@ public static class WorkflowEventIds
     public static readonly EventId CancelInstanceAlreadyCompleted = new(10047, nameof(CancelInstanceAlreadyCompleted));
     public static readonly EventId TargetStateNull = new(10048, nameof(TargetStateNull));
     public static readonly EventId AutoTransitionConditionNotSatisfied = new(10049, nameof(AutoTransitionConditionNotSatisfied));
+    public static readonly EventId UpdateDataInstanceAlreadyCompleted = new(10054, nameof(UpdateDataInstanceAlreadyCompleted));
 
     // Error (10070-10099)
     public static readonly EventId TaskExecutionFailed = new(10071, nameof(TaskExecutionFailed));
@@ -67,6 +70,10 @@ public static class WorkflowEventIds
     public static readonly EventId InstanceCanceledJobsProcessed = new(40019, nameof(InstanceCanceledJobsProcessed));
     public static readonly EventId ChildSubflowCancelRequestReceived = new(40020, nameof(ChildSubflowCancelRequestReceived));
     public static readonly EventId ChildSubflowCancelSucceeded = new(40021, nameof(ChildSubflowCancelSucceeded));
+    public static readonly EventId SubFlowStateChangeReceived = new(40027, nameof(SubFlowStateChangeReceived));
+    public static readonly EventId SubFlowStateChangeApplied = new(40028, nameof(SubFlowStateChangeApplied));
+    public static readonly EventId SubFlowStateChangedEventReceived = new(40029, nameof(SubFlowStateChangedEventReceived));
+    public static readonly EventId SubFlowStateUpdateFailed = new(40079, nameof(SubFlowStateUpdateFailed));
 
     // Warning (40040-40069)
     public static readonly EventId SubFlowCorrelationNotFound = new(40043, nameof(SubFlowCorrelationNotFound));

@@ -15,5 +15,16 @@ public static class TransitionExecutionContextExtensions
     {
         return ctx.Workflow.Cancel?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
     }
+
+    /// <summary>
+    /// Determines whether the current transition is an updateData transition.
+    /// A transition is considered an updateData transition if it matches the workflow's configured updateData transition key.
+    /// </summary>
+    /// <param name="ctx">The transition execution context</param>
+    /// <returns>True if this is an updateData transition, false otherwise</returns>
+    public static bool IsUpdateDataTransition(this TransitionExecutionContext ctx)
+    {
+        return ctx.Workflow.UpdateData?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
+    }
 }
 

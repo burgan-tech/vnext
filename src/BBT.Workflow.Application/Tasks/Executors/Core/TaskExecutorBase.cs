@@ -77,6 +77,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             return CreateErrorResponse(invokeResult.Error, stopwatch.ElapsedMilliseconds);
         }
 
+        // Note: Business errors (HTTP 4xx/5xx) are NOT intercepted here.
+        // The invocation result (including IsSuccess=false, StatusCode, Metadata/ExceptionType)
+        // is passed through to CreateSuccessResponse and handled by TaskCoordinator
+        // for Error Boundary policy resolution.
+
         // 5. PostProcess (virtual - optional, e.g., correlation)
         var postProcessResult = await PostProcessAsync(task, invokeResult.Value!, context, cancellationToken);
         if (!postProcessResult.IsSuccess)

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -14,6 +15,7 @@ namespace BBT.Workflow.Execution.Pipeline;
 /// Manages distributed locks and sync dispatch chain for automatic transitions.
 /// Each step in the pipeline performs a specific operation during the transition.
 /// Uses Result pattern for exception-free error handling.
+/// Error boundary handling is delegated to TaskCoordinator at task level.
 /// </summary>
 public class TransitionPipeline
 {
@@ -72,7 +74,7 @@ public class TransitionPipeline
         CancellationToken cancellationToken)
     {
         var currentWorkflowContext = workflowContext;
-        Error? lastPipelineError = null;
+        bool pipelineFaulted = false;
 
         // Sync dispatch loop: chains automatic transitions under the same trace
         while (true)
@@ -115,7 +117,10 @@ public class TransitionPipeline
                     var pipelineResult = await RunSingleTransitionAsync(context, cancellationToken);
                     if (!pipelineResult.IsSuccess)
                     {
-                        lastPipelineError = pipelineResult.Error;
+                        // Mark instance as faulted instead of propagating error
+                        // This allows returning OK response with Status = "F" to client
+                        await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
+                        pipelineFaulted = true;
                         return;
                     }
 
@@ -132,9 +137,9 @@ public class TransitionPipeline
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
 
-            // Check if pipeline execution failed
-            if (lastPipelineError.HasValue)
-                return Result<TransitionExecutionContext>.Fail(lastPipelineError.Value);
+            // Pipeline faulted: return success with faulted instance (client sees Status = "F")
+            if (pipelineFaulted)
+                return Result<TransitionExecutionContext>.Ok(context);
 
             // 5) Execute post-commit jobs (outside lock - avoids deadlocks for remote calls)
             if (postCommitJobs.Count > 0)
@@ -149,10 +154,20 @@ public class TransitionPipeline
                             context,
                             postCommitResult.FaultRequest,
                             cancellationToken);
+                        
+                        // Return OK with faulted instance - client sees Status = "F"
+                        return Result<TransitionExecutionContext>.Ok(context);
                     }
 
-                    return Result<TransitionExecutionContext>.Fail(
-                        postCommitResult.Error ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed"));
+                    // No fault request but still failed - mark as faulted via lock
+                    var error = postCommitResult.Error ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed");
+                    await MarkInstanceFaultedWithLockAsync(
+                        context,
+                        new PostCommitFaultRequest(error.Code, error.Message),
+                        cancellationToken);
+                    
+                    // Return OK with faulted instance - client sees Status = "F"
+                    return Result<TransitionExecutionContext>.Ok(context);
                 }
             }
 
@@ -163,12 +178,13 @@ public class TransitionPipeline
 
             // 7) Create new WorkflowExecutionContext for next transition
             currentWorkflowContext = CreateNextWorkflowContext(context, nextTransition);
-            lastPipelineError = null; // Reset for next iteration
+            pipelineFaulted = false; // Reset for next iteration
         }
     }
 
     /// <summary>
     /// Executes a single transition's pipeline steps.
+    /// Includes global error boundary wrapper for unhandled exceptions.
     /// </summary>
     [Trace]
     private async Task<Result> RunSingleTransitionAsync(
@@ -179,34 +195,79 @@ public class TransitionPipeline
 
         var state = CreateInitialState(context);
 
-        while (state.HasMoreSteps())
+        try
         {
-            // Guard: Skip immediate execution requested
-            if (context.SkipImmediateExecution)
-                return Result.Ok();
-
-            // Execute current step
-            var stepResult = await ExecuteStepAsync(state.CurrentStep, context, cancellationToken);
-            if (!stepResult.IsSuccess)
-                return Result.Fail(stepResult.Error);
-
-            // Determine flow control based on step outcome
-            var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
-
-            // Apply flow control decision
-            if (flowControl.ShouldStop)
-                break;
-
-            if (flowControl.ShouldReplan)
+            while (state.HasMoreSteps())
             {
-                state = CreateInitialState(context);
-                continue;
+                // Guard: Skip immediate execution requested
+                if (context.SkipImmediateExecution)
+                    return Result.Ok();
+
+                // Execute current step with error boundary handling
+                var stepResult = await ExecuteStepWithBoundaryAsync(
+                    state.CurrentStep, context, cancellationToken);
+
+                if (!stepResult.IsSuccess)
+                {
+                    // Check if boundary abort was requested (handled but no transition)
+                    // Pipeline stops but instance is NOT marked as faulted
+                    if (context.Directives.BoundaryAbortRequested)
+                    {
+                        _logger.LogInformation(
+                            "Boundary abort requested for workflow {WorkflowKey}. Stopping pipeline without fault.",
+                            context.Workflow.Key);
+                        return Result.Ok();
+                    }
+
+                    // Unhandled error - this will cause fault
+                    return Result.Fail(stepResult.Error);
+                }
+
+                // Determine flow control based on step outcome
+                var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
+
+                // Apply flow control decision
+                if (flowControl.ShouldStop)
+                    break;
+
+                if (flowControl.ShouldReplan)
+                {
+                    state = CreateInitialState(context);
+                    continue;
+                }
+
+                state = state.MoveNext();
             }
 
-            state = state.MoveNext();
+            return Result.Ok();
         }
+        catch (Exception ex)
+        {
+            // Unhandled exception - propagate as error
+            _logger.LogError(ex, "Unhandled exception in pipeline execution for workflow {WorkflowKey}", 
+                context.Workflow.Key);
+            return Result.Fail(Error.Failure("PipelineException", ex.Message));
+        }
+    }
 
-        return Result.Ok();
+    /// <summary>
+    /// Executes a pipeline step.
+    /// Error boundary handling is now delegated to TaskCoordinator for task steps.
+    /// </summary>
+    private async Task<Result<StepOutcome>> ExecuteStepWithBoundaryAsync(
+        ITransitionStep step,
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await step.ExecuteAsync(context, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception in step {StepName}", step.Name);
+            return Result<StepOutcome>.Fail(Error.Failure(ex.GetType().Name, ex.Message));
+        }
     }
 
     private static void EnrichTelemetry(TransitionExecutionContext context)
@@ -244,7 +305,7 @@ public class TransitionPipeline
             WorkflowKey = currentContext.WorkflowKey,
             WorkflowVersion = currentContext.Workflow.Version,
             TransitionKey = nextTransition.TransitionKey,
-            TriggerType = Definitions.TriggerType.Automatic,
+            TriggerType = TriggerType.Automatic,
             Mode = ExecMode.Sync,
             Actor = Shared.ExecutionActor.System,
             CorrelationId = currentContext.CorrelationId,
@@ -365,8 +426,37 @@ public class TransitionPipeline
     }
 
     /// <summary>
+    /// Marks the workflow instance as faulted within an existing lock scope.
+    /// Called when pipeline execution fails after all error boundary actions are exhausted.
+    /// Client will receive OK response with Status = "F" instead of an exception.
+    /// </summary>
+    /// <param name="context">The transition execution context.</param>
+    /// <param name="error">The error that caused the fault.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private async Task MarkInstanceFaultedAsync(
+        TransitionExecutionContext context,
+        Error error,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Marking instance {InstanceId} as faulted due to unhandled pipeline error: {ErrorCode} - {ErrorMessage}",
+            context.InstanceId,
+            error.Code,
+            error.Message);
+
+        // Already within lock scope - update instance directly
+        context.Instance.Fault();
+        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+
+        _logger.LogInformation(
+            "Instance {InstanceId} marked as faulted successfully. Client will receive Status = 'F'",
+            context.InstanceId);
+    }
+
+    /// <summary>
     /// Marks the workflow instance as faulted within a lock scope.
     /// Reacquires the distributed lock to ensure consistent state update.
+    /// Used for post-commit failures that occur outside the main lock.
     /// </summary>
     /// <param name="context">The transition execution context.</param>
     /// <param name="faultRequest">The fault request containing error details.</param>
@@ -391,7 +481,7 @@ public class TransitionPipeline
                     includeDetails: false,
                     cancellationToken);
 
-                if (instanceResult.IsSuccess && instanceResult.Value is not null)
+                if (instanceResult is { IsSuccess: true, Value: not null })
                 {
                     instanceResult.Value.Fault();
                     await _instanceRepository.UpdateAsync(instanceResult.Value, true, cancellationToken);

@@ -50,4 +50,15 @@ public sealed class StepOutcome
     /// <param name="fx">The action to apply to the directives.</param>
     /// <returns>A StepOutcome with directive mutation.</returns>
     public static StepOutcome With(Action<PipelineDirectives> fx) => new() { MutateDirectives = fx };
+
+    /// <summary>
+    /// Creates an outcome that skips to the Finalize step.
+    /// Used when error boundary handles an error and pipeline should complete gracefully.
+    /// Uses SkipToOrder which is handled directly by DetermineFlowControl without being overwritten.
+    /// </summary>
+    /// <returns>A StepOutcome that skips to Finalize order.</returns>
+    public static StepOutcome SkipToFinalize() => new()
+    {
+        SkipToOrder = LifecycleOrder.Finalize
+    };
 }

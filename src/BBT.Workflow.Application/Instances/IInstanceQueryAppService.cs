@@ -18,9 +18,10 @@ public interface IInstanceQueryAppService : IApplicationService
     /// <summary>
     /// Retrieves a paginated list of instances with optional extensions
     /// </summary>
-    Task<Result<HateoasPagedList<GetInstanceOutput>>> GetInstanceListAsync(
+    Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
         GetInstanceListInput input,
         CancellationToken cancellationToken = default);
+ 
 
     /// <summary>
     /// Retrieves the complete history of an instance (all data transitions)

@@ -19,5 +19,6 @@ public static class TaskTypes
     public const string DirectTrigger = "directtrigger";
     public const string SubProcess = "subprocess";
     public const string GetInstanceData = "getinstancedata";
+    public const string GetInstances = "getinstances";
 }
 

@@ -103,5 +103,30 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             return Result.Ok();
         }
     }
+
+    /// <inheritdoc />
+    public async Task<Result> UpdateSubFlowStateAsync(
+        SubFlowStateChangedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = _serviceScopeFactory.CreateAsyncScope();
+        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+        var subflowStateService = scope.ServiceProvider.GetRequiredService<ISubflowStateService>();
+        var unitOfWorkManager = scope.ServiceProvider.GetRequiredService<IUnitOfWorkManager>();
+
+        using (currentSchema.Use(input.Flow))
+        {
+            await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+            {
+                Scope = UnitOfWorkScopeOption.RequiresNew
+            }, cancellationToken);
+
+            await subflowStateService.UpdateParentStateAsync(input, cancellationToken);
+            await uow.SaveChangesAsync(cancellationToken);
+            await uow.CommitAsync(cancellationToken);
+
+            return Result.Ok();
+        }
+    }
 }
 

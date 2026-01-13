@@ -79,8 +79,16 @@ public sealed class State : IHasKey
 
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
+    
     [JsonInclude] [JsonPropertyName("view")]
     public ViewDefinition? view  { get; private set; }
+    
+    /// <summary>
+    /// State-level error boundary.
+    /// Applied when no task-level boundary handles the error.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("errorBoundary")]
+    public ErrorBoundary? ErrorBoundary { get; private set; }
 
     /// <summary>
     /// Languages
@@ -151,6 +159,11 @@ public sealed class State : IHasKey
         SubFlow = SubFlow.Create(type, reference, mapping, viewOverrides);
     }
 
+    public void SetErrorBoundary(ErrorBoundary errorBoundary)
+    {
+        ErrorBoundary = errorBoundary;
+    }
+
     public void AddTransition(Transition transition)
     {
         transitions.Add(transition);
@@ -164,6 +177,14 @@ public sealed class State : IHasKey
     public IEnumerable<Transition> AutoTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Automatic);
     
     public IEnumerable<Transition> ScheduledTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Scheduled);
+
+    /// <summary>
+    /// Returns true if the state has only manual/event transitions or no transitions at all.
+    /// Used to determine if instance should become Available after transition.
+    /// </summary>
+    public bool HasOnlyManualOrEventTransitions => 
+        !Transitions.Any() || 
+        Transitions.All(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event);
 
     public IReadOnlyList<string> TransitionKeys() => Transitions.Select(t => t.Key).ToList();
 

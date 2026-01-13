@@ -25,4 +25,8 @@ public interface IRemoteInstanceCommandAppService
     Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default);
+
+    Task<Result> UpdateSubFlowStateAsync(
+        SubFlowStateChangedInput input,
+        CancellationToken cancellationToken = default);
 } 

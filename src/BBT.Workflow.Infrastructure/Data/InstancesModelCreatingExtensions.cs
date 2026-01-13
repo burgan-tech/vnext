@@ -29,6 +29,13 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.CurrentState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
+            b.Property(p => p.EffectiveState)
+                .HasMaxLength(StateConstants.MaxKeyLength);
+
+            // Index for EffectiveState for query performance
+            b.HasIndex(p => p.EffectiveState)
+                .HasDatabaseName("IX_Instances_EffectiveState");
+
             b.Property(p => p.Status)
                 .IsRequired()
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
@@ -78,6 +85,9 @@ public static class InstancesModelCreatingExtensions
 
             b.Property(p => p.SubFlowVersion)
                 .HasMaxLength(WorkflowConstants.MaxVersionLength);
+
+            b.Property(p => p.SubFlowCurrentState)
+                .HasMaxLength(StateConstants.MaxKeyLength);
 
             // Create index for performance on blocking SubFlow queries
             b.HasIndex(p => new { p.ParentInstanceId, p.IsCompleted, p.SubFlowType })

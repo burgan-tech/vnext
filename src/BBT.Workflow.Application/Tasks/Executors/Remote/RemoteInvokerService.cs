@@ -79,17 +79,14 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: taskType));
         }
-
-        var response = result.Value!;
-
-        // Always return TaskInvocationResult - let executor decide how to handle errors
-        if (!response.Success || response.Result == null)
+        
+        if (!result.IsSuccess)
         {
             _logger.LogWarning("Remote task {TaskKey} execution failed: {Error}",
-                taskKey, response.ErrorMessage ?? "Unknown error");
+                taskKey, result.Error.Message ?? "Unknown error");
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                error: response.ErrorMessage ?? "Remote execution failed",
+                error: result.Error.Message ?? "Remote execution failed",
                 statusCode: 500,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: taskType,
@@ -100,10 +97,12 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 }));
         }
 
+        var response = result.Value!;
+        
         // Update execution duration to include network time
         var remoteResult = new TaskInvocationResult
         {
-            IsSuccess = response.Result.IsSuccess,
+            IsSuccess = response.Result!.IsSuccess,
             StatusCode = response.Result.StatusCode,
             Body = response.Result.Body,
             Data = response.Result.Data,

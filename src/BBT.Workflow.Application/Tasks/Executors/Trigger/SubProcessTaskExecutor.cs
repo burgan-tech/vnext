@@ -276,7 +276,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     Callback = GetCallbackAppId(),
                     ExtraProperties = BuildExtraProperties(context, task)
                 },
-                Headers = ExtractHeaders(context) ?? new Dictionary<string, string?>()
+                Headers = ExtractHeaders(context) ?? new Dictionary<string, string?>(),
+                StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
             };
     }
 

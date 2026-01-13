@@ -21,7 +21,8 @@ public enum TaskType
     StartTrigger = 11,
     DirectTrigger = 12,
     GetInstanceData = 13,
-    SubProcess = 14
+    SubProcess = 14,
+    GetInstances = 15
 }
 
 /// <summary>

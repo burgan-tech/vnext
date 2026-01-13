@@ -143,6 +143,10 @@ namespace BBT.Workflow.Migrations
                     b.Property<TimeSpan?>("Duration")
                         .HasColumnType("interval");
 
+                    b.Property<string>("EffectiveState")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("ExtraProperties")
                         .IsRequired()
                         .HasColumnType("text")
@@ -170,6 +174,9 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("text[]");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("EffectiveState")
+                        .HasDatabaseName("IX_Instances_EffectiveState");
 
                     b.ToTable("Instances", (string)null);
                 });
@@ -225,6 +232,10 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<string>("SubFlowCurrentState")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("SubFlowDomain")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -245,8 +256,8 @@ namespace BBT.Workflow.Migrations
                         .HasComment("SubFlow Type: S (SubFlow - blocking) or P (SubProcess - non-blocking)");
 
                     b.Property<string>("SubFlowVersion")
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
+                        .HasMaxLength(180)
+                        .HasColumnType("character varying(180)");
 
                     b.HasKey("Id");
 
@@ -302,8 +313,6 @@ namespace BBT.Workflow.Migrations
                         .HasDefaultValue(0L);
 
                     b.HasKey("Id");
-
-                    b.HasIndex("InstanceId");
 
                     b.HasIndex("InstanceId")
                         .IsUnique()
@@ -366,6 +375,9 @@ namespace BBT.Workflow.Migrations
                 {
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
+
+                    b.Property<int>("BusinessStatus")
+                        .HasColumnType("integer");
 
                     b.Property<TimeSpan?>("Duration")
                         .HasColumnType("interval");
@@ -457,7 +469,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceActionId");
 
-                            b1.ToTable("InstanceActions", (string)null);
+                            b1.ToTable("InstanceActions");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceActionId");
@@ -500,7 +512,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceDataId");
 
-                            b1.ToTable("InstancesData", (string)null);
+                            b1.ToTable("InstancesData");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceDataId");
@@ -535,7 +547,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTaskId");
 
-                            b1.ToTable("InstanceTasks", (string)null);
+                            b1.ToTable("InstanceTasks");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTaskId");
@@ -553,7 +565,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTaskId");
 
-                            b1.ToTable("InstanceTasks", (string)null);
+                            b1.ToTable("InstanceTasks");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTaskId");
@@ -586,7 +598,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTransitionId");
 
-                            b1.ToTable("InstanceTransitions", (string)null);
+                            b1.ToTable("InstanceTransitions");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTransitionId");
@@ -604,7 +616,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTransitionId");
 
-                            b1.ToTable("InstanceTransitions", (string)null);
+                            b1.ToTable("InstanceTransitions");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTransitionId");

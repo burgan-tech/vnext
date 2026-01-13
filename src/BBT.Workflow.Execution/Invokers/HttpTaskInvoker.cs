@@ -127,7 +127,7 @@ public sealed class HttpTaskInvoker(
                     data: responseData,
                     metadata: metadata);
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
@@ -142,7 +142,8 @@ public sealed class HttpTaskInvoker(
                 {
                     ["Url"] = binding.Url,
                     ["Method"] = binding.Method,
-                    ["Cancelled"] = true
+                    ["Cancelled"] = true,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (HttpRequestException ex)

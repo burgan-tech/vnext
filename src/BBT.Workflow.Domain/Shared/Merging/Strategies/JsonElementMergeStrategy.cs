@@ -6,7 +6,8 @@ namespace BBT.Workflow.Shared.Merging;
 
 /// <summary>
 /// Merge strategy for JsonElement instances and mixed JsonElement/ExpandoObject scenarios.
-/// Handles object merging, array concatenation, and type conversions.
+/// Handles object merging (deep merge), array replacement, and type conversions.
+/// Arrays are replaced entirely rather than merged to ensure deterministic updates.
 /// </summary>
 public class JsonElementMergeStrategy : IMergeStrategy
 {
@@ -48,10 +49,11 @@ public class JsonElementMergeStrategy : IMergeStrategy
                 }
             }
 
-            // Handle array merging with full deep merge
+            // Handle array replacement - source array completely replaces target array
+            // This ensures deterministic updates and allows removing items from arrays
             if (targetElement.ValueKind == JsonValueKind.Array && sourceElement.ValueKind == JsonValueKind.Array)
             {
-                return MergeJsonArraysDeep(targetElement, sourceElement);
+                return sourceElement;
             }
 
             // For other JsonElement types, source takes precedence
@@ -89,53 +91,5 @@ public class JsonElementMergeStrategy : IMergeStrategy
 
         // For all other cases, source takes precedence
         return source;
-    }
-
-    /// <summary>
-    /// Performs full deep merge of two JSON arrays without key-based restrictions.
-    /// Merges objects at same positions and appends remaining items.
-    /// </summary>
-    /// <param name="targetArray">The target JSON array.</param>
-    /// <param name="sourceArray">The source JSON array.</param>
-    /// <returns>The fully merged JSON array.</returns>
-    private static JsonElement MergeJsonArraysDeep(JsonElement targetArray, JsonElement sourceArray)
-    {
-        var targetList = targetArray.EnumerateArray().ToList();
-        var sourceList = sourceArray.EnumerateArray().ToList();
-        var mergedItems = new List<JsonElement>();
-        var maxLength = Math.Max(targetList.Count, sourceList.Count);
-
-        // Merge items at same positions
-        for (int i = 0; i < maxLength; i++)
-        {
-            if (i < targetList.Count && i < sourceList.Count)
-            {
-                // Both arrays have items at this position - deep merge them
-                var mergedItem = MergeJsonElements(targetList[i], sourceList[i]);
-                if (mergedItem is JsonElement jsonElement)
-                {
-                    mergedItems.Add(jsonElement);
-                }
-                else
-                {
-                    // Fallback to source item if merge fails
-                    mergedItems.Add(sourceList[i]);
-                }
-            }
-            else if (i < targetList.Count)
-            {
-                // Only target has item at this position
-                mergedItems.Add(targetList[i]);
-            }
-            else
-            {
-                // Only source has item at this position
-                mergedItems.Add(sourceList[i]);
-            }
-        }
-
-        // Convert back to JsonElement
-        var mergedJson = JsonSerializer.Serialize(mergedItems.Select(e => e.GetRawText()).ToArray());
-        return JsonSerializer.Deserialize<JsonElement>(mergedJson);
     }
 }

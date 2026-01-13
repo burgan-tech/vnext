@@ -43,7 +43,6 @@ public sealed record StartSubflowJob(
 /// <summary>
 /// Post-commit job for forwarding a transition to an active subflow.
 /// Contains the data needed to forward the transition after lock release.
-/// Implements idempotency to prevent duplicate forwards on retries.
 /// </summary>
 /// <param name="SubflowInstanceId">The instance ID of the active subflow to forward to.</param>
 /// <param name="TransitionKey">The transition key being forwarded.</param>
@@ -65,9 +64,7 @@ public sealed record ForwardToSubflowJob(
     string[]? Tags,
     JsonElement? DataElement,
     Dictionary<string, string?> Headers,
-    Dictionary<string, string?> RouteValues) : IIdempotentPostCommitJob
+    Dictionary<string, string?> RouteValues) : IPostCommitJob
 {
-    /// <inheritdoc />
-    public string IdempotencyKey => $"forward:{SubflowInstanceId}:{TransitionKey}";
 }
 

@@ -21,6 +21,7 @@ namespace BBT.Workflow.Definitions;
 [JsonDerivedType(typeof(DirectTriggerTask), typeDiscriminator: "12")]
 [JsonDerivedType(typeof(GetInstanceDataTask), typeDiscriminator: "13")]
 [JsonDerivedType(typeof(SubProcessTask), typeDiscriminator: "14")]
+[JsonDerivedType(typeof(GetInstancesTask), typeDiscriminator: "15")]
 public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSetter, ITaskClonable
 {
     protected WorkflowTask()

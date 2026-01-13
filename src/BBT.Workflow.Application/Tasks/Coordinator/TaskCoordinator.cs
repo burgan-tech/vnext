@@ -1,16 +1,10 @@
 using System.Diagnostics;
-using System.Text.Json;
-using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Timer;
-using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
-using BBT.Workflow.Tasks.Executors;
-using BBT.Workflow.Tasks.Factory;
-using BBT.Workflow.Tasks.Persistence;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Coordinator;
@@ -18,39 +12,44 @@ namespace BBT.Workflow.Tasks.Coordinator;
 /// <summary>
 /// Coordinates workflow task execution with support for both parallel and sequential execution strategies.
 /// Implements condition and timer evaluation services.
-/// Uses ITaskExecutorRegistry to resolve executors for each task type.
+/// Delegates single task execution to ITaskExecutionEngine.
 /// </summary>
-public sealed class TaskCoordinator : ITaskCoordinator
+/// <remarks>
+/// Refactored to follow SRP - only handles orchestration.
+/// Task execution logic is delegated to TaskExecutionEngine.
+/// Error boundary handling is delegated to consolidated services in Execution/ErrorHandling.
+/// </remarks>
+public sealed class TaskCoordinator : ITaskCoordinatorExtended
 {
-    private readonly ITaskExecutorRegistry _executorRegistry;
+    private readonly ITaskExecutionEngine _executionEngine;
     private readonly IConditionEvaluator _conditionEvaluator;
     private readonly ITimerEvaluator _timerEvaluator;
-    private readonly ITaskFactory _taskFactory;
-    private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory;
-    private readonly IGuidGenerator _guidGenerator;
-    private readonly IWorkflowMetrics _workflowMetrics;
+    private readonly IExecutionErrorFactory _errorFactory;
     private readonly ILogger<TaskCoordinator> _logger;
+
+    /// <summary>
+    /// Lock object for thread-safe parallel task failure tracking.
+    /// Per Microsoft guidelines: use a dedicated private readonly object for locking.
+    /// </summary>
+    /// <remarks>
+    /// See: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock#guidelines
+    /// </remarks>
+    private readonly object _parallelTaskLock = new();
 
     /// <summary>
     /// Initializes a new instance of TaskCoordinator.
     /// </summary>
     public TaskCoordinator(
-        ITaskExecutorRegistry executorRegistry,
+        ITaskExecutionEngine executionEngine,
         IConditionEvaluator conditionEvaluator,
         ITimerEvaluator timerEvaluator,
-        ITaskFactory taskFactory,
-        ITaskPersistenceStrategyFactory persistenceStrategyFactory,
-        IGuidGenerator guidGenerator,
-        IWorkflowMetrics workflowMetrics,
+        IExecutionErrorFactory errorFactory,
         ILogger<TaskCoordinator> logger)
     {
-        _executorRegistry = executorRegistry;
+        _executionEngine = executionEngine;
         _conditionEvaluator = conditionEvaluator;
         _timerEvaluator = timerEvaluator;
-        _taskFactory = taskFactory;
-        _persistenceStrategyFactory = persistenceStrategyFactory;
-        _guidGenerator = guidGenerator;
-        _workflowMetrics = workflowMetrics;
+        _errorFactory = errorFactory;
         _logger = logger;
     }
 
@@ -62,24 +61,24 @@ public sealed class TaskCoordinator : ITaskCoordinator
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
-        var tasks = onExecuteTasks.ToList();
+        var result = await ExecuteWithDetailsAsync(
+            onExecuteTasks,
+            instanceTransitionId,
+            taskTrigger,
+            context,
+            cancellationToken);
 
-        if (!tasks.Any()) return Result.Ok();
+        if (!result.IsSuccess)
+            return Result.Fail(result.Error);
 
-        _logger.LogDebug("Coordinating execution of {TaskCount} tasks for instance {InstanceId}",
-            tasks.Count, context.Instance.Id);
-
-        // Check if tasks can be executed in parallel (no dependencies)
-        var canExecuteInParallel = CanExecuteInParallel(tasks);
-
-        if (canExecuteInParallel)
+        if (!result.Value!.IsSuccess)
         {
-            return await ExecuteTasksInParallelAsync(tasks, instanceTransitionId, taskTrigger, context,
-                cancellationToken);
+            var error = result.Value.TaskError?.ToError() ??
+                        Error.Failure("TaskExecutionFailed", "One or more tasks failed");
+            return Result.Fail(error);
         }
 
-        return await ExecuteTasksSequentiallyAsync(tasks, instanceTransitionId, taskTrigger, context,
-            cancellationToken);
+        return Result.Ok();
     }
 
     /// <inheritdoc />
@@ -100,238 +99,283 @@ public sealed class TaskCoordinator : ITaskCoordinator
         return _timerEvaluator.EvaluateAsync(script, context, cancellationToken);
     }
 
-    /// <summary>
-    /// Executes a single task with full lifecycle management.
-    /// </summary>
-    private async Task<Result> ExecuteTaskAsync(
-        OnExecuteTask onExecuteTask,
+    /// <inheritdoc />
+    public Task<Result<TasksExecutionResult>> ExecuteWithDetailsAsync(
+        IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
         ScriptContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken = default)
     {
-        // Load task from factory
-        var taskResult = await _taskFactory.CreateExecutionTaskAsync(onExecuteTask.Task, cancellationToken);
-        if (!taskResult.IsSuccess)
-        {
-            return Result.Fail(taskResult.Error);
-        }
-
-        var task = taskResult.Value!;
-        var taskType = task.GetTaskType();
-        var taskTypeStr = taskType.ToString();
-        var workflowKey = context.Workflow.Key;
-        var stopwatch = Stopwatch.StartNew();
-
-        // Create instance task for tracking
-        var instanceTask = new InstanceTask(
-            _guidGenerator.Create(),
-            instanceTransitionId ?? _guidGenerator.Create(),
-            task.Key);
-
-        // Get persistence strategy
-        var persistenceStrategy = GetPersistenceStrategy(taskTrigger);
-
-        // Record metrics start
-        _workflowMetrics.RecordTaskExecuted(taskTypeStr, workflowKey);
-        _workflowMetrics.StartTaskExecution(taskTypeStr, workflowKey);
-
-        _logger.LogInformation("Executing task {TaskKey} of type {TaskType} for instance {InstanceId}",
-            task.Key, taskType, context.Instance.Id);
-
-        // Persist creation (non-blocking)
-        await PersistCreationAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
-
-        // Get executor and execute
-        var executorResult = _executorRegistry.GetExecutor(taskType);
-        if (!executorResult.IsSuccess)
-        {
-            stopwatch.Stop();
-            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
-                executorResult.Error.Message, cancellationToken);
-            return Result.Fail(executorResult.Error);
-        }
-
-        // Create executor context
-        var executorContext = new TaskExecutorContext(
-            task,
-            onExecuteTask,
-            context,
+        return ExecuteWithDetailsAsync(
+            onExecuteTasks,
             instanceTransitionId,
-            taskTrigger);
-
-        // Execute
-        var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
-
-        stopwatch.Stop();
-
-        if (!executeResult.IsSuccess)
-        {
-            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
-                executeResult.Error.Message, cancellationToken);
-            return Result.Fail(executeResult.Error);
-        }
-
-        // Complete task
-        var response = executeResult.Value!;
-        ApplyOutputToContext(task, response, taskTrigger, context);
-        instanceTask.Completed(new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions)));
-
-        // Persist completion (non-blocking)
-        await PersistCompletionAsync(persistenceStrategy, instanceTask, task.Key, cancellationToken);
-
-        // Record success metrics
-        _workflowMetrics.RecordTaskCompleted(taskTypeStr, workflowKey, stopwatch.Elapsed.TotalSeconds);
-        _workflowMetrics.FinishTaskExecution(taskTypeStr, workflowKey);
-
-        return Result.Ok();
+            taskTrigger,
+            context,
+            completedTaskIds: [],
+            cancellationToken);
     }
 
-    /// <summary>
-    /// Executes multiple tasks in parallel.
-    /// </summary>
-    private async Task<Result> ExecuteTasksInParallelAsync(
-        List<OnExecuteTask> tasks,
+    /// <inheritdoc />
+    public async Task<Result<TasksExecutionResult>> ExecuteWithDetailsAsync(
+        IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
         ScriptContext context,
-        CancellationToken cancellationToken)
+        IEnumerable<string> completedTaskIds,
+        CancellationToken cancellationToken = default)
     {
-        var executionTasks = tasks.Select(task =>
-            ExecuteTaskAsync(task, instanceTransitionId, taskTrigger, context, cancellationToken));
+        var tasks = onExecuteTasks.ToList();
+        var completedSet = completedTaskIds.ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+        var executedTasks = new List<TaskExecutionSummary>();
+        var totalStopwatch = Stopwatch.StartNew();
 
-        var results = await Task.WhenAll(executionTasks);
-
-        // Check for any failures
-        if (results.Any(r => !r.IsSuccess))
+        if (!tasks.Any())
         {
-            var firstFailure = results.First(r => !r.IsSuccess);
-            return Result.Fail(firstFailure.Error);
+            return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Success(executedTasks));
         }
 
-        return Result.Ok();
-    }
+        // Filter out already completed tasks
+        var tasksToExecute = tasks
+            .Where(t => !completedSet.Contains(t.Task.Key))
+            .ToList();
 
-    /// <summary>
-    /// Executes multiple tasks in parallel.
-    /// </summary>
-    private async Task<Result> ExecuteTasksSequentiallyAsync(
-        List<OnExecuteTask> tasks,
-        Guid? instanceTransitionId,
-        TaskTrigger taskTrigger,
-        ScriptContext context,
-        CancellationToken cancellationToken)
-    {
-        foreach (var task in tasks)
+        var skippedCount = tasks.Count - tasksToExecute.Count;
+
+        _logger.LogDebug(
+            "Coordinating execution of {TaskCount} tasks for instance {InstanceId}. " +
+            "Bypassing {BypassCount} already completed tasks.",
+            tasksToExecute.Count, context.Instance.Id, skippedCount);
+
+        // Group tasks by Order for parallel/sequential execution
+        var taskGroups = tasksToExecute
+            .GroupBy(t => t.Order)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        foreach (var group in taskGroups)
         {
-            var result = await ExecuteTaskAsync(task, instanceTransitionId, taskTrigger, context, cancellationToken);
-            if (!result.IsSuccess)
+            var groupTasks = group.ToList();
+
+            if (groupTasks.Count == 1)
             {
-                return Result.Fail(result.Error);
+                // Single task - execute directly
+                var result = await _executionEngine.ExecuteAsync(
+                    groupTasks[0], instanceTransitionId, taskTrigger, context, cancellationToken);
+
+                var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStopwatch);
+                if (processResult.HasValue)
+                    return processResult.Value;
+            }
+            else
+            {
+                // Multiple tasks with same Order - execute in parallel with cancellation
+                var parallelResult = await ExecuteTaskGroupInParallelAsync(
+                    groupTasks, instanceTransitionId, taskTrigger, context, cancellationToken);
+
+                if (!parallelResult.IsSuccess)
+                {
+                    totalStopwatch.Stop();
+                    return parallelResult;
+                }
+
+                var groupResult = parallelResult.Value!;
+                executedTasks.AddRange(groupResult.ExecutedTasks);
+
+                // If any task in parallel group failed with blocking action, stop
+                if (!groupResult.IsSuccess)
+                {
+                    totalStopwatch.Stop();
+                    return parallelResult;
+                }
             }
         }
 
-        return Result.Ok();
-    }
+        totalStopwatch.Stop();
 
-    /// <summary>
-    /// Gets the persistence strategy for the given task trigger.
-    /// </summary>
-    private ITaskPersistenceStrategy? GetPersistenceStrategy(TaskTrigger taskTrigger)
-    {
-        var strategyResult = _persistenceStrategyFactory.GetStrategy(taskTrigger);
-        if (!strategyResult.IsSuccess)
+        if (skippedCount > 0)
         {
-            _logger.LogDebug("No persistence strategy found for trigger {TaskTrigger}, skipping persistence",
-                taskTrigger);
-            return null;
+            _logger.LogInformation(
+                "Task coordination completed. Executed: {ExecutedCount}, Skipped: {SkippedCount}",
+                executedTasks.Count, skippedCount);
         }
 
-        return strategyResult.Value;
+        return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Success(
+            executedTasks,
+            totalStopwatch.ElapsedMilliseconds));
     }
 
     /// <summary>
-    /// Persists task creation (non-blocking).
+    /// Processes single task result and returns failure result if needed.
     /// </summary>
-    private async Task PersistCreationAsync(
-        ITaskPersistenceStrategy? strategy,
-        InstanceTask instanceTask,
-        string taskKey,
-        CancellationToken cancellationToken)
+    private Result<TasksExecutionResult>? ProcessTaskResult(
+        Result<TasksExecutionResult> taskResult,
+        OnExecuteTask onExecuteTask,
+        List<TaskExecutionSummary> executedTasks,
+        Stopwatch totalStopwatch)
     {
-        if (strategy == null)
-            return;
-        await strategy.HandleCreationAsync(instanceTask, cancellationToken);
-    }
-
-    /// <summary>
-    /// Persists task completion (non-blocking).
-    /// </summary>
-    private async Task PersistCompletionAsync(
-        ITaskPersistenceStrategy? strategy,
-        InstanceTask instanceTask,
-        string taskKey,
-        CancellationToken cancellationToken)
-    {
-        if (strategy == null)
-            return;
-        await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
-    }
-
-    /// <summary>
-    /// Records task failure metrics and persists the failure.
-    /// </summary>
-    private void RecordFailure(
-        InstanceTask instanceTask,
-        ITaskPersistenceStrategy? strategy,
-        string taskType,
-        string workflowKey,
-        Stopwatch stopwatch,
-        string? errorMessage,
-        CancellationToken cancellationToken)
-    {
-        instanceTask.Faulted(errorMessage ?? "Unknown error");
-
-        // Fire and forget persistence for failed tasks
-        if (strategy != null)
+        // Infrastructure error
+        if (!taskResult.IsSuccess)
         {
-            _ = strategy.HandleCompletionAsync(instanceTask, cancellationToken);
+            totalStopwatch.Stop();
+            var infraError = _errorFactory.CreateFromError(
+                taskResult.Error,
+                onExecuteTask.Task.Key,
+                "Unknown",
+                totalStopwatch.ElapsedMilliseconds);
+
+            return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Failure(
+                onExecuteTask,
+                infraError,
+                executedTasks,
+                totalStopwatch.ElapsedMilliseconds));
         }
 
-        _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
-        _workflowMetrics.FinishTaskExecution(taskType, workflowKey);
+        var result = taskResult.Value!;
 
-        _logger.LogError("Task {TaskKey} failed: {Error}", instanceTask.TaskId, errorMessage);
+        // Business error with blocking action
+        if (!result.IsSuccess)
+        {
+            totalStopwatch.Stop();
+            return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
+            {
+                IsSuccess = false,
+                HasFailedTasks = true,
+                FailedTaskKeys = result.FailedTaskKeys,
+                FailedTask = result.FailedTask ?? onExecuteTask,
+                TaskError = result.TaskError,
+                BoundaryAction = result.BoundaryAction,
+                ExecutedTasks = executedTasks,
+                TotalExecutionDurationMs = totalStopwatch.ElapsedMilliseconds
+            });
+        }
+
+        // Success - add to executed list
+        executedTasks.AddRange(result.ExecutedTasks);
+        return null;
     }
 
     /// <summary>
-    /// Applies the output response to the script context.
+    /// Executes a group of tasks with same Order in parallel.
+    /// If one task fails, cancels all other tasks and triggers error boundary.
     /// </summary>
-    private void ApplyOutputToContext(
-        WorkflowTask task,
-        StandardTaskResponse response,
+    private async Task<Result<TasksExecutionResult>> ExecuteTaskGroupInParallelAsync(
+        List<OnExecuteTask> tasks,
+        Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
-        ScriptContext context)
+        ScriptContext context,
+        CancellationToken cancellationToken)
     {
-        // Store in TaskResponse WARN: No needed
-        // var variableKey = task.Key.ToVariableName();
-        // context.TaskResponse[variableKey] = response;
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var linkedToken = linkedCts.Token;
+        var executedTasks = new List<TaskExecutionSummary>();
+        var stopwatch = Stopwatch.StartNew();
 
-        // Add to instance data if not an extension task and has data
-        if (taskTrigger != TaskTrigger.Extension && response.Data is not null)
+        _logger.LogDebug(
+            "Executing {TaskCount} tasks in parallel for instance {InstanceId}",
+            tasks.Count, context.Instance.Id);
+
+        // Track first failure for error boundary (thread-safe)
+        TasksExecutionResult? firstFailure = null;
+        OnExecuteTask? firstFailedTask = null;
+
+        var executionTasks = tasks.Select(async task =>
         {
-            context.Instance.AddData(
-                _guidGenerator.Create(),
-                new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions)),
-                VersionStrategy.IncreasePatch);
-        }
-    }
+            try
+            {
+                var result = await _executionEngine.ExecuteAsync(
+                    task, instanceTransitionId, taskTrigger, context, linkedToken);
 
-    private static bool CanExecuteInParallel(IList<OnExecuteTask> tasks)
-    {
-        // Simple heuristic: if tasks have different orders, they might have dependencies
-        // In a more sophisticated implementation, you would analyze actual dependencies
-        var orders = tasks.Select(t => t.Order).Distinct().ToList();
-        return orders.Count == 1 || tasks.Count == 1;
+                if (!result.IsSuccess || !result.Value!.IsSuccess)
+                {
+                    // Use class-level lock per Microsoft guidelines
+                    // https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock#guidelines
+                    lock (_parallelTaskLock)
+                    {
+                        if (firstFailure == null)
+                        {
+                            firstFailure = result.Value;
+                            firstFailedTask = task;
+                            // Cancel other tasks
+                            linkedCts.CancelAsync();
+                        }
+                    }
+                }
+
+                return (Task: task, Result: result);
+            }
+            catch (OperationCanceledException)
+            {
+                // Task was cancelled due to another task failure
+                return (Task: task, Result: Result<TasksExecutionResult>.Fail(
+                    Error.Failure("TaskCancelled", $"Task {task.Task.Key} was cancelled")));
+            }
+        }).ToList();
+
+        try
+        {
+            var results = await Task.WhenAll(executionTasks);
+
+            stopwatch.Stop();
+
+            // If there was a failure, return it with error boundary info
+            if (firstFailure != null && firstFailedTask != null)
+            {
+                // Collect successful tasks before failure
+                foreach (var (_, result) in results)
+                {
+                    if (result.IsSuccess && result.Value != null && result.Value.IsSuccess)
+                    {
+                        executedTasks.AddRange(result.Value.ExecutedTasks);
+                    }
+                }
+
+                return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
+                {
+                    IsSuccess = false,
+                    HasFailedTasks = true,
+                    FailedTaskKeys = firstFailure.FailedTaskKeys,
+                    FailedTask = firstFailure.FailedTask ?? firstFailedTask,
+                    TaskError = firstFailure.TaskError,
+                    BoundaryAction = firstFailure.BoundaryAction,
+                    ExecutedTasks = executedTasks,
+                    TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                });
+            }
+
+            // All succeeded
+            foreach (var (_, result) in results)
+            {
+                if (result.IsSuccess && result.Value != null)
+                {
+                    executedTasks.AddRange(result.Value.ExecutedTasks);
+                }
+            }
+
+            return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Success(
+                executedTasks, stopwatch.ElapsedMilliseconds));
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.LogError(ex, "Parallel task execution failed unexpectedly");
+
+            if (firstFailure != null && firstFailedTask != null)
+            {
+                return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
+                {
+                    IsSuccess = false,
+                    HasFailedTasks = true,
+                    FailedTaskKeys = firstFailure.FailedTaskKeys,
+                    FailedTask = firstFailedTask,
+                    TaskError = firstFailure.TaskError,
+                    BoundaryAction = firstFailure.BoundaryAction,
+                    ExecutedTasks = executedTasks,
+                    TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                });
+            }
+
+            return Result<TasksExecutionResult>.Fail(Error.Failure("ParallelExecutionFailed", ex.Message));
+        }
     }
 }

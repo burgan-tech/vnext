@@ -118,7 +118,7 @@ public class ObjectMergerTests
     }
 
     [Fact]
-    public void MergeValues_ShouldMergeLists()
+    public void MergeValues_ShouldReplaceLists()
     {
         // Arrange
         var target = new List<object> { 1, 2, 3 };
@@ -127,12 +127,11 @@ public class ObjectMergerTests
         // Act
         var result = ObjectMerger.MergeValues(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
-        Assert.Equal(3, result.Count);
+        Assert.Equal(2, result.Count);
         Assert.Equal(10, result[0]);
         Assert.Equal(20, result[1]);
-        Assert.Equal(3, result[2]);
     }
 
     [Fact]
@@ -257,7 +256,7 @@ public class ObjectMergerTests
     }
 
     [Fact]
-    public void MergeValues_ShouldHandleArrays()
+    public void MergeValues_ShouldReplaceArrays()
     {
         // Arrange
         var target = new[] { 1, 2, 3 };
@@ -266,9 +265,11 @@ public class ObjectMergerTests
         // Act
         var result = ObjectMerger.MergeValues(target, source) as List<object>;
 
-        // Assert
+        // Assert - Arrays are replaced, source completely replaces target
         Assert.NotNull(result);
-        Assert.Equal(3, result.Count);
+        Assert.Equal(2, result.Count);
+        Assert.Equal(10, result[0]);
+        Assert.Equal(20, result[1]);
     }
 
     [Fact]
@@ -315,7 +316,7 @@ public class ObjectMergerTests
     }
 
     [Fact]
-    public void MergeValues_ShouldHandleJsonArrays()
+    public void MergeValues_ShouldReplaceJsonArrays()
     {
         // Arrange
         var target = JsonDocument.Parse(@"[1, 2, 3]").RootElement;
@@ -324,9 +325,13 @@ public class ObjectMergerTests
         // Act
         var result = ObjectMerger.MergeValues(target, source) as JsonElement?;
 
-        // Assert
+        // Assert - Arrays are replaced, source completely replaces target
         Assert.NotNull(result);
         Assert.Equal(JsonValueKind.Array, result.Value.ValueKind);
+        var array = result.Value.EnumerateArray().ToList();
+        Assert.Equal(2, array.Count);
+        Assert.Equal(10, array[0].GetInt32());
+        Assert.Equal(20, array[1].GetInt32());
     }
 
     [Fact]
@@ -351,7 +356,7 @@ public class ObjectMergerTests
     }
 
     [Fact]
-    public void MergeValues_ShouldHandleNestedLists()
+    public void MergeValues_ShouldReplaceNestedLists()
     {
         // Arrange
         var target = new List<object>
@@ -361,15 +366,20 @@ public class ObjectMergerTests
 
         var source = new List<object>
         {
-            new Dictionary<string, object?> { { "id", 1 }, { "value", "Added" } }
+            new Dictionary<string, object?> { { "id", 2 }, { "value", "Added" } }
         };
 
         // Act
         var result = ObjectMerger.MergeValues(target, source) as List<object>;
 
-        // Assert
+        // Assert - Lists are replaced, source completely replaces target
         Assert.NotNull(result);
         Assert.Single(result);
+        var item = result[0] as Dictionary<string, object?>;
+        Assert.NotNull(item);
+        Assert.Equal(2, item.Count);
+        Assert.Equal(2, item["id"]);
+        Assert.Equal("Added", item["value"]);
     }
 
     [Fact]

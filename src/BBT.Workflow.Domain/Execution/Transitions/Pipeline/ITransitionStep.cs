@@ -16,6 +16,11 @@ public interface ITransitionStep
     int Order { get; }
 
     /// <summary>
+    /// Gets the display name of this step for logging and telemetry.
+    /// </summary>
+    string Name => GetType().Name;
+
+    /// <summary>
     /// Executes this step of the transition pipeline using Result pattern.
     /// Returns a Result containing the StepOutcome or an Error if the step fails.
     /// </summary>

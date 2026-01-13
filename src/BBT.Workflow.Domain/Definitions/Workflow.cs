@@ -31,6 +31,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         WorkflowType type,
         WorkflowTimeout timeout,
         Transition cancel,
+        Transition updateData,
         List<LanguageLabel> labels,
         List<Reference> functions,
         List<Reference> features,
@@ -43,6 +44,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         Type = type;
         Timeout = timeout;
         Cancel = cancel;
+        UpdateData = updateData;
         this.labels = labels;
         this.functions = functions ?? [];
         this.features = features ?? [];
@@ -104,6 +106,21 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// When configured, allows the workflow to be canceled via the cancel transition.
     /// </summary>
     public Transition? Cancel { get; private set; }
+
+    /// <summary>
+    /// Defines the update data configuration for this workflow.
+    /// When configured, allows the workflow to update data via the updateData transition.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("updateData")]
+    public Transition? UpdateData { get; private set; }
+
+    /// <summary>
+    /// Global error boundary for the workflow.
+    /// Applied when no task or state-level boundary handles the error.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("errorBoundary")]
+    public ErrorBoundary? ErrorBoundary { get; private set; }
+
 
     [JsonInclude] [JsonPropertyName("labels")]
     private List<LanguageLabel> labels = new();
@@ -225,6 +242,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         Cancel = cancel;
     }
 
+    public void SetUpdateData(Transition updateData)
+    {
+        UpdateData = updateData;
+    }
+
+    public void SetErrorBoundary(ErrorBoundary errorBoundary)
+    {
+        ErrorBoundary = errorBoundary;
+    }
+
     public void AddFunction(IReference reference)
     {
         functions.Add(reference.ToReference());
@@ -285,7 +312,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     {
         return FindSharedTransition(key)
                ?? (StartTransition.Key == key ? StartTransition : null)
-               ?? (Cancel?.Key == key ? Cancel : null);
+               ?? (Cancel?.Key == key ? Cancel : null)
+               ?? (UpdateData?.Key == key ? UpdateData : null);
     }
 
     public Transition? ResolveTransition(string key, State currentState)
@@ -302,14 +330,25 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// <exception cref="BusinessException">Thrown when a well-known key is requested but not configured</exception>
     private string ResolveWellKnownKey(string requestedKey)
     {
-        if (!string.Equals(requestedKey, WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase))
-            return requestedKey;
+        if (string.Equals(requestedKey, WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase))
+        {
+            // If this flow does not have cancel configuration, "cancel" is not supported
+            if (Cancel is null)
+                throw new CancelNotConfiguredForWorkflowException(Key);
 
-        // If this flow does not have cancel configuration, "cancel" is not supported
-        if (Cancel is null)
-            throw new CancelNotConfiguredForWorkflowException(Key);
+            return Cancel.Key;
+        }
 
-        return Cancel.Key;
+        if (string.Equals(requestedKey, WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase))
+        {
+            // If this flow does not have updateData configuration, "updateData" is not supported
+            if (UpdateData is null)
+                throw new UpdateDataNotConfiguredForWorkflowException(Key);
+
+            return UpdateData.Key;
+        }
+
+        return requestedKey;
     }
 
     public Transition? FindTransitionInContext(string key)

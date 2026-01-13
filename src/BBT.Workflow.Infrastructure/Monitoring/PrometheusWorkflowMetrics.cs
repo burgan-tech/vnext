@@ -595,4 +595,43 @@ public sealed class PrometheusWorkflowMetrics : IWorkflowMetrics
             .WithLabels(workflowType)
             .Set(count);
     }
+
+    #region Error Boundary Metrics
+
+    public void RecordErrorBoundaryResolution(string workflow, string level, string action)
+    {
+        WorkflowMetrics.ErrorBoundaryResolutions
+            .WithLabels(workflow, level, action)
+            .Inc();
+    }
+
+    public void RecordErrorBoundaryUnhandled(string workflow, string exceptionType, string scope)
+    {
+        WorkflowMetrics.ErrorBoundaryUnhandled
+            .WithLabels(workflow, exceptionType, scope)
+            .Inc();
+    }
+
+    public void RecordErrorBoundaryRetry(string workflow, string taskType, int attempt)
+    {
+        WorkflowMetrics.ErrorBoundaryRetries
+            .WithLabels(workflow, taskType, attempt.ToString())
+            .Inc();
+    }
+
+    public void RecordErrorActionDuration(string action, double durationSeconds)
+    {
+        WorkflowMetrics.ErrorActionDuration
+            .WithLabels(action)
+            .Observe(durationSeconds);
+    }
+
+    public void RecordSubFlowErrorPropagation(string parentWorkflow, string childWorkflow, bool propagated)
+    {
+        WorkflowMetrics.SubFlowErrorPropagation
+            .WithLabels(parentWorkflow, childWorkflow, propagated.ToString().ToLower())
+            .Inc();
+    }
+
+    #endregion
 }

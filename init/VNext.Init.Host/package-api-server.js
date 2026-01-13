@@ -941,6 +941,10 @@ async function handleRuntimePublish(req, res) {
             message = `Runtime package partially processed. ${results.success.length} packages loaded successfully, ${results.failed.length} packages failed to load.`;
         }
         
+        // Trigger re-initialization
+        await reInitializeDefinitions();
+        
+
         res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: success,
@@ -1044,6 +1048,9 @@ async function handlePackagePublish(req, res) {
             message = `Package partially processed. ${results.success.length} packages loaded successfully, ${results.failed.length} packages failed to load.`;
         }
         
+        // Trigger re-initialization
+        await reInitializeDefinitions();
+
         res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: success,
@@ -1093,6 +1100,29 @@ async function verifyPackageStructure(packagePath) {
         
         if (!hasValidStructure) {
             throw new Error(`Invalid package structure: neither vnext.config.json nor core directory found at ${packagePath}`);
+    }
+}
+
+/**
+ * Trigger re-initialization of definitions to clear cache
+ */
+async function reInitializeDefinitions() {
+    const url = `${VNEXT_APP_URL}/api/v1/definitions/re-initialize`;
+    log.detail(`Triggering re-initialization at ${url}...`);
+    
+    try {
+        const response = await httpRequest(url, { method: 'GET' });
+        
+        if (response.statusCode === 200 || response.statusCode === 204) {
+            log.success('Cache re-initialization triggered successfully');
+            return true;
+        } else {
+            log.warn(`Failed to trigger re-initialization (HTTP ${response.statusCode})`);
+            return false;
+        }
+    } catch (e) {
+        log.warn(`Error triggering re-initialization: ${e.message}`);
+        return false;
     }
 }
 

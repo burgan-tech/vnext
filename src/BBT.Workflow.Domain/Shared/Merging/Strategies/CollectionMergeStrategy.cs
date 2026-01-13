@@ -6,16 +6,17 @@ namespace BBT.Workflow.Shared.Merging;
 
 /// <summary>
 /// Merge strategy for collection types including dictionaries and enumerable objects.
-/// Handles dictionary merging with recursive value merging and collection concatenation.
+/// Handles dictionary merging with recursive value merging.
+/// List-like collections are replaced entirely rather than merged to ensure deterministic updates.
 /// </summary>
 public class CollectionMergeStrategy : IMergeStrategy
 {
     /// <summary>
-    /// Merges two collections by concatenating them or merging their contents.
+    /// Merges two collections. Dictionaries are deep merged, while list-like collections are replaced.
     /// </summary>
     /// <param name="target">The target collection.</param>
     /// <param name="source">The source collection.</param>
-    /// <returns>The merged collection.</returns>
+    /// <returns>The merged collection (for dictionaries) or the source collection (for lists).</returns>
     public object? Merge(object? target, object? source)
     {
         if (target is not IEnumerable targetCollection || source is not IEnumerable sourceCollection)
@@ -25,14 +26,14 @@ public class CollectionMergeStrategy : IMergeStrategy
     }
 
     /// <summary>
-    /// Merges two collections by concatenating them or merging dictionary contents.
+    /// Merges two collections. Dictionaries are deep merged, while list-like collections are replaced.
     /// </summary>
     /// <param name="target">The target collection.</param>
     /// <param name="source">The source collection.</param>
-    /// <returns>The merged collection.</returns>
+    /// <returns>The merged collection (for dictionaries) or the source collection (for lists).</returns>
     private static object? MergeCollections(IEnumerable target, IEnumerable source)
     {
-        // Handle Dictionary<string, object> types
+        // Handle Dictionary<string, object> types - deep merge
         if (target is IDictionary<string, object?> targetDict && source is IDictionary<string, object?> sourceDict)
         {
             var result = new ExpandoObject() as IDictionary<string, object?>;
@@ -54,54 +55,16 @@ public class CollectionMergeStrategy : IMergeStrategy
             return (ExpandoObject)result;
         }
 
-        // For other enumerable types, perform full deep merge
+        // For list-like collections, replace entirely with source
+        // This ensures deterministic updates and allows removing items from lists
         try
         {
-            var targetList = target.Cast<object>().ToList();
-            var sourceList = source.Cast<object>().ToList();
-
-            return PerformFullDeepMerge(targetList, sourceList);
+            return source.Cast<object>().ToList();
         }
         catch
         {
-            // If casting fails, return source
+            // If casting fails, return source as-is
             return source;
         }
-    }
-
-    /// <summary>
-    /// Performs full deep merge of two object lists without any key-based restrictions.
-    /// Merges objects at same positions and appends remaining items.
-    /// </summary>
-    /// <param name="targetList">The target object list.</param>
-    /// <param name="sourceList">The source object list.</param>
-    /// <returns>The fully merged object list.</returns>
-    private static List<object> PerformFullDeepMerge(List<object> targetList, List<object> sourceList)
-    {
-        var mergedItems = new List<object>();
-        var maxLength = Math.Max(targetList.Count, sourceList.Count);
-
-        // Merge items at same positions
-        for (int i = 0; i < maxLength; i++)
-        {
-            if (i < targetList.Count && i < sourceList.Count)
-            {
-                // Both lists have items at this position - deep merge them
-                var mergedItem = ObjectMerger.MergeValues(targetList[i], sourceList[i]);
-                mergedItems.Add(mergedItem ?? sourceList[i]);
-            }
-            else if (i < targetList.Count)
-            {
-                // Only target has item at this position
-                mergedItems.Add(targetList[i]);
-            }
-            else
-            {
-                // Only source has item at this position
-                mergedItems.Add(sourceList[i]);
-            }
-        }
-
-        return mergedItems;
     }
 }

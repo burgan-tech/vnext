@@ -69,11 +69,13 @@ public sealed class InstanceCommandAppService(
 
     /// <summary>
     /// Checks if an active instance already exists before starting workflow creation.
-    /// Implements idempotent behavior for active instances only.
+    /// Implements idempotent behavior for active instances only (when StrictIdempotency is false).
+    /// When StrictIdempotency is true (service-to-service calls), returns 409 Conflict.
     /// </summary>
     /// <returns>
     /// - null: No existing instance OR existing completed instance, continue with creation
-    /// - Ok: Existing active instance found, return its current status (idempotent)
+    /// - Ok: Existing active instance found, return its current status (idempotent, only when StrictIdempotency is false)
+    /// - Fail: Existing active instance found and StrictIdempotency is true (409 Conflict)
     /// </returns>
     private async Task<Result<StartInstanceOutput>?> CheckExistingInstanceAsync(
         StartInstanceInput input,
@@ -93,7 +95,20 @@ public sealed class InstanceCommandAppService(
 
         if (existingInstance.IsCompleted)
             return null; // Completed instance, allow creating new one
+        
+        // Strict idempotency: Return 409 Conflict for service-to-service calls
+        // This prevents false positive correlations in SubFlow/SubProcess scenarios
+        if (input.StrictIdempotency)
+        {
+            logger.LogWarning(
+                "Strict idempotency check failed: Active instance already exists with key '{InstanceKey}' or id '{InstanceId}'",
+                instanceKey, existingInstance.Id);
             
+            return Result<StartInstanceOutput>.Fail(
+                WorkflowErrors.ActiveInstanceAlreadyExists(existingInstance.Id, instanceKey));
+        }
+        
+        // Default idempotent behavior for client calls
         return Result<StartInstanceOutput>.Ok(new StartInstanceOutput
         {
             Id = existingInstance.Id,

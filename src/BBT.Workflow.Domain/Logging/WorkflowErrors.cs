@@ -1,5 +1,4 @@
 using BBT.Aether.Results;
-using BBT.Aether.Validation;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Shared;
 
@@ -12,15 +11,18 @@ namespace BBT.Workflow.Logging;
 public static class WorkflowErrors
 {
     #region Instance Errors
-
+    
     /// <summary>
-    /// Instance already exists with the given key.
+    /// Active instance already exists with the given key (strict idempotency check).
+    /// Used for service-to-service calls to prevent false positive correlations.
     /// </summary>
-    public static Error InstanceAlreadyExists(string instanceKey)
+    /// <param name="instanceId">The ID of the existing active instance.</param>
+    /// <param name="key">The key of the existing active instance (optional).</param>
+    public static Error ActiveInstanceAlreadyExists(Guid instanceId, string? key)
         => Error.Conflict(
-            WorkflowErrorCodes.ConflictWorkflow,
-            $"An active instance with key \"{instanceKey}\" already exists",
-            target: instanceKey);
+            WorkflowErrorCodes.ActiveInstanceAlreadyExists,
+            $"An active instance already exists with {(key != null ? $"key '{key}'" : $"id '{instanceId}'")}",
+            target: key ?? instanceId.ToString());
 
     /// <summary>
     /// Instance was not found by ID or key.
@@ -212,6 +214,54 @@ public static class WorkflowErrors
         => Error.Failure(
             WorkflowErrorCodes.ChildSubflowCancellationFailed,
             $"Failed to cancel child subflow {instanceId}: {reason}");
+
+    #endregion
+
+    #region SubFlow Errors
+
+    /// <summary>
+    /// SubFlow start operation failed.
+    /// </summary>
+    /// <param name="subFlowKey">The key of the SubFlow that failed to start.</param>
+    /// <param name="reason">The reason for the failure.</param>
+    public static Error SubFlowStartFailed(string subFlowKey, string reason)
+        => Error.Failure(
+            WorkflowErrorCodes.SubflowStartFailed,
+            $"Failed to start SubFlow '{subFlowKey}': {reason}",
+            detail: subFlowKey);
+
+    /// <summary>
+    /// SubFlow input mapping failed.
+    /// </summary>
+    /// <param name="subFlowKey">The key of the SubFlow.</param>
+    /// <param name="reason">The reason for the mapping failure.</param>
+    public static Error SubFlowInputMappingFailed(string subFlowKey, string reason)
+        => Error.Failure(
+            WorkflowErrorCodes.SubflowStartFailed,
+            $"SubFlow '{subFlowKey}' input mapping failed: {reason}",
+            detail: subFlowKey);
+
+    /// <summary>
+    /// Correlation not found for SubFlow start.
+    /// </summary>
+    /// <param name="correlationId">The correlation ID that was not found.</param>
+    /// <param name="instanceId">The instance ID.</param>
+    public static Error SubFlowCorrelationNotFound(Guid correlationId, Guid instanceId)
+        => Error.NotFound(
+            WorkflowErrorCodes.ConfigInvalid,
+            $"Correlation '{correlationId}' not found for instance '{instanceId}'",
+            target: correlationId.ToString());
+
+    /// <summary>
+    /// Target state not found or has no SubFlow configuration.
+    /// </summary>
+    /// <param name="stateKey">The state key that was not found.</param>
+    /// <param name="instanceId">The instance ID.</param>
+    public static Error SubFlowTargetStateNotFound(string stateKey, Guid instanceId)
+        => Error.NotFound(
+            WorkflowErrorCodes.ConfigInvalid,
+            $"Target state '{stateKey}' not found or has no SubFlow configuration for instance '{instanceId}'",
+            target: stateKey);
 
     #endregion
 }

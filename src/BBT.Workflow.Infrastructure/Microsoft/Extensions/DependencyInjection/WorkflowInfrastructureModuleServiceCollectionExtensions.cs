@@ -5,13 +5,17 @@ using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
 using BBT.Workflow.Infrastructure.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.HostedServices;
+using BBT.Workflow.Infrastructure.Security;
 using BBT.Workflow.Infrastructure.Scripting;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Remote.Extensions;
 using BBT.Workflow.Schemas;
+using BBT.Workflow.Security;
 using BBT.Workflow.Scripting;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -25,14 +29,28 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The <see cref="IServiceCollection" /> to add services to.</param>
     /// <returns>The <see cref="IServiceCollection" /> so that additional calls can be chained.</returns>
+    /// <remarks>
+    /// Infrastructure module manages its own dependencies.
+    /// If IDistributedCache is not registered, a fallback in-memory cache will be used.
+    /// </remarks>
     public static IServiceCollection AddInfrastructureModule(
         this IServiceCollection services)
     {
         services.AddAetherInfrastructure();
         
+        // Ensure IDistributedCache is available for SchemaValidator
+        // If not registered by Application/API layer, use in-memory fallback
+        if (!services.Any(sd => sd.ServiceType == typeof(IDistributedCache)))
+        {
+            services.AddDistributedMemoryCache();
+        }
+        
         // DbContext
         services.AddSingleton<NpgsqlSchemaConnectionInterceptor>();
         services.AddScoped<IMultiSchemaMigrator<WorkflowDbContext>, MultiSchemaMigrator<WorkflowDbContext>>();
+        
+        // Security - Schema Validation
+        services.AddScoped<ISchemaValidator, SchemaValidator>();
         
         // You can register your repositories here.
         services.AddScoped<IInstanceRepository, EfCoreInstanceRepository>();
@@ -71,6 +89,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         
         // Event Hooks
         services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
+        services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
         services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
         
         // Embedded Script Services

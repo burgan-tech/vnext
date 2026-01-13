@@ -50,6 +50,28 @@ public sealed class PipelineDirectives
     public bool IsSubFlowResume { get; private set; }
 
     /// <summary>
+    /// Gets the error transition key to be triggered by error boundary.
+    /// </summary>
+    private string? _errorTransitionKey;
+
+    /// <summary>
+    /// Gets a value indicating whether an error transition has been set.
+    /// </summary>
+    public bool HasErrorTransition => _errorTransitionKey != null;
+
+    /// <summary>
+    /// Gets a value indicating whether an abort action was triggered by error boundary
+    /// without a target transition. Pipeline should stop and finalize without faulting.
+    /// </summary>
+    public bool BoundaryAbortRequested { get; private set; }
+
+    /// <summary>
+    /// Requests pipeline to abort without faulting.
+    /// Used when error boundary handles the error but no transition is specified.
+    /// </summary>
+    public void RequestBoundaryAbort() => BoundaryAbortRequested = true;
+
+    /// <summary>
     /// Requests the pipeline to resume from a specific order.
     /// </summary>
     /// <param name="order">The lifecycle order to resume from.</param>
@@ -100,6 +122,25 @@ public sealed class PipelineDirectives
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
+
+    /// <summary>
+    /// Sets the error transition key to be triggered by error boundary.
+    /// The pipeline will trigger this transition after error handling completes.
+    /// </summary>
+    /// <param name="transitionKey">The transition key to trigger.</param>
+    public void SetErrorTransition(string transitionKey) => _errorTransitionKey = transitionKey;
+
+    /// <summary>
+    /// Consumes and clears the error transition key.
+    /// Called by the pipeline when handling error boundary transition.
+    /// </summary>
+    /// <returns>The error transition key, or null if none was set.</returns>
+    public string? ConsumeErrorTransition()
+    {
+        var key = _errorTransitionKey;
+        _errorTransitionKey = null;
+        return key;
+    }
 
     /// <summary>
     /// Enqueues a post-commit job to be executed after the distributed lock is released.

@@ -105,6 +105,28 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
+    /// Logs when an updateData transition is detected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10011,
+        Level = LogLevel.Information,
+        Message = "UpdateData transition detected for instance {InstanceId}")]
+    public static partial void UpdateDataTransitionDetected(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when skipping to finish step for updateData transition.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10012,
+        Level = LogLevel.Information,
+        Message = "Skipping normal pipeline steps for updateData transition, jumping to Finalize step for instance {InstanceId}")]
+    public static partial void UpdateDataSkipToFinish(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when a transition rule validation fails.
     /// </summary>
     [LoggerMessage(
@@ -202,6 +224,18 @@ public static partial class WorkflowLogs
         string stateKey,
         Guid instanceId,
         string transitionKeys);
+
+    /// <summary>
+    /// Logs when attempting to update data on an already completed instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10054,
+        Level = LogLevel.Warning,
+        Message = "Cannot update data for instance {InstanceId}: already in {Status} state")]
+    public static partial void UpdateDataInstanceAlreadyCompleted(
+        this ILogger logger,
+        Guid instanceId,
+        string status);
 
     /// <summary>
     /// Logs when inline transition execution fails during re-entry.
@@ -481,6 +515,58 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
+    /// Logs when a SubFlow state change event is received.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40027,
+        Level = LogLevel.Information,
+        Message = "SubFlow state change received for SubInstance {SubInstanceId}, Parent {ParentInstanceId}, NewState: {NewState}")]
+    public static partial void SubFlowStateChangeReceived(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string newState);
+
+    /// <summary>
+    /// Logs when a SubFlow state change is successfully applied to parent.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40028,
+        Level = LogLevel.Information,
+        Message = "SubFlow state change applied for SubInstance {SubInstanceId}, Parent {ParentInstanceId}, NewState: {NewState}")]
+    public static partial void SubFlowStateChangeApplied(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string newState);
+
+    /// <summary>
+    /// Logs when a SubFlow state changed event is received by the hook.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40029,
+        Level = LogLevel.Information,
+        Message = "SubFlow state changed event received for SubInstance {SubInstanceId}, Parent {ParentInstanceId}, NewState: {NewState}")]
+    public static partial void SubFlowStateChangedEventReceived(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string newState);
+
+    /// <summary>
+    /// Logs when SubFlow state update fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40079,
+        Level = LogLevel.Error,
+        Message = "SubFlow state update failed for SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
+    public static partial void SubFlowStateUpdateFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
     /// Logs when parent workflow continuation starts after SubFlow completion.
     /// </summary>
     [LoggerMessage(
@@ -526,6 +612,68 @@ public static partial class WorkflowLogs
         Exception exception,
         Guid subInstanceId,
         Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a SubFlow start operation completes successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40030,
+        Level = LogLevel.Information,
+        Message = "SubFlow {SubFlowKey} started successfully for parent instance {ParentInstanceId}")]
+    public static partial void SubFlowStarted(
+        this ILogger logger,
+        string subFlowKey,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a SubFlow start operation fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40080,
+        Level = LogLevel.Error,
+        Message = "SubFlow {SubFlowKey} start failed for parent instance {ParentInstanceId}: {ErrorCode} - {ErrorMessage}")]
+    public static partial void SubFlowStartFailed(
+        this ILogger logger,
+        string subFlowKey,
+        Guid parentInstanceId,
+        string errorCode,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when instance is not found during subflow start.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40081,
+        Level = LogLevel.Error,
+        Message = "Instance {InstanceId} not found while starting subflow for correlation {CorrelationId}")]
+    public static partial void SubFlowInstanceNotFound(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId);
+
+    /// <summary>
+    /// Logs when correlation is not found during subflow start.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40082,
+        Level = LogLevel.Error,
+        Message = "Correlation {CorrelationId} not found for instance {InstanceId}")]
+    public static partial void SubFlowCorrelationNotFoundForStart(
+        this ILogger logger,
+        Guid correlationId,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when target state is not found or has no SubFlow configuration.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40083,
+        Level = LogLevel.Error,
+        Message = "Target state {TargetStateKey} not found or has no SubFlow configuration for instance {InstanceId}")]
+    public static partial void SubFlowTargetStateNotFound(
+        this ILogger logger,
+        string targetStateKey,
+        Guid instanceId);
 
     #endregion
 
@@ -689,7 +837,7 @@ public static partial class WorkflowLogs
     /// Logs when a ChildSubflowCancelRequestedEvent is silently ignored because it belongs to a different domain.
     /// </summary>
     [LoggerMessage(
-        EventId = 40025,
+        EventId = 40030,
         Level = LogLevel.Debug,
         Message = "ChildSubflowCancelRequestedEvent silently ignored: event domain {EventDomain} does not match current runtime domain {RuntimeDomain}. Instance {InstanceId}, Flow {Flow}")]
     public static partial void ChildSubflowCancelEventIgnoredDomainMismatch(
@@ -703,7 +851,7 @@ public static partial class WorkflowLogs
     /// Logs when child subflow cancellation succeeds.
     /// </summary>
     [LoggerMessage(
-        EventId = 40024,
+        EventId = 40021,
         Level = LogLevel.Information,
         Message = "Child subflow cancellation succeeded for instance {InstanceId}")]
     public static partial void ChildSubflowCancelSucceeded(

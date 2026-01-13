@@ -110,7 +110,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
                     data: responseData,
                     metadata: metadata);
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "cancelled");
@@ -125,7 +125,8 @@ public sealed class DaprHttpEndpointTaskInvoker(
                 {
                     ["EndpointName"] = binding.EndpointName,
                     ["Path"] = binding.Path,
-                    ["Cancelled"] = true
+                    ["Cancelled"] = true,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)

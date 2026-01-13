@@ -44,6 +44,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
         app.UseDaprScheduledJobHandler();
         app.MapAppHealthChecks();
         
+        app.EnsureDatabaseCreatedInDevelopment();
         app.Services.MigrateMessagingDbContext();
         return app;
     }

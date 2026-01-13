@@ -11,5 +11,11 @@ public static class WellKnownTransitionKeys
     /// When requested, the system resolves this to the workflow's configured cancel transition.
     /// </summary>
     public const string Cancel = "cancel";
+
+    /// <summary>
+    /// Special transition key for workflow data updates.
+    /// When requested, the system resolves this to the workflow's configured updateData transition.
+    /// </summary>
+    public const string UpdateData = "update-parent-data";
 }
 

@@ -64,6 +64,7 @@ public sealed class ScriptEngine(
         "System.Threading",
         "System.Threading.Tasks",
         "System.Dynamic",
+        "System.Text.Json",
         "System.Text.Json.Serialization",
         "BBT.Workflow.Shared",
         "BBT.Workflow.Scripting",

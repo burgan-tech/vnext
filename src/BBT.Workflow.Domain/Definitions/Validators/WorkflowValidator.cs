@@ -4,10 +4,12 @@ namespace BBT.Workflow.Definitions.Validators;
 
 /// <summary>
 /// Provides consistent validation for workflow domain objects.
-/// Validates workflow structure, states, transitions, and labels according to business rules.
+/// Validates workflow structure, states, transitions, labels, and error boundaries according to business rules.
 /// </summary>
 public class WorkflowValidator
 {
+    private readonly ErrorBoundaryValidator _errorBoundaryValidator = new();
+
     /// <summary>
     /// Validates the entire workflow definition.
     /// </summary>
@@ -27,6 +29,7 @@ public class WorkflowValidator
         ValidateWorkflowLabels(workflow, result);
         ValidateTimeoutInStates(workflow, result, stateKeys);
         ValidateStartTransition(workflow, result);
+        ValidateUpdateDataTransition(workflow, result);
         ValidateTransitionInStates(workflow, result, stateKeys);
         ValidateStateCountAndTypes(workflow, result);
 
@@ -38,6 +41,9 @@ public class WorkflowValidator
         // Transition level validations
         ValidateTransitionLabels(workflow, result);
         ValidateTransitionRules(workflow, result);
+
+        // Error boundary validations
+        ValidateErrorBoundaries(workflow, result, stateKeys);
 
         return result;
     }
@@ -83,6 +89,19 @@ public class WorkflowValidator
             result.AddError(new ValidationResult(
                 "Workflow must have a start transition.",
                 [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}"]));
+        }
+    }
+
+    /// <summary>
+    /// Validates that UpdateData transition must have target value of "$self".
+    /// </summary>
+    private void ValidateUpdateDataTransition(Workflow workflow, WorkflowValidationResult result)
+    {
+        if (workflow.UpdateData != null && workflow.UpdateData.Target != WellKnownStateKeys.Self)
+        {
+            result.AddError(new ValidationResult(
+                $"UpdateData transition must have target value of '$self'. Found: '{workflow.UpdateData.Target}'.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.UpdateData)}.{nameof(Transition.Target)}"]));
         }
     }
 
@@ -486,6 +505,233 @@ public class WorkflowValidator
         }
 
         // Schema, View, Mapping are optional - no validation needed
+    }
+
+    #endregion
+
+    #region Error Boundary Validations
+
+    /// <summary>
+    /// Validates all error boundaries in the workflow (Workflow, State, Transition, SubFlow levels).
+    /// </summary>
+    private void ValidateErrorBoundaries(Workflow workflow, WorkflowValidationResult result, HashSet<string> stateKeys)
+    {
+        // Collect all valid transition keys in the workflow
+        var transitionKeys = CollectTransitionKeys(workflow);
+
+        // Validate Workflow-level (Global) ErrorBoundary
+        if (workflow.ErrorBoundary != null)
+        {
+            var errors = _errorBoundaryValidator.Validate(
+                workflow.ErrorBoundary,
+                $"{nameof(Workflow)}.{nameof(Workflow.ErrorBoundary)}",
+                stateKeys,
+                transitionKeys);
+            foreach (var error in errors)
+            {
+                result.AddError(error);
+            }
+        }
+
+        // Validate State-level ErrorBoundaries
+        foreach (var state in workflow.States)
+        {
+            ValidateStateErrorBoundary(state, result, stateKeys, transitionKeys);
+        }
+
+        // Validate Transition-level OnExecuteTask ErrorBoundaries
+        ValidateTransitionTaskErrorBoundaries(workflow, result, stateKeys, transitionKeys);
+    }
+
+    /// <summary>
+    /// Collects all transition keys defined in the workflow.
+    /// Includes StartTransition, Cancel, SharedTransitions, and State transitions.
+    /// </summary>
+    private static HashSet<string> CollectTransitionKeys(Workflow workflow)
+    {
+        var transitionKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        // StartTransition
+        if (workflow.StartTransition != null && !string.IsNullOrEmpty(workflow.StartTransition.Key))
+        {
+            transitionKeys.Add(workflow.StartTransition.Key);
+        }
+
+        // Cancel transition
+        if (workflow.Cancel != null && !string.IsNullOrEmpty(workflow.Cancel.Key))
+        {
+            transitionKeys.Add(workflow.Cancel.Key);
+        }
+
+        // SharedTransitions
+        foreach (var transition in workflow.SharedTransitions)
+        {
+            if (!string.IsNullOrEmpty(transition.Key))
+            {
+                transitionKeys.Add(transition.Key);
+            }
+        }
+
+        // State transitions
+        foreach (var state in workflow.States)
+        {
+            foreach (var transition in state.Transitions)
+            {
+                if (!string.IsNullOrEmpty(transition.Key))
+                {
+                    transitionKeys.Add(transition.Key);
+                }
+            }
+        }
+
+        return transitionKeys;
+    }
+
+    /// <summary>
+    /// Validates a state's error boundary and its task error boundaries.
+    /// </summary>
+    private void ValidateStateErrorBoundary(
+        State state,
+        WorkflowValidationResult result,
+        HashSet<string> stateKeys,
+        HashSet<string> transitionKeys)
+    {
+        var stateContext = $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}]";
+
+        // Validate State ErrorBoundary
+        if (state.ErrorBoundary != null)
+        {
+            var errors = _errorBoundaryValidator.Validate(
+                state.ErrorBoundary,
+                $"{stateContext}.{nameof(State.ErrorBoundary)}",
+                stateKeys,
+                transitionKeys);
+            foreach (var error in errors)
+            {
+                result.AddError(error);
+            }
+        }
+
+        // Validate OnEntry task ErrorBoundaries
+        foreach (var (onEntry, index) in state.OnEntries.Select((t, i) => (t, i)))
+        {
+            if (onEntry.ErrorBoundary != null)
+            {
+                var errors = _errorBoundaryValidator.ValidateOnExecuteTaskBoundary(
+                    onEntry,
+                    $"{stateContext}.{nameof(State.OnEntries)}[{index}]",
+                    stateKeys,
+                    transitionKeys);
+                foreach (var error in errors)
+                {
+                    result.AddError(error);
+                }
+            }
+        }
+
+        // Validate OnExit task ErrorBoundaries
+        foreach (var (onExit, index) in state.OnExits.Select((t, i) => (t, i)))
+        {
+            if (onExit.ErrorBoundary != null)
+            {
+                var errors = _errorBoundaryValidator.ValidateOnExecuteTaskBoundary(
+                    onExit,
+                    $"{stateContext}.{nameof(State.OnExits)}[{index}]",
+                    stateKeys,
+                    transitionKeys);
+                foreach (var error in errors)
+                {
+                    result.AddError(error);
+                }
+            }
+        }
+
+        // Validate SubFlow ErrorBoundary (if SubFlow has error handling configured)
+        // Note: SubFlow error handling is defined but not implemented yet
+    }
+
+    /// <summary>
+    /// Validates OnExecuteTask ErrorBoundaries in transitions.
+    /// </summary>
+    private void ValidateTransitionTaskErrorBoundaries(
+        Workflow workflow,
+        WorkflowValidationResult result,
+        HashSet<string> stateKeys,
+        HashSet<string> transitionKeys)
+    {
+        // Validate StartTransition OnExecute tasks
+        if (workflow.StartTransition != null)
+        {
+            ValidateTransitionOnExecuteTasks(
+                workflow.StartTransition,
+                $"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}",
+                result,
+                stateKeys,
+                transitionKeys);
+        }
+
+        // Validate Cancel transition OnExecute tasks
+        if (workflow.Cancel != null)
+        {
+            ValidateTransitionOnExecuteTasks(
+                workflow.Cancel,
+                $"{nameof(Workflow)}.{nameof(Workflow.Cancel)}",
+                result,
+                stateKeys,
+                transitionKeys);
+        }
+
+        // Validate SharedTransitions OnExecute tasks
+        foreach (var transition in workflow.SharedTransitions)
+        {
+            ValidateTransitionOnExecuteTasks(
+                transition,
+                $"{nameof(Workflow)}.{nameof(Workflow.SharedTransitions)}[{transition.Key}]",
+                result,
+                stateKeys,
+                transitionKeys);
+        }
+
+        // Validate State transitions OnExecute tasks
+        foreach (var state in workflow.States)
+        {
+            foreach (var transition in state.Transitions)
+            {
+                ValidateTransitionOnExecuteTasks(
+                    transition,
+                    $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Transitions)}[{transition.Key}]",
+                    result,
+                    stateKeys,
+                    transitionKeys);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Validates OnExecuteTask ErrorBoundaries within a transition.
+    /// </summary>
+    private void ValidateTransitionOnExecuteTasks(
+        Transition transition,
+        string transitionContext,
+        WorkflowValidationResult result,
+        HashSet<string> stateKeys,
+        HashSet<string> transitionKeys)
+    {
+        foreach (var (onExecute, index) in transition.OnExecutionTasks.Select((t, i) => (t, i)))
+        {
+            if (onExecute.ErrorBoundary != null)
+            {
+                var errors = _errorBoundaryValidator.ValidateOnExecuteTaskBoundary(
+                    onExecute,
+                    $"{transitionContext}.{nameof(Transition.OnExecutionTasks)}[{index}]",
+                    stateKeys,
+                    transitionKeys);
+                foreach (var error in errors)
+                {
+                    result.AddError(error);
+                }
+            }
+        }
     }
 
     #endregion

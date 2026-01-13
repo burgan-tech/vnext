@@ -19,7 +19,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services
             .AddDomainModule()
             .AddApplicationModule()
-            .AddInfrastructureModule()
+            .AddInfrastructureModule() // Infrastructure manages its own dependencies
             .AddAspNetCoreModules(configuration)
             .AddResultResilience(configuration)
             .AddDaprClients()
@@ -27,7 +27,7 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddDbContext(configuration)
             .AppMapper()
             .AddTelemetry(configuration)
-            .AddDistributedCache(configuration)
+            .AddDistributedCache(configuration) // Can be called before or after InfrastructureModule
             .AddDistributedLock(configuration)
             .AddBackgroundJob()
             .AddRedis()

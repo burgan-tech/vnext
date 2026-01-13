@@ -165,7 +165,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddAetherDomainEvents<MessagingDbContext>(options =>
         {
-            options.DispatchStrategy = DomainEventDispatchStrategy.PublishWithFallback;
+            options.DispatchStrategy = DomainEventDispatchStrategy.AlwaysUseOutbox;
         });
 
         services.AddAetherOutbox<MessagingDbContext>();

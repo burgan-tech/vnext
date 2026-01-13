@@ -90,7 +90,7 @@ public sealed class DaprBindingTaskInvoker(
                     ["Operation"] = operation
                 });
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "cancelled");
@@ -105,7 +105,8 @@ public sealed class DaprBindingTaskInvoker(
                 {
                     ["BindingName"] = binding.BindingName,
                     ["Operation"] = binding.Operation,
-                    ["Cancelled"] = true
+                    ["Cancelled"] = true,
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)
