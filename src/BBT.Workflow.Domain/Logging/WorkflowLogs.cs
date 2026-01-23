@@ -147,7 +147,18 @@ public static partial class WorkflowLogs
     public static partial void ExitSkipToFinish(
         this ILogger logger,
         Guid instanceId);
-
+    /// <summary>
+    /// Logs when existing timer jobs are canceled before scheduling new ones.
+    /// This typically occurs during self-transitions or re-entry scenarios.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10015,
+        Level = LogLevel.Information,
+        Message = "Canceled {Count} existing timer job(s) for instance {InstanceId} before scheduling new timers")]
+    public static partial void ExistingTimerJobsCanceled(
+        this ILogger logger,
+        int count,
+        Guid instanceId);
     /// <summary>
     /// Logs when a transition rule validation fails.
     /// </summary>

@@ -20,9 +20,11 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Pipeline step that schedules future transitions based on timers.
 /// Enqueues scheduled transitions for later execution.
 /// Uses Result pattern for exception-free error handling.
+/// Cancels existing timer jobs before scheduling new ones to handle self-transitions correctly.
 /// </summary>
 public sealed class ScheduleTransitionsStep(
     IBackgroundJobService backgroundJobService,
+    IJobScheduler jobScheduler,
     ITaskTimerService taskTimerService,
     IScriptContextFactory scriptContextFactory,
     IInstanceJobRepository jobRepository,
@@ -46,6 +48,14 @@ public sealed class ScheduleTransitionsStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // Cancel existing timer jobs for scheduled transitions that will be re-scheduled
+        // This handles self-transitions and re-entry scenarios where timers need to reset
+        var cancelResult = await CancelExistingScheduledJobsAsync(context, cancellationToken);
+        if (!cancelResult.IsSuccess)
+        {
+            return Result<StepOutcome>.Fail(cancelResult.Error);
+        }
+
         // Process each scheduled transition
         foreach (var scheduledTransition in context.Target!.ScheduledTransitions)
         {
@@ -64,6 +74,52 @@ public sealed class ScheduleTransitionsStep(
     /// </summary>
     private static bool HasScheduledTransitions(TransitionExecutionContext context)
         => context.Target?.ScheduledTransitions != null && context.Target.ScheduledTransitions.Any();
+
+    /// <summary>
+    /// Cancels existing timer jobs for scheduled transitions that will be re-scheduled.
+    /// This handles self-transitions and re-entry scenarios where timers need to reset.
+    /// </summary>
+    private async Task<Result> CancelExistingScheduledJobsAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var activeJobs = await jobRepository.GetListActiveAsync(context.InstanceId, cancellationToken);
+        
+        if (!activeJobs.Any())
+        {
+            return Result.Ok();
+        }
+
+        foreach (var job in activeJobs)
+        {
+            try
+            {
+                await jobScheduler.DeleteAsync(
+                    TransitionTimerJobHandler.HandlerName, 
+                    job.JobName, 
+                    cancellationToken);
+                
+                job.MarkAsProcessed();
+                await jobRepository.UpdateAsync(job, true, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, 
+                    "Failed to cancel timer job: JobName={JobName}",
+                    job.JobName);
+            }
+        }
+
+        logger.ExistingTimerJobsCanceled(activeJobs.Count, context.InstanceId);
+
+        return Result.Ok();
+    }
+
+    /// <summary>
+    /// Builds the job name for a scheduled transition.
+    /// </summary>
+    private static string BuildJobName(Guid instanceId, string scheduledTransitionKey)
+        => $"trans-{instanceId}-{scheduledTransitionKey}";
 
     /// <summary>
     /// Schedules a single transition for future execution using Railway chain.
@@ -129,7 +185,7 @@ public sealed class ScheduleTransitionsStep(
         Transition scheduledTransition,
         TimerSchedule timerSchedule)
     {
-        var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
+        var jobName = $"trans-{context.InstanceId}-{context.Transition?.Key}";
         var activity = Activity.Current;
         
         var payload = new TransitionTimerPayload
@@ -184,6 +240,12 @@ public sealed class ScheduleTransitionsStep(
                 info.Context.InstanceId),
             true,
             cancellationToken);
+
+        logger.LogInformation(
+            "Scheduled timer job: JobId={JobId}, JobName={JobName}, InstanceId={InstanceId}",
+            jobId,
+            info.JobName,
+            info.Context.InstanceId);
 
         return Result.Ok();
     }

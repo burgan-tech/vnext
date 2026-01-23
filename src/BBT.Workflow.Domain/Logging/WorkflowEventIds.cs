@@ -31,6 +31,7 @@ public static class WorkflowEventIds
     public static readonly EventId UpdateDataSkipToFinish = new(10012, nameof(UpdateDataSkipToFinish));
     public static readonly EventId ExitTransitionDetected = new(10013, nameof(ExitTransitionDetected));
     public static readonly EventId ExitSkipToFinish = new(10014, nameof(ExitSkipToFinish));
+    public static readonly EventId ExistingTimerJobsCanceled = new(10015, nameof(ExistingTimerJobsCanceled));
 
     // Warning (10040-10069)
     public static readonly EventId TransitionRuleFailed = new(10040, nameof(TransitionRuleFailed));

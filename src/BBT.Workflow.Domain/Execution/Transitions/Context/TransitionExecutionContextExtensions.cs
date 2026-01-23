@@ -37,5 +37,30 @@ public static class TransitionExecutionContextExtensions
     {
         return ctx.Workflow.Exit?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
     }
+    // <summary>
+    /// Determines whether the current transition is a self-transition.
+    /// A self-transition occurs when the source and target states are the same,
+    /// causing the workflow to re-enter the current state.
+    /// This can be expressed either by using the "$self" keyword or by explicitly
+    /// specifying the current state key as the target.
+    /// </summary>
+    /// <param name="ctx">The transition execution context</param>
+    /// <returns>True if this is a self-transition, false otherwise</returns>
+    public static bool IsSelfTransition(this TransitionExecutionContext ctx)
+    {
+        if (ctx.Transition?.Target == null)
+        {
+            return false;
+        }
+ 
+        // Check for explicit $self keyword
+        if (ctx.Transition.Target.Equals(Definitions.WellKnownStateKeys.Self, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+ 
+        // Check if target equals current state key
+        return ctx.Transition.Target.Equals(ctx.Current?.Key, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
