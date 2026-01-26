@@ -1,15 +1,14 @@
 using System.Text.Json;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -21,22 +20,22 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetInstanceDataTask>
 {
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
 
     /// <summary>
     /// Initializes a new instance of GetInstanceDataTaskExecutor.
     /// </summary>
     public GetInstanceDataTaskExecutor(
-        IServiceScopeFactory scopeFactory,
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
         ILogger<GetInstanceDataTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
-        _serviceScopeFactory = scopeFactory;
+        _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
     }
 
@@ -98,7 +97,7 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        Logger.LogDebug("Using local IInstanceQueryAppService for GetInstanceData task {TaskKey}", task.Key);
+        Logger.LogDebug("Using local IInstanceQueryGateway for GetInstanceData task {TaskKey}", task.Key);
 
         try
         {
@@ -110,43 +109,37 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
                 Extensions = task.Extensions
             };
 
-            await using var scope = _serviceScopeFactory.CreateAsyncScope();
-            var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-            var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-            using (currentSchema.Use(input.Workflow))
+            var result = await _instanceQueryGateway.GetInstanceDataAsync(input, cancellationToken);
+            if (!result.Result.IsSuccess)
             {
-                var result = await queryService.GetInstanceDataAsync(input, cancellationToken);
-                if (!result.Result.IsSuccess)
-                {
-                    Logger.TaskLocalExecutionFailed(
-                        task.Key,
-                        TaskType.ToString(),
-                        instanceIdentifier,
-                        result.Result.Error.Message ?? "GetInstanceData failed");
-                    return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                        error: result.Result.Error.Message ?? "GetInstanceData failed",
-                        statusCode: 500,
-                        taskType: TaskType.ToString()));
-                }
-
-                // Handle not modified (304) scenario
-                if (result.IsNotModified)
-                {
-                    return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-                        data: null,
-                        statusCode: 304,
-                        taskType: TaskType.ToString(),
-                        metadata: new Dictionary<string, object>
-                        {
-                            ["NotModified"] = true
-                        }));
-                }
-
-                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-                    data: result.Result.Value,
-                    statusCode: 200,
+                Logger.TaskLocalExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    instanceIdentifier,
+                    result.Result.Error.Message ?? "GetInstanceData failed");
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+                    error: result.Result.Error.Message ?? "GetInstanceData failed",
+                    statusCode: 500,
                     taskType: TaskType.ToString()));
             }
+
+            // Handle not modified (304) scenario
+            if (result.IsNotModified)
+            {
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                    data: null,
+                    statusCode: 304,
+                    taskType: TaskType.ToString(),
+                    metadata: new Dictionary<string, object>
+                    {
+                        ["NotModified"] = true
+                    }));
+            }
+
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                data: result.Result.Value,
+                statusCode: 200,
+                taskType: TaskType.ToString()));
         }
         catch (Exception ex)
         {

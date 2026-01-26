@@ -30,8 +30,6 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
     private readonly TriggerRetryOptions _retryOptions;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline;
 
-    public const string HttpClientName = "TriggerInvoker";
-
     public DirectTriggerRemoteInvoker(
         DaprClient daprClient,
         IHttpClientFactory httpClientFactory,
@@ -190,7 +188,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
         try
         {
-            var httpClient = _httpClientFactory.CreateClient(HttpClientName);
+            var httpClient = CreateHttpClient(binding, taskKey);
 
             var response = await _retryPipeline.ExecuteAsync(
                 async token =>
@@ -216,6 +214,20 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
+        }
+        catch (HttpRequestException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "failure");
+            _logger.LogError(ex,
+                "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
+                taskKey, binding.Domain, binding.Workflow, binding.Identifier, binding.TransitionName);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
@@ -385,5 +397,21 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
             metadata["ExceptionType"] = exceptionType;
 
         return metadata;
+    }
+
+    private HttpClient CreateHttpClient(DirectTriggerBinding binding, string? taskKey)
+    {
+        var clientName = binding.ValidateSSL
+            ? WorkflowHttpClientNames.Default
+            : WorkflowHttpClientNames.NoSslValidation;
+
+        if (!binding.ValidateSSL)
+        {
+            _logger.LogWarning(
+                "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
+                TaskType, taskKey);
+        }
+
+        return _httpClientFactory.CreateClient(clientName);
     }
 }

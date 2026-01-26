@@ -1,7 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <Import Project="..\..\common.props" />
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>BBT.Workflow</RootNamespace>
@@ -9,9 +9,7 @@
   <ItemGroup>
     <PackageReference Include="BBT.Aether.AspNetCore" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
-    <PackageReference Include="AspNetCore.HealthChecks.Dapr" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
     <PackageReference Include="prometheus-net.AspNetCore" Version="$(PrometheusVersion)" />
     <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" Version="$(PrometheusVersion)" />

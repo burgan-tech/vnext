@@ -41,6 +41,14 @@ public sealed class RemoteInstanceQueryGateway : IInstanceQueryGateway
     }
 
     /// <inheritdoc />
+    public Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+        GetInstanceListInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.GetInstanceListAsync(input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)

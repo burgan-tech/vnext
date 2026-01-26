@@ -70,7 +70,7 @@ public sealed record ExecutionError
             code = $"{code}:{exceptionType}";
         }
 
-        return Error.Failure(code, ErrorMessage ?? "Task execution failed");
+        return Error.Failure(code, ErrorMessage ?? "Task execution failed", detail: TaskKey);
     }
 
 

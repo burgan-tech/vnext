@@ -54,6 +54,18 @@ public class InstanceSubStateChangedEvent : IDistributedEvent
     public required string? PreviousState { get; init; }
 
     /// <summary>
+    /// Type of the new state
+    /// Used for upward propagation to parent instance
+    /// </summary>
+    public required int NewStateType { get; init; }
+    
+    /// <summary>
+    /// Subtype of the new state
+    /// Used for upward propagation to parent instance and automated status handling
+    /// </summary>
+    public required int NewStateSubType { get; init; }
+
+    /// <summary>
     /// When the state change occurred
     /// </summary>
     public required DateTime ChangedAt { get; init; }

@@ -1,0 +1,44 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/execution/">
+    <Project Path="execution/BBT.Workflow.Execution.HttpApi.Host/BBT.Workflow.Execution.HttpApi.Host.csproj" />
+  </Folder>
+  <Folder Name="/modules/">
+    <Project Path="modules/BBT.Workflow.Modules.Scripting/BBT.Workflow.Modules.Scripting.csproj" />
+  </Folder>
+  <Folder Name="/orchestration/">
+    <Project Path="orchestration/BBT.Workflow.Orchestration.HttpApi.Host/BBT.Workflow.Orchestration.HttpApi.Host.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BBT.Workflow.Application/BBT.Workflow.Application.csproj" />
+    <Project Path="src/BBT.Workflow.Domain/BBT.Workflow.Domain.csproj" />
+    <Project Path="src/BBT.Workflow.Events.Contracts/BBT.Workflow.Events.Contracts.csproj" />
+    <Project Path="src/BBT.Workflow.Execution.Abstractions/BBT.Workflow.Execution.Abstractions.csproj" />
+    <Project Path="src/BBT.Workflow.Execution/BBT.Workflow.Execution.csproj" />
+    <Project Path="src/BBT.Workflow.HttpApi.Shared/BBT.Workflow.HttpApi.Shared.csproj" />
+    <Project Path="src/BBT.Workflow.Infrastructure/BBT.Workflow.Infrastructure.csproj" />
+    <Project Path="src/BBT.Workflow.Tasks.Abstractions/BBT.Workflow.Tasks.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/BBT.Workflow.Application.Tests/BBT.Workflow.Application.Tests.csproj" />
+    <Project Path="test/BBT.Workflow.Domain.Tests/BBT.Workflow.Domain.Tests.csproj" />
+    <Project Path="test/BBT.Workflow.Infrastructure.Tests/BBT.Workflow.Infrastructure.Tests.csproj" />
+    <Project Path="test/BBT.Workflow.TestBase/BBT.Workflow.TestBase.csproj" />
+  </Folder>
+  <Folder Name="/workers/">
+    <Project Path="workers/BBT.Workflow.Workers.Inbox/BBT.Workflow.Workers.Inbox.csproj" />
+    <Project Path="workers/BBT.Workflow.Workers.Outbox/BBT.Workflow.Workers.Outbox.csproj" />
+  </Folder>
+<!--  <Project Path="../aether/framework/src/BBT.Aether.Abstractions/BBT.Aether.Abstractions.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.Application/BBT.Aether.Application.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.Aspects/BBT.Aether.Aspects.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.AspNetCore/BBT.Aether.AspNetCore.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.Core/BBT.Aether.Core.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.Domain/BBT.Aether.Domain.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.Infrastructure/BBT.Aether.Infrastructure.csproj" />-->
+<!--  <Project Path="../aether/framework/src/BBT.Aether.TestBase/BBT.Aether.TestBase.csproj" />-->
+</Solution>

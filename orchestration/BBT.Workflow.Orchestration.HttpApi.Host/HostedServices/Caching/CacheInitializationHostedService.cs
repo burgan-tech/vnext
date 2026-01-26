@@ -1,3 +1,5 @@
+using BBT.Workflow.ExceptionHandling;
+
 namespace BBT.Workflow.Caching;
 
 /// <summary>
@@ -22,9 +24,22 @@ public class CacheInitializationHostedService(
             
             logger.LogInformation("Cache initialization completed successfully");
         }
+        catch (DomainRegistrationFailedException ex)
+        {
+            // Domain registration failures are critical and should crash the application
+            logger.LogCritical(ex, "Domain registration failed. Application startup will be aborted.");
+            throw;
+        }
+        catch (InvalidConfigurationException ex)
+        {
+            // Configuration errors are critical and should crash the application
+            logger.LogCritical(ex, "Invalid configuration detected. Application startup will be aborted.");
+            throw;
+        }
         catch (Exception ex)
         {
-            logger.LogCritical(ex, "Critical error during cache initialization. Application startup will be aborted.");
+            // Other exceptions during cache initialization are logged but don't crash the application
+            logger.LogError(ex, "Error during cache initialization. Application will continue with empty cache.");
         }
     }
 }

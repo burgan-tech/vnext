@@ -75,6 +75,18 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
     /// </summary>
     public string? EffectiveState { get; private set; }
 
+    /// <summary>
+    /// Type of the effective state (Initial, Intermediate, Finish, SubFlow, Wizard)
+    /// Tracked alongside EffectiveState for efficient filtering without state definition joins
+    /// </summary>
+    public StateType? EffectiveStateType { get; private set; }
+    
+    /// <summary>
+    /// Subtype of the effective state (None, Success, Error, Terminated, Suspended, Busy, Human)
+    /// Tracked alongside EffectiveState for efficient filtering and automated status handling
+    /// </summary>
+    public StateSubType? EffectiveStateSubType { get; private set; }
+
     public string GetCurrentState => string.IsNullOrWhiteSpace(CurrentState) ? string.Empty : CurrentState;
     
     public string GetEffectiveState => string.IsNullOrWhiteSpace(EffectiveState) ? string.Empty : EffectiveState;
@@ -421,6 +433,53 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
     }
 
     /// <summary>
+    /// Propagates the EffectiveState to parent instance.
+    /// Updates this instance's EffectiveState and publishes an event to notify parent if this is a SubFlow.
+    /// This enables recursive propagation of EffectiveState up the parent chain.
+    /// </summary>
+    /// <param name="effectiveState">The new effective state to propagate</param>
+    /// <param name="stateType">The type of the new effective state</param>
+    /// <param name="stateSubType">The subtype of the new effective state</param>
+    /// <remarks>
+    /// This method does NOT change CurrentState - only EffectiveState is updated.
+    /// This method does NOT change Status - status management happens in ChangeState only.
+    /// Used by parent instances to reflect the deepest active SubFlow's state.
+    /// The recursion happens through event-driven propagation:
+    /// 1. Child updates its EffectiveState
+    /// 2. If child is also a SubFlow, it publishes event to its parent
+    /// 3. Parent receives event and calls this method again
+    /// 4. Chain continues until root parent is reached
+    /// 
+    /// Idempotency: If EffectiveState already matches the target state and types, no update or event is triggered.
+    /// This prevents duplicate events and unnecessary processing.
+    /// </remarks>
+    public void PropagateEffectiveStateToParent(string effectiveState, StateType stateType, StateSubType stateSubType)
+    {
+        var currentEffectiveState = GetEffectiveState;
+        
+        // Idempotency: If already at this state with same type/subtype, skip update
+        if (currentEffectiveState == effectiveState 
+            && EffectiveStateType == stateType 
+            && EffectiveStateSubType == stateSubType)
+        {
+            return;
+        }
+        
+        // Update EffectiveState with type and subtype
+        SetEffectiveState(effectiveState);
+        EffectiveStateType = stateType;
+        EffectiveStateSubType = stateSubType;
+        
+        // IMPORTANT: Do NOT modify Status here - status management happens in ChangeState only
+        
+        // If this instance is also a SubFlow, propagate upward to its parent
+        if (IsSubFlow)
+        {
+            PublishSubStateChangedEvent(currentEffectiveState, effectiveState);
+        }
+    }
+
+    /// <summary>
     /// Publishes an event to notify the parent instance about SubFlow state change.
     /// This enables cross-domain communication for state synchronization.
     /// </summary>
@@ -438,6 +497,8 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
             Version = contractInfo.Version,
             NewState = newState,
             PreviousState = previousState,
+            NewStateType = (int)(EffectiveStateType ?? StateType.Intermediate),
+            NewStateSubType = (int)(EffectiveStateSubType ?? StateSubType.None),
             ChangedAt = DateTime.UtcNow
         });
     }
@@ -447,57 +508,24 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         var previousState = GetCurrentState;
         SetState(state.Key);
 
-        // Domain Logic: Update EffectiveState if no active SubFlow
+        // Domain Logic: Update EffectiveState with type and subtype if no active SubFlow
         if (!HasActiveSubFlow)
         {
             SetEffectiveState(state.Key);
+            EffectiveStateType = state.StateType;
+            EffectiveStateSubType = state.SubType;
+        }
+        
+        // Domain Logic: Automatically set Status to Busy for Busy subtype states
+        if (state.SubType == StateSubType.Busy && !IsCompleted)
+        {
+            Status = InstanceStatus.Busy;
         }
 
         // Domain Logic: Publish state change event if this is a SubFlow
         if (IsSubFlow)
         {
             PublishSubStateChangedEvent(previousState, state.Key);
-        }
-    }
-
-    public void ChangeState(Transition transition)
-    {
-        if (WellKnownStateKeys.ReservedTargetKeys.Contains(transition.Target))
-        {
-            return;
-        }
-
-        var previousState = GetCurrentState;
-        SetState(transition.Target);
-
-        // Domain Logic: Update EffectiveState if no active SubFlow
-        if (!HasActiveSubFlow)
-        {
-            SetEffectiveState(transition.Target);
-        }
-
-        // Domain Logic: Publish state change event if this is a SubFlow
-        if (IsSubFlow)
-        {
-            PublishSubStateChangedEvent(previousState, transition.Target);
-        }
-    }
-
-    public void ChangeState(WorkflowTimeout timeout)
-    {
-        var previousState = GetCurrentState;
-        SetState(timeout.Target);
-
-        // Domain Logic: Update EffectiveState if no active SubFlow
-        if (!HasActiveSubFlow)
-        {
-            SetEffectiveState(timeout.Target);
-        }
-
-        // Domain Logic: Publish state change event if this is a SubFlow
-        if (IsSubFlow)
-        {
-            PublishSubStateChangedEvent(previousState, timeout.Target);
         }
     }
 

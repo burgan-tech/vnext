@@ -1,15 +1,14 @@
 using System.Text.Json;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -21,22 +20,22 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask>
 {
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IInstanceCommandGateway _instanceCommandGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
 
     /// <summary>
     /// Initializes a new instance of StartTriggerTaskExecutor.
     /// </summary>
     public StartTriggerTaskExecutor(
-        IServiceScopeFactory scopeFactory,
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IInstanceCommandGateway instanceCommandGateway,
         IDomainDiscoveryResolver endpointResolver,
         ILogger<StartTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
-        _serviceScopeFactory = scopeFactory;
+        _instanceCommandGateway = instanceCommandGateway;
         _endpointResolver = endpointResolver;
     }
 
@@ -70,40 +69,34 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        Logger.LogDebug("Using local IInstanceCommandAppService for StartTrigger task {TaskKey}", task.Key);
+        Logger.LogDebug("Using local IInstanceCommandGateway for StartTrigger task {TaskKey}", task.Key);
 
         try
         {
             var input = BuildStartInstanceInput(task, context);
-            await using var scope = _serviceScopeFactory.CreateAsyncScope();
-            var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-            var localCommandService = scope.ServiceProvider.GetRequiredService<IInstanceCommandAppService>();
-            using (currentSchema.Use(input.Workflow))
+            var result = await _instanceCommandGateway.StartAsync(input, cancellationToken);
+
+            if (!result.IsSuccess)
             {
-                var result = await localCommandService.StartAsync(input, cancellationToken);
-
-                if (!result.IsSuccess)
-                {
-                    Logger.TaskLocalExecutionFailed(
-                        task.Key,
-                        TaskType.ToString(),
-                        context.ScriptContext.Instance.Id.ToString(),
-                        result.Error.Message ?? "StartTrigger failed");
-                    return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                        error: result.Error.Message ?? "StartTrigger failed",
-                        statusCode: 500,
-                        taskType: TaskType.ToString()));
-                }
-
-                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-                    data: new
-                    {
-                        result.Value!.Id,
-                        result.Value.Status
-                    },
-                    statusCode: 200,
+                Logger.TaskLocalExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    context.ScriptContext.Instance.Id.ToString(),
+                    result.Error.Message ?? "StartTrigger failed");
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+                    error: result.Error.Message ?? "StartTrigger failed",
+                    statusCode: 500,
                     taskType: TaskType.ToString()));
             }
+
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                data: new
+                {
+                    result.Value!.Id,
+                    result.Value.Status
+                },
+                statusCode: 200,
+                taskType: TaskType.ToString()));
         }
         catch (Exception ex)
         {

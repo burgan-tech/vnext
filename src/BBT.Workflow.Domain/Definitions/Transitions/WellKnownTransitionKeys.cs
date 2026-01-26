@@ -17,5 +17,11 @@ public static class WellKnownTransitionKeys
     /// When requested, the system resolves this to the workflow's configured updateData transition.
     /// </summary>
     public const string UpdateData = "update-parent-data";
+
+    /// <summary>
+    /// Special transition key for workflow exit.
+    /// When requested, the system resolves this to the workflow's configured exit transition.
+    /// </summary>
+    public const string Exit = "exit";
 }
 

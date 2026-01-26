@@ -23,5 +23,10 @@ public sealed record TaskExecutorContext(
     /// Gets the task type from the workflow task.
     /// </summary>
     public TaskType TaskType => Task.GetTaskType();
+
+    /// <summary>
+    /// Holds the input handler response for auditing purposes.
+    /// </summary>
+    public ScriptResponse? InputResponse { get; set; }
 }
 

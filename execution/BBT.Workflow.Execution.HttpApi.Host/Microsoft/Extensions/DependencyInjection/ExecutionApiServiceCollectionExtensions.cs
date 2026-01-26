@@ -36,7 +36,6 @@ public static class ExecutionApiServiceCollectionExtensions
             .AddDistributedLock(configuration)
             .AddRedis()
             .AddExceptionHandling()
-            .AddWorkflowHttpClient()
             .AddExecutionHealthChecks()
             .AddDaprNotification(configuration)
             .AddTaskInvokers(configuration);

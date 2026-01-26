@@ -56,6 +56,8 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
                 taskKey, inputResult.Error.Message);
             return CreateErrorResponse(inputResult.Error, stopwatch.ElapsedMilliseconds);
         }
+        
+        context.InputResponse = inputResult.Value;
 
         // 3. PreProcess (virtual - optional)
         var preProcessResult = await PreProcessAsync(task, context, cancellationToken);
@@ -139,12 +141,12 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     /// Prepares input data and runs input mapping scripts.
     /// Override to implement custom input logic.
     /// </summary>
-    protected virtual Task<Result> PrepareInputAsync(
+    protected virtual Task<Result<ScriptResponse?>> PrepareInputAsync(
         TTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        return Task.FromResult(Result.Ok());
+        return Task.FromResult(Result<ScriptResponse?>.Ok(null));
     }
 
     /// <summary>

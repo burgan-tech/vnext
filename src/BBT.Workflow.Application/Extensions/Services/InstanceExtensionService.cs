@@ -4,6 +4,7 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
@@ -38,17 +39,27 @@ public sealed class InstanceExtensionService(
             : null;
 
         // Process core system extensions first (runtime-wide, always included)
-        // Core extensions failing should not block workflow extensions
-        await ProcessCoreExtensionsAsync(requestedSet, scriptContext, currentScope, context, cancellationToken);
+        // Fail-fast: if core extensions fail, return error immediately
+        var coreResult = await ProcessCoreExtensionsAsync(requestedSet, scriptContext, currentScope, context, cancellationToken);
+        if (!coreResult.IsSuccess)
+        {
+            return Result<Dictionary<string, object>>.Fail(coreResult.Error);
+        }
 
         // Process workflow-specific extensions (excluding already executed core extensions)
-        await ProcessWorkflowExtensionsAsync(
+        // Fail-fast: if workflow extensions fail, return error immediately
+        var workflowResult = await ProcessWorkflowExtensionsAsync(
             requestedSet,
             scriptContext,
             workflow,
             currentScope,
             context,
             cancellationToken);
+        
+        if (!workflowResult.IsSuccess)
+        {
+            return Result<Dictionary<string, object>>.Fail(workflowResult.Error);
+        }
 
         return Result<Dictionary<string, object>>.Ok(context.Response);
     }
@@ -56,9 +67,9 @@ public sealed class InstanceExtensionService(
     /// <summary>
     /// Processes core extensions that are runtime-wide and always included in instance responses.
     /// Core extensions provide essential data like state, createBy, etc.
-    /// Failures here are logged but don't break the flow - the system continues without core extensions.
+    /// Uses fail-fast behavior: if any core extension fails, returns error immediately.
     /// </summary>
-    private async Task ProcessCoreExtensionsAsync(
+    private async Task<Result> ProcessCoreExtensionsAsync(
         HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         ExtensionScope currentScope,
@@ -68,9 +79,9 @@ public sealed class InstanceExtensionService(
         var coreExtensionsResult = await GetCoreExtensionsAsync(extensionRequested, cancellationToken);
 
         if (!coreExtensionsResult.IsSuccess || coreExtensionsResult.Value!.Count == 0)
-            return;
+            return Result.Ok();
 
-        await ExecuteExtensionsInternalAsync(
+        return await ExecuteExtensionsInternalAsync(
             null,
             scriptContext,
             coreExtensionsResult.Value,
@@ -81,8 +92,9 @@ public sealed class InstanceExtensionService(
 
     /// <summary>
     /// Processes workflow-specific extensions excluding already executed core extensions.
+    /// Uses fail-fast behavior: if any workflow extension fails, returns error immediately.
     /// </summary>
-    private async Task ProcessWorkflowExtensionsAsync(
+    private async Task<Result> ProcessWorkflowExtensionsAsync(
         HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         Definitions.Workflow workflow,
@@ -98,7 +110,7 @@ public sealed class InstanceExtensionService(
             .Where(ext => !context.ExecutedKeys.Contains(ext.Key))
             .ToList();
 
-        await ExecuteExtensionsInternalAsync(
+        return await ExecuteExtensionsInternalAsync(
             extensionRequested,
             scriptContext,
             filteredExtensions,
@@ -175,9 +187,9 @@ public sealed class InstanceExtensionService(
 
     /// <summary>
     /// Executes extensions and extracts their responses into the context.
-    /// Extension execution errors are logged but don't propagate - extensions are best-effort enrichment.
+    /// Uses fail-fast behavior: if any extension fails, returns error with target indicating which extension failed.
     /// </summary>
-    private async Task ExecuteExtensionsInternalAsync(
+    private async Task<Result> ExecuteExtensionsInternalAsync(
         HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         List<Extension> extensions,
@@ -190,11 +202,11 @@ public sealed class InstanceExtensionService(
             .ToList();
 
         if (executableExtensions.Count == 0)
-            return;
+            return Result.Ok();
 
         var tasks = executableExtensions.Select(ext => ext.Task);
 
-        // Execute tasks and log errors (extensions are best-effort, don't fail the chain)
+        // Execute tasks with fail-fast behavior
         var executeResult = await taskCoordinator.ExecuteAsync(
             tasks,
             null,
@@ -204,17 +216,48 @@ public sealed class InstanceExtensionService(
 
         if (!executeResult.IsSuccess)
         {
-            logger.LogWarning(
-                "Extension task execution failed: {ErrorCode} - {ErrorMessage}. Extensions are best-effort, continuing.",
+            var failedExtensionKey = FindFailedExtensionKey(executableExtensions, scriptContext);
+            
+            logger.LogError(
+                "Extension execution failed for '{ExtensionKey}': {ErrorCode} - {ErrorMessage}",
+                failedExtensionKey,
                 executeResult.Error.Code,
                 executeResult.Error.Message);
+            
+            return Result.Fail(WorkflowErrors.ExtensionExecutionFailed(
+                failedExtensionKey,
+                executeResult.Error.Message ?? "Unknown error"));
         }
 
-        // Extract responses from executed extensions (even partial results)
+        // Extract responses from executed extensions
         foreach (var extension in executableExtensions)
         {
             ExtractExtensionResponse(extension, scriptContext, context);
         }
+        
+        return Result.Ok();
+    }
+    
+    /// <summary>
+    /// Finds the key of the extension that failed execution.
+    /// Identifies the failed extension by checking which task output is missing from the script context.
+    /// </summary>
+    /// <param name="extensions">List of extensions that were executed.</param>
+    /// <param name="scriptContext">The script context containing task outputs.</param>
+    /// <returns>The key of the failed extension, or "unknown" if not determinable.</returns>
+    private static string FindFailedExtensionKey(
+        List<Extension> extensions,
+        ScriptContext scriptContext)
+    {
+        // Find extension whose task output is missing (failed)
+        foreach (var extension in extensions)
+        {
+            var variableKey = extension.Task.Task.Key.ToVariableName();
+            if (!scriptContext.OutputResponse.ContainsKey(variableKey))
+                return extension.Key;
+        }
+        
+        return extensions.FirstOrDefault()?.Key ?? "unknown";
     }
 
     /// <summary>

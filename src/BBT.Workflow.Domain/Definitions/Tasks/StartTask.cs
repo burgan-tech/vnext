@@ -59,6 +59,11 @@ public sealed class StartTask : WorkflowTask
     /// </summary>
     public bool UseDapr { get; private set; } = false;
 
+    /// <summary>
+    /// Whether to validate SSL certificates
+    /// </summary>
+    public bool ValidateSSL { get; private set; } = true;
+
     public void SetTags(string[] tags)
     {
         TriggerTags = tags;
@@ -101,6 +106,11 @@ public sealed class StartTask : WorkflowTask
         UseDapr = useDapr;
     }
 
+    public void SetValidateSSL(bool validateSSL)
+    {
+        ValidateSSL = validateSSL;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -113,6 +123,7 @@ public sealed class StartTask : WorkflowTask
     internal void SetTriggerKeyInternal(string? key) => TriggerKey = key;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
+    internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
 
     protected override void Configure(JsonElement config)
     {
@@ -144,6 +155,9 @@ public sealed class StartTask : WorkflowTask
 
         if (config.TryGetProperty("useDapr", out var useDaprElement))
             UseDapr = useDaprElement.GetBoolean();
+
+        if (config.TryGetProperty("validateSsl", out var validateSslElement))
+            ValidateSSL = validateSslElement.GetBoolean();
     }
 
     public static StartTask Create(JsonElement config)
@@ -175,6 +189,7 @@ public sealed class StartTask : WorkflowTask
         cloned.TriggerKey = TriggerKey;
         cloned.TriggerTags = TriggerTags;
         cloned.UseDapr = UseDapr;
+        cloned.ValidateSSL = ValidateSSL;
         return cloned;
     }
 
@@ -193,6 +208,7 @@ public sealed class StartTask : WorkflowTask
         SetTriggerKeyInternal(source.TriggerKey);
         SetTriggerTagsInternal(source.TriggerTags);
         SetUseDaprInternal(source.UseDapr);
+        SetValidateSSLInternal(source.ValidateSSL);
     }
 
     /// <summary>
@@ -209,6 +225,7 @@ public sealed class StartTask : WorkflowTask
         TriggerKey = null;
         TriggerTags = null;
         UseDapr = false;
+        ValidateSSL = true;
     }
 
     /// <summary>

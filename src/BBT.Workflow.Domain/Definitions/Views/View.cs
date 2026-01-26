@@ -76,6 +76,12 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// Display
     /// </summary>
     public LanguageLabel[]? Labels { get; private set; } = [];
+    
+    /// <summary>
+    /// Platform-specific overrides for view content.
+    /// This property is deprecated (Issue #56). Use rule-based view selection in State/Transition view definitions instead.
+    /// </summary>
+    [Obsolete("PlatformOverrides is deprecated. Use rule-based view selection in State/Transition view definitions instead. See Issue #56.")]
     public PlatformOverrides? PlatformOverrides { get; private set; }
     
     public string ComponentKey => RuntimeSysSchemaInfo.Views;

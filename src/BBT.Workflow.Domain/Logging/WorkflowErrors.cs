@@ -264,5 +264,20 @@ public static class WorkflowErrors
             target: stateKey);
 
     #endregion
+
+    #region Extension Errors
+
+    /// <summary>
+    /// Extension execution failed during instance data enrichment.
+    /// </summary>
+    /// <param name="extensionKey">The key of the extension that failed.</param>
+    /// <param name="message">The error message from the failed execution.</param>
+    public static Error ExtensionExecutionFailed(string extensionKey, string message)
+        => Error.Validation(
+            WorkflowErrorCodes.ExtensionExecutionFailed,
+            $"Extension '{extensionKey}' execution failed: {message}",
+            target: extensionKey);
+
+    #endregion
 }
 

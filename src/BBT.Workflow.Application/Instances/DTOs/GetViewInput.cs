@@ -21,5 +21,15 @@ public sealed class GetViewInput : IHasDomain
 
     [Required] 
     public string Instance { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Request headers for rule evaluation (e.g., x-platform, x-user-role)
+    /// </summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>
+    /// Query parameters for rule evaluation
+    /// </summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
 }
 

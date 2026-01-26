@@ -26,5 +26,16 @@ public static class TransitionExecutionContextExtensions
     {
         return ctx.Workflow.UpdateData?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
     }
+
+    /// <summary>
+    /// Determines whether the current transition is an exit transition.
+    /// A transition is considered an exit transition if it matches the workflow's configured exit transition key.
+    /// </summary>
+    /// <param name="ctx">The transition execution context</param>
+    /// <returns>True if this is an exit transition, false otherwise</returns>
+    public static bool IsExitTransition(this TransitionExecutionContext ctx)
+    {
+        return ctx.Workflow.Exit?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
+    }
 }
 

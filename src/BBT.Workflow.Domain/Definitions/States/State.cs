@@ -34,15 +34,14 @@ public sealed class State : IHasKey
         VersionStrategy versionStrategy,
         List<LanguageLabel>? labels,
         List<OnExecuteTask>? onEntries,
-        List<OnExecuteTask>? onExits,
-        ViewDefinition view)
+         List<OnExecuteTask>? onExits)
         : this(key, stateType, subType)
     {
         VersionStrategy = versionStrategy;
         this.labels = labels ?? [];
         this.onEntries = onEntries ?? [];
         this.onExits = onExits ?? [];
-        this.view = view;
+        // view property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
 
     /// <summary>
@@ -80,8 +79,14 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
-    [JsonInclude] [JsonPropertyName("view")]
+    [JsonInclude]
+    [JsonPropertyName("view")]
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
     public ViewDefinition? view  { get; private set; }
+    [JsonInclude]
+    [JsonPropertyName("views")]
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
+    public ViewDefinition? views { get; private set; }
     
     /// <summary>
     /// State-level error boundary.
@@ -100,7 +105,7 @@ public sealed class State : IHasKey
     /// State view
     /// </summary>
     [JsonIgnore]
-    public ViewDefinition? View => view;
+    public ViewDefinition? View => views==null?view:views;
 
     /// <summary>
     /// Transitions

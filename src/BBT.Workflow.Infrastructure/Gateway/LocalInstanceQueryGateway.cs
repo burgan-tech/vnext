@@ -56,6 +56,21 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
     }
 
     /// <inheritdoc />
+    public async Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+        GetInstanceListInput input,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = _serviceScopeFactory.CreateAsyncScope();
+        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
+
+        using (currentSchema.Use(input.Workflow))
+        {
+            return await queryService.GetInstanceListAsync(input, cancellationToken);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
@@ -111,7 +126,9 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                 Domain = input.Domain,
                 Workflow = input.Workflow,
                 Version = input.Version,
-                Instance = input.Instance
+                Instance = input.Instance,
+                Headers=input.Headers,
+                QueryParameters=input.QueryParams
             };
             return await queryService.GetPlatformSpecificViewAsync(viewInput, platform, transitionKey, cancellationToken);
         }

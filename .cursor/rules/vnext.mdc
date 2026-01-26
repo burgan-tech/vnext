@@ -117,6 +117,14 @@ All AI-generated documents must be stored under:
 All implementation details must be placed under:
 /docs
 
+### Development Guidance
+- When a task is assigned, first consult summaries on the relevant structures and then scan the detailed documents under `/docs` for deeper context.
+- For platform feature and domain knowledge, use the `vnext-runtime` tag with the `use context7` prompt to access MCP documentation.
+- For example components, use the `vnext-example` tag with the `use context7` prompt to access MCP examples.
+
+### Documentation Update Trigger
+Whenever the user says "add to document", update docs in English and ensure Navigation and Overview grouping is added to docs/README.md.
+
 ## File Structure Expectations
 root/
  ├─ ai-docs/

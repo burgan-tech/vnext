@@ -35,7 +35,7 @@ public sealed class DaprHttpEndpointTaskExecutor : TaskExecutorBase<DaprHttpEndp
     public override TaskType TaskType => TaskType.DaprHttpEndpoint;
 
     /// <inheritdoc />
-    protected override async Task<Result> PrepareInputAsync(
+    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
         DaprHttpEndpointTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
@@ -43,16 +43,16 @@ public sealed class DaprHttpEndpointTaskExecutor : TaskExecutorBase<DaprHttpEndp
         var mapping = context.OnExecuteTask.Mapping;
         if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
         {
-            return Result.Ok();
+            return Result<ScriptResponse?>.Ok(null);
         }
 
-        var result = await ResultExtensions.TryAsync(async ct =>
+        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
                 mapping.DecodedCode,
                 cancellationToken: ct);
 
-            await scriptRunner.InputHandler(task, context.ScriptContext);
+            return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
             $"DaprHttpEndpoint task input handler failed: {ex.Message}"));

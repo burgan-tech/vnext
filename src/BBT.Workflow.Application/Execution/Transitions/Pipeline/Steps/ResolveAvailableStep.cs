@@ -90,6 +90,15 @@ public sealed class ResolveAvailableStep(
             return false;
         }
 
+        if (context.Target.SubType == StateSubType.Busy)
+        {
+            logger.LogWarning(
+                "Instance {InstanceId} has Busy subtype in state {TargetState}, skipping ResolveAvailableStep",
+                context.InstanceId,
+                context.Target.Key);
+            return false;
+        }
+
         // Finish state - will be handled by HandleFinishStep (Completed status)
         if (context.Target.StateType == StateType.Finish)
         {

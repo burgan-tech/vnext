@@ -32,6 +32,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         WorkflowTimeout timeout,
         Transition cancel,
         Transition updateData,
+        Transition exit,
         List<LanguageLabel> labels,
         List<Reference> functions,
         List<Reference> features,
@@ -45,6 +46,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         Timeout = timeout;
         Cancel = cancel;
         UpdateData = updateData;
+        Exit = exit;
         this.labels = labels;
         this.functions = functions ?? [];
         this.features = features ?? [];
@@ -105,6 +107,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// Defines the cancellation configuration for this workflow.
     /// When configured, allows the workflow to be canceled via the cancel transition.
     /// </summary>
+    [JsonInclude] [JsonPropertyName("cancel")]
     public Transition? Cancel { get; private set; }
 
     /// <summary>
@@ -113,6 +116,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// </summary>
     [JsonInclude] [JsonPropertyName("updateData")]
     public Transition? UpdateData { get; private set; }
+
+    /// <summary>
+    /// Defines the exit configuration for this workflow.
+    /// When configured, allows the workflow to be exited via the exit transition.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("exit")]
+    public Transition? Exit { get; private set; }
 
     /// <summary>
     /// Global error boundary for the workflow.
@@ -247,6 +257,11 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         UpdateData = updateData;
     }
 
+    public void SetExit(Transition exit)
+    {
+        Exit = exit;
+    }
+
     public void SetErrorBoundary(ErrorBoundary errorBoundary)
     {
         ErrorBoundary = errorBoundary;
@@ -298,6 +313,22 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
             : Result<State>.Fail(WorkflowErrors.StateNotFound(Key, key));
     }
 
+    /// <summary>
+    /// Gets a state by key, resolving well-known state keys (like $self) to actual states.
+    /// </summary>
+    /// <param name="key">The state key to retrieve</param>
+    /// <param name="currentStateKey">The current state key, used to resolve $self references</param>
+    /// <returns>Result containing the resolved state or an error if not found</returns>
+    public Result<State> GetState(string key, string currentStateKey)
+    {
+        // Domain Logic: Resolve well-known state keys
+        var resolvedKey = WellKnownStateKeys.ReservedTargetKeys.Contains(key)
+            ? currentStateKey  // $self resolves to current state
+            : key;
+
+        return GetState(resolvedKey);
+    }
+
     public State? FindState(string key)
     {
         return States.FirstOrDefault(s => s.Key == key);
@@ -313,7 +344,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         return FindSharedTransition(key)
                ?? (StartTransition.Key == key ? StartTransition : null)
                ?? (Cancel?.Key == key ? Cancel : null)
-               ?? (UpdateData?.Key == key ? UpdateData : null);
+               ?? (UpdateData?.Key == key ? UpdateData : null)
+               ?? (Exit?.Key == key ? Exit : null);
     }
 
     public Transition? ResolveTransition(string key, State currentState)
@@ -346,6 +378,15 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                 throw new UpdateDataNotConfiguredForWorkflowException(Key);
 
             return UpdateData.Key;
+        }
+
+        if (string.Equals(requestedKey, WellKnownTransitionKeys.Exit, StringComparison.OrdinalIgnoreCase))
+        {
+            // If this flow does not have exit configuration, "exit" is not supported
+            if (Exit is null)
+                throw new ExitNotConfiguredForWorkflowException(Key);
+
+            return Exit.Key;
         }
 
         return requestedKey;

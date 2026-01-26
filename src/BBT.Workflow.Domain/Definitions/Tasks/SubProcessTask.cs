@@ -53,6 +53,11 @@ public sealed class SubProcessTask : WorkflowTask
     /// </summary>
     public bool UseDapr { get; private set; } = false;
 
+    /// <summary>
+    /// Whether to validate SSL certificates
+    /// </summary>
+    public bool ValidateSSL { get; private set; } = true;
+
     public void SetBody(dynamic body)
     {
         Body = JsonSerializer.SerializeToElement(body);
@@ -90,6 +95,11 @@ public sealed class SubProcessTask : WorkflowTask
         UseDapr = useDapr;
     }
 
+    public void SetValidateSSL(bool validateSSL)
+    {
+        ValidateSSL = validateSSL;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -101,6 +111,7 @@ public sealed class SubProcessTask : WorkflowTask
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
+    internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
 
     protected override void Configure(JsonElement config)
     {
@@ -131,6 +142,9 @@ public sealed class SubProcessTask : WorkflowTask
 
         if (config.TryGetProperty("useDapr", out var useDaprElement))
             UseDapr = useDaprElement.GetBoolean();
+
+        if (config.TryGetProperty("validateSsl", out var validateSslElement))
+            ValidateSSL = validateSslElement.GetBoolean();
     }
 
     public static SubProcessTask Create(JsonElement config)
@@ -161,6 +175,7 @@ public sealed class SubProcessTask : WorkflowTask
         cloned.Body = Body;
         cloned.TriggerTags = TriggerTags;
         cloned.UseDapr = UseDapr;
+        cloned.ValidateSSL = ValidateSSL;
         return cloned;
     }
 
@@ -178,6 +193,7 @@ public sealed class SubProcessTask : WorkflowTask
         SetBodyInternal(source.Body);
         SetTriggerTagsInternal(source.TriggerTags);
         SetUseDaprInternal(source.UseDapr);
+        SetValidateSSLInternal(source.ValidateSSL);
     }
 
     /// <summary>
@@ -193,6 +209,7 @@ public sealed class SubProcessTask : WorkflowTask
         Body = null;
         TriggerTags = null;
         UseDapr = false;
+        ValidateSSL = true;
     }
 
     /// <summary>

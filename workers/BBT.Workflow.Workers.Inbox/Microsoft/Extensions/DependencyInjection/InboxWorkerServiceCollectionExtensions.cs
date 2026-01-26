@@ -36,13 +36,11 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
-            .AddAetherBackgroundJob<WorkflowDbContext>()
-            .AddDaprJobScheduler()
+            .AddBackgroundJob()
             .AddRedis()
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddWorkflowHttpClient() // TODO: Düşün!!!!
             .AddHostedServices()
             .AddAppHealthChecks();
         

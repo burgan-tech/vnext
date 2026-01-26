@@ -63,11 +63,11 @@ public sealed class RemoteInstanceQueryAppService(
             var relativePath = InstanceUrlTemplates.Instance(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
-            if (input.Extension?.Length > 0)
+            if (input.Extensions?.Length > 0)
             {
-                foreach (var ext in input.Extension)
+                foreach (var ext in input.Extensions)
                 {
-                    queryParams.Add($"extension={Uri.EscapeDataString(ext)}");
+                    queryParams.Add($"{nameof(input.Extensions).ToLowerInvariant()}={Uri.EscapeDataString(ext)}");
                 }
             }
 
@@ -121,7 +121,7 @@ public sealed class RemoteInstanceQueryAppService(
             {
                 foreach (var ext in input.Extensions)
                 {
-                    queryParams.Add($"extension={Uri.EscapeDataString(ext)}");
+                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
                 }
             }
 
@@ -154,6 +154,71 @@ public sealed class RemoteInstanceQueryAppService(
             return ConditionalResult<GetInstanceDataOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
         }
     }
+
+    /// <summary>
+    /// Retrieves a paginated list of instances with optional extensions
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances
+    /// </summary>
+    public async Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+        GetInstanceListInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            var relativePath = InstanceUrlTemplates.InstanceList(input.Domain, input.Workflow, ApiVersionPrefix);
+            var queryParams = new List<string>
+            {
+                $"page={input.Page}",
+                $"pageSize={input.PageSize}"
+            };
+
+            if (!string.IsNullOrWhiteSpace(input.Sort))
+            {
+                queryParams.Add($"sort={Uri.EscapeDataString(input.Sort)}");
+            }
+
+            if (input.Filter?.Length > 0)
+            {
+                foreach (var filter in input.Filter)
+                {
+                    queryParams.Add($"filter={Uri.EscapeDataString(filter)}");
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(input.GroupBy))
+            {
+                queryParams.Add($"groupBy={Uri.EscapeDataString(input.GroupBy)}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(input.Aggregations))
+            {
+                queryParams.Add($"aggregations={Uri.EscapeDataString(input.Aggregations)}");
+            }
+
+            if (input.Extension?.Length > 0)
+            {
+                foreach (var ext in input.Extension)
+                {
+                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
+                }
+            }
+
+            if (queryParams.Count > 0)
+                relativePath += "?" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var response = await httpClient.GetAsync(requestUri, cancellationToken);
+
+            return await HandleResponseAsync<InstanceListWithGroupsResponse<GetInstanceOutput>>(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(
+                Error.Transient("remote_network_error", ex.Message));
+        }
+    }
     
     /// <summary>
     /// Retrieves the complete history of an instance (all data transitions)
@@ -171,11 +236,11 @@ public sealed class RemoteInstanceQueryAppService(
             var relativePath = InstanceUrlTemplates.InstanceHistory(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
             var queryParams = new List<string>();
-            if (input.Extension?.Length > 0)
+            if (input.Extensions?.Length > 0)
             {
-                foreach (var ext in input.Extension)
+                foreach (var ext in input.Extensions)
                 {
-                    queryParams.Add($"extension={Uri.EscapeDataString(ext)}");
+                    queryParams.Add($"{nameof(input.Extensions).ToLowerInvariant()}={Uri.EscapeDataString(ext)}");
                 }
             }
 
@@ -337,7 +402,7 @@ public sealed class RemoteInstanceQueryAppService(
 
     /// <summary>
     /// Retrieves extensions function result for an instance (returns GetExtensionsOutput with executed extension results)
-    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/extensions?extensions={extensions}
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/extension?extensions={extensions}
     /// </summary>
     public async Task<Result<DTOs.GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
         GetFunctionWithInstanceInput input,

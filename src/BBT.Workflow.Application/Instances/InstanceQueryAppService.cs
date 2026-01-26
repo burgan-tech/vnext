@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 using BBT.Workflow.Shared;
 using System.Text.Json;
 using BBT.Workflow.Definitions.GraphQL;
-
+using BBT.Workflow.Tasks.Coordinator;
 namespace BBT.Workflow.Instances;
 
 public sealed class InstanceQueryAppService(
@@ -25,6 +25,7 @@ public sealed class InstanceQueryAppService(
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
+    ITaskConditionService taskConditionService,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -48,7 +49,7 @@ public sealed class InstanceQueryAppService(
 
                     var result = await BuildInstanceOutputAsync(
                         input.Domain,
-                        input.Extension,
+                        input.Extensions,
                         input.Workflow,
                         instance,
                         instance.LatestData,
@@ -57,7 +58,13 @@ public sealed class InstanceQueryAppService(
                         input.QueryParameters,
                         cancellationToken);
 
-                    return ConditionalResult<GetInstanceOutput>.Success(result);
+                    // Propagate extension errors - fail-fast behavior
+                    if (!result.IsSuccess)
+                    {
+                        return ConditionalResult<GetInstanceOutput>.Fail(result.Error);
+                    }
+
+                    return ConditionalResult<GetInstanceOutput>.Success(result.Value!);
                 },
                 onFailure: error => ConditionalResult<GetInstanceOutput>.Fail(error));
     }
@@ -149,7 +156,7 @@ public sealed class InstanceQueryAppService(
                 var list = new List<GetInstanceOutput>();
                 foreach (var instance in pagedList.Items)
                 {
-                    var instanceOutput = await BuildInstanceOutputAsync(
+                    var instanceOutputResult = await BuildInstanceOutputAsync(
                         input.Domain,
                         input.Extension,
                         input.Workflow,
@@ -160,7 +167,16 @@ public sealed class InstanceQueryAppService(
                         input.QueryParameters,
                         ct);
 
-                    list.Add(instanceOutput);
+                    // Propagate extension errors - fail-fast behavior
+                    if (!instanceOutputResult.IsSuccess)
+                    {
+                        throw new UserFriendlyException(
+                            instanceOutputResult.Error.Code,
+                            instanceOutputResult.Error.Message,
+                            instanceOutputResult.Error.Detail).WithData("Target", instanceOutputResult.Error.Target ?? string.Empty);
+                    }
+
+                    list.Add(instanceOutputResult.Value!);
                 }
 
                 var resultPagedList = new HateoasPagedList<GetInstanceOutput>(list, pagedList.CurrentPage, pagedList.PageSize,
@@ -183,9 +199,9 @@ public sealed class InstanceQueryAppService(
                 var transitions = new List<GetInstanceOutput>();
                 foreach (var instanceData in instance.DataList.OrderBy(d => d.EnteredAt))
                 {
-                    var transitionOutput = await BuildInstanceOutputAsync(
+                    var transitionOutputResult = await BuildInstanceOutputAsync(
                         input.Domain,
-                        input.Extension,
+                        input.Extensions,
                         input.Workflow,
                         instance,
                         instanceData,
@@ -194,7 +210,13 @@ public sealed class InstanceQueryAppService(
                         input.QueryParameters,
                         cancellationToken);
 
-                    transitions.Add(transitionOutput);
+                    // Propagate extension errors - fail-fast behavior
+                    if (!transitionOutputResult.IsSuccess)
+                    {
+                        return Result<GetInstanceHistoryOutput>.Fail(transitionOutputResult.Error);
+                    }
+
+                    transitions.Add(transitionOutputResult.Value!);
                 }
 
                 return Result<GetInstanceHistoryOutput>.Ok(new GetInstanceHistoryOutput
@@ -243,11 +265,13 @@ public sealed class InstanceQueryAppService(
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>SubFlowStateInfo containing transitions, state, view extensions, and active correlations from SubFlow</returns>
     private async Task<SubFlowStateInfo> GetSubFlowTransitionsAsync(
-        InstanceCorrelationInfo activeSubFlowCorrelation,
-        Instance mainInstance,
-        BBT.Workflow.Definitions.Workflow currentWorkflow,
-        string[]? extensions,
-        CancellationToken cancellationToken = default)
+    InstanceCorrelationInfo activeSubFlowCorrelation,
+    Instance mainInstance,
+    BBT.Workflow.Definitions.Workflow currentWorkflow,
+    string[]? extensions,
+    Dictionary<string, string?> headers,
+    Dictionary<string, string?> queryParams,
+    CancellationToken cancellationToken = default)
     {
         try
         {
@@ -342,7 +366,7 @@ public sealed class InstanceQueryAppService(
         return instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
     }
 
-    private async Task<GetInstanceOutput> BuildInstanceOutputAsync(
+    private async Task<Result<GetInstanceOutput>> BuildInstanceOutputAsync(
         string domain,
         string[]? extensionRequested,
         string workflow,
@@ -371,7 +395,7 @@ public sealed class InstanceQueryAppService(
 
         if (flow == null)
         {
-            return response;
+            return Result<GetInstanceOutput>.Ok(response);
         }
 
         var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
@@ -384,6 +408,7 @@ public sealed class InstanceQueryAppService(
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
 
+        // Execute extensions with fail-fast behavior
         var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
             extensionRequested,
             scriptContext,
@@ -391,10 +416,15 @@ public sealed class InstanceQueryAppService(
             currentScope,
             cancellationToken);
 
-        // Extensions are optional enrichment - use empty dictionary if processing fails
-        response.Extensions = extensionsResult.ValueOrDefault(new Dictionary<string, object>())!;
+        // Propagate extension errors - fail-fast behavior
+        if (!extensionsResult.IsSuccess)
+        {
+            return Result<GetInstanceOutput>.Fail(extensionsResult.Error);
+        }
 
-        return response;
+        response.Extensions = extensionsResult.Value!;
+
+        return Result<GetInstanceOutput>.Ok(response);
     }
 
     public async Task<ConditionalResult<GetInstanceDataOutput>> GetInstanceDataAsync(
@@ -451,6 +481,7 @@ public sealed class InstanceQueryAppService(
                         .WithQueryParameters(input.QueryParameters)
                         .BuildAsync(cancellationToken);
 
+                    // Execute extensions with fail-fast behavior
                     var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
                         input.Extensions,
                         scriptContext,
@@ -458,17 +489,21 @@ public sealed class InstanceQueryAppService(
                         ExtensionScope.GetInstance,
                         cancellationToken);
 
-                    // Extensions are optional enrichment - use empty dictionary if processing fails
-                    result.Extensions = extensionsResult.ValueOrDefault(new Dictionary<string, object>())!;
+                    // Propagate extension errors - fail-fast behavior
+                    if (!extensionsResult.IsSuccess)
+                    {
+                        return ConditionalResult<GetInstanceDataOutput>.Fail(extensionsResult.Error);
+                    }
+
+                    result.Extensions = extensionsResult.Value!;
 
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
     }
 
-    /// <summary>
-    /// Gets the view definition for platform-specific view retrieval.
-    /// Throws <see cref="EntityNotFoundException"/> if view definition is not found.
+    /// Gets the view definition for rule-based view selection.
+    /// Returns the view definition from the transition (if transitionKey is provided) or from the state.
     /// </summary>
     private ViewDefinition? GetViewDefinition(
         Instance instance,
@@ -527,7 +562,7 @@ public sealed class InstanceQueryAppService(
     /// Builds the complete instance state output including transitions, correlations, and view information.
     /// When there's an active SubFlow, includes the SubFlow's view extensions in data href and merges active correlations.
     /// </summary>
-    private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
+private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
@@ -543,7 +578,7 @@ public sealed class InstanceQueryAppService(
             .FirstOrDefault();
 
         var subFlowStateInfo = activeSubFlowCorrelation != null
-            ? await GetSubFlowTransitionsAsync(activeSubFlowCorrelation, instance, currentWorkflow, input.Extensions, cancellationToken)
+            ? await GetSubFlowTransitionsAsync(activeSubFlowCorrelation, instance, currentWorkflow, input.Extensions,input.Headers,input.QueryParams, cancellationToken)
             : GetMainFlowTransitions(instance, currentWorkflow, transitionInfo);
 
         // Build transition items with href links
@@ -559,17 +594,23 @@ public sealed class InstanceQueryAppService(
             .Ensure(
                 state => state != null,
                 Error.NotFound("notfound", $"State {instance.CurrentState} not found in workflow {input.Workflow}"))
-            .Map(currentStateValue =>
+           .Map(currentStateValue =>
             {
                 // Get view definition from main flow
                 var viewDefinition = GetViewDefinition(instance, currentWorkflow, currentStateValue);
+
+                // Get extensions and loadData from first view entry (if available)
+                // For state output, we use the first/default view entry's extensions
+                var firstViewEntry = viewDefinition?.Views.FirstOrDefault();
+                var viewExtensions = firstViewEntry?.Extensions ?? [];
+                var viewLoadData = firstViewEntry?.LoadData ?? false;
 
                 // Build data href with extensions
                 // If SubFlow is active, use SubFlow's extensions; otherwise use main flow extensions
                 var allExtensions = subFlowStateInfo.SubFlowData != null
                     ? ExtractExtensionsFromDataHref(subFlowStateInfo.SubFlowData.Href)
-                    : (input.Extensions ?? []).Concat(viewDefinition?.Extensions ?? []).ToArray();
-                
+                    : (input.Extensions ?? []).Concat(viewExtensions).ToArray();
+
                 var dataHref = new DataHref
                 {
                     Href = allExtensions.Length > 0
@@ -582,7 +623,7 @@ public sealed class InstanceQueryAppService(
                 var viewHref = new ViewHref
                 {
                     Href = InstanceUrlTemplates.View(input.Domain, input.Workflow, instance.Id.ToString()),
-                    LoadData = subFlowStateInfo.SubFlowView?.LoadData ?? viewDefinition?.LoadData == true
+                    LoadData = subFlowStateInfo.SubFlowView?.LoadData ?? viewLoadData
                 };
 
                 // Build active correlations with href links from main flow
@@ -622,7 +663,6 @@ public sealed class InstanceQueryAppService(
                 };
             });
     }
-
     /// <summary>
     /// Extracts extension parameters from a data href URL.
     /// </summary>
@@ -744,7 +784,7 @@ public sealed class InstanceQueryAppService(
             .WithQueryParameters(input.QueryParameters)
             .BuildAsync(cancellationToken);
 
-        // Execute extensions
+        // Execute extensions with fail-fast behavior
         var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
             input.Extensions ?? [],
             scriptContext,
@@ -752,10 +792,16 @@ public sealed class InstanceQueryAppService(
             ExtensionScope.GetInstance,
             cancellationToken);
 
+        // Propagate extension errors - fail-fast behavior
+        if (!extensionsResult.IsSuccess)
+        {
+            return Result<GetExtensionsOutput>.Fail(extensionsResult.Error);
+        }
+
         // Return extension results
         return Result<GetExtensionsOutput>.Ok(new GetExtensionsOutput
         {
-            Extensions = extensionsResult.ValueOrDefault(new Dictionary<string, object>())!
+            Extensions = extensionsResult.Value!
         });
     }
 
@@ -866,6 +912,10 @@ public sealed class InstanceQueryAppService(
     /// Resolves and returns the appropriate view for the instance.
     /// Handles subflow view overrides and platform-specific content.
     /// </summary>
+    /// <summary>
+    /// Resolves and returns the appropriate view for the instance using rule-based view selection.
+    /// Iterates through view entries and evaluates rules to select the matching view.
+    /// </summary>
     private async Task<Result<GetViewOutput>> ResolveViewAsync(
         Instance instance,
         Definitions.Workflow currentWorkflow,
@@ -892,6 +942,8 @@ public sealed class InstanceQueryAppService(
                 currentState,
                 platform,
                 transitionKey,
+                input.Headers,
+                input.QueryParameters,
                 cancellationToken);
 
             if (subFlowViewResult != null)
@@ -903,20 +955,74 @@ public sealed class InstanceQueryAppService(
         // Get view definition
         var viewDefinition = GetViewDefinition(instance, currentWorkflow, currentState, transitionKey);
 
-        if (viewDefinition?.View == null)
+        if (viewDefinition == null || viewDefinition.Views.Count == 0)
         {
             return Result<GetViewOutput>.Fail(
                 Error.NotFound("notfound",
-                    $"View not found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
+                    $"View definition not found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
+        }
+
+        // Build script context for rule evaluation
+        var instanceData = instance.LatestData;
+        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            .WithWorkflow(currentWorkflow)
+            .WithInstance(instance)
+            .WithRuntime(runtimeInfoProvider)
+            .WithTransition(transitionKey ?? string.Empty)
+            .WithBody(instanceData?.Data ?? new JsonData("{}"))
+            .WithHeaders(input.Headers)
+            .WithQueryParameters(input.QueryParameters)
+            .BuildAsync(cancellationToken);
+
+        // Iterate through views array and evaluate rules
+        ViewEntry? selectedViewEntry = null;
+        foreach (var viewEntry in viewDefinition.Views)
+        {
+            // If no rule, treat as fallback and return immediately
+            if (viewEntry.Rule == null)
+            {
+                selectedViewEntry = viewEntry;
+                break;
+            }
+
+            // Evaluate rule using condition service
+            var ruleResult = await taskConditionService.ExecuteConditionAsync(
+                viewEntry.Rule,
+                scriptContext,
+                cancellationToken);
+
+            if (ruleResult.IsSuccess && ruleResult.Value)
+            {
+                selectedViewEntry = viewEntry;
+                break;
+            }
+
+            // If rule evaluation failed, log and continue to next entry
+            if (!ruleResult.IsSuccess)
+            {
+                logger.LogWarning(
+                    "View rule evaluation failed for view {ViewKey} in state {StateKey}: {Error}",
+                    viewEntry.View.Key,
+                    instance.CurrentState,
+                    ruleResult.Error.Message);
+            }
+        }
+
+        // If no matching view found, return error
+        if (selectedViewEntry == null)
+        {
+            return Result<GetViewOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"No matching view found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
         }
 
         // Fetch and return the view
         return await componentCacheStore.GetViewAsync(
-                viewDefinition.View.Domain,
-                viewDefinition.View.Key,
-                viewDefinition.View.Version,
+                selectedViewEntry.View.Domain,
+                selectedViewEntry.View.Key,
+                selectedViewEntry.View.Version,
                 cancellationToken)
-            .MapAsync(view => BuildViewOutput(view, platform));
+            .MapAsync(view => BuildViewOutput(view, selectedViewEntry));
     }
 
     /// <summary>
@@ -934,6 +1040,8 @@ public sealed class InstanceQueryAppService(
         State currentState,
         string? platform,
         string? transitionKey = null,
+        Dictionary<string, string?>? headers=null,
+        Dictionary<string, string?>? queryParams=null, 
         CancellationToken cancellationToken = default)
     {
         var subFlowViewResult = await instanceQueryGateway.GetFunctionWithViewAsync(
@@ -942,7 +1050,10 @@ public sealed class InstanceQueryAppService(
                 Instance = instance.Subflow!.SubFlowInstanceId.ToString(),
                 Domain = instance.Subflow!.SubFlowDomain,
                 Workflow = instance.Subflow!.SubFlowName,
-                Version = instance.Subflow!.SubFlowVersion
+                Version = instance.Subflow!.SubFlowVersion,
+                Headers=headers,
+                QueryParams=queryParams
+
             },
             platform?.ToLowerInvariant(),
             transitionKey,
@@ -969,58 +1080,32 @@ public sealed class InstanceQueryAppService(
                 // If override view fetch fails, fall back to subflow view
                 if (overrideViewResult.IsSuccess)
                 {
-                    return BuildViewOutput(overrideViewResult.Value!, platform);
+                    // Create a default view entry for the override view
+                    var overrideViewEntry = ViewEntry.CreateDefault(overrideViewRef);
+                    return BuildViewOutput(overrideViewResult.Value!, overrideViewEntry);
                 }
             }
         }
 
-        // Return subflow view directly (remote call already handled platform-specific logic)
+        // Return subflow view directly (remote call already handled view selection)
         return subFlowViewResult.Value!;
     }
 
     /// <summary>
-    /// Builds a GetViewOutput from a View, applying platform-specific content if available.
+    /// Builds a GetViewOutput from a View and ViewEntry.
     /// </summary>
     /// <param name="view">The view to build output from</param>
-    /// <param name="platform">Platform identifier (optional)</param>
-    /// <returns>GetViewOutput with platform-specific content if available, otherwise default content</returns>
-    private GetViewOutput BuildViewOutput(View view, string? platform)
+    /// <param name="viewEntry">The view entry containing extensions and loadData information</param>
+    /// <returns>GetViewOutput with view content</returns>
+    private GetViewOutput BuildViewOutput(View view, ViewEntry viewEntry)
     {
-        var content = GetPlatformSpecificContent(view, platform);
-
         return new GetViewOutput
         {
             Key = view.Key,
-            Content = content,
+            Content = view.Content,
             Type = view.Type.ToString(),
             Display = view.Display,
             Label = ""
-        };
-    }
-
-    /// <summary>
-    /// Extracts platform-specific content from a view based on the platform identifier.
-    /// Returns default content if platform is not specified or no platform override exists.
-    /// </summary>
-    /// <param name="view">The view to extract content from</param>
-    /// <param name="platform">Platform identifier (optional)</param>
-    /// <returns>Platform-specific content if available, otherwise default view content</returns>
-    private string GetPlatformSpecificContent(View view, string? platform)
-    {
-        // If no platform specified or no platform overrides, return default content
-        if (string.IsNullOrEmpty(platform) || view.PlatformOverrides == null)
-        {
-            return view.Content;
-        }
-
-        var platformLower = platform.ToLowerInvariant();
-
-        return platformLower switch
-        {
-            PlatformConst.Android => view.PlatformOverrides.Android?.Content ?? view.Content,
-            PlatformConst.Web => view.PlatformOverrides.Web?.Content ?? view.Content,
-            PlatformConst.Ios => view.PlatformOverrides.Ios?.Content ?? view.Content,
-            _ => view.Content
         };
     }
 

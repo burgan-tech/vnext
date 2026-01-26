@@ -28,5 +28,8 @@ public sealed class GetFunctionWithInstanceInput : IHasDomain
     /// Extensions to be appended to the data href URL
     /// </summary>
     public string[]? Extensions { get; set; }
+    public Dictionary<string, string?> Headers { get; set; }
+    public Dictionary<string, string?> QueryParams { get; set; }
+
 }
 

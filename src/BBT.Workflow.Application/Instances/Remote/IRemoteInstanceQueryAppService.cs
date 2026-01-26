@@ -23,6 +23,14 @@ public interface IRemoteInstanceQueryAppService
         CancellationToken cancellationToken = default);
     
     /// <summary>
+    /// Retrieves a paginated list of instances with optional extensions
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances
+    /// </summary>
+    Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+        GetInstanceListInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves the complete history of an instance (all data transitions)
     /// </summary>
     Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(

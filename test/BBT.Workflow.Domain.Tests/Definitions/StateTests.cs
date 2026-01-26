@@ -236,22 +236,7 @@ public class StateTests
         Assert.Contains("submit", result);
         Assert.Contains("cancel", result);
     }
-
-    [Fact]
-    public void SetView_ShouldSetViewReference()
-    {
-        // Arrange
-        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
-        var viewRef = new Reference("view-1", "domain", "sys-views", "1.0.0");
-        var viewDefinition = new ViewDefinition([], true, viewRef);
-
-        // Act
-        state.SetView(viewDefinition);
-
-        // Assert
-        Assert.NotNull(state.View);
-        Assert.Equal("view-1", state.View.View.Key);
-    }
+    
 
     [Fact]
     public void SetSubFlow_ShouldSetSubFlowConfiguration()

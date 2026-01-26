@@ -43,7 +43,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     }
 
     /// <inheritdoc />
-    protected override async Task<Result> PrepareInputAsync(
+    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
         TTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
@@ -51,16 +51,16 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         var mapping = context.OnExecuteTask.Mapping;
         if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
         {
-            return Result.Ok();
+            return Result<ScriptResponse?>.Ok(null);
         }
 
-        var result = await ResultExtensions.TryAsync(async ct =>
+        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
                 mapping.DecodedCode,
                 cancellationToken: ct);
 
-            await scriptRunner.InputHandler(task, context.ScriptContext);
+            return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
             $"Input handler failed for {TaskType}: {ex.Message}"));

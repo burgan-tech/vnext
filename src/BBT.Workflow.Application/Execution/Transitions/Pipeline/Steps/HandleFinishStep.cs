@@ -44,14 +44,15 @@ public sealed class HandleFinishStep(
     }
 
     /// <summary>
-    /// Determines if this is a finish scenario (cancel or finish state).
+    /// Determines if this is a finish scenario (cancel, exit, or finish state).
     /// </summary>
     private bool IsFinishScenario(TransitionExecutionContext context)
     {
         var isCancelTransition = context.IsCancelTransition();
+        var isExitTransition = context.IsExitTransition();
         
-        // Cancel transitions always go through finish
-        if (isCancelTransition)
+        // Cancel and Exit transitions always go through finish
+        if (isCancelTransition || isExitTransition)
         {
             return true;
         }

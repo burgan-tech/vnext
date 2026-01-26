@@ -40,6 +40,7 @@ public static class WorkflowErrorCodes
     public const string SubflowStartFailed = "Instance:100023";
     public const string UpdateDataNotConfiguredForWorkflow = "Instance:100024";
     public const string ActiveInstanceAlreadyExists = "Instance:100025";
+    public const string ExitNotConfiguredForWorkflow = "Instance:100026";
     
     #endregion
     
@@ -102,6 +103,12 @@ public static class WorkflowErrorCodes
     public const string TriggerSubProcessExecutionFailed = "Trigger:500007";
     public const string TriggerInvalidResponseFormat = "Trigger:500008";
     public const string TriggerInvalidResponseStructure = "Trigger:500009";
+    
+    #endregion
+    
+    #region Extension Errors (600xxx)
+    
+    public const string ExtensionExecutionFailed = "Extension:600001";
     
     #endregion
 }

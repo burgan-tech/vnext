@@ -38,7 +38,7 @@ public static class JsonSchemaValidationMapper
 
             var message = "Validation failed";
 
-            if (detail.HasErrors)
+            if (!detail.IsValid)
             {
                 message = string.Join(", ", detail.Errors!.Select(s => Regex.Unescape(s.Value)));
             }
@@ -46,7 +46,7 @@ public static class JsonSchemaValidationMapper
             validationResults.Add(new ValidationResult(message, [memberName]));
         }
 
-        if (evaluation.HasErrors)
+        if (!evaluation.IsValid)
         {
             foreach (var error in evaluation.Errors!)
             {
@@ -70,7 +70,7 @@ public static class JsonSchemaValidationMapper
     {
         var list = new List<EvaluationResults>();
 
-        if (!result.IsValid && result.HasDetails)
+        if (result is { IsValid: false, Details: not null })
         {
             foreach (var child in result.Details)
             {

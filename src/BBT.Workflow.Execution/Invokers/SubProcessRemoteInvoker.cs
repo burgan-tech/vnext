@@ -24,8 +24,6 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
     private readonly ITaskMetrics _metrics;
     private readonly string _orchestrationAppId;
 
-    public const string HttpClientName = "TriggerInvoker";
-
     public SubProcessRemoteInvoker(
         DaprClient daprClient,
         IHttpClientFactory httpClientFactory,
@@ -134,7 +132,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
 
         try
         {
-            var httpClient = _httpClientFactory.CreateClient(HttpClientName);
+            var httpClient = CreateHttpClient(binding, taskKey);
             var request = CreateHttpRequest(binding);
 
             using var response = await httpClient.SendAsync(request, cancellationToken);
@@ -154,6 +152,19 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
+        }
+        catch (HttpRequestException ex)
+        {
+            stopwatch.Stop();
+            _metrics.RecordTaskExecution(TaskType, "failure");
+            _logger.LogError(ex, "SubProcess HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
+                taskKey, binding.Domain, binding.Workflow);
+
+            return TaskInvocationResult.Failure(
+                error: ex.Message,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
@@ -315,5 +326,21 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
             metadata["ExceptionType"] = exceptionType;
 
         return metadata;
+    }
+
+    private HttpClient CreateHttpClient(SubProcessBinding binding, string? taskKey)
+    {
+        var clientName = binding.ValidateSSL
+            ? WorkflowHttpClientNames.Default
+            : WorkflowHttpClientNames.NoSslValidation;
+
+        if (!binding.ValidateSSL)
+        {
+            _logger.LogWarning(
+                "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
+                TaskType, taskKey);
+        }
+
+        return _httpClientFactory.CreateClient(clientName);
     }
 }

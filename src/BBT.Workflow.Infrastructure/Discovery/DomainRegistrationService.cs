@@ -1,7 +1,10 @@
+using System;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -17,6 +20,7 @@ public sealed class DomainRegistrationService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOptions<ServiceDiscoveryOptions> serviceDiscoveryOptions,
     IConfiguration configuration,
+    IHostEnvironment hostEnvironment,
     ILogger<DomainRegistrationService> logger) : IDomainRegistrationService
 {
     /// <summary>
@@ -35,14 +39,31 @@ public sealed class DomainRegistrationService(
     public async Task RegisterDomainAsync(CancellationToken cancellationToken = default)
     {
         var options = serviceDiscoveryOptions.Value;
+
+        // Check if service discovery is enabled
+        if (!options.Enabled)
+        {
+            logger.LogDebug("Service discovery is disabled. Skipping domain registration");
+            return;
+        }
+
+        logger.LogInformation("Service discovery is enabled. Starting domain registration...");
+
         var vNextApiBaseUrl = configuration[VNextApiBaseUrlKey];
 
         if (string.IsNullOrWhiteSpace(vNextApiBaseUrl))
         {
-            logger.LogWarning(
-                "Domain registration skipped: '{ConfigKey}' is not configured",
-                VNextApiBaseUrlKey);
-            return;
+            throw new InvalidConfigurationException(
+                $"Service discovery is enabled, but '{VNextApiBaseUrlKey}' is not configured. " +
+                "Either disable service discovery or configure the base URL.");
+        }
+
+        if (IsLocalhostBaseUrl(vNextApiBaseUrl) && !hostEnvironment.IsDevelopment())
+        {
+            throw new InvalidConfigurationException(
+                $"Invalid configuration: '{VNextApiBaseUrlKey}' points to localhost ('{vNextApiBaseUrl}') " +
+                $"in environment '{hostEnvironment.EnvironmentName}'. " +
+                "Use a reachable base URL in non-development environments.");
         }
 
         var domainName = runtimeInfoProvider.Domain;
@@ -51,7 +72,7 @@ public sealed class DomainRegistrationService(
         var appId = configuration["DAPR_APP_ID"];
         
         logger.LogInformation(
-            "Starting domain registration for domain '{DomainName}' with baseUrl '{BaseUrl}' and healthUrl '{HealthUrl}' to registry '{RegistryUrl}'",
+            "Registering domain '{DomainName}' with baseUrl '{BaseUrl}' and healthUrl '{HealthUrl}' to registry '{RegistryUrl}'",
             domainName, baseUrl, healthUrl, options.BaseUrl);
 
         var requestBody = new
@@ -88,22 +109,45 @@ public sealed class DomainRegistrationService(
             else
             {
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogWarning(
-                    "Domain registration failed for domain '{DomainName}'. Status: {StatusCode}, Error: {Error}",
-                    domainName, response.StatusCode, errorContent);
+                var reason = $"HTTP {(int)response.StatusCode} - {errorContent}";
+                
+                throw new DomainRegistrationFailedException(domainName, requestUrl, reason);
             }
+        }
+        catch (DomainRegistrationFailedException)
+        {
+            // Re-throw domain registration exceptions as-is
+            throw;
         }
         catch (HttpRequestException ex)
         {
-            logger.LogWarning(ex,
-                "Domain registration HTTP request failed for domain '{DomainName}'. Registry might be unavailable at '{RegistryUrl}'",
-                domainName, requestUrl);
+            var reason = $"HTTP request failed: {ex.Message}. Registry might be unavailable.";
+            throw new DomainRegistrationFailedException(domainName, requestUrl, reason);
         }
         catch (TaskCanceledException ex) when (ex.CancellationToken != cancellationToken)
         {
-            logger.LogWarning(ex,
-                "Domain registration request timed out for domain '{DomainName}'",
-                domainName);
+            var reason = "Request timed out. Registry might be slow or unavailable.";
+            throw new DomainRegistrationFailedException(domainName, requestUrl, reason);
         }
     }
+
+    private static bool IsLocalhostBaseUrl(string baseUrl)
+    {
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+        {
+            return IsLocalhostHost(uri.Host);
+        }
+
+        return ContainsLocalhostToken(baseUrl);
+    }
+
+    private static bool IsLocalhostHost(string host)
+        => host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+           || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+           || host.Equals("::1", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsLocalhostToken(string baseUrl)
+        => baseUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase)
+           || baseUrl.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+           || baseUrl.Contains("::1", StringComparison.OrdinalIgnoreCase);
 }

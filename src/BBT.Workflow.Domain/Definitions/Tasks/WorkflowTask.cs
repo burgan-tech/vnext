@@ -61,6 +61,7 @@ public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSe
     /// <see cref="TaskType"/>
     /// </summary>
     [JsonPropertyOrder(0)]
+    [JsonIgnore]
     public string Type { get; protected set; }
 
     /// <summary>

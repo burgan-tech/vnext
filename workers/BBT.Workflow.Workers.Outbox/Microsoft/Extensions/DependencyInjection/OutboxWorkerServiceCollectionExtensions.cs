@@ -41,7 +41,6 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddWorkflowHttpClient() // TODO: Düşün!!!!
             .AddHostedServices()
             .AddAppHealthChecks();
         return services;

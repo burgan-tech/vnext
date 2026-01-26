@@ -10,6 +10,11 @@ using BBT.Workflow.Definitions;
 
 namespace BBT.Workflow.Shared;
 
+    /// <summary>
+    /// Platform-specific overrides for view content.
+    /// This class is deprecated (Issue #56). Use rule-based view selection in State/Transition view definitions instead.
+    /// </summary>
+    [Obsolete("PlatformOverrides is deprecated. Use rule-based view selection in State/Transition view definitions instead. See Issue #56.")]
     public class PlatformOverrides
     {
         private PlatformOverrides()

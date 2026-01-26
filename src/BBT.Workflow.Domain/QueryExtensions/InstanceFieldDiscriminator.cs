@@ -16,12 +16,14 @@ public static class InstanceFieldDiscriminator
         "Key",
         "Flow",
         "CurrentState",
-        "State", // Alias for CurrentState
+        "State", // Alias for EffectiveState
         "Status",
         "CreatedAt",
         "ModifiedAt",
         "CompletedAt",
-        "IsTransient"
+        "IsTransient",
+        "EffectiveStateType",
+        "EffectiveStateSubType"
     };
 
     /// <summary>
@@ -57,6 +59,18 @@ public static class InstanceFieldDiscriminator
         
         // Extract the first part of the field path (e.g., "key" from "key.subfield")
         var rootFieldName = cleanFieldName.Split('.')[0];
+        
+        // Handle alias: "State" -> "EffectiveState"
+        if (fieldName.Equals("State", StringComparison.OrdinalIgnoreCase))
+            rootFieldName = "EffectiveState";
+        
+        // Handle alias: "StateType" -> "EffectiveStateType"
+        if (fieldName.Equals("StateType", StringComparison.OrdinalIgnoreCase))
+            rootFieldName = "EffectiveStateType";
+        
+        // Handle alias: "StateSubType" -> "EffectiveStateSubType"
+        if (fieldName.Equals("StateSubType", StringComparison.OrdinalIgnoreCase))
+            rootFieldName = "EffectiveStateSubType";
 
         return InstanceColumns.Contains(rootFieldName);
     }
@@ -71,9 +85,17 @@ public static class InstanceFieldDiscriminator
         if (string.IsNullOrWhiteSpace(fieldName))
             throw new ArgumentException("Field name cannot be null or empty", nameof(fieldName));
 
-        // Handle alias: "State" -> "CurrentState"
+        // Handle alias: "State" -> "EffectiveState"
         if (fieldName.Equals("State", StringComparison.OrdinalIgnoreCase))
-            return "CurrentState";
+            return "EffectiveState";
+        
+        // Handle alias: "StateType" -> "EffectiveStateType"
+        if (fieldName.Equals("StateType", StringComparison.OrdinalIgnoreCase))
+            return "EffectiveStateType";
+        
+        // Handle alias: "StateSubType" -> "EffectiveStateSubType"
+        if (fieldName.Equals("StateSubType", StringComparison.OrdinalIgnoreCase))
+            return "EffectiveStateSubType";
 
         // Find the matching column name (case-insensitive match)
         var matchedColumn = InstanceColumns.FirstOrDefault(c => 

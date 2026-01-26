@@ -1,3 +1,4 @@
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Logging;
@@ -111,6 +112,8 @@ public sealed class InstanceSubStateChangedEventHook(
             Version = eventData.Version,
             NewState = eventData.NewState,
             PreviousState = eventData.PreviousState,
+            NewStateType = (StateType)eventData.NewStateType,
+            NewStateSubType = (StateSubType)eventData.NewStateSubType,
             ChangedAt = eventData.ChangedAt
         };
     }

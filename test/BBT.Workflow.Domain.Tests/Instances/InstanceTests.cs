@@ -54,20 +54,6 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void ChangeState_ShouldUpdateCurrentState_FromTransition()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var transition = TransitionFactory.CreateDefault("submit", "from-step", "to-step");
-
-        // Act
-        instance.ChangeState(transition);
-
-        // Assert
-        Assert.Equal("to-step", instance.CurrentState);
-    }
-
-    [Fact]
     public void CanExecuteTransition_ShouldDelegateToTransition()
     {
         // Arrange
@@ -1211,20 +1197,6 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
 
         // Assert
         Assert.Equal("test-state", currentState);
-    }
-
-    [Fact]
-    public void ChangeState_WithWorkflowTimeout_ShouldUpdateCurrentState()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var timeout = WorkflowTimeout.Create("timeout-key", "timeout-state", "Patch", "none", "PT1H");
-
-        // Act
-        instance.ChangeState(timeout);
-
-        // Assert
-        Assert.Equal("timeout-state", instance.CurrentState);
     }
 
     [Fact]

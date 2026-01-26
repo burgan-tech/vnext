@@ -19,16 +19,6 @@ public sealed class HttpTaskInvoker(
 {
     private readonly ITaskMetrics _metrics = metrics ?? NullTaskMetrics.Instance;
 
-    /// <summary>
-    /// Named HttpClient for SSL validation enabled requests (default behavior).
-    /// </summary>
-    public const string DefaultHttpClientName = "WorkflowHttpClient";
-
-    /// <summary>
-    /// Named HttpClient for SSL validation disabled requests.
-    /// </summary>
-    public const string NoSslValidationHttpClientName = "WorkflowHttpClient.NoSslValidation";
-
     /// <inheritdoc />
     public string TaskType => TaskTypes.Http;
 
@@ -187,8 +177,8 @@ public sealed class HttpTaskInvoker(
     private HttpClient CreateHttpClient(HttpTaskBinding binding, string? taskKey)
     {
         var clientName = binding.ValidateSSL
-            ? DefaultHttpClientName
-            : NoSslValidationHttpClientName;
+            ? WorkflowHttpClientNames.Default
+            : WorkflowHttpClientNames.NoSslValidation;
 
         if (!binding.ValidateSSL)
         {

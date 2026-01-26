@@ -1,16 +1,15 @@
 using System.Text.Json;
 using BBT.Aether;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -22,22 +21,22 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstancesTask>
 {
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
 
     /// <summary>
     /// Initializes a new instance of GetInstancesTaskExecutor.
     /// </summary>
     public GetInstancesTaskExecutor(
-        IServiceScopeFactory scopeFactory,
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
         ILogger<GetInstancesTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
-        _serviceScopeFactory = scopeFactory;
+        _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
     }
 
@@ -72,82 +71,74 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        Logger.LogDebug("Using local IInstanceQueryAppService for GetInstances task {TaskKey}", task.Key);
+        Logger.LogDebug("Using local IInstanceQueryGateway for GetInstances task {TaskKey}", task.Key);
 
         try
         {
-            await using var scope = _serviceScopeFactory.CreateAsyncScope();
-            var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-            var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(task.TriggerFlow))
+            // Step 1: Get list of instances
+            var listInput = new GetInstanceListInput
             {
-                // Step 1: Get list of instances
-                var listInput = new GetInstanceListInput
-                {
-                    Domain = task.TriggerDomain,
-                    Workflow = task.TriggerFlow,
-                    Page = task.Page,
-                    PageSize = task.PageSize,
-                    Sort = task.Sort,
-                    Filter = task.Filter
-                };
+                Domain = task.TriggerDomain,
+                Workflow = task.TriggerFlow,
+                Page = task.Page,
+                PageSize = task.PageSize,
+                Sort = task.Sort,
+                Filter = task.Filter
+            };
 
-                var instanceListResult = await queryService.GetInstanceListAsync(listInput, cancellationToken);
-                if (!instanceListResult.IsSuccess)
-                {
-                    Logger.TaskLocalExecutionFailed(
-                        task.Key,
-                        TaskType.ToString(),
-                        task.TriggerFlow,
-                        instanceListResult.Error.Message ?? "GetInstanceList failed");
-
-                    return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                        error: instanceListResult.Error.Message ?? "GetInstanceList failed",
-                        statusCode: 500,
-                        taskType: TaskType.ToString()));
-                }
-
-                // Step 2: Get data for each instance
-                // Note: ToPagedList uses Items.Count as totalItems estimate since InstanceListWithGroupsResponse doesn't preserve total count
-                var pagedList = instanceListResult.Value!.ToPagedList(task.PageSize, task.Page, instanceListResult.Value.Items.Count);
-                var instanceDataResults = await ProcessDataFunctionListAsync(
-                    task.TriggerDomain,
+            var instanceListResult = await _instanceQueryGateway.GetInstanceListAsync(listInput, cancellationToken);
+            if (!instanceListResult.IsSuccess)
+            {
+                Logger.TaskLocalExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
                     task.TriggerFlow,
-                    pagedList,
-                    queryService,
-                    cancellationToken);
-                
-                // Build HATEOAS-like response structure for consistency with remote execution
-                var basePath = $"/api/v1/{task.TriggerDomain}/workflows/{task.TriggerFlow}/functions/data";
-                var responseData = new
-                {
-                    links = new
-                    {
-                        self = $"{basePath}?page={pagedList.CurrentPage}&pageSize={pagedList.PageSize}",
-                        first = $"{basePath}?page=1&pageSize={pagedList.PageSize}",
-                        next = pagedList.HasNext 
-                            ? $"{basePath}?page={pagedList.CurrentPage + 1}&pageSize={pagedList.PageSize}" 
-                            : "",
-                        prev = pagedList.CurrentPage > 1 
-                            ? $"{basePath}?page={pagedList.CurrentPage - 1}&pageSize={pagedList.PageSize}" 
-                            : ""
-                    },
-                    items = instanceDataResults
-                };
-                
-                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-                    data: responseData,
-                    statusCode: 200,
-                    taskType: TaskType.ToString(),
-                    metadata: new Dictionary<string, object>
-                    {
-                        ["Page"] = pagedList.CurrentPage,
-                        ["PageSize"] = pagedList.PageSize,
-                        ["HasNext"] = pagedList.HasNext,
-                        ["ItemCount"] = instanceDataResults.Count
-                    }));
+                    instanceListResult.Error.Message ?? "GetInstanceList failed");
+
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+                    error: instanceListResult.Error.Message ?? "GetInstanceList failed",
+                    statusCode: 500,
+                    taskType: TaskType.ToString()));
             }
+
+            // Step 2: Get data for each instance
+            // Note: ToPagedList uses Items.Count as totalItems estimate since InstanceListWithGroupsResponse doesn't preserve total count
+            var pagedList = instanceListResult.Value!.ToPagedList(task.PageSize, task.Page, instanceListResult.Value.Items.Count);
+            var instanceDataResults = await ProcessDataFunctionListAsync(
+                task.TriggerDomain,
+                task.TriggerFlow,
+                pagedList,
+                cancellationToken);
+
+            // Build HATEOAS-like response structure for consistency with remote execution
+            var basePath = $"/api/v1/{task.TriggerDomain}/workflows/{task.TriggerFlow}/functions/data";
+            var responseData = new
+            {
+                links = new
+                {
+                    self = $"{basePath}?page={pagedList.CurrentPage}&pageSize={pagedList.PageSize}",
+                    first = $"{basePath}?page=1&pageSize={pagedList.PageSize}",
+                    next = pagedList.HasNext 
+                        ? $"{basePath}?page={pagedList.CurrentPage + 1}&pageSize={pagedList.PageSize}" 
+                        : "",
+                    prev = pagedList.CurrentPage > 1 
+                        ? $"{basePath}?page={pagedList.CurrentPage - 1}&pageSize={pagedList.PageSize}" 
+                        : ""
+                },
+                items = instanceDataResults
+            };
+            
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                data: responseData,
+                statusCode: 200,
+                taskType: TaskType.ToString(),
+                metadata: new Dictionary<string, object>
+                {
+                    ["Page"] = pagedList.CurrentPage,
+                    ["PageSize"] = pagedList.PageSize,
+                    ["HasNext"] = pagedList.HasNext,
+                    ["ItemCount"] = instanceDataResults.Count
+                }));
         }
         catch (Exception ex)
         {
@@ -169,11 +160,9 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         string domain,
         string workflow,
         HateoasPagedList<GetInstanceOutput> instanceListResult,
-        IInstanceQueryAppService queryService,
         CancellationToken cancellationToken)
     {
-        // Process sequentially to avoid DbContext threading issues
-        // Each call uses the same scoped queryService which shares a DbContext
+        // Process sequentially to avoid flooding downstream dependencies
         var results = new List<GetInstanceDataOutput>();
         
         foreach (var instance in instanceListResult.Items)
@@ -185,7 +174,7 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                 Instance = instance.Key!
             };
             
-            var result = await queryService.GetInstanceDataAsync(input, cancellationToken);
+            var result = await _instanceQueryGateway.GetInstanceDataAsync(input, cancellationToken);
             if (result.Result is { IsSuccess: true, Value: not null })
             {
                 results.Add(result.Result.Value);

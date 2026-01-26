@@ -1,18 +1,17 @@
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Guids;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -25,7 +24,7 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessTask>
 {
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IInstanceCommandGateway _instanceCommandGateway;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IGuidGenerator _guidGenerator;
     private readonly IConfiguration _configuration;
@@ -35,10 +34,10 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     /// Initializes a new instance of SubProcessTaskExecutor.
     /// </summary>
     public SubProcessTaskExecutor(
-        IServiceScopeFactory scopeFactory,
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IInstanceCommandGateway instanceCommandGateway,
         IInstanceRepository instanceRepository,
         IGuidGenerator guidGenerator,
         IConfiguration configuration,
@@ -46,7 +45,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         ILogger<SubProcessTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
-        _serviceScopeFactory = scopeFactory;
+        _instanceCommandGateway = instanceCommandGateway;
         _instanceRepository = instanceRepository;
         _guidGenerator = guidGenerator;
         _configuration = configuration;
@@ -123,45 +122,23 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         Guid correlationId,
         CancellationToken cancellationToken)
     {
-        Logger.LogDebug("Using local IInstanceCommandAppService for SubProcess task {TaskKey}", task.Key);
+        Logger.LogDebug("Using local IInstanceCommandGateway for SubProcess task {TaskKey}", task.Key);
 
         try
         {
             var input = BuildStartInstanceInput(task, context.ScriptContext, subFlowInstanceId);
-            await using var scope = _serviceScopeFactory.CreateAsyncScope();
-            var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-            var localCommandService = scope.ServiceProvider.GetRequiredService<IInstanceCommandAppService>();
-            using (currentSchema.Use(input.Workflow))
+            var result = await _instanceCommandGateway.StartAsync(input, cancellationToken);
+
+            if (!result.IsSuccess)
             {
-                var result = await localCommandService.StartAsync(input, cancellationToken);
-
-                if (!result.IsSuccess)
-                {
-                    Logger.TaskLocalExecutionFailed(
-                        task.Key,
-                        TaskType.ToString(),
-                        context.ScriptContext.Instance.Id.ToString(),
-                        result.Error.Message ?? "SubProcess start failed");
-                    return TaskInvocationResult.Failure(
-                        error: result.Error.Message ?? "SubProcess start failed",
-                        statusCode: 500,
-                        taskType: TaskType.ToString(),
-                        metadata: new Dictionary<string, object>
-                        {
-                            ["SubFlowInstanceId"] = subFlowInstanceId,
-                            ["CorrelationId"] = correlationId
-                        });
-                }
-
-                return TaskInvocationResult.Success(
-                    data: new
-                    {
-                        result.Value!.Id,
-                        result.Value.Status,
-                        SubFlowInstanceId = subFlowInstanceId,
-                        CorrelationId = correlationId
-                    },
-                    statusCode: 200,
+                Logger.TaskLocalExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    context.ScriptContext.Instance.Id.ToString(),
+                    result.Error.Message ?? "SubProcess start failed");
+                return TaskInvocationResult.Failure(
+                    error: result.Error.Message ?? "SubProcess start failed",
+                    statusCode: 500,
                     taskType: TaskType.ToString(),
                     metadata: new Dictionary<string, object>
                     {
@@ -169,6 +146,22 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                         ["CorrelationId"] = correlationId
                     });
             }
+
+            return TaskInvocationResult.Success(
+                data: new
+                {
+                    result.Value!.Id,
+                    result.Value.Status,
+                    SubFlowInstanceId = subFlowInstanceId,
+                    CorrelationId = correlationId
+                },
+                statusCode: 200,
+                taskType: TaskType.ToString(),
+                metadata: new Dictionary<string, object>
+                {
+                    ["SubFlowInstanceId"] = subFlowInstanceId,
+                    ["CorrelationId"] = correlationId
+                });
         }
         catch (Exception ex)
         {

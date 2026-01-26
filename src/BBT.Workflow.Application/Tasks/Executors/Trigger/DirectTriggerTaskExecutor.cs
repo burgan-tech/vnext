@@ -1,16 +1,15 @@
 using System.Text.Json;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Polly;
 
@@ -24,7 +23,8 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTriggerTask>
 {
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IInstanceCommandGateway _instanceCommandGateway;
+    private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
     private readonly ResiliencePipeline<Result<TransitionOutput>> _retryPipeline;
 
@@ -32,16 +32,18 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     /// Initializes a new instance of DirectTriggerTaskExecutor.
     /// </summary>
     public DirectTriggerTaskExecutor(
-        IServiceScopeFactory scopeFactory,
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
+        IInstanceCommandGateway instanceCommandGateway,
+        IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
         ILogger<DirectTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
-        _serviceScopeFactory = scopeFactory;
+        _instanceCommandGateway = instanceCommandGateway;
+        _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
         _retryPipeline = resilienceFactory.CreatePipeline<TransitionOutput>(
             operationName: "DirectTrigger.ExecuteLocal");
@@ -105,7 +107,22 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        Logger.LogDebug("Using local IInstanceCommandAppService for DirectTrigger task {TaskKey}", task.Key);
+        Logger.LogDebug("Using local IInstanceCommandGateway for DirectTrigger task {TaskKey}", task.Key);
+
+        var instanceIdResult = await ResolveInstanceIdAsync(task, instanceIdentifier, cancellationToken);
+        if (!instanceIdResult.IsSuccess)
+        {
+            Logger.TaskLocalExecutionFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id.ToString(),
+                instanceIdResult.Error.Message ?? "DirectTrigger instance resolution failed");
+
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+                error: instanceIdResult.Error.Message ?? "DirectTrigger instance resolution failed",
+                statusCode: 404,
+                taskType: TaskType.ToString()));
+        }
 
         var headers = ExtractHeaders(context.ScriptContext);
 
@@ -129,7 +146,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
 
         // Execute with retry pipeline for transient failures (e.g., instance lock scenarios)
         var result = await _retryPipeline.ExecuteAsync(
-            async token => await ExecuteTransitionWithUowAsync(task, instanceIdentifier, input, token),
+            async token => await ExecuteTransitionWithUowAsync(task, instanceIdResult.Value, input, token),
             cancellationToken);
 
         if (!result.IsSuccess)
@@ -162,42 +179,36 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     /// </summary>
     private async Task<Result<TransitionOutput>> ExecuteTransitionWithUowAsync(
         DirectTriggerTask task,
-        string instanceIdentifier,
+        Guid instanceId,
         TransitionInput input,
         CancellationToken cancellationToken)
     {
         try
         {
-            await using var scope = _serviceScopeFactory.CreateAsyncScope();
-            var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-            var localCommandService = scope.ServiceProvider.GetRequiredService<IInstanceCommandAppService>();
-            using (currentSchema.Use(input.Workflow))
+            var result = await _instanceCommandGateway.TransitionAsync(
+                instanceId,
+                task.TransitionName,
+                input,
+                cancellationToken);
+
+            if (!result.IsSuccess)
             {
-                var result = await localCommandService.TransitionAsync(
-                    instanceIdentifier,
-                    task.TransitionName,
-                    input,
-                    cancellationToken);
-
-                if (!result.IsSuccess)
-                {
-                    Logger.TaskLocalExecutionFailed(
-                        task.Key,
-                        TaskType.ToString(),
-                        instanceIdentifier,
-                        result.Error.Message ?? "DirectTrigger transition failed");
-                    return Result<TransitionOutput>.Fail(result.Error);
-                }
-
-                return result;
+                Logger.TaskLocalExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    instanceId.ToString(),
+                    result.Error.Message ?? "DirectTrigger transition failed");
+                return Result<TransitionOutput>.Fail(result.Error);
             }
+
+            return result;
         }
         catch (Exception ex)
         {
             Logger.TaskLocalExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                instanceIdentifier,
+                instanceId.ToString(),
                 ex.Message);
             
             return Result<TransitionOutput>.Fail(
@@ -206,6 +217,34 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
                     $"DirectTrigger transition execution failed: {ex.Message}",
                     detail: ex.GetType().Name));
         }
+    }
+
+    private async Task<Result<Guid>> ResolveInstanceIdAsync(
+        DirectTriggerTask task,
+        string instanceIdentifier,
+        CancellationToken cancellationToken)
+    {
+        if (Guid.TryParse(instanceIdentifier, out var instanceId))
+        {
+            return Result<Guid>.Ok(instanceId);
+        }
+
+        var queryInput = new GetInstanceInput
+        {
+            Domain = task.TriggerDomain,
+            Workflow = task.TriggerFlow,
+            Instance = instanceIdentifier
+        };
+
+        var instanceResult = await _instanceQueryGateway.GetInstanceAsync(queryInput, cancellationToken);
+        if (!instanceResult.Result.IsSuccess || instanceResult.Result.Value?.Id == null)
+        {
+            return Result<Guid>.Fail(Error.Validation(
+                WorkflowErrorCodes.TaskExecution,
+                "DirectTrigger instance could not be resolved to a valid identifier"));
+        }
+
+        return Result<Guid>.Ok(instanceResult.Result.Value.Id.Value);
     }
 
     private async Task<Result<TaskInvocationResult>> ExecuteRemoteAsync(

@@ -38,16 +38,14 @@ public sealed class Transition : IHasKey
         TriggerType triggerType,
         VersionStrategy versionStrategy,
         List<LanguageLabel> labels,
-        List<OnExecuteTask> onExecutionTasks,
-        ViewDefinition view
+      List<OnExecuteTask> onExecutionTasks
     ) : this(key, from, target, triggerType)
     {
         VersionStrategy = versionStrategy;
         this.labels = labels ?? [];
         this.onExecutionTasks = onExecutionTasks ?? [];
-        this.View = view;
+        // View property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
-
     /// <summary>
     /// If present, it is the more readable key value of the record.
     /// </summary>
@@ -72,15 +70,15 @@ public sealed class Transition : IHasKey
     /// <see cref="TriggerType"/>
     /// </summary>
     public TriggerType TriggerType { get; private set; }
-    
+
     /// <summary>
     /// Optional transition kind that defines special behavior.
     /// When set to <see cref="TransitionKind.DefaultAutoTransition"/>, this transition acts as a fallback
     /// when no other automatic transitions are satisfied.
     /// </summary>
-    [JsonInclude] 
+    [JsonInclude]
     public TransitionKind? TriggerKind { get; private set; }
-    
+
     [JsonInclude] public ScriptCode? Timer { get; private set; }
     [JsonInclude] public ScriptCode? Rule { get; private set; }
     [JsonInclude] public Reference? Schema { get; private set; }
@@ -95,8 +93,10 @@ public sealed class Transition : IHasKey
     [JsonPropertyName("onExecutionTasks")]
     private List<OnExecuteTask> onExecutionTasks = new();
     [JsonInclude]
-    [JsonPropertyName("view")]
+    [JsonPropertyName("views")]
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
     public ViewDefinition? View { get; private set; }
+
 
     /// <summary>
     /// Language
@@ -177,7 +177,7 @@ public sealed class Transition : IHasKey
     {
         Timer = new ScriptCode(location, code);
     }
-    
+
     public void SetMapping(ScriptCode code)
     {
         Mapping = code;

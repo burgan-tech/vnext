@@ -35,6 +35,17 @@ public interface IInstanceQueryGateway
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves a paginated list of instances with optional extensions.
+    /// Routes to local or remote based on target domain in input.
+    /// </summary>
+    /// <param name="input">The list input containing domain, workflow, paging, and filters.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result containing the instance list response.</returns>
+    Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+        GetInstanceListInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves the complete history of an instance (all data transitions).
     /// Routes to local or remote based on target domain in input.
     /// </summary>

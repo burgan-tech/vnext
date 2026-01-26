@@ -34,7 +34,6 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddWorkflowHttpClient() // TODO: Düşün!!!!
             .AddHostedServices()
             .AddAppHealthChecks();
         return services;

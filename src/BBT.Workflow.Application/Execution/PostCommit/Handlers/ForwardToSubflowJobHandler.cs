@@ -38,10 +38,16 @@ public sealed class ForwardToSubflowJobHandler(
         if (forwarded)
         {
             // Update client response with forwarded status
+            // Special case: If subflow completed, show parent instance's actual status
+            // Otherwise, show subflow's status (or fallback to parent if null)
+            var responseStatus = status?.Equals(InstanceStatus.Completed) == true
+                ? context.Instance.Status
+                : status ?? context.Instance.Status;
+            
             context.ClientResponse = new ClientResponse
             {
                 Id = context.InstanceId,
-                Status = status ?? context.Instance.Status
+                Status = responseStatus
             };
 
             logger.LogInformation(

@@ -1,263 +1,73 @@
-# Workflow Usage Documentation
+# vNext Platform
 
-## Introduction
-This document explains the structure and usage of the .NET Core template project created using the BBT.Aether SDK. This template includes all the necessary configurations and structure for developers to get started quickly.
+The vNext workflow runtime is a .NET-based orchestration system built with Clean Architecture
+and DDD. It ships two API hosts:
 
-## Folder Structure
+- **Orchestration API**: client-facing workflow/instance operations
+- **Execution API**: internal task execution and background processing
 
-The project folder structure is as follows:
+## Prerequisites
 
-```
-.vscode
-etc
-  └── dapr
-      └── components
-          └── config.yaml
-          └── pubsub.yaml
-          └── secretstore.yaml
-          └── state.yaml
-      └── config.yaml
-  └── docker
-      └── config
-          └── otel
-          └── prometheus
-          └── setup-service
-          └── vault
-          └── setup.sh
-      └── .env.execution.dev
-      └── .env.execution.stage
-      └── .env.orchestration.dev
-      └── .env.orchestration.stage
-      └── docker-compose.yml
-      └── docker-compose.dev.yml
-      └── docker-compose.state.yml
-      └── run-docker.sh
-src
-  └── BBT.Workflow.Application
-  └── BBT.Workflow.Domain
-  └── BBT.Workflow.Infrastructure
-  └── BBT.Workflow.HttpApi.Host (LEGACY)
-  └── BBT.Workflow.HttpApi.Shared
-orchestration
-  └── BBT.Workflow.Orchestration.HttpApi.Host
-execution
-  └── BBT.Workflow.Execution.HttpApi.Host
-test
-  └── BBT.Workflow.Application.Tests
-  └── BBT.Workflow.Domain.Tests
-  └── BBT.Workflow.Infrastructure.Tests
-  └── BBT.Workflow.TestBase
- 
- api-tests
- examples
-.gitattributes
-.gitignore
-.prettierrc
-BBT.Workflow.sln
-BBT.Workflow.sln.DotSettings
-common.props
-delete-bin-obj.ps1
-global.json
-NuGet.Config
+- .NET 10 SDK (10.0.101 or later)
+- Docker (for container builds)
+
+### First-Time Setup (.NET 10)
+
+If you're building with .NET 10 for the first time, run the setup script once:
+
+**macOS/Linux:**
+```bash
+./scripts/setup-netstandard-ref.sh
 ```
 
-### .vscode
-Contains configuration files for Visual Studio Code.
+**Windows:**
+```powershell
+.\scripts\setup-netstandard-ref.ps1
+```
 
-### etc
-Contains configuration files.
-- **dapr**: Contains Dapr components and configuration files.
-  - `components`: Dapr component configurations.
-  - `config.yaml`: Dapr general configuration file.
-- **docker**: Contains Docker configuration files.
-  - `config`: Docker configurations.
-  - `docker-compose.yml`: Docker Compose configuration file.
-  - `docker-compose.dev.yml`: Docker Compose DEV configuration file.
-  - `docker-compose.stage.yml`: Docker Compose STAGE configuration file.
+This installs the `NETStandard.Library.Ref` targeting pack required by PostSharp. See [.NET 10 Setup Guide](docs/guides/net10-setup.md) for details.
 
-### src
-Contains the application source code.
-- **BBT.Workflow.Application**: Application layer with modular organization including Orchestration, Execution, SubFlow, Extensions, and Persistence modules.
-- **BBT.Workflow.Domain**: Domain layer.
-- **BBT.Workflow.Infrastructure**: Infrastructure configurations (Data, AutoMapper, Cache etc.).
-- **BBT.Workflow.HttpApi.Host**: (LEGACY) HTTP API Host - Legacy implementation.
-- **BBT.Workflow.HttpApi.Shared**: Shared components and configurations for both API hosts.
+## Quick Start
 
-### orchestration
-Contains the Orchestration API project.
-- **BBT.Workflow.Orchestration.HttpApi.Host**: Primary API for external clients. Handles workflow and instance management operations. This is the main API that clients should interact with.
+```bash
+dotnet restore
+dotnet build
+```
 
-### execution
-Contains the Execution API project.
-- **BBT.Workflow.Execution.HttpApi.Host**: Internal API for task execution. Only consumed by the Orchestration API. Handles task processing and execution logic.
-
-### test
-Contains the test projects.
-- **BBT.Workflow.Application.Tests**: Tests for the Application layer.
-- **BBT.Workflow.Domain.Tests**: Tests for the Domain layer.
-- **BBT.Workflow.Infrastructure.Tests**: Tests for the Infrastructure layer.
-- **BBT.Workflow.TestBase**: Base classes and utilities for tests.
-
-### Other Files
-- **.gitattributes**: Specifies Git attributes.
-- **.gitignore**: Specifies files to be ignored by Git.
-- **.prettierrc**: Prettier configuration file.
-- **BBT.Workflow.sln**: Visual Studio solution file.
-- **BBT.Workflow.sln.DotSettings**: Visual Studio settings file.
-- **common.props**: Contains common project properties.
-- **delete-bin-obj.ps1**: PowerShell script to clean `bin` and `obj` folders.
-- **global.json**: Specifies the .NET SDK version.
-- **NuGet.Config**: Contains NuGet sources and settings.
-
----
-
-## Architecture Overview
-
-The system is now built with a **microservices architecture** using two separate API projects:
-
-### 1. Orchestration API (`BBT.Workflow.Orchestration.HttpApi.Host`)
-- **Purpose**: Primary API for external clients
-- **Responsibilities**:
-  - Workflow management and definition
-  - Instance lifecycle management
-  - Client-facing operations
-  - API gateway functionality
-- **Access**: Public API consumed by external clients
-- **Port**: Default 4201 (HTTP), 7189 (HTTPS)
-
-### 2. Execution API (`BBT.Workflow.Execution.HttpApi.Host`)
-- **Purpose**: Internal API for task execution
-- **Responsibilities**:
-  - Task processing and execution
-  - Task-specific operations
-  - Background job processing
-- **Access**: Internal API, only consumed by Orchestration API
-- **Port**: Default 4202 (HTTP), 7190 (HTTPS)
-
-## Required Tools and Setup Steps
-
-### Prerequisites
-- [.NET SDK](https://dotnet.microsoft.com/download)
-- [Docker](https://www.docker.com/get-started)
-- [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
-
-### Setup Steps
-1. Clone the repository:
-    ```sh
-    git clone https://github.com/your-repo/Workflow.git
-    cd Workflow
-    ```
-
-2. Install the required .NET SDK version:
-    ```sh
-    dotnet --version
-    ```
-
-3. Restore the dependencies:
-    ```sh
-    dotnet restore
-    ```
-
-4. Build the project:
-    ```sh
-    dotnet build
-    ```
-
-5. Run the projects:
-    ```sh
-    ./run-docker.sh
-    ```
-
-## Running the Application
-
-### Development Mode
-Both APIs will start simultaneously when using Docker Compose:
+Start with Docker (recommended):
 
 ```bash
 cd etc/docker
-
-# Run both APIs in development mode
-./run-docker.sh 
-
-# Run both APIs in debugging mode (with debugger and hot reload)
-./run-docker.sh dev
-
-# Run both APIs in stage mode (no debugger)
-./run-docker.sh stage
+./run-docker.sh
 ```
 
-### Individual API Startup
-You can also run each API individually:
+Local development (no Docker):
 
 ```bash
-# Run Orchestration API
-cd orchestration/BBT.Workflow.Orchestration.HttpApi.Host
-dotnet run
-
-# Run Execution API (in a separate terminal)
-cd execution/BBT.Workflow.Execution.HttpApi.Host
-dotnet run
+dotnet run --project orchestration/BBT.Workflow.Orchestration.HttpApi.Host
+dotnet run --project execution/BBT.Workflow.Execution.HttpApi.Host
 ```
 
-## API Endpoints
+## Repository Layout
 
-### Orchestration API
-- **Base URL**: `http://localhost:4201`
-- **Swagger**: `http://localhost:4201/swagger`
-- **Health Check**: `http://localhost:4201/health`
+- `orchestration/`: Orchestration API host
+- `execution/`: Execution API host
+- `workers/`: Inbox/Outbox workers
+- `src/`: Domain, Application, Infrastructure, shared libs
+- `etc/`: Docker, Dapr, and environment configs
+- `docs/`: developer documentation
 
-### Execution API
-- **Base URL**: `http://localhost:4202`
-- **Swagger**: `http://localhost:4202/swagger`
-- **Health Check**: `http://localhost:4202/health`
+## Docs
 
-## Docker Debugging Setup
+- `docs/getting-started.md`
+- `docs/architecture/overview.md`
+- `docs/implementation/application-services.md`
+- `docs/implementation/remote-routing-and-discovery.md`
 
-The project includes a Docker setup that supports both development (with debugging) and production environments.
+## Health Endpoints
 
-### Docker Configuration
-
-- **Dockerfile**: Contains multi-stage build with conditional debugging support
-- **docker-compose.yml**: Development configuration with debugging enabled for both APIs
-
-### Running with Docker
-
-Navigate to the docker directory and use the helper script:
-
-```bash
-cd etc/docker
-
-# Run in development mode
-./run-docker.sh 
-
-# Run in debugging mode (with debugger and hot reload)
-./run-docker.sh dev
-
-# Run in stage mode (no debugger)
-./run-docker.sh stage
-```
-
-### Debugging with VS Code
-
-1. Start the application in development mode:
-   ```bash
-   cd etc/docker
-   ./run-docker.sh
-   ```
-
-2. Once the application is running:
-   - Open VS Code's "Run and Debug" view (Ctrl+Shift+D or Cmd+Shift+D)
-   - Select the "Attach to Docker" configuration
-   - Choose which API to debug (Orchestration or Execution)
-   - Press F5 to start debugging
-
-3. VS Code will connect to the running container and you can set breakpoints and debug as normal
-
-### Conditional Debugging
-
-The Dockerfile is configured to:
-- Only install debugging tools when `ENVIRONMENT=dev`
-- Set `ASPNETCORE_ENVIRONMENT=Development` only in development mode
+- Orchestration: `http://localhost:4201/health`
+- Execution: `http://localhost:4202/health`
 - Use a non-root user for better security
 
 This approach ensures that production images remain small and secure while development images include all necessary debugging tools.

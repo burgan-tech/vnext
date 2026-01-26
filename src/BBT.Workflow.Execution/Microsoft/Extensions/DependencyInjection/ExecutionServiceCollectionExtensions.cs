@@ -1,12 +1,10 @@
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Invokers;
 using BBT.Workflow.Execution.Metrics;
 using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Polly;
-using Polly.Extensions.Http;
-using Polly.Timeout;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -15,11 +13,6 @@ namespace Microsoft.Extensions.DependencyInjection;
 /// </summary>
 public static class ExecutionServiceCollectionExtensions
 {
-    /// <summary>
-    /// Named HttpClient for trigger invoker HTTP requests.
-    /// </summary>
-    public const string TriggerInvokerHttpClientName = "TriggerInvoker";
-
     /// <summary>
     /// Adds the task invoker registry and all built-in invokers to the service collection.
     /// </summary>
@@ -42,24 +35,8 @@ public static class ExecutionServiceCollectionExtensions
             services.Configure<TriggerRetryOptions>(_ => { });
         }
 
-        // Get options for configuring HttpClient policies
-        var triggerOptions = configuration?
-            .GetSection(TriggerRetryOptions.SectionName)
-            .Get<TriggerRetryOptions>() ?? new TriggerRetryOptions();
-
-        // Register named HttpClient for trigger invokers with Polly policies
-        services.AddHttpClient(TriggerInvokerHttpClientName, client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(triggerOptions.TimeoutSeconds);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
-            })
-            .AddPolicyHandler(GetTimeoutPolicy(triggerOptions))
-            .AddPolicyHandler(GetRetryPolicy(triggerOptions))
-            .AddPolicyHandler(GetCircuitBreakerPolicy(triggerOptions));
+        // Register WorkflowHttpClient instances
+        services.AddWorkflowHttpClient();
 
         // Register the registry
         services.AddSingleton<ITaskInvokerRegistry, TaskInvokerRegistry>();
@@ -84,42 +61,6 @@ public static class ExecutionServiceCollectionExtensions
         
         return services;
     }
-
-    /// <summary>
-    /// Creates a retry policy with exponential backoff for trigger invokers
-    /// </summary>
-    private static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(TriggerRetryOptions options)
-    {
-        return HttpPolicyExtensions
-            .HandleTransientHttpError()
-            .Or<TimeoutRejectedException>()
-            .WaitAndRetryAsync(
-                retryCount: options.MaxRetryAttempts,
-                sleepDurationProvider: retryAttempt => TimeSpan.FromMilliseconds(
-                    options.RetryDelayMilliseconds * Math.Pow(2, retryAttempt - 1)));
-    }
-
-    /// <summary>
-    /// Creates a circuit breaker policy for trigger invokers
-    /// </summary>
-    private static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakerPolicy(TriggerRetryOptions options)
-    {
-        return HttpPolicyExtensions
-            .HandleTransientHttpError()
-            .CircuitBreakerAsync(
-                handledEventsAllowedBeforeBreaking: options.CircuitBreakerFailureThreshold,
-                durationOfBreak: TimeSpan.FromSeconds(options.CircuitBreakerTimeoutSeconds));
-    }
-
-    /// <summary>
-    /// Creates a timeout policy for trigger invokers
-    /// </summary>
-    private static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy(TriggerRetryOptions options)
-    {
-        return Policy.TimeoutAsync<HttpResponseMessage>(
-            TimeSpan.FromSeconds(options.TimeoutSeconds),
-            TimeoutStrategy.Pessimistic);
-    }
     
     /// <summary>
     /// Adds custom task metrics implementation.
@@ -131,6 +72,39 @@ public static class ExecutionServiceCollectionExtensions
         where TMetrics : class, ITaskMetrics
     {
         services.AddSingleton<ITaskMetrics, TMetrics>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers named HttpClient instances for workflow task execution.
+    /// - WorkflowHttpClient: Default with SSL validation
+    /// - WorkflowHttpClient.NoSslValidation: Without SSL validation
+    /// </summary>
+    private static IServiceCollection AddWorkflowHttpClient(this IServiceCollection services)
+    {
+        // Default HTTP client with SSL validation enabled
+        services.AddHttpClient(WorkflowHttpClientNames.Default, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                MaxConnectionsPerServer = 10,
+                UseCookies = false
+            });
+
+        // HTTP client with SSL validation disabled
+        services.AddHttpClient(WorkflowHttpClientNames.NoSslValidation, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                MaxConnectionsPerServer = 10,
+                UseCookies = false,
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            });
+
         return services;
     }
 }

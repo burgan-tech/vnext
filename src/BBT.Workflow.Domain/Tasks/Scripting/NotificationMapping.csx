@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -18,67 +19,7 @@ public class NotificationMapping : IMapping
         var notifyTask = task as NotificationTask 
             ?? throw new InvalidOperationException("Task must be a NotificationTask");
 
-        var workflow = context.Workflow;
-        var instance = context.Instance;
-
-        // Get available transitions
-        var availableTransitions = new List<string>();
-        if (instance.Status.Equals(InstanceStatus.Active))
-        {
-            var stateResult = context.Workflow.GetState(instance.GetCurrentState);
-            if (stateResult.IsSuccess)
-            {
-                availableTransitions = context.Workflow.GetAvailableUserTransitionKeys(stateResult.Value!);
-            }
-        }
-
-        // Build transition items with href links
-        var transitionItems = availableTransitions.Select(transitionKey => new TransitionItem
-        {
-            Name = transitionKey,
-            Href = InstanceUrlTemplates.Transition(context.Runtime.Domain, workflow.Key, instance.Id.ToString(),
-                transitionKey)
-        }).ToList();
-
-        // Build data href
-        var dataHref = new DataHref
-        {
-            Href = InstanceUrlTemplates.Data(context.Runtime.Domain, workflow.Key, instance.Id.ToString())
-        };
-
-        // Build view href
-        var viewHref = new ViewHref
-        {
-            Href = InstanceUrlTemplates.View(context.Runtime.Domain, workflow.Key, instance.Id.ToString()),
-            LoadData = true
-        };
-
-        // Build active correlations with href links
-        var activeCorrelations = context.Instance.ActiveCorrelations.Select(correlation => new ActiveCorrelationHref
-        {
-            CorrelationId = correlation.Id,
-            ParentState = correlation.ParentState,
-            SubFlowInstanceId = correlation.SubFlowInstanceId,
-            SubFlowType = correlation.SubFlowType,
-            SubFlowDomain = correlation.SubFlowDomain,
-            SubFlowName = correlation.SubFlowName,
-            SubFlowVersion = correlation.SubFlowVersion,
-            IsCompleted = correlation.IsCompleted,
-            Href = InstanceUrlTemplates.Data(correlation.SubFlowDomain, correlation.SubFlowName,
-                correlation.SubFlowInstanceId.ToString())
-        }).ToList();
-
-        // Build the notification state output
-        var messageData = new NotificationStateOutput
-        {
-            Data = dataHref,
-            View = viewHref,
-            State = context.Instance.CurrentState ?? string.Empty,
-            Status = context.Instance.Status,
-            ActiveCorrelations = activeCorrelations,
-            Transitions = transitionItems,
-            ETag = context.Instance.LatestData?.ETag ?? string.Empty
-        };
+        var messageData = TryGetStateFromBody(context);
 
         // Create the CloudEvents-style notification message
         var message = NotificationMessage.Create(
@@ -94,6 +35,32 @@ public class NotificationMapping : IMapping
     public Task<ScriptResponse> OutputHandler(ScriptContext context)
     {
         return Task.FromResult(new ScriptResponse());
+    }
+
+    private static object? TryGetStateFromBody(ScriptContext context)
+    {
+        if (context.Body == null)
+        {
+            return null;
+        }
+
+        if (context.Body is JsonElement bodyElement &&
+            bodyElement.ValueKind == JsonValueKind.Object &&
+            bodyElement.TryGetProperty("state", out var stateElement))
+        {
+            return stateElement;
+        }
+
+        try
+        {
+            return context.Body.state;
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return null;
     }
 }
 

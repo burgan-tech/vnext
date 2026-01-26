@@ -75,6 +75,15 @@ public sealed class InstanceTask : Entity<Guid>
     public JsonData Response { get; private set; }
 
     /// <summary>
+    /// Sets the request payload that was sent to the task.
+    /// </summary>
+    /// <param name="request">The request data from InputHandler.</param>
+    public void SetRequest(JsonData request)
+    {
+        Request = request;
+    }
+
+    /// <summary>
     /// Marks the task as completed with business success.
     /// Platform successfully invoked the task and business logic succeeded.
     /// </summary>

@@ -37,6 +37,16 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
                 var status = (InstanceStatus)Enum.Parse(typeof(InstanceStatus), value, true);
                 return x => x.Status == status;
             },
+            ["effectiveStateType"] = value => 
+            {
+                var stateType = (StateType)Enum.Parse(typeof(StateType), value, true);
+                return x => x.EffectiveStateType == stateType;
+            },
+            ["effectiveStateSubType"] = value => 
+            {
+                var stateSubType = (StateSubType)Enum.Parse(typeof(StateSubType), value, true);
+                return x => x.EffectiveStateSubType == stateSubType;
+            },
             ["flow"] = value => x => x.Flow == value,
             ["key"] = value => 
             {

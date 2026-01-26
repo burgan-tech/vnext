@@ -127,6 +127,28 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when an exit transition is detected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10013,
+        Level = LogLevel.Information,
+        Message = "Exit transition detected for instance {InstanceId}")]
+    public static partial void ExitTransitionDetected(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when skipping to finish step for exit transition.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10014,
+        Level = LogLevel.Information,
+        Message = "Skipping normal pipeline steps for exit transition, jumping to Finish step for instance {InstanceId}")]
+    public static partial void ExitSkipToFinish(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when a transition rule validation fails.
     /// </summary>
     [LoggerMessage(
@@ -233,6 +255,18 @@ public static partial class WorkflowLogs
         Level = LogLevel.Warning,
         Message = "Cannot update data for instance {InstanceId}: already in {Status} state")]
     public static partial void UpdateDataInstanceAlreadyCompleted(
+        this ILogger logger,
+        Guid instanceId,
+        string status);
+
+    /// <summary>
+    /// Logs when attempting to exit an already completed instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10055,
+        Level = LogLevel.Warning,
+        Message = "Cannot exit instance {InstanceId}: already in {Status} state")]
+    public static partial void ExitInstanceAlreadyCompleted(
         this ILogger logger,
         Guid instanceId,
         string status);

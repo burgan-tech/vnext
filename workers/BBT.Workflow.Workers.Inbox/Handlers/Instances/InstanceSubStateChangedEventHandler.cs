@@ -2,6 +2,7 @@ using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -55,6 +56,8 @@ internal sealed class InstanceSubStateChangedEventHandler(
                 Version = eventData.Version,
                 NewState = eventData.NewState,
                 PreviousState = eventData.PreviousState,
+                NewStateType = (StateType)eventData.NewStateType,
+                NewStateSubType = (StateSubType)eventData.NewStateSubType,
                 ChangedAt = eventData.ChangedAt
             };
 

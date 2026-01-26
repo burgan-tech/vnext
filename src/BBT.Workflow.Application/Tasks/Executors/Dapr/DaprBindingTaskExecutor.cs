@@ -35,7 +35,7 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
     public override TaskType TaskType => TaskType.DaprBinding;
 
     /// <inheritdoc />
-    protected override async Task<Result> PrepareInputAsync(
+    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
         DaprBindingTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
@@ -43,16 +43,16 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
         var mapping = context.OnExecuteTask.Mapping;
         if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
         {
-            return Result.Ok();
+            return Result<ScriptResponse?>.Ok(null);
         }
 
-        var result = await ResultExtensions.TryAsync(async ct =>
+        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
                 mapping.DecodedCode,
                 cancellationToken: ct);
 
-            await scriptRunner.InputHandler(task, context.ScriptContext);
+            return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
             $"DaprBinding task input handler failed: {ex.Message}"));

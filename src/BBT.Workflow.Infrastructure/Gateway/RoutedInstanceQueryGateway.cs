@@ -54,6 +54,16 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
     }
 
     /// <inheritdoc />
+    public Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+        GetInstanceListInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.GetInstanceListAsync(input, cancellationToken)
+            : _remote.GetInstanceListAsync(input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)

@@ -1,7 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <Import Project="..\..\common.props" />
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <RootNamespace>BBT.Workflow</RootNamespace>
     <NoWarn>$(NoWarn);CS1591;CS8618;EF1001;CS1570;xUnit2002;CS8603</NoWarn>

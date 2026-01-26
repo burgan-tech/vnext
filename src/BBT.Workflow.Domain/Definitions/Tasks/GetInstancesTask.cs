@@ -54,6 +54,11 @@ public sealed class GetInstancesTask : WorkflowTask
     /// </summary>
     public bool UseDapr { get; private set; } = false;
 
+    /// <summary>
+    /// Whether to validate SSL certificates
+    /// </summary>
+    public bool ValidateSSL { get; private set; } = true;
+
     public void SetDomain(string domain)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(domain, nameof(domain));
@@ -91,6 +96,11 @@ public sealed class GetInstancesTask : WorkflowTask
         UseDapr = useDapr;
     }
 
+    public void SetValidateSSL(bool validateSSL)
+    {
+        ValidateSSL = validateSSL;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -101,6 +111,7 @@ public sealed class GetInstancesTask : WorkflowTask
     internal void SetSortInternal(string? sort) => Sort = sort;
     internal void SetFilterInternal(string[]? filter) => Filter = filter;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
+    internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
 
     protected override void Configure(JsonElement config)
     {
@@ -135,6 +146,9 @@ public sealed class GetInstancesTask : WorkflowTask
 
         if (config.TryGetProperty("useDapr", out var useDaprElement))
             UseDapr = useDaprElement.GetBoolean();
+
+        if (config.TryGetProperty("validateSsl", out var validateSslElement))
+            ValidateSSL = validateSslElement.GetBoolean();
     }
 
     public static GetInstancesTask Create(JsonElement config)
@@ -165,6 +179,7 @@ public sealed class GetInstancesTask : WorkflowTask
         cloned.Sort = Sort;
         cloned.Filter = Filter;
         cloned.UseDapr = UseDapr;
+        cloned.ValidateSSL = ValidateSSL;
 
         return cloned;
     }
@@ -183,6 +198,7 @@ public sealed class GetInstancesTask : WorkflowTask
         SetSortInternal(source.Sort);
         SetFilterInternal(source.Filter);
         SetUseDaprInternal(source.UseDapr);
+        SetValidateSSLInternal(source.ValidateSSL);
     }
 
     /// <summary>
@@ -198,6 +214,7 @@ public sealed class GetInstancesTask : WorkflowTask
         Sort = null;
         Filter = null;
         UseDapr = false;
+        ValidateSSL = true;
     }
 
     /// <summary>

@@ -51,12 +51,30 @@ public sealed class SubflowStateService(
                 input.SubInstanceId);
             return;
         }
+        
+        // Out-of-order event detection using timestamp:
+        // If correlation already has a state update with a later timestamp,
+        // this event is out-of-order/stale - reject it to prevent downgrade
+        if (correlation.SubFlowStateChangedAt.HasValue && 
+            input.ChangedAt < correlation.SubFlowStateChangedAt.Value)
+        {
+            logger.LogWarning(
+                "Rejecting out-of-order SubFlow state event for {SubInstanceId}. " +
+                "Event timestamp {EventTime} is older than correlation's last update {CorrelationTime}. " +
+                "Correlation state: '{CorrelationState}', Event state: '{EventState}'.",
+                input.SubInstanceId,
+                input.ChangedAt,
+                correlation.SubFlowStateChangedAt.Value,
+                correlation.SubFlowCurrentState,
+                input.NewState);
+            return;
+        }
 
-        // Update correlation's SubFlowCurrentState
-        correlation.UpdateSubFlowState(input.NewState);
+        // Update correlation's SubFlowCurrentState with timestamp
+        correlation.UpdateSubFlowState(input.NewState, input.ChangedAt);
 
-        // Update parent's EffectiveState with SubFlow's state
-        parentInstance.SetEffectiveState(input.NewState);
+        // Propagate EffectiveState with type and subtype to parent (and recursively upward if parent is also a SubFlow)
+        parentInstance.PropagateEffectiveStateToParent(input.NewState, input.NewStateType, input.NewStateSubType);
 
         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
 

@@ -1,5 +1,5 @@
 # Base image using Alpine
-FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS base
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS base
 WORKDIR /app
 
 # Create non-root user for security
@@ -8,7 +8,15 @@ RUN adduser -D workflowuser && chown -R workflowuser:workflowuser /app
 USER workflowuser
 
 # Build image
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
+
+# Install NETStandard.Library.Ref targeting pack for PostSharp compatibility
+RUN wget -q https://www.nuget.org/api/v2/package/NETStandard.Library.Ref/2.1.0 -O /tmp/netstandard.nupkg && \
+    mkdir -p /root/.nuget/packages/netstandard.library.ref/2.1.0 && \
+    mkdir -p /var/tmp/postsharp/NuGetFallback/NETStandard.Library.Ref/2.1.0 && \
+    unzip -q /tmp/netstandard.nupkg -d /root/.nuget/packages/netstandard.library.ref/2.1.0 && \
+    unzip -q /tmp/netstandard.nupkg -d /var/tmp/postsharp/NuGetFallback/NETStandard.Library.Ref/2.1.0 && \
+    rm /tmp/netstandard.nupkg
 
 COPY ["common.props", "/common.props"]
 COPY ["Directory.Build.props", "/Directory.Build.props"]

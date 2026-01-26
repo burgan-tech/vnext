@@ -54,6 +54,11 @@ public sealed class StartTriggerBinding
     public bool UseDapr { get; init; } = false;
 
     /// <summary>
+    /// Whether to validate SSL certificates.
+    /// </summary>
+    public bool ValidateSSL { get; init; } = true;
+
+    /// <summary>
     /// Resolved base URL for HTTP requests.
     /// </summary>
     public string? BaseUrl { get; init; }

@@ -9,53 +9,53 @@ The BBT Workflow Engine is a comprehensive, domain-driven workflow management sy
 ### Getting Started
 - [Getting Started](./getting-started.md) - Setup and initial configuration
 
-### Architecture & Design
-- [Architecture Overview](./architecture-overview.md) - System architecture, microservices design, and transition pipeline
-- [Transition Pipeline Architecture](./transition-pipeline-architecture.md) - Deterministic transition lifecycle execution system
-- [Domain Models](./domain-models.md) - Core business entities and aggregates
-- [Strategy Pattern Implementation](./strategy-pattern-implementation.md) - Strategy pattern usage across the system
+### Architecture
+- [Architecture Overview](./architecture/overview.md) - System architecture, microservices design, and transition pipeline
+- [Transition Pipeline](./architecture/transition-pipeline.md) - Deterministic transition lifecycle execution system
+- [Domain Models](./architecture/domain-models.md) - Core business entities and aggregates
+- [Task Invoker](./architecture/task-invoker.md) - Execution Service invokers and binding types
+- [Multi-Schema](./architecture/multi-schema.md) - Multi-tenant schema management
 
-### Cross-Cutting Concerns
-- [Result Pattern & Railway Programming](./result-pattern-railway.md) - Exception-free error handling with Aether SDK
-- [Aether SDK Aspects](./aether-sdk-aspects.md) - Cross-cutting concerns: UnitOfWork, Log, Trace
+### SDK & Cross-Cutting
+- [Aether SDK Aspects](./sdk/aspects.md) - UnitOfWork, Log, Trace
+- [Result Pattern](./sdk/result-pattern.md) - Exception-free error handling with Aether SDK
+- [EventBus Hooks](./sdk/eventbus-hooks.md) - Pre-publish hooks for domain events
 
-### Application Layer
-- [Application Services](./application-services.md) - Application layer services and interfaces
-- [Task Executors](./task-executors.md) - Task execution system and custom executors
-- [Task Invoker Architecture](./task-invoker-architecture.md) - Execution Service invokers and binding types
-- [Task Factory & Object Pooling](./task-factory-pooling.md) - High-performance task instance creation and memory optimization
+### Implementation
+- [Application Services](./implementation/application-services.md) - Application layer services and interfaces
+- [Task Executors](./implementation/task-executors.md) - Task execution system and custom executors
+- [Task Factory & Pooling](./implementation/task-factory-pooling.md) - High-performance task instance creation and memory optimization
+- [Strategy Pattern](./implementation/strategy-pattern.md) - Strategy pattern usage across the system
+- [Remote Routing and Discovery](./implementation/remote-routing-and-discovery.md) - Gateways, remote clients, and service discovery
+- [Infrastructure Layer](./implementation/infrastructure-layer.md) - Data access and external integrations
 
-### Scripting & Extensibility
-- [Scripting Engine](./scripting-engine.md) - Dynamic C# script execution, logging, and configuration access
+### Features
+- [Scripting Engine](./features/scripting-engine.md) - Dynamic C# script execution, logging, and configuration access
+- [Auto Transition](./features/auto-transition.md) - Automatic transition evaluation
+- [Timer Execution](./features/timer-execution.md) - Enhanced timer execution and scheduling
+- [Instance Filtering](./features/instance-filtering.md) - Advanced filtering capabilities for workflow instances
+- [Caching Strategy](./features/caching-strategy.md) - Distributed caching implementation and patterns
 
-### Infrastructure & Integration
-- [Infrastructure Layer](./infrastructure-layer.md) - Data access and external integrations
-- [EventBus Hooks](./eventbus-hooks.md) - Pre-publish hooks for domain events
-- [Multi-Schema Support](./multi-schema-support.md) - Multi-tenant schema management
-- [ClickHouse Integration](./clickhouse-integration.md) - High-performance analytics with ClickHouse
+### Infrastructure & Operations
+- [Background Jobs](./infrastructure/background-jobs.md) - Asynchronous job processing with Dapr
+- [Inbox/Outbox Workers](./infrastructure/inbox-outbox-workers.md) - Transactional outbox and inbox event processing
+- [ClickHouse Integration](./infrastructure/clickhouse-integration.md) - High-performance analytics with ClickHouse
+- [Embedded Scripts and Dapr](./infrastructure/embedded-scripts-and-dapr.md) - Embedded scripts and Dapr metadata/bindings
+- [OpenTelemetry Logging](./infrastructure/opentelemetry-logging.md) - Distributed tracing, structured logging, and telemetry
 
-### Background Processing
-- [Background Jobs](./background-jobs.md) - Asynchronous job processing with Dapr
-- [Inbox/Outbox Workers](./inbox-outbox-workers.md) - Transactional outbox and inbox event processing
-- [Timer Execution Enhancement](./timer-execution-enhancement.md) - Enhanced timer execution and scheduling
+### Metrics
+- [Cache Metrics](./infrastructure/metrics/cache-metrics.md) - Cache performance monitoring
+- [Persistent Metrics](./infrastructure/metrics/persistent-metrics.md) - Long-term metrics storage
+- [Database Metrics](./infrastructure/metrics/database-metrics.md) - Database performance monitoring
 
-### Performance & Optimization
-- [Caching Strategy](./caching-strategy.md) - Distributed caching implementation and patterns with Result Pattern integration
-- [Cache Result Pattern Integration](./cache-result-pattern-integration.md) - Result Pattern implementation in caching system
-- [Cache Metrics](./cache-metrics.md) - Cache performance monitoring
-- [Persistent Metrics](./persistent-metrics.md) - Long-term metrics storage
-- [Database Metrics Interceptor](./database-metrics-interceptor.md) - Database performance monitoring
+### Guides & Examples
+- [Instance Filtering Guide (EN)](./guides/instance-filtering-guide-en.md)
+- [Instance Filtering Guide (TR)](./guides/instance-filtering-guide-tr.md)
+- [Dapr Timer Examples](./guides/examples/dapr-timer-examples.md)
+- [Timer Mapping Examples](./guides/examples/timer-mapping-examples.md)
 
-### Observability & Monitoring
-- [OpenTelemetry Logging](./opentelemetry-logging.md) - Distributed tracing, structured logging, and telemetry
-
-### Data & Filtering
-- [Instance Filtering](./instance-filtering.md) - Advanced filtering capabilities for workflow instances
-
-### Examples
-- [Examples](./examples/) - Code examples and usage patterns
-  - [Dapr-Compatible Timer Examples](./examples/dapr-compatible-timer-examples.md)
-  - [Enhanced Timer Mapping Examples](./examples/enhanced-timer-mapping-examples.md)
+### Security
+- [QueryExtensions Security](./security/queryextensions-security.md)
 
 ## Key Features
 
@@ -170,5 +170,5 @@ vnext/
 
 For technical questions and support:
 - Review the documentation in this folder
-- Check the examples directory for usage patterns
+- Check the guides and examples for usage patterns
 - Refer to the test projects for implementation details 

@@ -19,7 +19,7 @@ namespace BBT.Workflow.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.0")
+                .HasAnnotation("ProductVersion", "10.0.2")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -147,6 +147,12 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<int?>("EffectiveStateSubType")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("EffectiveStateType")
+                        .HasColumnType("integer");
+
                     b.Property<string>("ExtraProperties")
                         .IsRequired()
                         .HasColumnType("text")
@@ -248,6 +254,9 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("SubFlowStateChangedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("SubFlowType")
                         .IsRequired()

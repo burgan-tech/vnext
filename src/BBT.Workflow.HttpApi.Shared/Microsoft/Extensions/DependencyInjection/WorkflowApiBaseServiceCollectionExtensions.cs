@@ -51,41 +51,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// Adds HTTP client with default configuration for task execution
-    /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddWorkflowHttpClient(this IServiceCollection services)
-    {
-        // Default HTTP client with SSL validation enabled
-        services.AddHttpClient(TaskConstants.DefaultHttpClientName, client =>
-            {
-                // Default timeout - will be overridden per request
-                client.Timeout = TimeSpan.FromSeconds(30);
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                MaxConnectionsPerServer = 10,
-                UseCookies = false
-            });
-
-        // HTTP client with SSL validation disabled
-        services.AddHttpClient(TaskConstants.NoSslValidationHttpClientName, client =>
-            {
-                // Default timeout - will be overridden per request
-                client.Timeout = TimeSpan.FromSeconds(30);
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                MaxConnectionsPerServer = 10,
-                UseCookies = false,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            });
-
-        return services;
-    }
-    
     public static IServiceCollection AddAspNetCoreModules(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddAetherAmbientServiceProvider();

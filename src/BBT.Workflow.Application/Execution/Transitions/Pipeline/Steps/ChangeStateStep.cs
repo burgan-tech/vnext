@@ -36,7 +36,7 @@ public sealed class ChangeStateStep(
         // Railway Oriented Programming: Fluent chain
         return await Result.Ok(BuildStateTransitionInfo(context))
             .Tap(info => RecordTransitionMetric(context, info))
-            .TapAsync(info => PerformStateChangeAsync(context, info, cancellationToken))
+            .BindAsync(info => PerformStateChangeAsync(context, info, cancellationToken)) 
             .ThenAsync(_ => UpdateTargetStateInContext(context))
             .OnSuccess(_ => RecordStateEntryMetric(context))
             .OnSuccess(_ => LogStateChange(context))
@@ -68,22 +68,36 @@ public sealed class ChangeStateStep(
 
     /// <summary>
     /// Performs the actual state change and updates the instance in repository.
+    /// Delegates well-known state key resolution to the Workflow aggregate.
+    /// Uses Result Pattern for error handling without throwing exceptions.
     /// </summary>
-    private async Task PerformStateChangeAsync(
+    private async Task<Result<StateTransitionInfo>> PerformStateChangeAsync(
         TransitionExecutionContext context,
         StateTransitionInfo info,
         CancellationToken cancellationToken)
     {
-        context.Instance.ChangeState(info.Transition);
+        // Resolve target state through workflow aggregate (handles $self and other well-known keys)
+        var stateResult = context.Workflow.GetState(info.Transition.Target, context.Instance.GetCurrentState);
+        
+        if (!stateResult.IsSuccess)
+        {
+            return Result<StateTransitionInfo>.Fail(stateResult.Error);
+        }
+        
+        context.Instance.ChangeState(stateResult.Value!);
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        
+        return Result<StateTransitionInfo>.Ok(info);
     }
 
     /// <summary>
     /// Updates target state in context using Result Pattern.
-    /// Returns Result because GetState can legitimately fail (state not found).
+    /// Synchronizes context.Current and context.Target with the instance's actual current state.
+    /// This is called after state change to reflect the new state in the context.
     /// </summary>
     private Task<Result<TransitionExecutionContext>> UpdateTargetStateInContext(TransitionExecutionContext context)
     {
+        // After state change, update context to reflect the actual current state
         var result = context.Workflow.GetState(context.Instance.GetCurrentState)
             .Map(state =>
             {

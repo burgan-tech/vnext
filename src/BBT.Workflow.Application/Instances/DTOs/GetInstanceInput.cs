@@ -23,7 +23,7 @@ public sealed class GetInstanceInput : IHasDomain
     /// <summary>
     /// Extensions requested for data enrichment
     /// </summary>
-    public string[]? Extension { get; set; }
+    public string[]? Extensions { get; set; }
 
     /// <summary>
     /// ETag value for conditional requests (If-None-Match header)
@@ -124,7 +124,7 @@ public sealed class GetInstanceHistoryInput : IHasDomain
     /// <summary>
     /// Extensions requested for data enrichment
     /// </summary>
-    public string[]? Extension { get; set; }
+    public string[]? Extensions { get; set; }
 
     /// <summary>
     /// HTTP headers from the request for script context binding

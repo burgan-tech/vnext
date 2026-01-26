@@ -56,7 +56,7 @@ public sealed class FlowTimeoutJobHandler(
                 return;
             }
 
-            if (instance.IsActive || instance.IsBusy)
+            if (!instance.IsCompleted)
             {
                 // Record current status before timeout
                 var currentStatus = instance.Status.Code;
@@ -68,7 +68,18 @@ public sealed class FlowTimeoutJobHandler(
                     return;
                 }
 
-                instance.ChangeState(workflow.Timeout!);
+                // Resolve timeout target state through workflow aggregate (handles $self and other well-known keys)
+                var timeoutTargetState = workflow.GetState(workflow.Timeout!.Target, instance.GetCurrentState);
+                
+                if (!timeoutTargetState.IsSuccess)
+                {
+                    logger.LogError("Timeout target state '{Target}' not found in workflow '{Workflow}'", 
+                        workflow.Timeout.Target, workflow.Key);
+                    activity?.SetStatus(ActivityStatusCode.Error, "Timeout target state not found");
+                    return;
+                }
+                    
+                instance.ChangeState(timeoutTargetState.Value!);
                 instance.Complete(); // This calculates the Duration
 
                 // Record timeout metrics with duration - this will also decrement the current status gauge

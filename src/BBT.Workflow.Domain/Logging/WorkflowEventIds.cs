@@ -29,6 +29,8 @@ public static class WorkflowEventIds
     public static readonly EventId TransitionTimerSkipped = new(10010, nameof(TransitionTimerSkipped));
     public static readonly EventId UpdateDataTransitionDetected = new(10011, nameof(UpdateDataTransitionDetected));
     public static readonly EventId UpdateDataSkipToFinish = new(10012, nameof(UpdateDataSkipToFinish));
+    public static readonly EventId ExitTransitionDetected = new(10013, nameof(ExitTransitionDetected));
+    public static readonly EventId ExitSkipToFinish = new(10014, nameof(ExitSkipToFinish));
 
     // Warning (10040-10069)
     public static readonly EventId TransitionRuleFailed = new(10040, nameof(TransitionRuleFailed));
@@ -39,6 +41,7 @@ public static class WorkflowEventIds
     public static readonly EventId TargetStateNull = new(10048, nameof(TargetStateNull));
     public static readonly EventId AutoTransitionConditionNotSatisfied = new(10049, nameof(AutoTransitionConditionNotSatisfied));
     public static readonly EventId UpdateDataInstanceAlreadyCompleted = new(10054, nameof(UpdateDataInstanceAlreadyCompleted));
+    public static readonly EventId ExitInstanceAlreadyCompleted = new(10055, nameof(ExitInstanceAlreadyCompleted));
 
     // Error (10070-10099)
     public static readonly EventId TaskExecutionFailed = new(10071, nameof(TaskExecutionFailed));

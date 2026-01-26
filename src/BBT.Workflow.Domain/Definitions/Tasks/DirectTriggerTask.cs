@@ -68,6 +68,11 @@ public sealed class DirectTriggerTask : WorkflowTask
     /// </summary>
     public bool UseDapr { get; private set; } = false;
 
+    /// <summary>
+    /// Whether to validate SSL certificates
+    /// </summary>
+    public bool ValidateSSL { get; private set; } = true;
+
     public string? Identifier => TriggerInstanceId.HasValue ? TriggerInstanceId.Value.ToString() : TriggerKey;
 
     public void SetTags(string[] tags)
@@ -130,6 +135,11 @@ public sealed class DirectTriggerTask : WorkflowTask
         UseDapr = useDapr;
     }
 
+    public void SetValidateSSL(bool validateSSL)
+    {
+        ValidateSSL = validateSSL;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -143,6 +153,7 @@ public sealed class DirectTriggerTask : WorkflowTask
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
     internal void SetTriggerVersionInternal(string? version) => TriggerVersion = version;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
+    internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
 
     protected override void Configure(JsonElement config)
     {
@@ -180,6 +191,9 @@ public sealed class DirectTriggerTask : WorkflowTask
 
         if (config.TryGetProperty("useDapr", out var useDaprElement))
             UseDapr = useDaprElement.GetBoolean();
+
+        if (config.TryGetProperty("validateSsl", out var validateSslElement))
+            ValidateSSL = validateSslElement.GetBoolean();
     }
 
     public static DirectTriggerTask Create(JsonElement config)
@@ -213,6 +227,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         cloned.TriggerVersion = TriggerVersion;
         cloned.TriggerTags = TriggerTags;
         cloned.UseDapr = UseDapr;
+        cloned.ValidateSSL = ValidateSSL;
         return cloned;
     }
 
@@ -233,6 +248,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         SetTriggerVersionInternal(source.TriggerVersion);
         SetTriggerTagsInternal(source.TriggerTags);
         SetUseDaprInternal(source.UseDapr);
+        SetValidateSSLInternal(source.ValidateSSL);
     }
 
     /// <summary>
@@ -251,6 +267,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         TriggerVersion = null;
         TriggerTags = null;
         UseDapr = false;
+        ValidateSSL = true;
     }
 
     /// <summary>

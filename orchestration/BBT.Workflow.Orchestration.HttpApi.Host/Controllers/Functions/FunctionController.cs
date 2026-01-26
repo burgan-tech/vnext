@@ -143,13 +143,13 @@ public sealed class FunctionController(
         if (functionType == Definitions.Functions.FunctionTypeConst.Longpooling)
         {
             return FromResult(await ProcessLongpoolingFunctionAsync(domain, workflow, instance, parameters.Version,
-                parameters.Extensions, cancellationToken));
+                parameters.Extensions,requestContext.Headers, requestContext.QueryParameters, cancellationToken));
         }
 
         if (functionType == Definitions.Functions.FunctionTypeConst.View)
         {
             return FromResult(await ProcessViewFunctionAsync(domain, workflow, instance, parameters.Version,
-                parameters.Platform, parameters.TransitionKey, cancellationToken));
+                parameters.Platform, parameters.TransitionKey ,requestContext.Headers, requestContext.QueryParameters, cancellationToken));
         }
 
         if (functionType == Definitions.Functions.FunctionTypeConst.Data)
@@ -190,6 +190,8 @@ public sealed class FunctionController(
         string instance,
         string? version,
         string[]? extensions,
+        Dictionary<string, string?> headers,
+        Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
         var input = new GetInstanceStateInput
@@ -198,7 +200,9 @@ public sealed class FunctionController(
             Workflow = workflow,
             Instance = instance,
             Version = version,
-            Extensions = extensions
+            Extensions = extensions,
+            Headers=headers,
+            QueryParams=queryParams
         };
         return await queryAppService.GetInstanceStateAsync(input, cancellationToken);
     }
@@ -241,6 +245,8 @@ public sealed class FunctionController(
         string? version,
         string? platform,
         string? transitionKey,
+           Dictionary<string, string?> headers,
+        Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
         var input = new GetViewInput
@@ -248,7 +254,9 @@ public sealed class FunctionController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            Version = version
+            Version = version,
+            Headers=headers,
+            QueryParameters=queryParams
         };
 
         return await queryAppService.GetPlatformSpecificViewAsync(

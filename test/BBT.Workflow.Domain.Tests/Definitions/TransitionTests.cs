@@ -211,22 +211,6 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void SetView_ShouldSetViewReference()
-    {
-        // Arrange
-        var transition = Transition.Create("submit", "from", "to", TriggerType.Manual, "Patch");
-        var viewRef = new Reference("view-1", "domain", "sys-views", "1.0.0");
-        var viewDefinition = new ViewDefinition(Array.Empty<string>(), true, viewRef);
-
-        // Act
-        transition.SetView(viewDefinition);
-
-        // Assert
-        Assert.NotNull(transition.View);
-        Assert.Equal("view-1", transition.View.View.Key);
-    }
-
-    [Fact]
     public void SetSchema_ShouldSetSchemaReference()
     {
         // Arrange

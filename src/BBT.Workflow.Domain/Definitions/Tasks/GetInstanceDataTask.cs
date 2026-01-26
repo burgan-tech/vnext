@@ -48,6 +48,11 @@ public sealed class GetInstanceDataTask : WorkflowTask
     /// </summary>
     public bool UseDapr { get; private set; } = false;
 
+    /// <summary>
+    /// Whether to validate SSL certificates
+    /// </summary>
+    public bool ValidateSSL { get; private set; } = true;
+
     public string? Identifier => TriggerInstanceId.HasValue ? TriggerInstanceId.Value.ToString() : TriggerKey;
 
     public void SetInstance(string? instanceId)
@@ -89,6 +94,11 @@ public sealed class GetInstanceDataTask : WorkflowTask
         UseDapr = useDapr;
     }
 
+    public void SetValidateSSL(bool validateSSL)
+    {
+        ValidateSSL = validateSSL;
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -98,6 +108,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
     internal void SetTriggerInstanceIdInternal(Guid? triggerInstanceId) => TriggerInstanceId = triggerInstanceId;
     internal void SetExtensionsInternal(string[]? extensions) => Extensions = extensions;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
+    internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
 
     protected override void Configure(JsonElement config)
     {
@@ -129,6 +140,9 @@ public sealed class GetInstanceDataTask : WorkflowTask
 
         if (config.TryGetProperty("useDapr", out var useDaprElement))
             UseDapr = useDaprElement.GetBoolean();
+
+        if (config.TryGetProperty("validateSsl", out var validateSslElement))
+            ValidateSSL = validateSslElement.GetBoolean();
     }
 
     public static GetInstanceDataTask Create(JsonElement config)
@@ -158,6 +172,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         cloned.TriggerInstanceId = TriggerInstanceId;
         cloned.Extensions = Extensions;
         cloned.UseDapr = UseDapr;
+        cloned.ValidateSSL = ValidateSSL;
 
         return cloned;
     }
@@ -175,6 +190,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         SetTriggerInstanceIdInternal(source.TriggerInstanceId);
         SetExtensionsInternal(source.Extensions);
         SetUseDaprInternal(source.UseDapr);
+        SetValidateSSLInternal(source.ValidateSSL);
     }
 
     /// <summary>
@@ -189,6 +205,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         TriggerInstanceId = null;
         Extensions = null;
         UseDapr = false;
+        ValidateSSL = true;
     }
 
     /// <summary>

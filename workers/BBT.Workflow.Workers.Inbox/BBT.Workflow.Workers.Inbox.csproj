@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
     <Import Project="..\..\common.props"/>
     <PropertyGroup>
-        <TargetFramework>net9.0</TargetFramework>
+        <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <UserSecretsId>dotnet-BBT.Workflow.Workers.Inbox-8a9b0c1d-4e2f-3b6a-7c8d-9e5f6a4b3c2d</UserSecretsId>

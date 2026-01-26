@@ -1,3 +1,5 @@
+using BBT.Workflow.Definitions;
+
 namespace BBT.Workflow.SubFlow;
 
 /// <summary>
@@ -40,6 +42,18 @@ public record SubFlowStateChangedInput
     /// The previous state before the change
     /// </summary>
     public required string? PreviousState { get; init; }
+
+    /// <summary>
+    /// Type of the new state
+    /// Used for upward propagation to parent instance
+    /// </summary>
+    public required StateType NewStateType { get; init; }
+
+    /// <summary>
+    /// Subtype of the new state
+    /// Used for upward propagation to parent instance and automated status handling
+    /// </summary>
+    public required StateSubType NewStateSubType { get; init; }
 
     /// <summary>
     /// When the state change occurred

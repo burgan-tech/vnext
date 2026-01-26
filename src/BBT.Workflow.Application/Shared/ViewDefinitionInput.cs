@@ -5,6 +5,6 @@ public class ViewDefinitionInput
     public bool LoadData { get; set; }
     public ReferenceInput View { get; set; }
     public ViewDefinition ToViewDefinition() {
-        return new ViewDefinition(Extensions, LoadData, View.ToReference());
+        return ViewDefinition.CreateDefault(View.ToReference(), Extensions, LoadData);
     }
 }

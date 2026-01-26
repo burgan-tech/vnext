@@ -58,5 +58,17 @@ public enum StateSubType
     /// <summary>
     /// Temporarily suspended
     /// </summary>
-    Suspended = 4
+    Suspended = 4,
+
+    /// <summary>
+    /// State is busy processing (e.g., long-running operation, async task)
+    /// When instance enters Busy subtype, instance status is automatically set to Busy
+    /// </summary>
+    Busy = 5,
+
+    /// <summary>
+    /// State requires human intervention (e.g., approval, manual review)
+    /// Enables efficient querying of instances waiting for human action
+    /// </summary>
+    Human = 6
 }
