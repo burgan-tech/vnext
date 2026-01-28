@@ -191,7 +191,19 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
     {
         Logger.LogDebug("Using RemoteInvokerService for GetInstances task {TaskKey}", task.Key);
 
-        var binding = await BuildGetInstancesBindingAsync(task, cancellationToken);
+        var bindingResult = await BuildGetInstancesBindingAsync(task, cancellationToken);
+        
+        if (!bindingResult.IsSuccess)
+        {
+            Logger.TaskRemoteExecutionFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                bindingResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+        }
+
+        var binding = bindingResult.Value!;
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.GetInstances,
@@ -219,15 +231,22 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         return result;
     }
 
-    private async Task<GetInstancesBinding> BuildGetInstancesBindingAsync(
+    private async Task<Result<GetInstancesBinding>> BuildGetInstancesBindingAsync(
         GetInstancesTask task,
         CancellationToken cancellationToken)
     {
         var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
-        var endpoint = await _endpointResolver.GetEndpointAsync(
+        var endpointResult = await _endpointResolver.GetEndpointAsync(
             task.TriggerDomain, preferredKind, cancellationToken);
 
-        return new GetInstancesBinding
+        if (!endpointResult.IsSuccess)
+        {
+            return Result<GetInstancesBinding>.Fail(endpointResult.Error);
+        }
+
+        var endpoint = endpointResult.Value!;
+
+        return Result.Ok(new GetInstancesBinding
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
@@ -236,8 +255,9 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
             Sort = task.Sort,
             Filter = task.Filter,
             UseDapr = task.UseDapr,
+            ValidateSSL = task.ValidateSSL,
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId
-        };
+        });
     }
 }

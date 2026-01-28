@@ -76,7 +76,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         instance.CreatedAt = DateTime.UtcNow.AddMinutes(-5);
 
         // Act
-        instance.Complete();
+        instance.Complete("test-domain");
 
         // Assert
         Assert.Equal(InstanceStatus.Completed, instance.Status);
@@ -812,7 +812,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.Complete();
+        instance.Complete("test-domain");
         Assert.True(instance.IsCompleted);
 
         // Act
@@ -844,7 +844,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.Complete();
+        instance.Complete("test-domain");
         Assert.True(instance.IsCompleted);
 
         // Act
@@ -863,7 +863,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         instance.CreatedAt = DateTime.UtcNow.AddMinutes(-5);
 
         // Act
-        instance.Fault();
+        instance.Fault("test-domain");
 
         // Assert
         Assert.Equal(InstanceStatus.Faulted, instance.Status);
@@ -1107,7 +1107,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
         instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = "S";
-        instance.Complete();
+        instance.Complete("test-domain");
 
         // Act & Assert
         Assert.True(instance.ShouldPublishCompletionEvent());
@@ -1130,7 +1130,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
         instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = "F"; // Flow (Main Flow)
-        instance.Complete();
+        instance.Complete("test-domain");
 
         // Act & Assert
         Assert.False(instance.ShouldPublishCompletionEvent());
@@ -1204,7 +1204,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.Complete();
+        instance.Complete("test-domain");
 
         // Act & Assert
         Assert.True(instance.IsCompleted);
@@ -1215,7 +1215,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.Fault();
+        instance.Fault("test-domain");
 
         // Act & Assert
         Assert.True(instance.IsCompleted);

@@ -17,5 +17,18 @@ public interface IInstanceCancellationService
     Task<Result> ProcessCancellationAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default);
+    
+    /// <summary>
+    /// Processes cancellation for specific state transitions by cleaning up their jobs.
+    /// Only cancels jobs that match the provided transition keys.
+    /// </summary>
+    /// <param name="instanceId">The ID of the instance.</param>
+    /// <param name="transitionKeys">List of transition keys whose jobs should be canceled.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A result indicating success or failure of the cancellation processing.</returns>
+    Task<Result> ProcessStateTransitionsCancellationAsync(
+        Guid instanceId,
+        IReadOnlyList<string> transitionKeys,
+        CancellationToken cancellationToken = default);
 }
 

@@ -40,7 +40,14 @@ public sealed class RemoteInstanceCommandAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<StartInstanceOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Start(input.Domain, input.Workflow, ApiVersionPrefix);
 
@@ -102,7 +109,14 @@ public sealed class RemoteInstanceCommandAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<StartInstanceOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.StartSub(input.Domain, input.Workflow, ApiVersionPrefix);
 
@@ -171,7 +185,14 @@ public sealed class RemoteInstanceCommandAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<TransitionOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Transition(input.Domain, input.Workflow, instanceId.ToString(),
                 transitionKey, ApiVersionPrefix);
@@ -228,7 +249,14 @@ public sealed class RemoteInstanceCommandAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Complete(input.Domain, input.Flow, input.InstanceId.ToString(),
                 ApiVersionPrefix);
@@ -266,7 +294,14 @@ public sealed class RemoteInstanceCommandAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.SubFlowState(
                 input.Domain, 

@@ -41,6 +41,13 @@ public static class LifecycleOrder
     public const int OnExecute = 30;
     
     /// <summary>
+    /// Order for canceling scheduled transition jobs before leaving current state.
+    /// Ensures timer jobs are cleaned up when transitioning away (including self-transitions).
+    /// Only cancels jobs for the current state's scheduled transitions.
+    /// </summary>
+    public const int CancelScheduledJobs = OnExit - 1;
+    
+    /// <summary>
     /// Order for executing current state's OnExit tasks.
     /// These tasks run when leaving the current state.
     /// </summary>

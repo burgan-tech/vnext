@@ -445,7 +445,7 @@ public class TransitionPipeline
             error.Message);
 
         // Already within lock scope - update instance directly
-        context.Instance.Fault();
+        context.Instance.Fault(context.Domain);
         await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
         _logger.LogInformation(
@@ -483,7 +483,7 @@ public class TransitionPipeline
 
                 if (instanceResult is { IsSuccess: true, Value: not null })
                 {
-                    instanceResult.Value.Fault();
+                    instanceResult.Value.Fault(context.Domain);
                     await _instanceRepository.UpdateAsync(instanceResult.Value, true, cancellationToken);
 
                     _logger.LogInformation(

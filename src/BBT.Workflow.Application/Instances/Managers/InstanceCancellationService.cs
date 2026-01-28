@@ -62,5 +62,57 @@ public sealed class InstanceCancellationService(
             return Result.Fail(WorkflowErrors.InstanceCancellationFailed(instanceId, ex.Message));
         }
     }
+    
+    /// <inheritdoc />
+    public async Task<Result> ProcessStateTransitionsCancellationAsync(
+        Guid instanceId,
+        IReadOnlyList<string> transitionKeys,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
+            if (instance == null)
+            {
+                logger.InstanceNotFound(instanceId, string.Empty);
+                return Result.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString()));
+            }
+
+            // Get all active jobs for this instance
+            var allJobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
+            
+            // Filter jobs by transition keys
+            // Job name format: trans-{instanceId}-{transitionKey}
+            var jobsToCancel = allJobs.Where(job => 
+                transitionKeys.Any(key => job.JobName.EndsWith($"-{key}"))).ToList();
+            
+            if (!jobsToCancel.Any())
+            {
+                return Result.Ok();
+            }
+
+            // Process filtered jobs in parallel
+            var processingTasks = jobsToCancel.Select(async job =>
+            {
+                await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
+                job.MarkAsProcessed();
+                await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+            });
+
+            await Task.WhenAll(processingTasks);
+
+            logger.StateTransitionsJobsCanceled(
+                jobsToCancel.Count,
+                instanceId,
+                string.Join(", ", transitionKeys));
+
+            return Result.Ok();
+        }
+        catch (Exception ex)
+        {
+            logger.InstanceCanceledProcessingFailed(ex, instanceId);
+            return Result.Fail(WorkflowErrors.InstanceCancellationFailed(instanceId, ex.Message));
+        }
+    }
 }
 

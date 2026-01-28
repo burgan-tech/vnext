@@ -80,7 +80,7 @@ public sealed class HandleFinishStep(
         else
         {
             logger.InstanceCompleting(context.Instance.Id);
-            context.Instance.Complete();
+            context.Instance.Complete(context.Domain);
         }
     }
 }

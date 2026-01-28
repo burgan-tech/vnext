@@ -1,23 +1,34 @@
+using BBT.Aether.Results;
+
 namespace BBT.Workflow.Discovery;
 
 /// <summary>
 /// Service responsible for resolving domain endpoints from service discovery.
-/// Provides caching and fallback mechanisms for endpoint resolution.
+/// Provides caching mechanisms for endpoint resolution with ETag validation.
 /// </summary>
 public interface IDomainDiscoveryResolver
 {
     /// <summary>
-    /// Resolves the endpoint for a given domain.
-    /// Uses distributed cache with fallback to Discovery API.
-    /// When service discovery is disabled, returns the static BaseUrl from configuration.
+    /// Resolves the endpoint for a domain from service discovery cache.
+    /// Performs ETag validation on cached entries.
+    /// If domain not found in cache, queries registry directly.
     /// </summary>
     /// <param name="domain">The domain name to resolve.</param>
     /// <param name="preferredKind">The preferred endpoint kind (URL or Dapr). Default is URL.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The resolved endpoint containing base URL and optional Dapr app ID.</returns>
-    Task<DiscoveryEndpoint> GetEndpointAsync(
+    /// <returns>Result containing endpoint if found, or error if domain does not exist.</returns>
+    Task<Result<DiscoveryEndpoint>> GetEndpointAsync(
         string domain,
         EndpointKind preferredKind = EndpointKind.Url,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Refreshes the bulk domain cache from service discovery.
+    /// Fetches all active domains with pagination support.
+    /// Uses distributed lock to prevent concurrent updates from multiple pods.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    Task RefreshBulkCacheAsync(CancellationToken cancellationToken = default);
 }
 

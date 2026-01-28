@@ -75,7 +75,7 @@ public class ResolveAvailableStepTests
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
-        context.Instance.Complete();
+        context.Instance.Complete("test-domain");
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);

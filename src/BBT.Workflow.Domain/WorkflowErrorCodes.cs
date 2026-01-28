@@ -111,4 +111,11 @@ public static class WorkflowErrorCodes
     public const string ExtensionExecutionFailed = "Extension:600001";
     
     #endregion
+    
+    #region Discovery Errors (700xxx)
+    
+    public const string DomainEndpointNotFound = "Discovery:700001";
+    public const string DomainDiscoveryFailed = "Discovery:700002";
+    
+    #endregion
 }

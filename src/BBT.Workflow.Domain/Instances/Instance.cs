@@ -237,37 +237,68 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         return snapshot;
     }
 
-    public void Complete()
+    /// <summary>
+    /// Completes the instance and publishes completion cleanup event.
+    /// Sets the instance status to Completed and records the completion time.
+    /// </summary>
+    /// <param name="domain">The domain of the instance.</param>
+    public void Complete(string domain)
     {
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
+
+        // Publish cleanup event to cancel all scheduled jobs
+        AddDistributedEvent(new InstanceCompletedCleanupEvent
+        {
+            InstanceId = Id,
+            Domain = domain,
+            Flow = Flow,
+            CompletedAt = CompletedAt.Value
+        });
 
         // Publish completion event for SubItems (SubFlow or SubProcess)
         if (IsSubItem)
         {
             var latestData = LatestData;
             var contractInfo = ExtraProperties.ToSubFlowContractInfo();
-            AddDistributedEvent(new InstanceSubCompletedEvent
+            if (contractInfo.Id != Guid.Empty)
             {
-                SubInstanceId = Id,
-                InstanceId = contractInfo.Id,
-                Domain = contractInfo.Domain,
-                Flow = contractInfo.Flow,
-                Version = contractInfo.Version,
-                CompletedState = GetCurrentState,
-                InstanceData = latestData?.Data.JsonElement,
-                CompletedAt = CompletedAt.Value,
-                Duration = Duration
-            });
+                AddDistributedEvent(new InstanceSubCompletedEvent
+                {
+                    SubInstanceId = Id,
+                    InstanceId = contractInfo.Id,
+                    Domain = contractInfo.Domain,
+                    Flow = contractInfo.Flow,
+                    Version = contractInfo.Version,
+                    CompletedState = GetCurrentState,
+                    InstanceData = latestData?.Data.JsonElement,
+                    CompletedAt = CompletedAt.Value,
+                    Duration = Duration
+                });
+            }
         }
     }
 
-    public void Fault()
+    /// <summary>
+    /// Marks the instance as faulted and publishes fault cleanup event.
+    /// Sets the instance status to Faulted and records the completion time.
+    /// </summary>
+    /// <param name="domain">The domain of the instance.</param>
+    public void Fault(string domain)
     {
         Status = InstanceStatus.Faulted;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
+        
+        // Publish cleanup event to cancel all scheduled jobs
+        AddDistributedEvent(new InstanceFaultedCleanupEvent
+        {
+            InstanceId = Id,
+            Domain = domain,
+            Flow = Flow,
+            FaultedAt = CompletedAt.Value
+        });
     }
 
     /// <summary>
@@ -488,19 +519,22 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
     private void PublishSubStateChangedEvent(string previousState, string newState)
     {
         var contractInfo = ExtraProperties.ToSubFlowContractInfo();
-        AddDistributedEvent(new InstanceSubStateChangedEvent
+        if (contractInfo.Id != Guid.Empty)
         {
-            ParentInstanceId = contractInfo.Id,
-            SubInstanceId = Id,
-            Domain = contractInfo.Domain,
-            Flow = contractInfo.Flow,
-            Version = contractInfo.Version,
-            NewState = newState,
-            PreviousState = previousState,
-            NewStateType = (int)(EffectiveStateType ?? StateType.Intermediate),
-            NewStateSubType = (int)(EffectiveStateSubType ?? StateSubType.None),
-            ChangedAt = DateTime.UtcNow
-        });
+            AddDistributedEvent(new InstanceSubStateChangedEvent
+            {
+                ParentInstanceId = contractInfo.Id,
+                SubInstanceId = Id,
+                Domain = contractInfo.Domain,
+                Flow = contractInfo.Flow,
+                Version = contractInfo.Version,
+                NewState = newState,
+                PreviousState = previousState,
+                NewStateType = (int)(EffectiveStateType ?? StateType.Intermediate),
+                NewStateSubType = (int)(EffectiveStateSubType ?? StateSubType.None),
+                ChangedAt = DateTime.UtcNow
+            });
+        }
     }
 
     public void ChangeState(State state)

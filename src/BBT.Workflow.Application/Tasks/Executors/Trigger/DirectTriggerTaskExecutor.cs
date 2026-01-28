@@ -254,7 +254,19 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     {
         Logger.LogDebug("Using RemoteInvokerService for DirectTrigger task {TaskKey}", task.Key);
 
-        var binding = await BuildDirectTriggerBindingAsync(task, context, cancellationToken);
+        var bindingResult = await BuildDirectTriggerBindingAsync(task, context, cancellationToken);
+        
+        if (!bindingResult.IsSuccess)
+        {
+            Logger.TaskRemoteExecutionFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                bindingResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+        }
+
+        var binding = bindingResult.Value!;
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.DirectTrigger,
@@ -282,7 +294,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         return result;
     }
 
-    private async Task<DirectTriggerBinding> BuildDirectTriggerBindingAsync(
+    private async Task<Result<DirectTriggerBinding>> BuildDirectTriggerBindingAsync(
         DirectTriggerTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
@@ -290,10 +302,17 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         var headers = ExtractHeaders(context.ScriptContext);
 
         var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
-        var endpoint = await _endpointResolver.GetEndpointAsync(
+        var endpointResult = await _endpointResolver.GetEndpointAsync(
             task.TriggerDomain, preferredKind, cancellationToken);
 
-        return new DirectTriggerBinding
+        if (!endpointResult.IsSuccess)
+        {
+            return Result<DirectTriggerBinding>.Fail(endpointResult.Error);
+        }
+
+        var endpoint = endpointResult.Value!;
+
+        return Result.Ok(new DirectTriggerBinding
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
@@ -306,8 +325,9 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
             Sync = task.TriggerSync,
             UseDapr = task.UseDapr,
+            ValidateSSL = task.ValidateSSL,
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId
-        };
+        });
     }
 }

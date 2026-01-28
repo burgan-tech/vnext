@@ -58,7 +58,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return ConditionalResult<GetInstanceOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Instance(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
@@ -112,7 +119,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return ConditionalResult<GetInstanceDataOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Data(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
@@ -165,7 +179,14 @@ public sealed class RemoteInstanceQueryAppService(
     {
         try
         {
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.InstanceList(input.Domain, input.Workflow, ApiVersionPrefix);
             var queryParams = new List<string>
@@ -231,7 +252,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<GetInstanceHistoryOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.InstanceHistory(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
@@ -271,7 +299,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<GetInstanceStateOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.State(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
@@ -318,7 +353,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<GetViewOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.View(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
@@ -374,7 +416,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<DTOs.GetSchemaOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Schema(input.Domain, input.Workflow, input.Instance, transitionKey, ApiVersionPrefix);
 
@@ -411,7 +460,14 @@ public sealed class RemoteInstanceQueryAppService(
         try
         {
             // Resolve endpoint dynamically based on target domain
-            var endpoint = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+            
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<DTOs.GetExtensionsOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
 
             var relativePath = InstanceUrlTemplates.Extensions(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 

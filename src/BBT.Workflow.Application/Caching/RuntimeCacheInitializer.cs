@@ -1,5 +1,4 @@
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Discovery;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -12,7 +11,6 @@ namespace BBT.Workflow.Caching;
 /// </summary>
 public sealed class RuntimeCacheInitializer(
     IServiceScopeFactory scopeFactory,
-    IDomainRegistrationService domainRegistrationService,
     IDomainCacheContext domainCacheContext) : IRuntimeCacheInitializer
 {
     /// <inheritdoc />
@@ -50,8 +48,5 @@ public sealed class RuntimeCacheInitializer(
 
         // Initialize the domain cache context
         await domainCacheContext.InitializeAsync(initialData, cancellationToken);
-
-        // Register domain with service discovery (handles enabled check internally)
-        await domainRegistrationService.RegisterDomainAsync(cancellationToken);
     }
 }

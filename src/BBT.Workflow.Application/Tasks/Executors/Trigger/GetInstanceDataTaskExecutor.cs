@@ -165,7 +165,19 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
     {
         Logger.LogDebug("Using RemoteInvokerService for GetInstanceData task {TaskKey}", task.Key);
 
-        var binding = await BuildGetInstanceDataBindingAsync(task, instanceIdentifier, cancellationToken);
+        var bindingResult = await BuildGetInstanceDataBindingAsync(task, instanceIdentifier, cancellationToken);
+        
+        if (!bindingResult.IsSuccess)
+        {
+            Logger.TaskRemoteExecutionFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                bindingResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+        }
+
+        var binding = bindingResult.Value!;
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.GetInstanceData,
@@ -193,16 +205,23 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         return result;
     }
 
-    private async Task<GetInstanceDataBinding> BuildGetInstanceDataBindingAsync(
+    private async Task<Result<GetInstanceDataBinding>> BuildGetInstanceDataBindingAsync(
         GetInstanceDataTask task,
         string instanceIdentifier,
         CancellationToken cancellationToken)
     {
         var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
-        var endpoint = await _endpointResolver.GetEndpointAsync(
+        var endpointResult = await _endpointResolver.GetEndpointAsync(
             task.TriggerDomain, preferredKind, cancellationToken);
 
-        return new GetInstanceDataBinding
+        if (!endpointResult.IsSuccess)
+        {
+            return Result<GetInstanceDataBinding>.Fail(endpointResult.Error);
+        }
+
+        var endpoint = endpointResult.Value!;
+
+        return Result.Ok(new GetInstanceDataBinding
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
@@ -210,8 +229,9 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
             Extensions = task.Extensions,
             ETag = null,
             UseDapr = task.UseDapr,
+            ValidateSSL = task.ValidateSSL,
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId
-        };
+        });
     }
 }

@@ -1,4 +1,5 @@
 using BBT.Workflow.Caching;
+using BBT.Workflow.HostedServices;
 using BBT.Workflow.Orchestration.Services;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -45,6 +46,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddHostedService<MultiSchemaMigrationHostedService>();
         services.AddHostedService<CacheCleanupHostedService>();
         services.AddHostedService<CacheInitializationHostedService>();
+        services.AddHostedService<DomainDiscoveryInitializationHostedService>();
         return services;
     }
 }

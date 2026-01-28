@@ -1,8 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Web;
 using BBT.Aether.DistributedCache;
-using BBT.Workflow.Remote.Configuration;
+using BBT.Aether.DistributedLock;
+using BBT.Aether.Results;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -16,11 +19,13 @@ namespace BBT.Workflow.Discovery;
 public sealed class DomainDiscoveryResolver(
     IHttpClientFactory httpClientFactory,
     IDistributedCacheService distributedCache,
+    IDistributedLockService lockService,
     IOptions<ServiceDiscoveryOptions> serviceDiscoveryOptions,
-    IOptions<RemoteOptions> remoteOptions,
     ILogger<DomainDiscoveryResolver> logger) : IDomainDiscoveryResolver
 {
-    private const string CacheKeyPrefix = "discovery:endpoint:";
+    private const string BulkCacheKey = "discovery:domains:bulk";
+    private const string BulkCacheLockKey = "discovery:bulk-lock";
+    private const int LockExpiryInSeconds = 30;
     private const string IfNoneMatchHeader = "If-None-Match";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -30,174 +35,82 @@ public sealed class DomainDiscoveryResolver(
     };
 
     /// <inheritdoc />
-    public async Task<DiscoveryEndpoint> GetEndpointAsync(
+    public async Task<Result<DiscoveryEndpoint>> GetEndpointAsync(
         string domain,
         EndpointKind preferredKind = EndpointKind.Url,
         CancellationToken cancellationToken = default)
     {
         var options = serviceDiscoveryOptions.Value;
 
-        // If service discovery is disabled, fall back to static BaseUrl
-        // if (!options.Enabled)
-        // {
-        //     return GetFallbackEndpoint(domain);
-        // }
-
-        // Try to get from cache first
-        var cacheKey = GetCacheKey(domain);
-        var cachedEntry = await TryGetFromCacheAsync(cacheKey, cancellationToken);
-
-        // If we have a cached entry with ETag, use conditional request
-        if (cachedEntry is not null)
+        // If disabled, return failure (no fallback)
+        if (!options.Enabled)
         {
-            var fetchResult = await FetchFromDiscoveryWithETagAsync(
-                domain, preferredKind, cachedEntry.ETag, cancellationToken);
+            return Result<DiscoveryEndpoint>.Fail(
+                WorkflowErrors.DomainDiscoveryFailed(domain, "Service discovery is disabled"));
+        }
 
-            // 304 Not Modified - use cached data
-            if (fetchResult.IsNotModified)
+        // 1. Try bulk cache first
+        var bulkCache = await distributedCache.GetAsync<BulkDomainCache>(BulkCacheKey, cancellationToken);
+
+        if (bulkCache is { Items.Count: > 0 })
+        {
+            var domainItem = bulkCache.Items.FirstOrDefault(i => 
+                i.DomainName.Equals(domain, StringComparison.OrdinalIgnoreCase));
+
+            if (domainItem != null)
             {
-                logger.LogDebug(
-                    "Endpoint for domain '{Domain}' not modified (304), using cache: {BaseUrl}",
-                    domain, cachedEntry.BaseUrl);
+                // Found in cache - perform ETag check
+                var etagCheckResult = await CheckDomainETagAsync(
+                    domain, domainItem.ItemETag, preferredKind, cancellationToken);
 
-                return new DiscoveryEndpoint(
-                    cachedEntry.Kind,
-                    new Uri(cachedEntry.BaseUrl),
-                    cachedEntry.DaprAppId);
+                if (etagCheckResult.IsNotModified)
+                {
+                    // Use cached endpoint
+                    var kind = DetermineEndpointKind(preferredKind, domainItem.AppId);
+                    var baseUrl = domainItem.BaseUrl.TrimEnd('/') + "/";
+                    return Result.Ok(new DiscoveryEndpoint(kind, new Uri(baseUrl), domainItem.AppId));
+                }
+                else if (etagCheckResult.Endpoint != null)
+                {
+                    // ETag changed - update bulk cache
+                    await UpdateDomainInBulkCacheAsync(
+                        domain, etagCheckResult.Endpoint, etagCheckResult.ETag, cancellationToken);
+                    return Result.Ok(etagCheckResult.Endpoint);
+                }
+                // If ETag check failed, fall through to direct query
             }
-
-            // Got new data, cache it
-            if (fetchResult.Endpoint is not null)
-            {
-                await CacheEndpointAsync(cacheKey, fetchResult.Endpoint, fetchResult.ETag, options.DiscoveryCacheSeconds, cancellationToken);
-
-                logger.LogInformation(
-                    "Endpoint for domain '{Domain}' updated from discovery: {BaseUrl}, Kind: {Kind}",
-                    domain, fetchResult.Endpoint.BaseUrl, fetchResult.Endpoint.Kind);
-
-                return fetchResult.Endpoint;
-            }
-
-            // Fallback case - use cached data
-            return new DiscoveryEndpoint(
-                cachedEntry.Kind,
-                new Uri(cachedEntry.BaseUrl),
-                cachedEntry.DaprAppId);
         }
 
-        // No cache - fetch fresh
-        var freshResult = await FetchFromDiscoveryWithETagAsync(domain, preferredKind, null, cancellationToken);
+        // 2. Not in bulk cache - query registry directly
+        logger.DomainNotFoundInCache(domain);
+        var queryResult = await QuerySingleDomainAsync(domain, preferredKind, cancellationToken);
 
-        if (freshResult.Endpoint is not null)
+        if (queryResult.IsSuccess)
         {
-            await CacheEndpointAsync(cacheKey, freshResult.Endpoint, freshResult.ETag, options.DiscoveryCacheSeconds, cancellationToken);
-
-            logger.LogInformation(
-                "Resolved endpoint for domain '{Domain}' from discovery service: {BaseUrl}, Kind: {Kind}",
-                domain, freshResult.Endpoint.BaseUrl, freshResult.Endpoint.Kind);
-
-            return freshResult.Endpoint;
+            // Add to bulk cache for future requests
+            await AddDomainToBulkCacheAsync(domain, queryResult.Value!, cancellationToken);
         }
 
-        // All failed - use fallback
-        return GetFallbackEndpoint(domain);
+        return queryResult;
     }
 
     /// <summary>
-    /// Gets the fallback endpoint when service discovery is disabled.
-    /// Uses the static BaseUrl from RemoteOptions configuration.
+    /// Queries a single domain from the discovery registry.
     /// </summary>
-    private DiscoveryEndpoint GetFallbackEndpoint(string domain)
-    {
-        var fallbackBaseUrl = remoteOptions.Value.BaseUrl;
-
-        if (string.IsNullOrWhiteSpace(fallbackBaseUrl))
-        {
-            throw new InvalidOperationException(
-                $"Cannot resolve endpoint for domain '{domain}': " +
-                "ServiceDiscovery.Enabled is false and vNextApi.BaseUrl is not configured.");
-        }
-
-        logger.LogDebug(
-            "Service discovery disabled, using fallback BaseUrl for domain '{Domain}': {BaseUrl}",
-            domain, fallbackBaseUrl);
-
-        return new DiscoveryEndpoint(
-            EndpointKind.Url,
-            new Uri(fallbackBaseUrl.TrimEnd('/') + "/"));
-    }
-
-    /// <summary>
-    /// Tries to get the endpoint from distributed cache.
-    /// Returns the cached entry including ETag for conditional requests.
-    /// </summary>
-    private async Task<CachedEndpoint?> TryGetFromCacheAsync(string cacheKey, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await distributedCache.GetAsync<CachedEndpoint>(cacheKey, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to get endpoint from cache with key '{CacheKey}'", cacheKey);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Caches the endpoint in distributed cache with ETag for conditional requests.
-    /// </summary>
-    private async Task CacheEndpointAsync(
-        string cacheKey,
-        DiscoveryEndpoint endpoint,
-        string? eTag,
-        int ttlSeconds,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var cached = new CachedEndpoint(
-                endpoint.Kind,
-                endpoint.BaseUrl.ToString(),
-                endpoint.DaprAppId,
-                eTag);
-
-            var cacheOptions = new DistributedCacheEntryOptions
-            {
-                AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(Math.Max(10, ttlSeconds))
-            };
-
-            await distributedCache.SetAsync(
-                cacheKey,
-                cached,
-                cacheOptions,
-                cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to cache endpoint with key '{CacheKey}'", cacheKey);
-        }
-    }
-
-    /// <summary>
-    /// Fetches the endpoint from the discovery service API with ETag support.
-    /// Sends If-None-Match header if cachedETag is provided.
-    /// </summary>
-    private async Task<DiscoveryFetchResult> FetchFromDiscoveryWithETagAsync(
+    private async Task<Result<DiscoveryEndpoint>> QuerySingleDomainAsync(
         string domain,
         EndpointKind preferredKind,
-        string? cachedETag,
         CancellationToken cancellationToken)
     {
         var options = serviceDiscoveryOptions.Value;
 
         if (string.IsNullOrWhiteSpace(options.BaseUrl))
         {
-            throw new InvalidOperationException(
-                $"Cannot resolve endpoint for domain '{domain}': " +
-                "ServiceDiscovery.BaseUrl is not configured but Enabled is true.");
+            return Result<DiscoveryEndpoint>.Fail(
+                WorkflowErrors.DomainDiscoveryFailed(domain, "Discovery base URL not configured"));
         }
+
+        logger.QueryingSingleDomain(domain);
 
         var endpointTemplate = options.DiscoveryEndpointTemplate;
         var relativePath = string.Format(endpointTemplate, domain);
@@ -206,13 +119,257 @@ public sealed class DomainDiscoveryResolver(
         try
         {
             var httpClient = httpClientFactory.CreateClient(DomainRegistrationService.HttpClientName);
+            var response = await httpClient.GetAsync(requestUrl, cancellationToken);
 
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                logger.LogWarning("Domain '{Domain}' not found in service discovery registry", domain);
+                return Result<DiscoveryEndpoint>.Fail(WorkflowErrors.DomainEndpointNotFound(domain));
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogWarning(
+                    "Discovery service returned {StatusCode} for domain '{Domain}': {Error}",
+                    response.StatusCode, domain, errorContent);
+                return Result<DiscoveryEndpoint>.Fail(
+                    WorkflowErrors.DomainDiscoveryFailed(domain, $"HTTP {response.StatusCode}"));
+            }
+
+            var dto = await response.Content.ReadFromJsonAsync<SingleDomainResponse>(JsonOptions, cancellationToken);
+
+            if (dto?.Data is null || string.IsNullOrWhiteSpace(dto.Data.BaseUrl))
+            {
+                return Result<DiscoveryEndpoint>.Fail(
+                    WorkflowErrors.DomainDiscoveryFailed(domain, "Empty or invalid response"));
+            }
+
+            var kind = DetermineEndpointKind(preferredKind, dto.Data.AppId);
+            var baseUrl = dto.Data.BaseUrl.TrimEnd('/') + "/";
+            var endpoint = new DiscoveryEndpoint(kind, new Uri(baseUrl), dto.Data.AppId);
+
+            logger.DomainResolvedFromRegistry(domain, baseUrl);
+
+            return Result.Ok(endpoint);
+        }
+        catch (HttpRequestException ex)
+        {
+            logger.LogWarning(ex, "HTTP request failed for domain '{Domain}'", domain);
+            return Result<DiscoveryEndpoint>.Fail(
+                WorkflowErrors.DomainDiscoveryFailed(domain, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unexpected error querying domain '{Domain}'", domain);
+            return Result<DiscoveryEndpoint>.Fail(
+                WorkflowErrors.DomainDiscoveryFailed(domain, ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Determines the endpoint kind based on preference and available data.
+    /// </summary>
+    private EndpointKind DetermineEndpointKind(EndpointKind preferredKind, string? appId)
+    {
+        if (preferredKind == EndpointKind.Dapr && string.IsNullOrWhiteSpace(appId))
+        {
+            logger.LogDebug("Requested Dapr endpoint but AppId not available, falling back to URL");
+            return EndpointKind.Url;
+        }
+        return preferredKind;
+    }
+
+    /// <summary>
+    /// Adds a domain to the bulk cache after it's been queried individually.
+    /// </summary>
+    private async Task AddDomainToBulkCacheAsync(
+        string domain,
+        DiscoveryEndpoint endpoint,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var bulkCache = await distributedCache.GetAsync<BulkDomainCache>(BulkCacheKey, cancellationToken) 
+                ?? new BulkDomainCache { Items = new List<DomainEndpointItem>() };
+
+            var newItem = new DomainEndpointItem
+            {
+                DomainName = domain,
+                BaseUrl = endpoint.BaseUrl.ToString().TrimEnd('/'),
+                AppId = endpoint.DaprAppId,
+                ItemETag = null // No ETag on first add
+            };
+
+            var updatedItems = bulkCache.Items
+                .Where(i => !i.DomainName.Equals(domain, StringComparison.OrdinalIgnoreCase))
+                .Append(newItem)
+                .ToList();
+
+            var updatedCache = bulkCache with { Items = updatedItems };
+
+            var options = serviceDiscoveryOptions.Value;
+            await distributedCache.SetAsync(
+                BulkCacheKey,
+                updatedCache,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(options.DiscoveryCacheSeconds)
+                },
+                cancellationToken);
+
+            logger.LogDebug("Added domain '{Domain}' to bulk cache", domain);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to add domain '{Domain}' to bulk cache", domain);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task RefreshBulkCacheAsync(CancellationToken cancellationToken = default)
+    {
+        var options = serviceDiscoveryOptions.Value;
+
+        if (!options.Enabled)
+        {
+            logger.LogDebug("Service discovery is disabled. Skipping bulk cache refresh");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.BaseUrl))
+        {
+            logger.BulkCacheRefreshFailed("ServiceDiscovery.BaseUrl is not configured");
+            return;
+        }
+
+        // Try to acquire distributed lock to prevent concurrent updates
+        var lockAcquired = await lockService.ExecuteWithLockAsync(
+            BulkCacheLockKey,
+            async () =>
+            {
+                logger.BulkCacheRefreshStarted();
+
+                // Fetch all pages with pagination
+                var allItems = await FetchAllPagesAsync(cancellationToken);
+
+                if (allItems.Count == 0)
+                {
+                    logger.BulkCacheRefreshed(0);
+                    return;
+                }
+
+                // Build bulk cache model
+                var bulkCache = new BulkDomainCache
+                {
+                    Items = allItems.Select(item => new DomainEndpointItem
+                    {
+                        DomainName = item.Data.DomainName,
+                        BaseUrl = item.Data.BaseUrl,
+                        AppId = item.Data.AppId,
+                        ItemETag = item.Etag
+                    }).ToList(),
+                    BulkETag = null // Will be set from response header if needed
+                };
+
+                // Store in distributed cache
+                await distributedCache.SetAsync(
+                    BulkCacheKey,
+                    bulkCache,
+                    new DistributedCacheEntryOptions
+                    {
+                        AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(options.DiscoveryCacheSeconds)
+                    },
+                    cancellationToken);
+
+                logger.BulkCacheRefreshed(bulkCache.Items.Count);
+            },
+            LockExpiryInSeconds,
+            cancellationToken);
+
+        if (!lockAcquired)
+        {
+            logger.LogWarning("Could not acquire lock for bulk cache refresh, another instance is refreshing");
+        }
+    }
+
+    /// <summary>
+    /// Fetches all pages of domain registrations from the discovery service.
+    /// Handles pagination using the links.next field.
+    /// </summary>
+    private async Task<List<FunctionDataItem>> FetchAllPagesAsync(CancellationToken cancellationToken)
+    {
+        var options = serviceDiscoveryOptions.Value;
+        var allItems = new List<FunctionDataItem>();
+        var currentPage = 1;
+
+        // Build initial URL with pagination and filter
+        var registryBaseUrl = options.BaseUrl.TrimEnd('/');
+        var registryDomain = options.Domain;
+        var filter = HttpUtility.UrlEncode("{\"Status\": \"A\"}");
+        var initialUrl = $"{registryBaseUrl}/{registryDomain}/workflows/domain/functions/data?page=1&pageSize=100&filter={filter}";
+
+        string? nextUrl = initialUrl;
+
+        while (!string.IsNullOrWhiteSpace(nextUrl))
+        {
+            logger.FetchingDomainPage(currentPage);
+
+            try
+            {
+                var httpClient = httpClientFactory.CreateClient(DomainRegistrationService.HttpClientName);
+                var response = await httpClient.GetFromJsonAsync<FunctionDataListResponse>(nextUrl, JsonOptions, cancellationToken);
+
+                if (response?.Items is { Count: > 0 })
+                {
+                    allItems.AddRange(response.Items);
+                }
+
+                // Get next page URL
+                nextUrl = response?.Links.Next;
+                currentPage++;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to fetch page {Page} of domain registrations", currentPage);
+                break; // Stop pagination on error
+            }
+        }
+
+        return allItems;
+    }
+
+    /// <summary>
+    /// Checks if a domain's ETag is still valid using conditional GET request.
+    /// Returns 304 if not modified, or new endpoint data if changed.
+    /// </summary>
+    private async Task<ETagCheckResult> CheckDomainETagAsync(
+        string domain,
+        string? cachedETag,
+        EndpointKind preferredKind,
+        CancellationToken cancellationToken)
+    {
+        var options = serviceDiscoveryOptions.Value;
+
+        if (string.IsNullOrWhiteSpace(options.BaseUrl))
+        {
+            return ETagCheckResult.Failed();
+        }
+
+        // Use the old endpoint template for single domain check
+        var endpointTemplate = options.DiscoveryEndpointTemplate;
+        var relativePath = string.Format(endpointTemplate, domain);
+        var requestUrl = options.BaseUrl.TrimEnd('/') + relativePath;
+
+        try
+        {
+            var httpClient = httpClientFactory.CreateClient(DomainRegistrationService.HttpClientName);
             using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
 
             // Add If-None-Match header for conditional request
             if (!string.IsNullOrWhiteSpace(cachedETag))
             {
-                request.Headers.TryAddWithoutValidation(IfNoneMatchHeader,  $"\"{cachedETag}\"");
+                request.Headers.TryAddWithoutValidation(IfNoneMatchHeader, $"\"{cachedETag}\"");
             }
 
             var response = await httpClient.SendAsync(request, cancellationToken);
@@ -224,7 +381,7 @@ public sealed class DomainDiscoveryResolver(
                     "Discovery service returned 304 Not Modified for domain '{Domain}'",
                     domain);
 
-                return DiscoveryFetchResult.NotModified();
+                return ETagCheckResult.NotModified();
             }
 
             if (!response.IsSuccessStatusCode)
@@ -234,10 +391,10 @@ public sealed class DomainDiscoveryResolver(
                     "Discovery service returned {StatusCode} for domain '{Domain}': {Error}",
                     response.StatusCode, domain, errorContent);
 
-                return DiscoveryFetchResult.Failed();
+                return ETagCheckResult.Failed();
             }
 
-            var dto = await response.Content.ReadFromJsonAsync<DiscoveryRegistrationDto>(JsonOptions, cancellationToken);
+            var dto = await response.Content.ReadFromJsonAsync<SingleDomainResponse>(JsonOptions, cancellationToken);
 
             if (dto?.Data is null || string.IsNullOrWhiteSpace(dto.Data.BaseUrl))
             {
@@ -245,7 +402,7 @@ public sealed class DomainDiscoveryResolver(
                     "Discovery service returned empty or invalid registration for domain '{Domain}'",
                     domain);
 
-                return DiscoveryFetchResult.Failed();
+                return ETagCheckResult.Failed();
             }
 
             // Determine endpoint kind based on available data and preference
@@ -265,118 +422,175 @@ public sealed class DomainDiscoveryResolver(
                 new Uri(baseUrl),
                 dto.Data.AppId);
 
-            // Get ETag from response header (includes quotes per RFC 7232)
-            // or fallback to DTO's ETag (may or may not include quotes)
+            // Get ETag from response header or DTO
             string? responseETag = null;
-            
+
             if (response.Headers.ETag is not null)
             {
-                // Header ETag includes quotes: "value"
-                responseETag = response.Headers.ETag.Tag;
+                responseETag = response.Headers.ETag.Tag.Trim('"');
             }
-            else if (!string.IsNullOrWhiteSpace(dto.ETag))
+            else if (!string.IsNullOrWhiteSpace(dto.Etag))
             {
-                // DTO ETag may not include quotes - normalize to quoted format
-                responseETag = dto.ETag.Trim('"');
+                responseETag = dto.Etag.Trim('"');
             }
 
-            return DiscoveryFetchResult.Success(endpoint, responseETag);
+            return ETagCheckResult.Success(endpoint, responseETag);
         }
         catch (HttpRequestException ex)
         {
             logger.LogWarning(ex,
-                "Failed to fetch endpoint from discovery service for domain '{Domain}'.",
+                "Failed to check ETag for domain '{Domain}'.",
                 domain);
 
-            return DiscoveryFetchResult.Failed();
+            return ETagCheckResult.Failed();
         }
         catch (TaskCanceledException ex) when (ex.CancellationToken != cancellationToken)
         {
             logger.LogWarning(ex,
-                "Discovery service request timed out for domain '{Domain}'.",
+                "ETag check request timed out for domain '{Domain}'.",
                 domain);
 
-            return DiscoveryFetchResult.Failed();
+            return ETagCheckResult.Failed();
         }
     }
 
-    private static string GetCacheKey(string domain) => $"{CacheKeyPrefix}{domain}";
-
     /// <summary>
-    /// Internal record for caching endpoint data in distributed cache.
-    /// Includes ETag for conditional request support.
+    /// Updates a single domain's information in the bulk cache.
     /// </summary>
-    private sealed record CachedEndpoint(
-        EndpointKind Kind,
-        string BaseUrl,
-        string? DaprAppId,
-        string? ETag);
-
-    /// <summary>
-    /// Result of fetching endpoint from discovery service.
-    /// Supports 304 Not Modified responses.
-    /// </summary>
-    private sealed record DiscoveryFetchResult(
-        bool IsNotModified,
-        DiscoveryEndpoint? Endpoint,
-        string? ETag)
+    private async Task UpdateDomainInBulkCacheAsync(
+        string domain,
+        DiscoveryEndpoint endpoint,
+        string? newETag,
+        CancellationToken cancellationToken)
     {
-        public static DiscoveryFetchResult NotModified() => new(true, null, null);
-        public static DiscoveryFetchResult Failed() => new(false, null, null);
-        public static DiscoveryFetchResult Success(DiscoveryEndpoint endpoint, string? eTag) => new(false, endpoint, eTag);
+        try
+        {
+            var bulkCache = await distributedCache.GetAsync<BulkDomainCache>(BulkCacheKey, cancellationToken);
+
+            if (bulkCache == null)
+            {
+                logger.LogWarning("Cannot update domain '{Domain}' in bulk cache: cache not found", domain);
+                return;
+            }
+
+            // Find and update the domain item
+            var updatedItems = bulkCache.Items.Select(item =>
+            {
+                if (item.DomainName.Equals(domain, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new DomainEndpointItem
+                    {
+                        DomainName = domain,
+                        BaseUrl = endpoint.BaseUrl.ToString().TrimEnd('/'),
+                        AppId = endpoint.DaprAppId,
+                        ItemETag = newETag
+                    };
+                }
+                return item;
+            }).ToList();
+
+            var updatedCache = bulkCache with { Items = updatedItems };
+
+            var options = serviceDiscoveryOptions.Value;
+            await distributedCache.SetAsync(
+                BulkCacheKey,
+                updatedCache,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(options.DiscoveryCacheSeconds)
+                },
+                cancellationToken);
+
+            logger.LogDebug("Updated domain '{Domain}' in bulk cache with new ETag", domain);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to update domain '{Domain}' in bulk cache", domain);
+        }
     }
 
     /// <summary>
-    /// DTO for discovery registration response from the discovery service.
-    /// Maps to the function data response returned by the domain workflow.
+    /// Bulk cache model containing all domain endpoints.
     /// </summary>
-    private sealed record DiscoveryRegistrationDto
+    private sealed record BulkDomainCache
     {
-        /// <summary>
-        /// Data containing endpoint information.
-        /// </summary>
-        public DiscoveryDataDto Data { get; init; } = new();
+        public List<DomainEndpointItem> Items { get; init; } = new();
+        public string? BulkETag { get; init; }
+    }
 
-        /// <summary>
-        /// ETag for optimistic concurrency (includes quotes per RFC 7232).
-        /// </summary>
-        public string ETag { get; init; } = string.Empty;
+    /// <summary>
+    /// Individual domain endpoint item in the bulk cache.
+    /// </summary>
+    private sealed record DomainEndpointItem
+    {
+        public string DomainName { get; init; } = string.Empty;
+        public string BaseUrl { get; init; } = string.Empty;
+        public string? AppId { get; init; }
+        public string? ItemETag { get; init; }
+    }
 
-        /// <summary>
-        /// Extensions dictionary for additional metadata.
-        /// </summary>
+    /// <summary>
+    /// Response DTO for paginated function data list.
+    /// </summary>
+    private sealed record FunctionDataListResponse
+    {
+        public PaginationLinks Links { get; init; } = new();
+        public List<FunctionDataItem> Items { get; init; } = new();
+    }
+
+    /// <summary>
+    /// Pagination links for navigating through pages.
+    /// </summary>
+    private sealed record PaginationLinks
+    {
+        public string? Self { get; init; }
+        public string? First { get; init; }
+        public string? Next { get; init; }
+        public string? Prev { get; init; }
+    }
+
+    /// <summary>
+    /// Individual function data item from the registry.
+    /// </summary>
+    private sealed record FunctionDataItem
+    {
+        public FunctionData Data { get; init; } = new();
+        public string Etag { get; init; } = string.Empty;
         public Dictionary<string, object>? Extensions { get; init; }
     }
 
     /// <summary>
-    /// Data of a discovery registration containing endpoint details.
+    /// Function data containing domain registration details.
     /// </summary>
-    private sealed record DiscoveryDataDto
+    private sealed record FunctionData
     {
-        /// <summary>
-        /// The registered domain name.
-        /// </summary>
         public string DomainName { get; init; } = string.Empty;
-
-        /// <summary>
-        /// Base URL for the domain's API.
-        /// </summary>
         public string BaseUrl { get; init; } = string.Empty;
+        public string? AppId { get; init; }
+        public string? HealthUrl { get; init; }
+    }
 
-        /// <summary>
-        /// Health check URL for the domain.
-        /// </summary>
-        public string HealthUrl { get; init; } = string.Empty;
+    /// <summary>
+    /// Result of ETag check for a single domain.
+    /// </summary>
+    private sealed record ETagCheckResult(
+        bool IsNotModified,
+        DiscoveryEndpoint? Endpoint,
+        string? ETag)
+    {
+        public static ETagCheckResult NotModified() => new(true, null, null);
+        public static ETagCheckResult Failed() => new(false, null, null);
+        public static ETagCheckResult Success(DiscoveryEndpoint endpoint, string? eTag) => new(false, endpoint, eTag);
+    }
 
-        /// <summary>
-        /// Dapr application ID for service invocation.
-        /// </summary>
-        public string AppId { get; init; } = string.Empty;
-
-        /// <summary>
-        /// ETag of the data (may differ from response ETag).
-        /// </summary>
-        public string ETag { get; init; } = string.Empty;
+    /// <summary>
+    /// Response DTO for single domain query (old endpoint).
+    /// </summary>
+    private sealed record SingleDomainResponse
+    {
+        public FunctionData Data { get; init; } = new();
+        public string Etag { get; init; } = string.Empty;
+        public Dictionary<string, object>? Extensions { get; init; }
     }
 }
 

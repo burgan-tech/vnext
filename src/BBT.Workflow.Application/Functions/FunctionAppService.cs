@@ -137,7 +137,7 @@ public sealed class FunctionAppService(
         var variableKeyFunction = function.Key.ToVariableName();
         var variableKeyTask = function.Task.Task.Key.ToVariableName();
 
-        if (scriptContext.TaskResponse.TryGetValue(variableKeyTask, out var value))
+        if (scriptContext.OutputResponse.TryGetValue(variableKeyTask, out var value))
         {
             try
             {

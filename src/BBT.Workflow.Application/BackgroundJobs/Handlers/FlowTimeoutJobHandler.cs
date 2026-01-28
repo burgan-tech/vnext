@@ -80,7 +80,7 @@ public sealed class FlowTimeoutJobHandler(
                 }
                     
                 instance.ChangeState(timeoutTargetState.Value!);
-                instance.Complete(); // This calculates the Duration
+                instance.Complete(runtimeInfoProvider.Domain); // This calculates the Duration
 
                 // Record timeout metrics with duration - this will also decrement the current status gauge
                 var durationSeconds = instance.Duration?.TotalSeconds;

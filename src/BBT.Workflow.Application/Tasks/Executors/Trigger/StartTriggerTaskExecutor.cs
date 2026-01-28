@@ -121,7 +121,19 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
     {
         Logger.LogDebug("Using RemoteInvokerService for StartTrigger task {TaskKey}", task.Key);
 
-        var binding = await BuildStartTriggerBindingAsync(task, context, cancellationToken);
+        var bindingResult = await BuildStartTriggerBindingAsync(task, context, cancellationToken);
+        
+        if (!bindingResult.IsSuccess)
+        {
+            Logger.TaskRemoteExecutionFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                bindingResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+        }
+
+        var binding = bindingResult.Value!;
         var envelope = new TaskEnvelope
         {
             TaskType = TaskTypes.StartTrigger,
@@ -169,7 +181,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         };
     }
 
-    private async Task<StartTriggerBinding> BuildStartTriggerBindingAsync(
+    private async Task<Result<StartTriggerBinding>> BuildStartTriggerBindingAsync(
         StartTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
@@ -177,10 +189,17 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         var headers = ExtractHeaders(context.ScriptContext);
 
         var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
-        var endpoint = await _endpointResolver.GetEndpointAsync(
+        var endpointResult = await _endpointResolver.GetEndpointAsync(
             task.TriggerDomain, preferredKind, cancellationToken);
 
-        return new StartTriggerBinding
+        if (!endpointResult.IsSuccess)
+        {
+            return Result<StartTriggerBinding>.Fail(endpointResult.Error);
+        }
+
+        var endpoint = endpointResult.Value!;
+
+        return Result.Ok(new StartTriggerBinding
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
@@ -191,8 +210,9 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
             Sync = task.TriggerSync,
             UseDapr = task.UseDapr,
+            ValidateSSL = task.ValidateSSL,
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId
-        };
+        });
     }
 }

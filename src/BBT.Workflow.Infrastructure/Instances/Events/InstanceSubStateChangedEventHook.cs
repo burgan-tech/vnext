@@ -52,13 +52,11 @@ public sealed class InstanceSubStateChangedEventHook(
                 var error = result.Error;
                 
                 // Log with structured error details
-                logger.LogWarning(
-                    "SubFlow state update failed for SubInstance {SubInstanceId}, Parent {ParentInstanceId}. " +
-                    "Error: [{ErrorCode}] {ErrorMessage}",
+                logger.SubFlowStateUpdateFailedWithError(
                     eventData.SubInstanceId,
                     eventData.ParentInstanceId,
                     error.Code ?? "unknown",
-                    error.Message);
+                    error.Message ?? "Unknown error");
 
                 // Preserve error context in metadata for diagnostics
                 var metadata = new Dictionary<string, string>

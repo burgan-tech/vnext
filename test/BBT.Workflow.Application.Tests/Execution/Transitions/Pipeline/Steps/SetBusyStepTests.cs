@@ -76,7 +76,7 @@ public class SetBusyStepTests
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
-        context.Instance.Complete(); // Set to Completed before test
+        context.Instance.Complete("test-domain"); // Set to Completed before test
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);

@@ -279,5 +279,26 @@ public static class WorkflowErrors
             target: extensionKey);
 
     #endregion
+
+    #region Discovery Errors
+
+    /// <summary>
+    /// Domain endpoint was not found in service discovery cache or registry.
+    /// </summary>
+    public static Error DomainEndpointNotFound(string domain)
+        => Error.NotFound(
+            WorkflowErrorCodes.DomainEndpointNotFound,
+            $"Service discovery endpoint not found for domain '{domain}'",
+            target: domain);
+
+    /// <summary>
+    /// Domain discovery operation failed.
+    /// </summary>
+    public static Error DomainDiscoveryFailed(string domain, string reason)
+        => Error.Failure(
+            WorkflowErrorCodes.DomainDiscoveryFailed,
+            $"Failed to discover endpoint for domain '{domain}': {reason}");
+
+    #endregion
 }
 

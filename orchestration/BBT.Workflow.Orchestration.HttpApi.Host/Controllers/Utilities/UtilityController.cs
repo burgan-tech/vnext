@@ -1,5 +1,6 @@
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Runtime;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -17,7 +18,8 @@ namespace BBT.Workflow.Orchestration.Controllers.Utilities;
 public sealed class UtilityController(
     IDefinitionAppService definitionAppService,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IOptions<RuntimeOptions> runtimeOptions) : AetherControllerBase
+    IOptions<RuntimeOptions> runtimeOptions,
+    IDomainDiscoveryResolver domainDiscoveryResolver) : AetherControllerBase
 {
     /// <summary>
     /// Retrieves the current runtime configuration information.
@@ -53,5 +55,21 @@ public sealed class UtilityController(
     {
         var result = await definitionAppService.InvalidateCacheAsync(input, cancellationToken);
         return FromResult(result);
+    }
+
+    /// <summary>
+    /// Clears and refreshes the bulk domain cache from service discovery.
+    /// Fetches all active domain registrations and updates the cache.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token for the operation.</param>
+    /// <returns>Success message indicating cache refresh completed.</returns>
+    /// <response code="200">Returns success message when cache refresh completes.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("utilities/discovery/refresh")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> RefreshDiscoveryCacheAsync(CancellationToken cancellationToken = default)
+    {
+        await domainDiscoveryResolver.RefreshBulkCacheAsync(cancellationToken);
+        return Ok(new { message = "Discovery cache refreshed successfully" });
     }
 } 

@@ -49,6 +49,93 @@ Use SDK components for:
 - Unit of Work (UoW)
 - OpenTelemetry
 
+## Domain Events Architecture
+When implementing domain events in the vNext workflow system, follow this dual-processing pattern:
+
+### Event Processing Pattern
+Each domain event **MUST** have two components:
+
+1. **Event Hook** (`IEventPublishHook<TEvent>`) - Located in `*.Infrastructure/*/Events/`
+   - Executes **synchronously** before event is published to event bus
+   - Handles local processing within the same process
+   - Uses `currentSchema.Use()` for multi-schema support
+   - Uses `UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }` for isolation
+   - Returns `EventHookResult.Ok()` or `EventHookResult.Fail()`
+
+2. **Event Handler** (`IEventHandler<TEvent>`) - Located in `workers/BBT.Workflow.Workers.Inbox/Handlers/`
+   - Executes **asynchronously** after event is published to event bus
+   - Processes events from distributed message queue
+   - Performs domain match validation: `if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain))`
+   - Uses same multi-schema and UoW patterns as hooks
+   - Provides fault tolerance and distributed processing
+
+### Event Development Checklist
+When creating a new domain event:
+- [ ] Create event contract in `*.Events.Contracts/*/Events/` with `[EventHook]` and `[EventName]` attributes
+- [ ] Create event hook in `*.Infrastructure/*/Events/` implementing `IEventPublishHook<TEvent>`
+- [ ] Create event handler in `workers/BBT.Workflow.Workers.Inbox/Handlers/` implementing `IEventHandler<TEvent>`
+- [ ] Add logging extension methods to `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`:
+  - `{EventName}Received` (Information level)
+  - `{EventName}IgnoredDomainMismatch` (Debug level)
+  - `{EventName}Succeeded` (Information level)
+  - `{EventName}ProcessingFailed` (Error level)
+- [ ] Register event hook in Infrastructure DI: `services.AddEventHook<TEvent, TEventHook>()`
+- [ ] Event handler is auto-registered by Aether's `AddAetherEventBus` (assembly scanning)
+- [ ] Use standard logging extension methods (never raw `logger.Log*` calls)
+
+### Event Pattern Example
+```csharp
+// 1. Event Contract
+[EventHook]
+[EventName("instance.completed.cleanup")]
+public class InstanceCompletedCleanupEvent : IDistributedEvent { }
+
+// 2. Event Hook (Infrastructure layer)
+public sealed class InstanceCompletedCleanupEventHook : IEventPublishHook<InstanceCompletedCleanupEvent>
+{
+    public async Task<EventHookResult> BeforePublishAsync(
+        InstanceCompletedCleanupEvent eventData,
+        EventHookContext context,
+        CancellationToken cancellationToken)
+    {
+        using (currentSchema.Use(eventData.Flow))
+        {
+            await using var uow = await unitOfWorkManager.BeginAsync(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, 
+                cancellationToken);
+            
+            await service.ProcessAsync(eventData.InstanceId, cancellationToken);
+            await uow.CommitAsync(cancellationToken);
+        }
+        return EventHookResult.Ok();
+    }
+}
+
+// 3. Event Handler (Inbox Worker)
+internal sealed class InstanceCompletedCleanupEventHandler : IEventHandler<InstanceCompletedCleanupEvent>
+{
+    public async Task HandleAsync(
+        CloudEventEnvelope<InstanceCompletedCleanupEvent> envelope,
+        CancellationToken cancellationToken)
+    {
+        if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain))
+        {
+            logger.InstanceCompletedCleanupEventIgnoredDomainMismatch(...);
+            return;
+        }
+        
+        logger.InstanceCompletedCleanupEventReceived(...);
+        // Process event...
+    }
+}
+```
+
+### Why Dual Processing?
+- **Hook (Local):** Fast, synchronous processing within same transaction boundary
+- **Handler (Inbox):** Distributed, fault-tolerant processing for cross-domain/cross-service scenarios
+- **Idempotency:** Operations should be idempotent since both may execute
+- **Reliability:** If local fails, distributed handler provides retry mechanism
+
 ## Aether SDK Knowledge – Context7
 LibraryId: burgan-tech/aether
 Use context7 for aether sdk knowledge:
@@ -71,6 +158,25 @@ use context7
 - Use Data Annotations or Fluent Validation for model validation within the application layer.
 - Leverage global exception handling middleware for unified error responses.
 - Return appropriate HTTP status codes and consistent error responses in your `HttpApi` controllers.
+
+## Logging Standards
+- **NEVER** use raw `logger.LogInformation()`, `logger.LogDebug()`, or `logger.LogError()` calls directly.
+- **ALWAYS** use the high-performance logging extension methods defined in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`.
+- These extensions use `LoggerMessage` source generator for zero-allocation logging.
+- When creating new logging scenarios:
+  1. Add new `[LoggerMessage]` partial methods to `WorkflowLogs.cs` with appropriate EventId and message template.
+  2. Use structured logging parameters (e.g., `{InstanceId}`, `{Flow}`, `{TransitionKey}`).
+  3. Choose appropriate log levels: `Debug` for detailed traces, `Information` for state changes, `Warning` for recoverable issues, `Error` for failures.
+  4. Assign unique EventIds following the existing patterns (e.g., 10xxx for transitions, 40xxx for events, 20xxx for instance management).
+
+### Logging Example
+```csharp
+// ❌ BAD: Raw logging
+logger.LogInformation($"Processing instance {instanceId}");
+
+// ✅ GOOD: Using extension from WorkflowLogs.cs
+logger.InstanceCompletedCleanupEventReceived(instanceId, flow);
+```
 
 ## API Design
 - Follow RESTful API design principles in your `HttpApi` layer.
