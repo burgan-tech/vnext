@@ -1,3 +1,4 @@
+using BBT.Aether.Results;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 
@@ -12,7 +13,7 @@ public sealed class SubflowForwardingService(
     : ISubflowForwardingService
 {
     /// <inheritdoc />
-    public async Task<(bool forwarded, InstanceStatus? status)> TryForwardTransitionAsync(
+    public async Task<Result<TransitionOutput>> ForwardTransitionAsync(
         Guid instanceId,
         string transitionKey,
         TransitionInput input,
@@ -29,17 +30,18 @@ public sealed class SubflowForwardingService(
                 ct
             );
 
-        if (!result.IsSuccess)
+        if (result.IsSuccess)
+        {
+            activity?.SetTag("vnext.subflow.forward.result", "success");
+            activity?.SetTag("vnext.subflow.forward.status", result.Value!.Status.ToString());
+            SubFlowActivityHelper.SetSuccess(activity);
+        }
+        else
         {
             activity?.SetTag("vnext.subflow.forward.result", "failed");
             SubFlowActivityHelper.SetError(activity, result.Error.Message);
-            return (false, null);
         }
 
-        var status = result.Value!.Status;
-        activity?.SetTag("vnext.subflow.forward.result", "success");
-        activity?.SetTag("vnext.subflow.forward.status", status.ToString());
-        SubFlowActivityHelper.SetSuccess(activity);
-        return (true, status);
+        return result;
     }
 }

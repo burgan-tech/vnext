@@ -4,6 +4,7 @@ using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,7 @@ public class TransitionPipeline
     private readonly ITransitionContextFactory _contextFactory;
     private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
+    private readonly ITransitionValidationService _validationService;
     private readonly ILogger<TransitionPipeline> _logger;
 
     /// <summary>
@@ -45,6 +47,7 @@ public class TransitionPipeline
     /// <param name="contextFactory">Factory for creating transition contexts.</param>
     /// <param name="postCommitExecutor">Executor for post-commit jobs.</param>
     /// <param name="instanceRepository">Repository for instance operations.</param>
+    /// <param name="validationService">Service for transition validation.</param>
     /// <param name="logger">Logger instance.</param>
     public TransitionPipeline(
         IEnumerable<ITransitionStep> steps,
@@ -52,6 +55,7 @@ public class TransitionPipeline
         ITransitionContextFactory contextFactory,
         IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
+        ITransitionValidationService validationService,
         ILogger<TransitionPipeline> logger)
     {
         _steps = steps.OrderBy(s => s.Order).ToList();
@@ -59,6 +63,7 @@ public class TransitionPipeline
         _contextFactory = contextFactory;
         _postCommitExecutor = postCommitExecutor;
         _instanceRepository = instanceRepository;
+        _validationService = validationService;
         _logger = logger;
     }
 
@@ -101,7 +106,13 @@ public class TransitionPipeline
 
             var context = contextResult.Value!;
 
-            // Guard: Skip immediate execution requested
+            // 1.5) VALIDATION GUARD - Validate trigger type and execution rules
+            // This ensures all transitions (including auto-chained) are validated
+            var triggerValidationResult = await _validationService.ValidateAsync(context, cancellationToken);
+            if (!triggerValidationResult.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(triggerValidationResult.Error);
+
+            // Guard: Skip immediate execution requested (e.g., scheduled transitions)
             if (context.SkipImmediateExecution)
                 return Result<TransitionExecutionContext>.Ok(context);
 
@@ -147,7 +158,7 @@ public class TransitionPipeline
                 var postCommitResult = await _postCommitExecutor.ExecuteAsync(postCommitJobs, context, cancellationToken);
                 if (!postCommitResult.IsSuccess)
                 {
-                    // Handle fault request: reacquire lock and mark instance as faulted
+                    // System error with fault request: reacquire lock and mark instance as faulted
                     if (postCommitResult.FaultRequest is not null)
                     {
                         await MarkInstanceFaultedWithLockAsync(
@@ -159,15 +170,10 @@ public class TransitionPipeline
                         return Result<TransitionExecutionContext>.Ok(context);
                     }
 
-                    // No fault request but still failed - mark as faulted via lock
-                    var error = postCommitResult.Error ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed");
-                    await MarkInstanceFaultedWithLockAsync(
-                        context,
-                        new PostCommitFaultRequest(error.Code, error.Message),
-                        cancellationToken);
-                    
-                    // Return OK with faulted instance - client sees Status = "F"
-                    return Result<TransitionExecutionContext>.Ok(context);
+                    // Client error (no fault request): return error to client without faulting instance
+                    // context.ClientResponse already contains the error details set by the handler
+                    var error = postCommitResult.Error ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed without error details");
+                    return Result<TransitionExecutionContext>.Fail(error);
                 }
             }
 

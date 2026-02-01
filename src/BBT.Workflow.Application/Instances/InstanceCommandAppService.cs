@@ -48,16 +48,27 @@ public sealed class InstanceCommandAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
         
-        // Check existing instance BEFORE entering railway chain
+        // Step 1: Load workflow
+        var workflowResult = await LoadWorkflowAsync(input, cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result<StartInstanceOutput>.Fail(workflowResult.Error);
+        
+        // Step 2: Migrate schema (MUST happen before any DB operations)
+        var migrationSuccess = await schemaMigrationOrchestrator.MigrateSchemaWithLockAsync(
+            input.Workflow, cancellationToken);
+        if (!migrationSuccess)
+        {
+            return Result<StartInstanceOutput>.Fail(
+                WorkflowErrors.SchemaMigrationLockFailed(input.Workflow));
+        }
+        
+        // Step 3: Check existing instance (AFTER schema migration)
         var existingInstanceResult = await CheckExistingInstanceAsync(input, cancellationToken);
         if (existingInstanceResult.HasValue)
             return existingInstanceResult.Value;
         
-        // Continue with normal railway flow for NEW instances only
-        return await LoadWorkflowAsync(input, cancellationToken)
-            .OnSuccessAsync(async _ =>
-                await schemaMigrationOrchestrator.MigrateSchemaWithLockAsync(input.Workflow, cancellationToken))
-            .ThenAsync(workflow => PrepareInstanceAsync(workflow, input, cancellationToken))
+        // Step 4-7: Continue with normal railway flow for NEW instances
+        return await PrepareInstanceAsync(workflowResult.Value, input, cancellationToken)
             .ThenAsync(async data =>
             {
                 await ScheduleWorkflowTimeoutIfConfiguredAsync(data.Workflow, data.Instance, cancellationToken);

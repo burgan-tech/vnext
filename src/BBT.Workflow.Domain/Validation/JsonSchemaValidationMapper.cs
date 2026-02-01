@@ -38,17 +38,17 @@ public static class JsonSchemaValidationMapper
 
             var message = "Validation failed";
 
-            if (!detail.IsValid)
+            if (!detail.IsValid && detail.Errors is not null && detail.Errors.Any())
             {
-                message = string.Join(", ", detail.Errors!.Select(s => Regex.Unescape(s.Value)));
+                message = string.Join(", ", detail.Errors.Select(s => Regex.Unescape(s.Value)));
             }
 
             validationResults.Add(new ValidationResult(message, [memberName]));
         }
 
-        if (!evaluation.IsValid)
+        if (!evaluation.IsValid && evaluation.Errors is not null)
         {
-            foreach (var error in evaluation.Errors!)
+            foreach (var error in evaluation.Errors)
             {
                 validationResults.Add(new ValidationResult(Regex.Unescape(error.Value), [error.Key]));
             }

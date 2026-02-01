@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using BBT.Aether;
-using BBT.Workflow.Instances.Policies;
 
 namespace BBT.Workflow.Definitions;
 
@@ -181,12 +180,6 @@ public sealed class Transition : IHasKey
     public void SetMapping(ScriptCode code)
     {
         Mapping = code;
-    }
-
-    public bool CanExecute(State currentState, StateTransitionPolicy policy)
-    {
-        policy.Validate(currentState, this);
-        return true;
     }
 
     public static Transition Create(

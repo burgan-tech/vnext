@@ -29,20 +29,20 @@ public sealed class ForwardToSubflowJobHandler(
         var input = CreateTransitionInput(job);
 
         // Perform the forward operation (remote call, now outside lock)
-        var (forwarded, status) = await subflowForwardingService.TryForwardTransitionAsync(
+        var result = await subflowForwardingService.ForwardTransitionAsync(
             job.SubflowInstanceId,
             job.TransitionKey,
             input,
             cancellationToken);
 
-        if (forwarded)
+        if (result.IsSuccess)
         {
-            // Update client response with forwarded status
+            // Success path - update client response with subflow status
             // Special case: If subflow completed, show parent instance's actual status
-            // Otherwise, show subflow's status (or fallback to parent if null)
-            var responseStatus = status?.Equals(InstanceStatus.Completed) == true
+            // Otherwise, show subflow's status
+            var responseStatus = result.Value!.Status.Equals(InstanceStatus.Completed)
                 ? context.Instance.Status
-                : status ?? context.Instance.Status;
+                : result.Value.Status;
             
             context.ClientResponse = new ClientResponse
             {
@@ -54,16 +54,27 @@ public sealed class ForwardToSubflowJobHandler(
                 "Successfully forwarded transition {TransitionKey} to subflow instance {SubflowInstanceId}",
                 job.TransitionKey,
                 job.SubflowInstanceId);
-        }
-        else
-        {
-            logger.LogWarning(
-                "Forward to subflow instance {SubflowInstanceId} was not accepted for transition {TransitionKey}",
-                job.SubflowInstanceId,
-                job.TransitionKey);
+            
+            return Result.Ok();
         }
 
-        return Result.Ok();
+        // Failure path - set error client response
+        context.ClientResponse = new ClientResponse
+        {
+            Id = context.InstanceId,
+            Status = context.Instance.Status,
+            Error = result.Error
+        };
+
+        logger.LogWarning(
+            "Forward to subflow instance {SubflowInstanceId} failed for transition {TransitionKey}: {ErrorCode} - {ErrorMessage}",
+            job.SubflowInstanceId,
+            job.TransitionKey,
+            result.Error.Code,
+            result.Error.Message);
+
+        // Propagate error to policy for decision making
+        return Result.Fail(result.Error);
     }
 
     /// <summary>

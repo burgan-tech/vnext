@@ -1,6 +1,5 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Validators;
-using BBT.Workflow.Instances.Policies;
 using BBT.Workflow.Rules;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -36,9 +35,8 @@ public static class WorkflowDomainModuleServiceCollectionExtensions
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IResultRuleEngine<State>, ResultRuleEngine<State>>();
-        services.AddSingleton<StateTransitionPolicy>();
         services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
-        services.AddSingleton<IJsonSchemaValidator, JsonSchemaValidator>();
+        services.AddSingleton<IJsonSchemaValidator, CachedJsonSchemaValidator>();
         return services;
     }
 }

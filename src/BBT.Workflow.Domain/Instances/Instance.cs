@@ -4,9 +4,7 @@ using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
-using BBT.Workflow.Instances.Policies;
 using BBT.Workflow.Shared;
-using DomainResult = BBT.Aether.Results.Result;
 
 namespace BBT.Workflow.Instances;
 
@@ -576,21 +574,6 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
                 Tags.Add(tag);
             }
         }
-    }
-
-    /// <summary>
-    /// Validates if a transition can be executed from the current state using Result Pattern.
-    /// Delegates validation to the StateTransitionPolicy which checks transition rules and authorization.
-    /// </summary>
-    /// <param name="transition">The transition to validate</param>
-    /// <param name="state">The current state</param>
-    /// <param name="policy">The policy to use for validation</param>
-    /// <param name="executionActor">The actor attempting to execute the transition</param>
-    /// <returns>Result indicating whether the transition can be executed. On failure, contains detailed rule error information.</returns>
-    public DomainResult CanExecuteTransition(Transition transition, State state, StateTransitionPolicy policy,
-        ExecutionActor executionActor = ExecutionActor.User)
-    {
-        return policy.Validate(state, transition, executionActor);
     }
 
     public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)

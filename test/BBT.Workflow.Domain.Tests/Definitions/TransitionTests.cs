@@ -2,19 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Instances.Policies;
 using Xunit;
 
 namespace BBT.Workflow.Definitions;
 
 public class TransitionTests : DomainTestBase<DomainEntryPoint>
 {
-    private readonly StateTransitionPolicy _stateTransitionPolicy;
-
-    public TransitionTests()
-    {
-        _stateTransitionPolicy = GetRequiredService<StateTransitionPolicy>();
-    }
 
     [Fact]
     public void Create_ShouldInitializeProperties()
@@ -295,19 +288,11 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal(2, transition.OnExecutionTasks.Count);
     }
 
-    [Fact]
+    [Fact(Skip = "CanExecute method removed - validation now handled by TransitionExecutionPolicy")]
     public void CanExecute_ShouldReturnTrue_WhenValidTransition()
     {
-        // Arrange
-        var state = State.Create("from-state", StateType.Intermediate, StateSubType.Success, "Patch");
-        var transition = Transition.Create("submit", "from-state", "to-state", TriggerType.Manual, "Patch");
-        state.AddTransition(transition);
-
-        // Act
-        var result = transition.CanExecute(state, _stateTransitionPolicy);
-
-        // Assert
-        Assert.True(result);
+        // This test is obsolete - validation is now done through specification pattern
+        // See TransitionExecutionPolicy and ITransitionSpecification implementations
     }
 
     [Fact]

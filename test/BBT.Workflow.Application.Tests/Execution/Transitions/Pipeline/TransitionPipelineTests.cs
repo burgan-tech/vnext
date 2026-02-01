@@ -9,6 +9,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
@@ -30,6 +31,7 @@ public class TransitionPipelineTests
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
+    private readonly ITransitionValidationService _mockValidationService;
     private readonly List<ITransitionStep> _mockSteps;
     private readonly TransitionPipeline _pipeline;
 
@@ -40,6 +42,7 @@ public class TransitionPipelineTests
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
+        _mockValidationService = Substitute.For<ITransitionValidationService>();
         _mockSteps = new List<ITransitionStep>();
         
         // Create a default set of steps in order
@@ -72,12 +75,19 @@ public class TransitionPipelineTests
             Arg.Any<CancellationToken>())
             .Returns(PostCommitResult.Ok());
 
+        // Default validation service behavior - always succeed
+        _mockValidationService.ValidateTriggerTypeAsync(
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+
         _pipeline = new TransitionPipeline(
             _mockSteps,
             _mockLockService,
             _mockContextFactory,
             _mockPostCommitExecutor,
             _mockInstanceRepository,
+            _mockValidationService,
             _mockLogger);
     }
 

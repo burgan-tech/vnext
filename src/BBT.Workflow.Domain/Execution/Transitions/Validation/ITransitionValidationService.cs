@@ -54,4 +54,22 @@ public interface ITransitionValidationService
         IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Validates trigger type rules and execution context.
+    /// Checks actor permissions, chain depth, and scheduled transition behavior.
+    /// </summary>
+    /// <param name="context">The transition execution context</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Result indicating validation success or failure</returns>
+    /// <remarks>
+    /// This method validates:
+    /// - Actor permissions based on trigger type (User for Manual, System for others)
+    /// - Chain depth limits for Automatic transitions
+    /// - Scheduled transition skip logic based on IsReentry flag
+    /// Returns Result.Ok() if valid, or Result.Fail() with specific error details
+    /// </remarks>
+    Task<Result> ValidateTriggerTypeAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default);
 }

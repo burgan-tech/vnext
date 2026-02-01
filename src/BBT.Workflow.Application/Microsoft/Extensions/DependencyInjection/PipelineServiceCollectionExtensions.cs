@@ -1,6 +1,7 @@
+using BBT.Workflow.Definitions.Policies;
+using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
-using BBT.Workflow.Execution.Handlers;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.PostCommit;
@@ -43,17 +44,22 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionDataMapper, TransitionDataMapper>();
 
         // Validation Services
-        services.AddSingleton<ITransitionValidationService, TransitionValidationService>();
+        services.AddScoped<ITransitionValidationService, TransitionValidationService>();
+
+        // State Machine Validation - Specification Pattern
+        services.AddScoped<ITransitionSpecification, ResumeModeSpecification>();
+        services.AddScoped<ITransitionSpecification, SubFlowBypassSpecification>();
+        services.AddScoped<ITransitionSpecification, WellKnownTransitionSpecification>();
+        services.AddScoped<ITransitionSpecification, ActorAuthorizationSpecification>();
+        services.AddScoped<ITransitionSpecification, StateTransitionListSpecification>();
+        services.AddScoped<ITransitionSpecification, SharedTransitionAvailabilitySpecification>();
+        services.AddScoped<ITransitionSpecification, StartTransitionSpecification>();
+        
+        services.AddScoped<CompositeTransitionSpecification>();
+        services.AddScoped<TransitionExecutionPolicy>();
 
         // Evaluation Services
         services.AddScoped<IAutoConditionEvaluator, AutoConditionEvaluator>();
-
-        // Trigger Handlers
-        services.AddScoped<ITransitionHandler, ManualTransitionHandler>();
-        services.AddScoped<ITransitionHandler, AutomaticTransitionHandler>();
-        services.AddScoped<ITransitionHandler, ScheduledTransitionHandler>();
-        services.AddScoped<ITransitionHandler, EventTransitionHandler>();
-        services.AddScoped<ITransitionHandlerFactory, TransitionHandlerFactory>();
 
         // Pipeline Steps (registered in execution order)
         services.AddScoped<ITransitionStep, HandleCancelPreflightStep>();

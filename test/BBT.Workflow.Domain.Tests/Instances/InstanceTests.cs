@@ -6,19 +6,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Instances.Policies;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
 
 public class InstanceTests : DomainTestBase<DomainEntryPoint>
 {
-    private readonly StateTransitionPolicy _stateTransitionPolicy;
-
-    public InstanceTests()
-    {
-        _stateTransitionPolicy = GetRequiredService<StateTransitionPolicy>();
-    }
 
     [Fact]
     public void Constructor_ShouldInitializeProperties()
@@ -51,21 +44,6 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
 
         // Assert
         Assert.Equal("next-state", instance.CurrentState);
-    }
-
-    [Fact]
-    public void CanExecuteTransition_ShouldDelegateToTransition()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var transition = TransitionFactory.CreateDefault();
-        var state = StateFactory.CreateDefault("from-state");
-
-        // Act
-        var result = instance.CanExecuteTransition(transition, state, _stateTransitionPolicy);
-
-        // Assert
-        Assert.True(result);
     }
 
     [Fact]
@@ -397,24 +375,6 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.NotNull(latest);
         Assert.Equal("1.0.2", latest.Version);
-    }
-
-    [Fact]
-    public void CanExecuteTransition_ShouldReturnTransitionResult()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var state = StateFactory.CreateDefault("from-state");
-
-        var transition = TransitionFactory.CreateDefault();
-
-        transition.CanExecute(state, _stateTransitionPolicy);
-
-        // Act
-        var result = instance.CanExecuteTransition(transition, state, _stateTransitionPolicy);
-
-        // Assert
-        Assert.True(result);
     }
 
     [Fact]

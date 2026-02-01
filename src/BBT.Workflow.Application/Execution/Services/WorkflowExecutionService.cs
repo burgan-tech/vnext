@@ -95,6 +95,12 @@ public sealed class WorkflowExecutionService(
         // Early return if client response is available (no DB lookup needed)
         if (executionContext.ClientResponse is not null)
         {
+            // Check if client response contains an error
+            if (executionContext.ClientResponse.Error is { } responseError)
+            {
+                return Result<TransitionOutput>.Fail(responseError);
+            }
+            
             return Result<TransitionOutput>.Ok(new TransitionOutput
             {
                 Id = executionContext.InstanceId,

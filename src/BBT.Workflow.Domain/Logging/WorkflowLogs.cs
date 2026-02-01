@@ -761,6 +761,34 @@ public static partial class WorkflowLogs
         string targetStateKey,
         Guid instanceId);
 
+    /// <summary>
+    /// Logs when SubFlow forward fails with a client error (validation, not found, etc.).
+    /// Client errors are returned to the user without faulting the instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40084,
+        Level = LogLevel.Warning,
+        Message = "SubFlow forward failed with client error for instance {InstanceId}: {ErrorCode} - {ErrorMessage}")]
+    public static partial void SubFlowForwardClientError(
+        this ILogger logger,
+        Guid instanceId,
+        string errorCode,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when SubFlow forward fails with a system error (dependency, transient, etc.).
+    /// System errors cause the instance to be marked as faulted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40085,
+        Level = LogLevel.Error,
+        Message = "SubFlow forward failed with system error for instance {InstanceId}: {ErrorCode} - {ErrorMessage}")]
+    public static partial void SubFlowForwardSystemError(
+        this ILogger logger,
+        Guid instanceId,
+        string errorCode,
+        string errorMessage);
+
     #endregion
 
     #region Instance Management
@@ -1346,6 +1374,36 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string domain,
         string baseUrl);
+
+    #endregion
+
+    #region Specification Validation
+
+    /// <summary>
+    /// Logs when validation is bypassed by a specification (Resume, Active SubFlow).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50010,
+        Level = LogLevel.Debug,
+        Message = "Validation bypassed by {SpecificationName} for instance {InstanceId}")]
+    public static partial void ValidationBypassedBySpecification(
+        this ILogger logger,
+        string specificationName,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when validation fails by a specification.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50011,
+        Level = LogLevel.Warning,
+        Message = "Validation failed by {SpecificationName} for instance {InstanceId}: {ErrorCode} - {ErrorMessage}")]
+    public static partial void ValidationFailedBySpecification(
+        this ILogger logger,
+        string specificationName,
+        Guid instanceId,
+        string errorCode,
+        string errorMessage);
 
     #endregion
 }

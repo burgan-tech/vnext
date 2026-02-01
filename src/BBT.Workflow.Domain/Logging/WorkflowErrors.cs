@@ -122,6 +122,84 @@ public static class WorkflowErrors
             (string.IsNullOrEmpty(transitionKey) ? "" : $" for transition '{transitionKey}'"),
             target: transitionKey);
 
+    /// <summary>
+    /// Invalid actor for manual transition (requires User actor).
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="actor">The current actor that is invalid.</param>
+    public static Error InvalidActorForManualTransition(Guid instanceId, ExecutionActor actor)
+        => Error.Validation(
+            WorkflowErrorCodes.UnauthorizedTransition,
+            $"Manual transitions require User actor. Current actor: {actor}",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// Invalid actor for automatic transition (requires System actor).
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="actor">The current actor that is invalid.</param>
+    public static Error InvalidActorForAutomaticTransition(Guid instanceId, ExecutionActor actor)
+        => Error.Validation(
+            WorkflowErrorCodes.UnauthorizedTransition,
+            $"Automatic transitions require System actor. Current actor: {actor}",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// Invalid actor for scheduled transition (requires System actor).
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="actor">The current actor that is invalid.</param>
+    public static Error InvalidActorForScheduledTransition(Guid instanceId, ExecutionActor actor)
+        => Error.Validation(
+            WorkflowErrorCodes.UnauthorizedTransition,
+            $"Scheduled transitions require System actor. Current actor: {actor}",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// Invalid actor for event transition (requires User actor).
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="actor">The current actor that is invalid.</param>
+    public static Error InvalidActorForEventTransition(Guid instanceId, ExecutionActor actor)
+        => Error.Validation(
+            WorkflowErrorCodes.UnauthorizedTransition,
+            $"Event transitions require User actor. Current actor: {actor}",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// Transition is not available in the current state.
+    /// </summary>
+    /// <param name="transitionKey">The transition key that is not available.</param>
+    /// <param name="currentState">The current state key.</param>
+    public static Error TransitionNotAvailableInCurrentState(string transitionKey, string currentState)
+        => Error.Validation(
+            WorkflowErrorCodes.TransitionNotAvailableInCurrentState,
+            $"Transition '{transitionKey}' is not available in current state '{currentState}'",
+            target: transitionKey);
+
+    /// <summary>
+    /// Shared transition is not available in the current state.
+    /// </summary>
+    /// <param name="transitionKey">The shared transition key.</param>
+    /// <param name="currentState">The current state key.</param>
+    public static Error SharedTransitionNotAvailableInState(string transitionKey, string currentState)
+        => Error.Validation(
+            WorkflowErrorCodes.SharedTransitionNotAvailableInState,
+            $"Shared transition '{transitionKey}' is not available in state '{currentState}'. Check AvailableIn configuration.",
+            target: transitionKey);
+
+    /// <summary>
+    /// StartTransition can only be executed from Initial state.
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="currentStateKey">The current state key.</param>
+    /// <param name="currentStateType">The current state type.</param>
+    public static Error StartTransitionNotFromInitialState(Guid instanceId, string currentStateKey, StateType currentStateType)
+        => Error.Validation(
+            WorkflowErrorCodes.StartTransitionNotFromInitialState,
+            $"Start transition can only be executed from Initial state. Instance {instanceId} is currently in state '{currentStateKey}' (Type: {currentStateType})",
+            target: instanceId.ToString());
+
     #endregion
 
     #region Task Errors
@@ -161,6 +239,17 @@ public static class WorkflowErrors
             WorkflowErrorCodes.InvalidSchema,
             $"Schema '{schemaKey}' is not configured in runtime options",
             target: schemaKey);
+
+    /// <summary>
+    /// Failed to acquire distributed lock for schema migration.
+    /// Another instance is already migrating this schema.
+    /// </summary>
+    /// <param name="schemaName">The name of the schema that could not be locked.</param>
+    public static Error SchemaMigrationLockFailed(string schemaName)
+        => Error.Conflict(
+            WorkflowErrorCodes.ConflictWorkflow,
+            $"Schema '{schemaName}' is already being migrated by another instance",
+            target: schemaName);
 
     #endregion
 

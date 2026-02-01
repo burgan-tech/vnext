@@ -55,6 +55,9 @@ public static class WorkflowErrorCodes
     public const string AutoTransitionFailed = "Transition:100011";
     public const string AutoTransitionConditionNotMet = "Transition:100014";
     public const string TransitionChainDepthExceeded = "Transition:100017";
+    public const string TransitionNotAvailableInCurrentState = "Transition:100020";
+    public const string SharedTransitionNotAvailableInState = "Transition:100021";
+    public const string StartTransitionNotFromInitialState = "Transition:100022";
     
     #endregion
     
