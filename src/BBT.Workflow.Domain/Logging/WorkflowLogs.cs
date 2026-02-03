@@ -1406,4 +1406,56 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     #endregion
+
+    #region Cache Invalidation
+
+    /// <summary>
+    /// Logs when a definition cache invalidation request is received via broadcast.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50020,
+        Level = LogLevel.Information,
+        Message = "Definition cache invalidation received. PodInstance: {PodInstance}, Domain: {Domain}, RequestedBy: {RequestedBy}")]
+    public static partial void DefinitionCacheInvalidationReceived(
+        this ILogger logger,
+        string podInstance,
+        string domain,
+        string requestedBy);
+
+    /// <summary>
+    /// Logs when a definition cache invalidation request is ignored due to domain mismatch.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50021,
+        Level = LogLevel.Debug,
+        Message = "Definition cache invalidation ignored - domain mismatch. PodInstance: {PodInstance}, Domain: {Domain}")]
+    public static partial void DefinitionCacheInvalidationIgnoredDomainMismatch(
+        this ILogger logger,
+        string podInstance,
+        string domain);
+
+    /// <summary>
+    /// Logs when definition cache invalidation succeeds.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50022,
+        Level = LogLevel.Information,
+        Message = "Definition cache invalidation succeeded. PodInstance: {PodInstance}")]
+    public static partial void DefinitionCacheInvalidationSucceeded(
+        this ILogger logger,
+        string podInstance);
+
+    /// <summary>
+    /// Logs when definition cache invalidation fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50023,
+        Level = LogLevel.Error,
+        Message = "Definition cache invalidation failed. PodInstance: {PodInstance}, Error: {Error}")]
+    public static partial void DefinitionCacheInvalidationFailed(
+        this ILogger logger,
+        string podInstance,
+        string error);
+
+    #endregion
 }

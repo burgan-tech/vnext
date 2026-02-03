@@ -216,13 +216,15 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
 
     private static string BuildPath(SubProcessBinding binding)
     {
-        var path = $"/api/v1/{binding.Domain}/workflows/sub/{binding.Workflow}/instances/start";
+        var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/sub/instances/start";
 
         var queryParams = new List<string>();
         if (!string.IsNullOrEmpty(binding.Version))
             queryParams.Add($"version={Uri.EscapeDataString(binding.Version)}");
         if (binding.Sync)
             queryParams.Add("sync=true");
+        else
+            queryParams.Add("sync=false");
 
         queryParams.Add("strictIdempotency=true");
 

@@ -18,5 +18,10 @@ public enum ViewType
     /// <summary>
     /// Markdown
     /// </summary>
-    Markdown = 3
+    Markdown = 3,
+
+    /// <summary>
+    /// Deep link URL for navigation
+    /// </summary>
+    DeepLink = 4
 }

@@ -99,7 +99,7 @@ public sealed record TasksExecutionResult
 
         return new TasksExecutionResult
         {
-            IsSuccess = true,
+            IsSuccess = false,
             HasFailedTasks = failedKeys.Count > 0,
             FailedTaskKeys = failedKeys,
             FailedTask = null,

@@ -24,24 +24,42 @@ public sealed class RunAutomaticTransitionsStep(
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(RunAutomaticTransitionsStep)}");
 
+        var nonBlockingFailures = NonBlockingTaskFailures.Get(context);
+
         // Check if target state has any automatic transitions
         if (context.Target?.AutoTransitions == null || !context.Target.AutoTransitions.Any())
         {
+            if (nonBlockingFailures.Count > 0)
+            {
+                return Result<StepOutcome>.Fail(
+                    ExecutionErrors.UnhandledNonBlockingTaskFailures(
+                        context.TransitionKey,
+                        context.Target?.Key ?? context.Current.Key,
+                        nonBlockingFailures,
+                        reason: "NoAutoTransitions"));
+            }
+
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
         // Railway chain: Evaluate all transitions -> Process winner (if exists)
-        return await EvaluateAllTransitionsAsync(context, cancellationToken)
-            .Map(evaluations => ProcessEvaluationResults(context, evaluations));
+        var evalResult = await EvaluateAllTransitionsAsync(context, cancellationToken);
+        if (!evalResult.IsSuccess)
+        {
+            return Result<StepOutcome>.Fail(evalResult.Error);
+        }
+
+        return ProcessEvaluationResults(context, evalResult.Value!, nonBlockingFailures);
     }
 
     /// <summary>
     /// Processes evaluation results and requests the winning transition for sync dispatch.
     /// If a winner is found, requests next transition and skips to Finalize step.
     /// </summary>
-    private StepOutcome ProcessEvaluationResults(
+    private Result<StepOutcome> ProcessEvaluationResults(
         TransitionExecutionContext context,
-        List<AutoConditionEvaluation> evaluations)
+        List<AutoConditionEvaluation> evaluations,
+        IReadOnlyList<NonBlockingTaskFailure> nonBlockingFailures)
     {
         var winner = evaluations.FirstOrDefault(e => e.Status == AutoConditionStatus.Satisfied);
 
@@ -52,8 +70,18 @@ public sealed class RunAutomaticTransitionsStep(
                 context.InstanceId,
                 string.Join(", ", evaluations.Select(e => e.TransitionKey)));
 
+            if (nonBlockingFailures.Count > 0)
+            {
+                return Result<StepOutcome>.Fail(
+                    ExecutionErrors.UnhandledNonBlockingTaskFailures(
+                        context.TransitionKey,
+                        context.Target!.Key,
+                        nonBlockingFailures,
+                        reason: "NoAutoTransitionWinner"));
+            }
+
             // No winner found - continue pipeline, stay in current state
-            return StepOutcome.Continue();
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
         logger.AutoTransitionSelected(winner.TransitionKey, context.Target!.Key, context.InstanceId);
@@ -64,7 +92,7 @@ public sealed class RunAutomaticTransitionsStep(
 
         // Skip to Finalize to complete current transition, then pipeline will chain to next
         // return StepOutcome.SkipTo(LifecycleOrder.Finalize);
-        return StepOutcome.Continue();
+        return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 
     /// <summary>

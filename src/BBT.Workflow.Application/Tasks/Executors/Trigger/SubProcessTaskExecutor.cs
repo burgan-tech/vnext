@@ -278,7 +278,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                 domain: task.TriggerDomain,
                 workflow: task.TriggerFlow,
                 version: task.TriggerVersion,
-                sync: false) // Always async
+                sync: task.TriggerSync)
             {
                 Instance = new CreateInstanceInput
                 {
@@ -325,7 +325,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Tags = task.TriggerTags,
             Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
             ExtraProperties = BuildExtraPropertiesAsDictionary(context, task),
-            Sync = false, // Always Async
+            Sync = task.TriggerSync,
             UseDapr = task.UseDapr,
             ValidateSSL = task.ValidateSSL,
             BaseUrl = endpoint.BaseUrl.ToString(),

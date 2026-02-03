@@ -36,30 +36,14 @@ public sealed class ActorAuthorizationSpecification : ITransitionSpecification
     {
         return context.Trigger switch
         {
-            TriggerType.Manual => ValidateManualActor(context),
+            TriggerType.Manual => Result.Ok(),
             TriggerType.Automatic => ValidateAutomaticActor(context),
             TriggerType.Scheduled => ValidateScheduledActor(context),
-            TriggerType.Event => ValidateEventActor(context),
+            TriggerType.Event => Result.Ok(),
             _ => Result.Fail(Error.NotSupported(
                 "UnsupportedTriggerType",
                 $"Trigger type {context.Trigger} is not supported"))
         };
-    }
-    
-    /// <summary>
-    /// Validates manual trigger execution rules.
-    /// Manual transitions must be initiated by User actors (external API/UI requests).
-    /// </summary>
-    private static Result ValidateManualActor(TransitionExecutionContext context)
-    {
-        if (context.Actor != ExecutionActor.User)
-        {
-            return Result.Fail(WorkflowErrors.InvalidActorForManualTransition(
-                context.InstanceId,
-                context.Actor));
-        }
-
-        return Result.Ok();
     }
 
     /// <summary>
@@ -98,23 +82,6 @@ public sealed class ActorAuthorizationSpecification : ITransitionSpecification
         if (context.Actor != ExecutionActor.System)
         {
             return Result.Fail(WorkflowErrors.InvalidActorForScheduledTransition(
-                context.InstanceId,
-                context.Actor));
-        }
-
-        return Result.Ok();
-    }
-
-    /// <summary>
-    /// Validates event trigger execution rules.
-    /// Event transitions must be initiated by User actors (external webhooks/events).
-    /// This allows event-driven transitions from external systems.
-    /// </summary>
-    private static Result ValidateEventActor(TransitionExecutionContext context)
-    {
-        if (context.Actor != ExecutionActor.User)
-        {
-            return Result.Fail(WorkflowErrors.InvalidActorForEventTransition(
                 context.InstanceId,
                 context.Actor));
         }

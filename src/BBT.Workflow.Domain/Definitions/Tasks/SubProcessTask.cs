@@ -37,6 +37,11 @@ public sealed class SubProcessTask : WorkflowTask
     /// SubFlow version (optional)
     /// </summary>
     public string? TriggerVersion { get; private set; }
+    
+    /// <summary>
+    /// Sync of the instance to start
+    /// </summary>
+    public bool TriggerSync { get; private set; } = false;
 
     /// <summary>
     /// Body data to send with the subprocess request
@@ -99,6 +104,11 @@ public sealed class SubProcessTask : WorkflowTask
     {
         ValidateSSL = validateSSL;
     }
+    
+    public void SetSync(bool sync)
+    {
+        TriggerSync = sync;
+    }
 
     /// <summary>
     /// Internal property setters for object pooling
@@ -108,6 +118,7 @@ public sealed class SubProcessTask : WorkflowTask
     internal void SetTriggerFlowInternal(string triggerFlow) => TriggerFlow = triggerFlow;
     internal void SetTriggerKeyInternal(string? triggerKey) => TriggerKey = triggerKey;
     internal void SetTriggerVersionInternal(string? triggerVersion) => TriggerVersion = triggerVersion;
+    internal void SetTriggerSyncInternal(bool sync) => TriggerSync = sync;
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
@@ -128,6 +139,9 @@ public sealed class SubProcessTask : WorkflowTask
 
         if (config.TryGetProperty("version", out var versionElement))
             TriggerVersion = versionElement.GetString();
+        
+        if (config.TryGetProperty("sync", out var triggerSyncElement))
+            TriggerSync = triggerSyncElement.GetBoolean();
 
         if (config.TryGetProperty("body", out var bodyElement))
         {
@@ -172,6 +186,7 @@ public sealed class SubProcessTask : WorkflowTask
         cloned.TriggerFlow = TriggerFlow;
         cloned.TriggerKey = TriggerKey;
         cloned.TriggerVersion = TriggerVersion;
+        cloned.TriggerSync = TriggerSync;
         cloned.Body = Body;
         cloned.TriggerTags = TriggerTags;
         cloned.UseDapr = UseDapr;
@@ -190,6 +205,7 @@ public sealed class SubProcessTask : WorkflowTask
         SetTriggerFlowInternal(source.TriggerFlow);
         SetTriggerKeyInternal(source.TriggerKey);
         SetTriggerVersionInternal(source.TriggerVersion);
+        SetTriggerSyncInternal(source.TriggerSync);
         SetBodyInternal(source.Body);
         SetTriggerTagsInternal(source.TriggerTags);
         SetUseDaprInternal(source.UseDapr);
@@ -206,6 +222,7 @@ public sealed class SubProcessTask : WorkflowTask
         TriggerFlow = string.Empty;
         TriggerKey = null;
         TriggerVersion = null;
+        TriggerSync = false;
         Body = null;
         TriggerTags = null;
         UseDapr = false;

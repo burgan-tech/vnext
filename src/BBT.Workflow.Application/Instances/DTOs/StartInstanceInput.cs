@@ -42,7 +42,7 @@ public sealed class StartInstanceInput(
             WorkflowKey = Workflow,
             WorkflowVersion = Version,
             TransitionKey = startTransitionKey,
-            TriggerType = TriggerType.Manual, // Start transitions are always manual
+            TriggerType = TriggerType.Manual, // Start transitions are always manual,
             Mode = Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,

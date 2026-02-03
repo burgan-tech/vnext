@@ -200,9 +200,11 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 executedTasks.Count, skippedCount);
         }
 
-        return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Success(
-            executedTasks,
-            totalStopwatch.ElapsedMilliseconds));
+        var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
+        return Result<TasksExecutionResult>.Ok(
+            hasBusinessFailures
+                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, totalStopwatch.ElapsedMilliseconds)
+                : TasksExecutionResult.Success(executedTasks, totalStopwatch.ElapsedMilliseconds));
     }
 
     /// <summary>
@@ -352,8 +354,11 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 }
             }
 
-            return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Success(
-                executedTasks, stopwatch.ElapsedMilliseconds));
+            var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
+            return Result<TasksExecutionResult>.Ok(
+                hasBusinessFailures
+                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, stopwatch.ElapsedMilliseconds)
+                    : TasksExecutionResult.Success(executedTasks, stopwatch.ElapsedMilliseconds));
         }
         catch (Exception ex)
         {

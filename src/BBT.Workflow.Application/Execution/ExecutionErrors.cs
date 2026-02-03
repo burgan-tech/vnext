@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Execution.Pipeline;
 
 namespace BBT.Workflow.Execution;
 
@@ -92,6 +93,51 @@ public static class ExecutionErrors
             WorkflowErrorCodes.DuplicateInstanceKey,
             $"An active instance with key '{key}' already exists. Instance {instanceId} cannot use this key.",
             target: key);
+
+    #endregion
+
+    #region Task / Pipeline Errors
+
+    /// <summary>
+    /// Creates an error when one or more tasks failed at business level without an ErrorBoundary,
+    /// and the workflow did not handle the failure via automatic transitions (or epilogue was skipped).
+    /// </summary>
+    /// <param name="transitionKey">The transition key being executed.</param>
+    /// <param name="stateKey">The state key where handling was expected (usually target state).</param>
+    /// <param name="failures">The non-blocking failures collected from task steps.</param>
+    /// <param name="reason">Optional reason for why handling didn't occur (e.g., EpilogueSkipped, NoAutoTransitions, NoAutoTransitionWinner).</param>
+    public static Error UnhandledNonBlockingTaskFailures(
+        string transitionKey,
+        string stateKey,
+        IReadOnlyList<NonBlockingTaskFailure> failures,
+        string? reason = null)
+    {
+        var failedKeys = failures
+            .SelectMany(f => f.FailedTaskKeys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var firstMessage = failures
+            .Select(f => f.FirstErrorMessage)
+            .FirstOrDefault(m => !string.IsNullOrWhiteSpace(m));
+
+        var reasonPart = string.IsNullOrWhiteSpace(reason) ? "Unknown" : reason;
+        var keysPart = failedKeys.Count == 0 ? "Unknown" : string.Join(", ", failedKeys);
+
+        var message =
+            $"Unhandled task business failures without ErrorBoundary for transition '{transitionKey}' " +
+            $"(state: '{stateKey}', reason: '{reasonPart}'). Failed task keys: [{keysPart}].";
+
+        if (!string.IsNullOrWhiteSpace(firstMessage))
+        {
+            message = $"{message} First error: {firstMessage}";
+        }
+
+        return Error.Failure(
+            WorkflowErrorCodes.TaskExecutionFailed,
+            message,
+            detail: stateKey);
+    }
 
     #endregion
     

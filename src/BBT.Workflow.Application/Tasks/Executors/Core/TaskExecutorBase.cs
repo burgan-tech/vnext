@@ -54,7 +54,8 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} input preparation failed: {Error}",
                 taskKey, inputResult.Error.Message);
-            return CreateErrorResponse(inputResult.Error, stopwatch.ElapsedMilliseconds);
+            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            // return CreateErrorResponse(inputResult.Error, stopwatch.ElapsedMilliseconds);
         }
         
         context.InputResponse = inputResult.Value;
@@ -66,7 +67,8 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} pre-processing failed: {Error}",
                 taskKey, preProcessResult.Error.Message);
-            return CreateErrorResponse(preProcessResult.Error, stopwatch.ElapsedMilliseconds);
+            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            // return CreateErrorResponse(preProcessResult.Error, stopwatch.ElapsedMilliseconds);
         }
 
         // 4. Invoke (abstract or virtual)
@@ -91,7 +93,8 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} post-processing failed: {Error}",
                 taskKey, postProcessResult.Error.Message);
-            return CreateErrorResponse(postProcessResult.Error, stopwatch.ElapsedMilliseconds);
+            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            // return CreateErrorResponse(postProcessResult.Error, stopwatch.ElapsedMilliseconds);
         }
 
         // 6. ProcessOutput (virtual - custom per executor)
@@ -101,7 +104,8 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} output processing failed: {Error}",
                 taskKey, outputResult.Error.Message);
-            return CreateErrorResponse(outputResult.Error, stopwatch.ElapsedMilliseconds);
+            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            // return CreateErrorResponse(outputResult.Error, stopwatch.ElapsedMilliseconds);
         }
         
         if (context.TaskTrigger == TaskTrigger.Extension)

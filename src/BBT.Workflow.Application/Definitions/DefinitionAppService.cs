@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Application.Services;
+using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;

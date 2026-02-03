@@ -81,12 +81,39 @@ public sealed class RunOnExecuteTasksStep(
         }
 
         // Unhandled failure - this will cause fault
-        if (!tasksResult.IsSuccess && tasksResult.TaskError != null)
+        if (tasksResult is { IsSuccess: false, TaskError: not null })
         {
             context.Items[FailedOnExecuteTaskKey] = tasksResult.FailedTask;
             context.Items[TaskExecutionErrorKey] = tasksResult.TaskError;
             
             return Result<StepOutcome>.Fail(tasksResult.TaskError.ToError());
+        }
+
+        // Non-blocking business failures (no ErrorBoundary) are expected to be routed by AutoTransitions.
+        // If epilogue is skipped, they become unhandled and must fault the transition.
+        if (tasksResult is { IsSuccess: true, HasFailedTasks: true })
+        {
+            NonBlockingTaskFailures.Add(context, trigger: "OnExecute", tasksResult);
+
+            if (context.Target?.AutoTransitions == null || !context.Target.AutoTransitions.Any())
+            {
+                return Result<StepOutcome>.Fail(
+                    ExecutionErrors.UnhandledNonBlockingTaskFailures(
+                        context.TransitionKey,
+                        context.Target?.Key ?? context.Current.Key,
+                        NonBlockingTaskFailures.Get(context),
+                        reason: "NoAutoTransitions"));
+            }
+
+            if (context.Directives.Epilogue == EpilogueMode.Skip)
+            {
+                return Result<StepOutcome>.Fail(
+                    ExecutionErrors.UnhandledNonBlockingTaskFailures(
+                        context.TransitionKey,
+                        context.Target?.Key ?? context.Current.Key,
+                        NonBlockingTaskFailures.Get(context),
+                        reason: "EpilogueSkipped"));
+            }
         }
         
         context.ApplyScriptContextChanges(scriptContext);
