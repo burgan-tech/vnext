@@ -19,7 +19,7 @@ public static class OutboxWorkerServiceCollectionExtensions
         services
             .AddDomainModule()
             .AddApplicationModule()
-            .AddInfrastructureModule()
+            .AddInfrastructureModule(configuration)
             .AddAspNetCoreModules(configuration)
             .AddResultResilience(configuration)
             .AddDaprClients()

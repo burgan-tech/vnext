@@ -10,9 +10,19 @@ public interface IRuntimeCacheInitializer
     /// <summary>
     /// Initializes the domain cache context by loading all workflow components from the database.
     /// This includes workflows, tasks, functions, views, schemas, and extensions.
+    /// Updates only in-memory cache (used by receiving pods).
     /// </summary>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A task representing the asynchronous initialization operation</returns>
     Task InitializeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Initializes both in-memory and distributed cache by loading all workflow components from the database.
+    /// This includes workflows, tasks, functions, views, schemas, and extensions.
+    /// Use this when triggering cache refresh that should propagate to all pods.
+    /// </summary>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
+    /// <returns>A task representing the asynchronous initialization operation</returns>
+    Task InitializeWithDistributedCacheAsync(CancellationToken cancellationToken = default);
 }
 

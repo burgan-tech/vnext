@@ -13,6 +13,12 @@ public interface ICacheSet : IDisposable
     Type EntityType { get; }
 
     Task LoadAllAsync(object data, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads all entities into both in-memory and distributed cache.
+    /// Used when initiating cache refresh that should propagate to all pods.
+    /// </summary>
+    Task LoadAllWithDistributedCacheAsync(object data, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

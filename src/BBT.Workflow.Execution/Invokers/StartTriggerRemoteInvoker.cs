@@ -335,6 +335,9 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
                 TaskType, taskKey);
         }
 
-        return _httpClientFactory.CreateClient(clientName);
+        var client = _httpClientFactory.CreateClient(clientName);
+        client.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+        
+        return client;
     }
 }

@@ -86,6 +86,8 @@ public static class ExecutionServiceCollectionExtensions
         services.AddHttpClient(WorkflowHttpClientNames.Default, client =>
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = int.MaxValue;
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -97,6 +99,8 @@ public static class ExecutionServiceCollectionExtensions
         services.AddHttpClient(WorkflowHttpClientNames.NoSslValidation, client =>
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = int.MaxValue;
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {

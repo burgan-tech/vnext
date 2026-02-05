@@ -16,6 +16,19 @@ public sealed class RuntimeCacheInitializer(
     /// <inheritdoc />
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        var initialData = await LoadAllEntitiesFromDatabaseAsync(cancellationToken);
+        await domainCacheContext.InitializeAsync(initialData, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task InitializeWithDistributedCacheAsync(CancellationToken cancellationToken = default)
+    {
+        var initialData = await LoadAllEntitiesFromDatabaseAsync(cancellationToken);
+        await domainCacheContext.InitializeWithDistributedCacheAsync(initialData, cancellationToken);
+    }
+
+    private async Task<Dictionary<Type, object>> LoadAllEntitiesFromDatabaseAsync(CancellationToken cancellationToken)
+    {
         async Task<IEnumerable<T?>> LoadAsync<T>(CancellationToken ct)
             where T : class, IDomainEntity, IReferenceSetter
         {
@@ -35,8 +48,8 @@ public sealed class RuntimeCacheInitializer(
         // Wait for all tasks to complete
         await Task.WhenAll(flowsTask, tasksTask, functionsTask, viewsTask, schemasTask, extensionsTask);
 
-        // Build the initial data dictionary
-        var initialData = new Dictionary<Type, object>
+        // Build and return the initial data dictionary
+        return new Dictionary<Type, object>
         {
             { typeof(Definitions.Workflow), flowsTask.Result ?? [] },
             { typeof(WorkflowTask), tasksTask.Result ?? [] },
@@ -45,8 +58,5 @@ public sealed class RuntimeCacheInitializer(
             { typeof(View), viewsTask.Result ?? [] },
             { typeof(Extension), extensionsTask.Result ?? [] }
         };
-
-        // Initialize the domain cache context
-        await domainCacheContext.InitializeAsync(initialData, cancellationToken);
     }
 }

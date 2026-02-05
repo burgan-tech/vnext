@@ -335,6 +335,65 @@ public class CacheSet<T>(
         return Task.CompletedTask;
     }
 
+    public async Task LoadAllWithDistributedCacheAsync(object data, CancellationToken cancellationToken = default)
+    {
+        if (data is not IEnumerable<T> entities)
+            throw new ArgumentException($"Invalid data type for {typeof(T).Name}");
+
+        var entitiesList = entities.ToList();
+        var entries = new Dictionary<string, CacheItem<T>>();
+        var index = new Dictionary<string, SortedSet<string>>();
+
+        // First, update in-memory cache
+        foreach (var entity in entitiesList)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var cacheKey = CreateCacheKey(entity);
+            EnsureReferenceIsSet(entity, cacheKey);
+
+            var item = new CacheItem<T>(entity);
+            entries[cacheKey] = item;
+            UpdateIndex(index, entity);
+        }
+
+        var newSnapshot = new CacheSnapshot<T>(
+            entries.ToImmutableDictionary(),
+            index.ToImmutableDictionary(kvp => kvp.Key, kvp => new SortedSet<string>(kvp.Value)));
+
+        Interlocked.Exchange(ref _snapshot, newSnapshot);
+
+        _logger.LogInformation(
+            "CacheSet<{Type}> initialized with distributed cache. Items: {Count}",
+            typeof(T).Name, entries.Count);
+
+        // Second, write all entities to distributed cache
+        var writeErrors = 0;
+        foreach (var entity in entitiesList)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var cacheKey = CreateCacheKey(entity);
+            try
+            {
+                await distributedCache.SetAsync(cacheKey, entity, cancellationToken: cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                writeErrors++;
+                _logger.LogError(ex, "Error writing to distributed cache for {CacheKey}", cacheKey);
+                // Continue with remaining entities even if one fails
+            }
+        }
+
+        if (writeErrors > 0)
+        {
+            _logger.LogWarning(
+                "CacheSet<{Type}> distributed cache write completed with {ErrorCount} errors out of {TotalCount} items",
+                typeof(T).Name, writeErrors, entitiesList.Count);
+        }
+    }
+
     /// <summary>
     /// Performs cleanup of expired and least-used items based on TTL and capacity.
     /// </summary>

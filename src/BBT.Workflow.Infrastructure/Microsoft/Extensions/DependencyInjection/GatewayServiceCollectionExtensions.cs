@@ -24,9 +24,13 @@ public static class GatewayServiceCollectionExtensions
         services.AddScoped<RemoteInstanceCommandGateway>();
         services.AddScoped<RemoteInstanceQueryGateway>();
 
+        services.AddScoped<LocalInstanceRetryGateway>();
+        services.AddScoped<RemoteInstanceRetryGateway>();
+
         // Routed gateways - route based on IRuntimeInfoProvider.IsDomainMatch()
         // These are registered as the interface implementations
         services.AddScoped<IInstanceCommandGateway, RoutedInstanceCommandGateway>();
+        services.AddScoped<IInstanceRetryGateway, RoutedInstanceRetryGateway>();
         services.AddScoped<IInstanceQueryGateway, RoutedInstanceQueryGateway>();
 
         return services;

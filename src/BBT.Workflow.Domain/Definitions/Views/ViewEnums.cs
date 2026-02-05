@@ -23,5 +23,15 @@ public enum ViewType
     /// <summary>
     /// Deep link URL for navigation
     /// </summary>
-    DeepLink = 4
+    DeepLink = 4,
+    
+    /// <summary>
+    /// Http
+    /// </summary>
+    Http = 5,
+    
+    /// <summary>
+    /// Urn
+    /// </summary>
+    URN = 6
 }

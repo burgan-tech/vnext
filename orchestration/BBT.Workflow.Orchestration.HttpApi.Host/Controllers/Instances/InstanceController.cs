@@ -20,10 +20,12 @@ namespace BBT.Workflow.Orchestration.Controllers.Instances;
 public sealed class InstanceController(
     IInstanceCommandAppService commandAppService,
     IInstanceQueryAppService queryAppService,
+    IInstanceRetryAppService retryAppService,
     IHttpContextAccessor httpContextAccessor,
     ISubflowCompletionService subflowCompletionService,
     ISubflowStateService subflowStateService,
-    IPaginationLinkGenerator linkGenerator) : AetherControllerBase
+    IPaginationLinkGenerator linkGenerator,
+    IUrlTemplateBuilder urlTemplateBuilder) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -50,9 +52,9 @@ public sealed class InstanceController(
         {
             Instance = new CreateInstanceInput
             {
-                Key = request.Key,
-                Tags = request.Tags,
-                Attributes = request.Attributes
+                Key = request?.Key,
+                Tags = request?.Tags,
+                Attributes = request?.Attributes
             }
         };
         var httpContext = httpContextAccessor.HttpContext;
@@ -182,6 +184,56 @@ public sealed class InstanceController(
         
         return FromResult(result);
     }
+
+    /// <summary>
+    /// Retries a faulted workflow instance by re-executing the incomplete transition.
+    /// </summary>
+    /// <param name="domain">The domain name.</param>
+    /// <param name="workflow">The workflow name.</param>
+    /// <param name="instance">The instance identifier (ID or key).</param>
+    /// <param name="data">Optional transition data to pass during retry.</param>
+    /// <param name="version">Optional workflow version.</param>
+    /// <param name="sync">Whether to execute synchronously.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Instance retry executed successfully</response>
+    /// <response code="400">Instance is not in faulted state or validation failed</response>
+    /// <response code="404">Instance or workflow not found</response>
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/retry")]
+    [ProducesResponseType(typeof(RetryInstanceOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RetryAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromBody] TransitionDataInput? data = null,
+        [FromQuery] string? version = null,
+        [FromQuery] bool sync = false,
+        CancellationToken cancellationToken = default)
+    {
+        var httpContext = httpContextAccessor.HttpContext;
+        var headers = httpContext?.Request.Headers.ToDictionary(
+            s => s.Key.ToLower(),
+            s => s.Value.FirstOrDefault()?.ToString()) ?? [];
+        var routeValues = httpContext?.Request.RouteValues.ToDictionary(
+            r => r.Key,
+            r => r.Value?.ToString()) ?? [];
+
+        var input = new RetryInstanceInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            Data = data,
+            Version = version,
+            Sync = sync,
+            Headers = headers,
+            RouteValues = routeValues
+        };
+
+        var result = await retryAppService.RetryAsync(input, cancellationToken);
+        return FromResult(result);
+    }
     
     /// <summary>
     /// Retrieves a workflow instance by key or ID.
@@ -244,7 +296,7 @@ public sealed class InstanceController(
             Extension = extension,
             Page = page,
             PageSize = pageSize,
-            PageUrl = InstanceUrlTemplates.InstanceList(domain, workflow),
+            PageUrl = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow),
             Filter = filter,
             Sort = sort,
             Headers = requestContext.Headers,
@@ -254,7 +306,7 @@ public sealed class InstanceController(
         var response = await queryAppService.GetInstanceListAsync(input, cancellationToken);
         if (response.IsSuccess)
         {
-            var route = InstanceUrlTemplates.InstanceList(domain, workflow, InstanceUrlTemplates.GetApiVersionPrefix("1"));
+            var route = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow);
 
             // Check if items contain GroupSummary objects (groupBy case) or GetInstanceOutput objects (normal case)
             var firstItem = response.Value!.Items.FirstOrDefault();

@@ -79,6 +79,19 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
     public new Task InitializeAsync(Dictionary<Type, object> initialData, CancellationToken cancellationToken = default)
         => base.InitializeAsync(initialData, cancellationToken);
 
+    public async Task InitializeWithDistributedCacheAsync(Dictionary<Type, object> initialData, CancellationToken cancellationToken = default)
+    {
+        foreach (var cacheSet in CacheSets)
+        {
+            var cacheSetType = cacheSet.GetType().GetGenericArguments()[0];
+
+            if (initialData.TryGetValue(cacheSetType, out var data))
+            {
+                await cacheSet.LoadAllWithDistributedCacheAsync(data, cancellationToken);
+            }
+        }
+    }
+
     public int CleanupAll(
         TimeSpan? ttl = null,
         int? maxItemsPerSet = null,

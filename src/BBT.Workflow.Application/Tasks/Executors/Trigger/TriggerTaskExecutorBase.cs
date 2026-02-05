@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
@@ -118,24 +119,23 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     }
 
     /// <summary>
-    /// Extracts headers from the script context for HTTP calls.
+    /// Converts task headers (JsonElement?) to Dictionary for local Input objects.
     /// </summary>
-    protected static Dictionary<string, string?>? ExtractHeaders(ScriptContext context)
+    protected static Dictionary<string, string?>? ConvertTaskHeadersToDictionary(JsonElement? taskHeaders)
     {
-        if (context.Headers == null || context.Headers?.Count == 0)
+        if (!taskHeaders.HasValue || taskHeaders.Value.ValueKind != JsonValueKind.Object)
+        {
             return null;
+        }
 
-        var headers = new Dictionary<string, string?>();
-        if (context.Headers != null)
-            foreach (var header in context.Headers)
-            {
-                if (header.Value != null)
-                {
-                    headers[header.Key] = header.Value.ToString() ?? string.Empty;
-                }
-            }
-
-        return headers.Count > 0 ? headers : null;
+        try
+        {
+            return taskHeaders.Value.Deserialize<Dictionary<string, string?>>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
 

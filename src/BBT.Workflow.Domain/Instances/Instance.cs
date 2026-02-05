@@ -298,7 +298,21 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
             FaultedAt = CompletedAt.Value
         });
     }
-
+    /// <summary>
+    /// Unfaults the instance, allowing it to be retried.
+    /// Changes the status from Faulted to Active and clears completion time.
+    /// </summary>
+    /// <returns>True if the instance was successfully unfaulted, false if it was not in Faulted state.</returns>
+    public bool Unfault()
+    {
+        if (!Status.Equals(InstanceStatus.Faulted))
+            return false;
+ 
+        Status = InstanceStatus.Active;
+        CompletedAt = null;
+        Duration = null;
+        return true;
+    }
     /// <summary>
     /// Cancels the instance and publishes a cancellation event.
     /// Sets the instance status to Canceled and records the completion time.

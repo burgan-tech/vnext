@@ -27,7 +27,8 @@ public sealed class FunctionController(
     IFunctionAppService functionAppService,
     IInstanceQueryAppService queryAppService,
     IPaginationLinkGenerator linkGenerator,
-    IServiceScopeFactory serviceScopeFactory) : AetherControllerBase
+    IServiceScopeFactory serviceScopeFactory,
+    IUrlTemplateBuilder urlTemplateBuilder) : AetherControllerBase
 {
     [HttpPatch("{domain}/functions")]
     public async Task<IActionResult> GetDomainFunctionsAsync(
@@ -72,7 +73,7 @@ public sealed class FunctionController(
             Domain = domain,
             Page = parameters.Page,
             PageSize = parameters.PageSize,
-            PageUrl = InstanceUrlTemplates.FunctionList(domain, workflow, function),
+            PageUrl = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow, function),
             Sort = parameters.Sort,
             Workflow = workflow,
             Filter = function.ToLowerInvariant() == Definitions.Functions.FunctionTypeConst.Data
@@ -88,7 +89,8 @@ public sealed class FunctionController(
         {
             return FromResult(instanceListResult);
         }
-         var pagedList = instanceListResult.Value!.ToPagedList(parameters.PageSize);
+        
+        var pagedList = instanceListResult.Value!.ToPagedList(parameters.PageSize);
         // Process based on function type
         var functionType = function.ToLowerInvariant();
 
@@ -231,7 +233,7 @@ public sealed class FunctionController(
         var results = await Task.WhenAll(tasks);
         var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
 
-        var route = InstanceUrlTemplates.FunctionList(domain, workflow,
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
             Definitions.Functions.FunctionTypeConst.Longpooling, InstanceUrlTemplates.GetApiVersionPrefix("1"));
         var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
 
@@ -337,7 +339,7 @@ public sealed class FunctionController(
         var results = await Task.WhenAll(tasks);
         var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
 
-        var route = InstanceUrlTemplates.FunctionList(domain, workflow,
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
             Definitions.Functions.FunctionTypeConst.Extensions, InstanceUrlTemplates.GetApiVersionPrefix("1"));
         var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
 
@@ -367,7 +369,7 @@ public sealed class FunctionController(
         var results = await Task.WhenAll(tasks);
         var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
 
-        var route = InstanceUrlTemplates.FunctionList(domain, workflow,
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
             Definitions.Functions.FunctionTypeConst.Schema, InstanceUrlTemplates.GetApiVersionPrefix("1"));
         var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
 
@@ -397,7 +399,7 @@ public sealed class FunctionController(
         var results = await Task.WhenAll(tasks);
         var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
 
-        var route = InstanceUrlTemplates.FunctionList(domain, workflow,
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
             Definitions.Functions.FunctionTypeConst.View, InstanceUrlTemplates.GetApiVersionPrefix("1"));
         var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
 
@@ -461,7 +463,7 @@ public sealed class FunctionController(
         var results = await Task.WhenAll(tasks);
         var list = results.Where(r => r.Result.IsSuccess).Select(r => r.Result.Value!).ToList();
 
-        var route = InstanceUrlTemplates.FunctionList(domain, workflow,
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
             Definitions.Functions.FunctionTypeConst.Data, InstanceUrlTemplates.GetApiVersionPrefix("1"));
         var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
         return Result<HateoasPagedResultDto<GetInstanceDataOutput>>.Ok(output);
@@ -486,7 +488,7 @@ public sealed class FunctionController(
         var results = await Task.WhenAll(tasks);
         var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
 
-        var route = InstanceUrlTemplates.FunctionList(domain, workflow, function,
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow, function,
             InstanceUrlTemplates.GetApiVersionPrefix("1"));
         var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
         return Result<HateoasPagedResultDto<Dictionary<string, dynamic?>>>.Ok(output);

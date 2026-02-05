@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Extensions.Http;
 using Polly.Timeout;
+using BBT.Workflow.Infrastructure.Instances.Remote;
 
 namespace BBT.Workflow.Remote.Extensions;
 
@@ -41,6 +42,38 @@ public static class RemoteServiceExtensions
         var options = optionsSection.Get<RemoteOptions>() ?? new RemoteOptions();
 
         services.AddHttpClient<IRemoteInstanceCommandAppService, RemoteInstanceCommandAppService>((sp, client) =>
+            {
+                var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
+                var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
+
+                // Note: BaseAddress is no longer set here - it's resolved dynamically per request
+                // using IDomainDiscoveryResolver based on the target domain
+                client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+                client.DefaultRequestHeaders.Add("User-Agent",
+                    $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
+
+                // Add internal operation header for circuit breaker context
+                if (clientOptions.EnableCircuitBreakerBypass)
+                {
+                    client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
+                }
+                
+                // Increase buffer size limits to handle large responses
+                client.MaxResponseContentBufferSize = int.MaxValue;
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                // Increase response headers length limit (default is 64KB)
+                MaxResponseHeadersLength = 1024 * 1024, // 1MB
+                // Increase request content buffer size limit (default is 2GB)
+                MaxRequestContentBufferSize = int.MaxValue
+            })
+            .AddPolicyHandler(GetTimeoutPolicy(options))
+            .AddPolicyHandler(GetRetryPolicy(options))
+            .AddPolicyHandler(GetCircuitBreakerPolicy(options));
+        services.AddHttpClient<IRemoteInstanceRetryAppService, RemoteInstanceRetryAppService>((sp, client) =>
             {
                 var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
                 var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;

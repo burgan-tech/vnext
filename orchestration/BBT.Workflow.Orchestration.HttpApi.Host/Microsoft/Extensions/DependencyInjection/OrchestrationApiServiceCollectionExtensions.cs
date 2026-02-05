@@ -17,10 +17,11 @@ public static class OrchestrationApiServiceCollectionExtensions
     public static IServiceCollection AddOrchestrationApiModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
+        
         services
             .AddDomainModule()
             .AddApplicationModule()
-            .AddInfrastructureModule() // Infrastructure manages its own dependencies
+            .AddInfrastructureModule(configuration) // Infrastructure manages its own dependencies including URL templates
             .AddAspNetCoreModules(configuration)
             .AddResultResilience(configuration)
             .AddDaprClients()

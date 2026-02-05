@@ -5,12 +5,15 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions.CastHandlers;
+using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
+using Dapr.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Nito.Disposables;
@@ -28,6 +31,8 @@ public sealed class DefinitionAppService(
     WorkflowCastProcessor castProcessor,
     IWorkflowMetrics workflowMetrics,
     IRuntimeCacheInitializer runtimeCacheInitializer,
+    DaprClient daprClient,
+    IConfiguration configuration,
     IServiceScopeFactory  scopeFactory,
     IServiceProvider serviceProvider)
     : ApplicationService(serviceProvider), IDefinitionAppService
@@ -349,7 +354,24 @@ public sealed class DefinitionAppService(
     /// <inheritdoc />
     public async Task<Result> ReInitializeAsync(CancellationToken cancellationToken = default)
     {
-        await runtimeCacheInitializer.InitializeAsync(cancellationToken);
+        // First, update both in-memory and distributed cache on this initiating pod
+        await runtimeCacheInitializer.InitializeWithDistributedCacheAsync(cancellationToken);
+        
+        // Then, publish broadcast event to all pods using Dapr client directly
+        var cacheInvalidationEvent = new DefinitionCacheInvalidationEvent
+        {
+            Domain = runtimeInfoProvider.Domain,
+            RequestedBy = "System",
+            RequestedAt = DateTime.UtcNow,
+            Environment = configuration["ASPNETCORE_ENVIRONMENT"]!
+        };
+        
+        await daprClient.PublishEventAsync(
+            pubsubName: configuration["DAPR_PUBSUB_BROADCAST_STORE_NAME"]!,
+            topicName: DefinitionCacheInvalidationEvent.TopicName,
+            data: cacheInvalidationEvent,
+            cancellationToken: cancellationToken);
+        
         return Result.Ok();
     }
 }

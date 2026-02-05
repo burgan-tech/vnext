@@ -18,6 +18,16 @@ public interface IDomainCacheContext
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Initializes both in-memory and distributed cache from the provided data.
+    /// Use this when triggering cache refresh that should propagate to all pods.
+    /// </summary>
+    /// <param name="initialData">Dictionary mapping entity types to their data</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
+    /// <returns>A task representing the asynchronous initialization operation</returns>
+    Task InitializeWithDistributedCacheAsync(Dictionary<Type, object> initialData,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the cache set for the specified entity type.
     /// </summary>
     /// <typeparam name="T">The entity type</typeparam>

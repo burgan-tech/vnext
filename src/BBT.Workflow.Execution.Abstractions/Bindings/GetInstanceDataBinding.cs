@@ -42,6 +42,16 @@ public sealed class GetInstanceDataBinding
     public bool ValidateSSL { get; init; } = true;
 
     /// <summary>
+    /// Request headers as JSON string.
+    /// </summary>
+    public string? Headers { get; init; }
+
+    /// <summary>
+    /// Timeout seconds for HTTP requests.
+    /// </summary>
+    public int TimeoutSeconds { get; init; } = 30;
+
+    /// <summary>
     /// Resolved base URL for HTTP requests.
     /// </summary>
     public string? BaseUrl { get; init; }

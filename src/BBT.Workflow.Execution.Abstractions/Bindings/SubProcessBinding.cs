@@ -75,6 +75,11 @@ public sealed class SubProcessBinding
     public bool ValidateSSL { get; init; } = true;
 
     /// <summary>
+    /// Timeout seconds for HTTP requests.
+    /// </summary>
+    public int TimeoutSeconds { get; init; } = 30;
+
+    /// <summary>
     /// Resolved base URL for HTTP requests.
     /// </summary>
     public string? BaseUrl { get; init; }

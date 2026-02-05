@@ -54,7 +54,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} input preparation failed: {Error}",
                 taskKey, inputResult.Error.Message);
-            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            return Result<StandardTaskResponse>.Fail(inputResult.Error);
             // return CreateErrorResponse(inputResult.Error, stopwatch.ElapsedMilliseconds);
         }
         
@@ -67,7 +67,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} pre-processing failed: {Error}",
                 taskKey, preProcessResult.Error.Message);
-            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            return Result<StandardTaskResponse>.Fail(preProcessResult.Error);
             // return CreateErrorResponse(preProcessResult.Error, stopwatch.ElapsedMilliseconds);
         }
 
@@ -93,7 +93,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} post-processing failed: {Error}",
                 taskKey, postProcessResult.Error.Message);
-            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            return Result<StandardTaskResponse>.Fail(postProcessResult.Error);
             // return CreateErrorResponse(postProcessResult.Error, stopwatch.ElapsedMilliseconds);
         }
 
@@ -104,7 +104,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             stopwatch.Stop();
             Logger.LogError("Task {TaskKey} output processing failed: {Error}",
                 taskKey, outputResult.Error.Message);
-            return Result<StandardTaskResponse>.Fail(validationResult.Error);
+            return Result<StandardTaskResponse>.Fail(outputResult.Error);
             // return CreateErrorResponse(outputResult.Error, stopwatch.ElapsedMilliseconds);
         }
         

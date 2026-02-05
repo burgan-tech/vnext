@@ -48,6 +48,9 @@ public static class TaskBindingMapper
                 
                 // Trigger tasks (basic mapping - runtime context handled by invokers)
                 StartTask startTask => (TaskTypes.StartTrigger, (object)MapStartTask(startTask)),
+                DirectTriggerTask directTriggerTask => (TaskTypes.DirectTrigger, (object)MapDirectTriggerTask(directTriggerTask)),
+                SubProcessTask subProcessTask => (TaskTypes.SubProcess, (object)MapSubProcessTask(subProcessTask)),
+                GetInstancesTask getInstancesTask => (TaskTypes.GetInstances, (object)MapGetInstancesTask(getInstancesTask)),
                 GetInstanceDataTask getDataTask => (TaskTypes.GetInstanceData, (object)MapGetInstanceDataTask(getDataTask)),
                 
                 // Note: DirectTriggerTask and SubProcessTask require runtime context (InstanceId, Correlation)
@@ -84,10 +87,71 @@ public static class TaskBindingMapper
     {
         Domain = task.TriggerDomain,
         Workflow = task.TriggerFlow,
-        Version = null, // StartTask doesn't have version
+        Version = task.TriggerVersion,
         Body = task.Body,
-        Headers = null, // Headers extracted from context at runtime
-        Sync = true
+        Tags = task.TriggerTags,
+        Sync = task.TriggerSync,
+        UseDapr = task.UseDapr,
+        ValidateSSL = task.ValidateSSL,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds,
+    };
+    
+    /// <summary>
+    /// Maps DirectTriggerTask to DirectTriggerBinding.
+    /// </summary>
+    private static DirectTriggerBinding MapDirectTriggerTask(DirectTriggerTask task) => new()
+    {
+        Domain = task.TriggerDomain,
+        Workflow = task.TriggerFlow,
+        Version = task.TriggerVersion,
+        InstanceId = task.TriggerInstanceId,
+        Key = task.TriggerKey,
+        TransitionName =  task.TransitionName,
+        Body = task.Body,
+        Tags = task.TriggerTags,
+        Sync = task.TriggerSync,
+        UseDapr = task.UseDapr,
+        ValidateSSL = task.ValidateSSL,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds
+    };
+    
+    /// <summary>
+    /// Maps SubProcessTask to SubProcessBinding.
+    /// </summary>
+    private static SubProcessBinding MapSubProcessTask(SubProcessTask task) => new()
+    {
+        Domain = task.TriggerDomain,
+        Workflow = task.TriggerFlow,
+        Version = task.TriggerVersion,
+        Tags = task.TriggerTags,
+        Key = task.TriggerKey,
+        InstanceId = Guid.Empty,
+        Body = task.Body,
+        ExtraProperties = new Dictionary<string, object>(),
+        Sync = task.TriggerSync,
+        UseDapr = task.UseDapr,
+        ValidateSSL = task.ValidateSSL,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds
+    };
+    
+    /// <summary>
+    /// Maps GetInstancesTask to GetInstancesBinding.
+    /// Note: Instance is resolved at runtime, this provides a basic mapping.
+    /// </summary>
+    private static GetInstancesBinding MapGetInstancesTask(GetInstancesTask task) => new()
+    {
+        Domain = task.TriggerDomain,
+        Workflow = task.TriggerFlow,
+        Filter = task.Filter,
+        Page = task.Page,
+        PageSize = task.PageSize,
+        ValidateSSL = task.ValidateSSL,
+        UseDapr = task.UseDapr,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds
     };
 
     /// <summary>
@@ -100,6 +164,10 @@ public static class TaskBindingMapper
         Workflow = task.TriggerFlow,
         Instance = task.Identifier ?? string.Empty,
         Extensions = task.Extensions,
+        ValidateSSL = task.ValidateSSL,
+        UseDapr = task.UseDapr,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds,
         ETag = null
     };
 

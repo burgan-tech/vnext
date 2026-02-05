@@ -9,6 +9,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -121,31 +122,41 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
     {
         Logger.LogDebug("Using RemoteInvokerService for StartTrigger task {TaskKey}", task.Key);
 
-        var bindingResult = await BuildStartTriggerBindingAsync(task, context, cancellationToken);
-        
-        if (!bindingResult.IsSuccess)
+        // Create envelope from task using TaskBindingMapper
+        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        if (!envelopeResult.IsSuccess)
+        {
+            Logger.TaskEnvelopeCreationFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                envelopeResult.Error.Message ?? "Failed to create envelope");
+            return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
+        }
+
+        // Enrich binding with runtime context (endpoint, headers)
+        var enrichResult = await EnrichBindingAsync<StartTriggerBinding>(
+            envelopeResult.Value!,
+            task.TriggerDomain,
+            task.UseDapr,
+            context,
+            cancellationToken);
+
+        if (!enrichResult.IsSuccess)
         {
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext.Instance.Id,
-                bindingResult.Error.Message ?? "Failed to resolve endpoint");
-            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+                enrichResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(enrichResult.Error);
         }
-
-        var binding = bindingResult.Value!;
-        var envelope = new TaskEnvelope
-        {
-            TaskType = TaskTypes.StartTrigger,
-            TaskKey = task.Key,
-            Binding = JsonSerializer.SerializeToElement(binding)
-        };
 
         var traceContext = RemoteInvoker.CreateTraceContext(context.ScriptContext);
         var result = await RemoteInvoker.InvokeAsync(
             TaskTypes.StartTrigger,
             task.Key,
-            envelope,
+            enrichResult.Value!,
             traceContext,
             cancellationToken);
 
@@ -161,9 +172,63 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         return result;
     }
 
+    private async Task<Result<TaskEnvelope>> EnrichBindingAsync<TBinding>(
+        TaskEnvelope envelope,
+        string targetDomain,
+        bool useDapr,
+        TaskExecutorContext context,
+        CancellationToken cancellationToken)
+    {
+        // Deserialize binding
+        var binding = envelope.Binding.Deserialize<StartTriggerBinding>();
+        if (binding == null)
+        {
+            return Result<TaskEnvelope>.Fail(Error.Failure(
+                WorkflowErrorCodes.TaskBindingMappingFailed,
+                "Failed to deserialize binding"));
+        }
+
+        // Resolve endpoint
+        var preferredKind = useDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        var endpointResult = await _endpointResolver.GetEndpointAsync(
+            targetDomain, preferredKind, cancellationToken);
+
+        if (!endpointResult.IsSuccess)
+        {
+            return Result<TaskEnvelope>.Fail(endpointResult.Error);
+        }
+
+        var endpoint = endpointResult.Value!;
+
+        // Create enriched binding with runtime context
+        var enrichedBinding = new StartTriggerBinding
+        {
+            Domain = binding.Domain,
+            Workflow = binding.Workflow,
+            Version = binding.Version,
+            Key = binding.Key,
+            Body = binding.Body,
+            Tags = binding.Tags,
+            Sync = binding.Sync,
+            UseDapr = binding.UseDapr,
+            ValidateSSL = binding.ValidateSSL,
+            TimeoutSeconds = binding.TimeoutSeconds,
+            Headers = binding.Headers,
+            BaseUrl = endpoint.BaseUrl.ToString(),
+            DaprAppId = endpoint.DaprAppId
+        };
+
+        return Result.Ok(new TaskEnvelope
+        {
+            TaskType = envelope.TaskType,
+            TaskKey = envelope.TaskKey,
+            Binding = JsonSerializer.SerializeToElement(enrichedBinding)
+        });
+    }
+
     private StartInstanceInput BuildStartInstanceInput(StartTask task, TaskExecutorContext context)
     {
-        var headers = ExtractHeaders(context.ScriptContext);
+        var headers = ConvertTaskHeadersToDictionary(task.Headers);
 
         return new StartInstanceInput(
             domain: task.TriggerDomain,
@@ -179,40 +244,5 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             },
             Headers = headers ?? new Dictionary<string, string?>()
         };
-    }
-
-    private async Task<Result<StartTriggerBinding>> BuildStartTriggerBindingAsync(
-        StartTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var headers = ExtractHeaders(context.ScriptContext);
-
-        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
-        var endpointResult = await _endpointResolver.GetEndpointAsync(
-            task.TriggerDomain, preferredKind, cancellationToken);
-
-        if (!endpointResult.IsSuccess)
-        {
-            return Result<StartTriggerBinding>.Fail(endpointResult.Error);
-        }
-
-        var endpoint = endpointResult.Value!;
-
-        return Result.Ok(new StartTriggerBinding
-        {
-            Domain = task.TriggerDomain,
-            Workflow = task.TriggerFlow,
-            Version = task.TriggerVersion,
-            Key = task.TriggerKey,
-            Tags = task.TriggerTags,
-            Body = task.Body,
-            Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
-            Sync = task.TriggerSync,
-            UseDapr = task.UseDapr,
-            ValidateSSL = task.ValidateSSL,
-            BaseUrl = endpoint.BaseUrl.ToString(),
-            DaprAppId = endpoint.DaprAppId
-        });
     }
 }

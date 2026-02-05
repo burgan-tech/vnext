@@ -11,6 +11,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -193,17 +194,17 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     {
         Logger.LogDebug("Using RemoteInvokerService for SubProcess task {TaskKey}", task.Key);
 
-        var bindingResult = await BuildSubProcessBindingAsync(task, context.ScriptContext, subFlowInstanceId, cancellationToken);
-        
-        if (!bindingResult.IsSuccess)
+        // Create envelope from task using TaskBindingMapper
+        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        if (!envelopeResult.IsSuccess)
         {
-            Logger.TaskRemoteExecutionFailed(
+            Logger.TaskEnvelopeCreationFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext.Instance.Id,
-                bindingResult.Error.Message ?? "Failed to resolve endpoint");
+                envelopeResult.Error.Message ?? "Failed to create envelope");
             return TaskInvocationResult.Failure(
-                error: bindingResult.Error.Message ?? "Failed to resolve endpoint",
+                error: envelopeResult.Error.Message ?? "Failed to create envelope",
                 statusCode: 500,
                 taskType: TaskType.ToString(),
                 metadata: new Dictionary<string, object>
@@ -213,19 +214,37 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                 });
         }
 
-        var binding = bindingResult.Value!;
-        var envelope = new TaskEnvelope
+        // Enrich binding with runtime context (endpoint, headers, callback, instanceId, extraProperties)
+        var enrichResult = await EnrichSubProcessBindingAsync(
+            envelopeResult.Value!,
+            task,
+            context,
+            subFlowInstanceId,
+            cancellationToken);
+
+        if (!enrichResult.IsSuccess)
         {
-            TaskType = TaskTypes.SubProcess,
-            TaskKey = task.Key,
-            Binding = JsonSerializer.SerializeToElement(binding)
-        };
+            Logger.TaskRemoteExecutionFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                enrichResult.Error.Message ?? "Failed to resolve endpoint");
+            return TaskInvocationResult.Failure(
+                error: enrichResult.Error.Message ?? "Failed to resolve endpoint",
+                statusCode: 500,
+                taskType: TaskType.ToString(),
+                metadata: new Dictionary<string, object>
+                {
+                    ["SubFlowInstanceId"] = subFlowInstanceId,
+                    ["CorrelationId"] = correlationId
+                });
+        }
 
         var traceContext = RemoteInvoker.CreateTraceContext(context.ScriptContext);
         var result = await RemoteInvoker.InvokeAsync(
             TaskTypes.SubProcess,
             task.Key,
-            envelope,
+            enrichResult.Value!,
             traceContext,
             cancellationToken);
 
@@ -271,9 +290,68 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         };
     }
 
+    private async Task<Result<TaskEnvelope>> EnrichSubProcessBindingAsync(
+        TaskEnvelope envelope,
+        SubProcessTask task,
+        TaskExecutorContext context,
+        Guid subFlowInstanceId,
+        CancellationToken cancellationToken)
+    {
+        // Deserialize binding
+        var binding = envelope.Binding.Deserialize<SubProcessBinding>();
+        if (binding == null)
+        {
+            return Result<TaskEnvelope>.Fail(Error.Failure(
+                WorkflowErrorCodes.TaskBindingMappingFailed,
+                "Failed to deserialize SubProcessBinding"));
+        }
+
+        // Resolve endpoint
+        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        var endpointResult = await _endpointResolver.GetEndpointAsync(
+            task.TriggerDomain, preferredKind, cancellationToken);
+
+        if (!endpointResult.IsSuccess)
+        {
+            return Result<TaskEnvelope>.Fail(endpointResult.Error);
+        }
+
+        var endpoint = endpointResult.Value!;
+
+        // Create enriched binding with runtime context
+        var enrichedBinding = new SubProcessBinding
+        {
+            Domain = binding.Domain,
+            Workflow = binding.Workflow,
+            Version = binding.Version,
+            Key = binding.Key,
+            Body = binding.Body,
+            Tags = binding.Tags,
+            Sync = binding.Sync,
+            UseDapr = binding.UseDapr,
+            ValidateSSL = binding.ValidateSSL,
+            TimeoutSeconds = binding.TimeoutSeconds,
+            InstanceId = subFlowInstanceId,
+            Callback = GetCallbackAppId(),
+            ExtraProperties = BuildExtraPropertiesAsDictionary(context.ScriptContext, task),
+            Headers = binding.Headers,
+            BaseUrl = endpoint.BaseUrl.ToString(),
+            DaprAppId = endpoint.DaprAppId
+        };
+
+        return Result.Ok(new TaskEnvelope
+        {
+            TaskType = envelope.TaskType,
+            TaskKey = envelope.TaskKey,
+            Binding = JsonSerializer.SerializeToElement(enrichedBinding)
+        });
+    }
+
     private StartInstanceInput BuildStartInstanceInput(SubProcessTask task, ScriptContext context,
         Guid subFlowInstanceId)
     {
+        var headers = ConvertTaskHeadersToDictionary(task.Headers);
+
         return new StartInstanceInput(
                 domain: task.TriggerDomain,
                 workflow: task.TriggerFlow,
@@ -289,48 +367,9 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     Callback = GetCallbackAppId(),
                     ExtraProperties = BuildExtraProperties(context, task)
                 },
-                Headers = ExtractHeaders(context) ?? new Dictionary<string, string?>(),
+                Headers = headers ?? new Dictionary<string, string?>(),
                 StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
             };
-    }
-
-    private async Task<Result<SubProcessBinding>> BuildSubProcessBindingAsync(
-        SubProcessTask task,
-        ScriptContext context,
-        Guid subFlowInstanceId,
-        CancellationToken cancellationToken)
-    {
-        var headers = ExtractHeaders(context);
-
-        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
-        var endpointResult = await _endpointResolver.GetEndpointAsync(
-            task.TriggerDomain, preferredKind, cancellationToken);
-
-        if (!endpointResult.IsSuccess)
-        {
-            return Result<SubProcessBinding>.Fail(endpointResult.Error);
-        }
-
-        var endpoint = endpointResult.Value!;
-
-        return Result.Ok(new SubProcessBinding
-        {
-            Domain = task.TriggerDomain,
-            Workflow = task.TriggerFlow,
-            Version = task.TriggerVersion,
-            InstanceId = subFlowInstanceId,
-            Key = task.TriggerKey,
-            Callback = GetCallbackAppId(),
-            Body = task.Body,
-            Tags = task.TriggerTags,
-            Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
-            ExtraProperties = BuildExtraPropertiesAsDictionary(context, task),
-            Sync = task.TriggerSync,
-            UseDapr = task.UseDapr,
-            ValidateSSL = task.ValidateSSL,
-            BaseUrl = endpoint.BaseUrl.ToString(),
-            DaprAppId = endpoint.DaprAppId
-        });
     }
 
     private async Task<Result> CreateCorrelationAsync(

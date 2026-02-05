@@ -479,14 +479,15 @@ function replaceDomainInJson(obj, targetDomain) {
     }
     
     // Recursively process all properties to find nested domain fields
+    // BUT skip "config" and "process" keys - it should always remain unchanged
     for (const [key, value] of Object.entries(result)) {
-        if (key !== 'domain') { // Skip domain itself, already processed
-        result[key] = replaceDomainInJson(value, targetDomain);
+        if (key !== 'domain' && key !== 'config' && key !== "process") { // Skip domain (already processed) and attributes (always preserved)
+            result[key] = replaceDomainInJson(value, targetDomain);
         }
     }
     
     return result;
-}
+} 
 
 
 /**

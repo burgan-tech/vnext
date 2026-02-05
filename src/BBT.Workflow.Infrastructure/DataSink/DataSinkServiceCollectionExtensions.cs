@@ -1,5 +1,6 @@
 using BBT.Workflow.ClickHouse;
 using BBT.Workflow.DataSink;
+using BBT.Workflow.Instances;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -85,9 +86,9 @@ public static class DataSinkServiceCollectionExtensions
         });
 
         // Register ClickHouse DataSink implementations
-        services.AddSingleton<IDataSink<Instances.Instance>, ClickHouseInstanceDataSink>();
-        services.AddSingleton<IDataSink<Instances.InstanceTransition>, ClickHouseInstanceTransitionDataSink>();
-        services.AddSingleton<IDataSink<Instances.InstanceTask>, ClickHouseInstanceTaskDataSink>();
+        services.AddSingleton<IDataSink<Instance>, ClickHouseInstanceDataSink>();
+        services.AddSingleton<IDataSink<InstanceTransition>, ClickHouseInstanceTransitionDataSink>();
+        services.AddSingleton<IDataSink<InstanceTask>, ClickHouseInstanceTaskDataSink>();
 
         return services;
     }

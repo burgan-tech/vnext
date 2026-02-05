@@ -412,6 +412,9 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 TaskType, taskKey);
         }
 
-        return _httpClientFactory.CreateClient(clientName);
+        var client = _httpClientFactory.CreateClient(clientName);
+        client.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+        
+        return client;
     }
 }

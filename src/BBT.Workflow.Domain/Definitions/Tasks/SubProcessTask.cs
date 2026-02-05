@@ -63,6 +63,16 @@ public sealed class SubProcessTask : WorkflowTask
     /// </summary>
     public bool ValidateSSL { get; private set; } = true;
 
+    /// <summary>
+    /// Headers
+    /// </summary>
+    public JsonElement? Headers { get; private set; }
+
+    /// <summary>
+    /// Timeout seconds
+    /// </summary>
+    public int TimeoutSeconds { get; private set; } = 30;
+
     public void SetBody(dynamic body)
     {
         Body = JsonSerializer.SerializeToElement(body);
@@ -110,6 +120,11 @@ public sealed class SubProcessTask : WorkflowTask
         TriggerSync = sync;
     }
 
+    public void SetHeaders(Dictionary<string, string?> headers)
+    {
+        Headers = JsonSerializer.SerializeToElement(headers);
+    }
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -123,6 +138,8 @@ public sealed class SubProcessTask : WorkflowTask
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
+    internal void SetHeadersInternal(JsonElement? headers) => Headers = headers;
+    internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
 
     protected override void Configure(JsonElement config)
     {
@@ -159,6 +176,15 @@ public sealed class SubProcessTask : WorkflowTask
 
         if (config.TryGetProperty("validateSsl", out var validateSslElement))
             ValidateSSL = validateSslElement.GetBoolean();
+
+        if (config.TryGetProperty("headers", out var headersElement))
+        {
+            var headers = headersElement.GetRawText();
+            Headers = string.IsNullOrWhiteSpace(headers) ? null : headersElement;
+        }
+
+        if (config.TryGetProperty("timeoutSeconds", out var timeoutSeconds))
+            TimeoutSeconds = timeoutSeconds.GetInt32();
     }
 
     public static SubProcessTask Create(JsonElement config)
@@ -191,6 +217,8 @@ public sealed class SubProcessTask : WorkflowTask
         cloned.TriggerTags = TriggerTags;
         cloned.UseDapr = UseDapr;
         cloned.ValidateSSL = ValidateSSL;
+        cloned.Headers = Headers;
+        cloned.TimeoutSeconds = TimeoutSeconds;
         return cloned;
     }
 
@@ -210,6 +238,8 @@ public sealed class SubProcessTask : WorkflowTask
         SetTriggerTagsInternal(source.TriggerTags);
         SetUseDaprInternal(source.UseDapr);
         SetValidateSSLInternal(source.ValidateSSL);
+        SetHeadersInternal(source.Headers);
+        SetTimeoutSecondsInternal(source.TimeoutSeconds);
     }
 
     /// <summary>
@@ -227,6 +257,8 @@ public sealed class SubProcessTask : WorkflowTask
         TriggerTags = null;
         UseDapr = false;
         ValidateSSL = true;
+        Headers = null;
+        TimeoutSeconds = 30;
     }
 
     /// <summary>

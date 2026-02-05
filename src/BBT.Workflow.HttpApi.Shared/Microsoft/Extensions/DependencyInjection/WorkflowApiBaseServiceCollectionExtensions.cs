@@ -8,7 +8,6 @@ using BBT.Aether.MultiSchema.EntityFrameworkCore.Interceptors;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
-using BBT.Workflow.Definitions;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;

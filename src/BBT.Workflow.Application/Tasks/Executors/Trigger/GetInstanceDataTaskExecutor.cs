@@ -9,6 +9,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -101,12 +102,15 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
 
         try
         {
+            var headers = ConvertTaskHeadersToDictionary(task.Headers);
+
             var input = new GetInstanceDataInput
             {
                 Domain = task.TriggerDomain,
                 Workflow = task.TriggerFlow,
                 Instance = instanceIdentifier,
-                Extensions = task.Extensions
+                Extensions = task.Extensions,
+                Headers = headers
             };
 
             var result = await _instanceQueryGateway.GetInstanceDataAsync(input, cancellationToken);
@@ -165,31 +169,42 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
     {
         Logger.LogDebug("Using RemoteInvokerService for GetInstanceData task {TaskKey}", task.Key);
 
-        var bindingResult = await BuildGetInstanceDataBindingAsync(task, instanceIdentifier, cancellationToken);
-        
-        if (!bindingResult.IsSuccess)
+        // Create envelope from task using TaskBindingMapper
+        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        if (!envelopeResult.IsSuccess)
+        {
+            Logger.TaskEnvelopeCreationFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                envelopeResult.Error.Message ?? "Failed to create envelope");
+            return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
+        }
+
+        // Enrich binding with runtime context (endpoint, headers, resolved instance)
+        var enrichResult = await EnrichBindingAsync(
+            envelopeResult.Value!,
+            task.TriggerDomain,
+            task.UseDapr,
+            instanceIdentifier,
+            context,
+            cancellationToken);
+
+        if (!enrichResult.IsSuccess)
         {
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext.Instance.Id,
-                bindingResult.Error.Message ?? "Failed to resolve endpoint");
-            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+                enrichResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(enrichResult.Error);
         }
-
-        var binding = bindingResult.Value!;
-        var envelope = new TaskEnvelope
-        {
-            TaskType = TaskTypes.GetInstanceData,
-            TaskKey = task.Key,
-            Binding = JsonSerializer.SerializeToElement(binding)
-        };
 
         var traceContext = RemoteInvoker.CreateTraceContext(context.ScriptContext);
         var result = await RemoteInvoker.InvokeAsync(
             TaskTypes.GetInstanceData,
             task.Key,
-            envelope,
+            enrichResult.Value!,
             traceContext,
             cancellationToken);
 
@@ -205,33 +220,56 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         return result;
     }
 
-    private async Task<Result<GetInstanceDataBinding>> BuildGetInstanceDataBindingAsync(
-        GetInstanceDataTask task,
+    private async Task<Result<TaskEnvelope>> EnrichBindingAsync(
+        TaskEnvelope envelope,
+        string targetDomain,
+        bool useDapr,
         string instanceIdentifier,
+        TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        // Deserialize binding
+        var binding = envelope.Binding.Deserialize<GetInstanceDataBinding>();
+        if (binding == null)
+        {
+            return Result<TaskEnvelope>.Fail(Error.Failure(
+                WorkflowErrorCodes.TaskBindingMappingFailed,
+                "Failed to deserialize GetInstanceDataBinding"));
+        }
+
+        // Resolve endpoint
+        var preferredKind = useDapr ? EndpointKind.Dapr : EndpointKind.Url;
         var endpointResult = await _endpointResolver.GetEndpointAsync(
-            task.TriggerDomain, preferredKind, cancellationToken);
+            targetDomain, preferredKind, cancellationToken);
 
         if (!endpointResult.IsSuccess)
         {
-            return Result<GetInstanceDataBinding>.Fail(endpointResult.Error);
+            return Result<TaskEnvelope>.Fail(endpointResult.Error);
         }
 
         var endpoint = endpointResult.Value!;
 
-        return Result.Ok(new GetInstanceDataBinding
+        // Create enriched binding with runtime context
+        var enrichedBinding = new GetInstanceDataBinding
         {
-            Domain = task.TriggerDomain,
-            Workflow = task.TriggerFlow,
+            Domain = binding.Domain,
+            Workflow = binding.Workflow,
             Instance = instanceIdentifier,
-            Extensions = task.Extensions,
-            ETag = null,
-            UseDapr = task.UseDapr,
-            ValidateSSL = task.ValidateSSL,
+            Extensions = binding.Extensions,
+            ETag = binding.ETag,
+            UseDapr = binding.UseDapr,
+            ValidateSSL = binding.ValidateSSL,
+            TimeoutSeconds = binding.TimeoutSeconds,
+            Headers = binding.Headers,
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId
+        };
+
+        return Result.Ok(new TaskEnvelope
+        {
+            TaskType = envelope.TaskType,
+            TaskKey = envelope.TaskKey,
+            Binding = JsonSerializer.SerializeToElement(enrichedBinding)
         });
     }
 }

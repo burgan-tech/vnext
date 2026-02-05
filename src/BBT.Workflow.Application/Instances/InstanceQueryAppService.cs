@@ -26,6 +26,7 @@ public sealed class InstanceQueryAppService(
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
     ITaskConditionService taskConditionService,
+    IUrlTemplateBuilder urlTemplateBuilder,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -585,8 +586,8 @@ private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync
         var transitionItems = subFlowStateInfo.AvailableTransitions.Select(transitionKey => new TransitionItem
         {
             Name = transitionKey,
-            Href = InstanceUrlTemplates.Transition(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey),
-            Schema = new HrefBase { Href = InstanceUrlTemplates.Schema(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey) }
+            Href = urlTemplateBuilder.BuildTransitionUrl(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey),
+            Schema = new HrefBase { Href = urlTemplateBuilder.BuildSchemaUrl(input.Domain, input.Workflow, instance.Id.ToString(), transitionKey) }
         }).ToList();
 
         // Get current state using Railway pattern
@@ -614,15 +615,15 @@ private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync
                 var dataHref = new DataHref
                 {
                     Href = allExtensions.Length > 0
-                        ? InstanceUrlTemplates.DataWithExtensions(input.Domain, input.Workflow, instance.Id.ToString(),
+                        ? urlTemplateBuilder.BuildDataWithExtensionsUrl(input.Domain, input.Workflow, instance.Id.ToString(),
                             allExtensions)
-                        : InstanceUrlTemplates.Data(input.Domain, input.Workflow, instance.Id.ToString())
+                        : urlTemplateBuilder.BuildDataUrl(input.Domain, input.Workflow, instance.Id.ToString())
                 };
 
                 // Build view href - use SubFlow view's LoadData if available, otherwise use main flow
                 var viewHref = new ViewHref
                 {
-                    Href = InstanceUrlTemplates.View(input.Domain, input.Workflow, instance.Id.ToString()),
+                    Href = urlTemplateBuilder.BuildViewUrl(input.Domain, input.Workflow, instance.Id.ToString()),
                     LoadData = subFlowStateInfo.SubFlowView?.LoadData ?? viewLoadData
                 };
 
@@ -639,10 +640,10 @@ private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync
                         SubFlowVersion = correlation.SubFlowVersion,
                         IsCompleted = correlation.IsCompleted,
                         Href = allExtensions.Length > 0
-                            ? InstanceUrlTemplates.DataWithExtensions(correlation.SubFlowDomain, correlation.SubFlowName,
+                            ? urlTemplateBuilder.BuildDataWithExtensionsUrl(correlation.SubFlowDomain, correlation.SubFlowName,
                                 correlation.SubFlowInstanceId.ToString(),
                                 allExtensions)
-                            : InstanceUrlTemplates.Data(correlation.SubFlowDomain, correlation.SubFlowName,
+                            : urlTemplateBuilder.BuildDataUrl(correlation.SubFlowDomain, correlation.SubFlowName,
                                 correlation.SubFlowInstanceId.ToString())
                     }).ToList();
 

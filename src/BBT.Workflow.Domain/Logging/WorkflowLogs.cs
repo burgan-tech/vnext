@@ -1296,6 +1296,56 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Instance Retry
+ 
+    /// <summary>
+    /// Logs when an instance retry is requested.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20050,
+        Level = LogLevel.Information,
+        Message = "Instance retry requested for {InstanceId} in workflow {WorkflowKey}")]
+    public static partial void InstanceRetryRequested(
+        this ILogger logger,
+        string instanceId,
+        string workflowKey);
+ 
+    /// <summary>
+    /// Logs when an instance is successfully unfaulted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20051,
+        Level = LogLevel.Information,
+        Message = "Instance {InstanceId} unfaulted, ready for retry")]
+    public static partial void InstanceUnfaulted(
+        this ILogger logger,
+        Guid instanceId);
+ 
+    /// <summary>
+    /// Logs when an instance retry succeeds.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20052,
+        Level = LogLevel.Information,
+        Message = "Instance {InstanceId} retry succeeded")]
+    public static partial void InstanceRetrySucceeded(
+        this ILogger logger,
+        Guid instanceId);
+ 
+    /// <summary>
+    /// Logs when an instance retry fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20053,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} retry failed: {Reason}")]
+    public static partial void InstanceRetryFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string reason);
+ 
+    #endregion
+
     #region Service Discovery
 
     /// <summary>

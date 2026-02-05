@@ -186,7 +186,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         HttpResponseMessage response,
         long executionDurationMs,
         CancellationToken cancellationToken)
-    {
+        {
         var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         var responseData = InvokerHelpers.TryParseJson(content);
@@ -343,6 +343,9 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
                 TaskType, taskKey);
         }
 
-        return _httpClientFactory.CreateClient(clientName);
+        var client = _httpClientFactory.CreateClient(clientName);
+        client.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+        
+        return client;
     }
 }

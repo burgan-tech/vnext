@@ -15,6 +15,7 @@ using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -28,13 +29,39 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     /// Adds the infrastructure module services to the specified <see cref="IServiceCollection" />.
     /// </summary>
     /// <param name="services">The <see cref="IServiceCollection" /> to add services to.</param>
+    /// <param name="configuration">The configuration instance for service configuration.</param>
     /// <returns>The <see cref="IServiceCollection" /> so that additional calls can be chained.</returns>
     /// <remarks>
     /// Infrastructure module manages its own dependencies.
     /// If IDistributedCache is not registered, a fallback in-memory cache will be used.
+    /// URL template services are configured for HATEOAS support.
+    /// </remarks>
+    public static IServiceCollection AddInfrastructureModule(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        return AddInfrastructureModuleCore(services, configuration);
+    }
+
+    /// <summary>
+    /// Adds the infrastructure module services to the specified <see cref="IServiceCollection" />.
+    /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection" /> to add services to.</param>
+    /// <returns>The <see cref="IServiceCollection" /> so that additional calls can be chained.</returns>
+    /// <remarks>
+    /// Infrastructure module manages its own dependencies.
+    /// If IDistributedCache is not registered, a fallback in-memory cache will be used.
+    /// This overload does not configure URL template services (used for testing).
     /// </remarks>
     public static IServiceCollection AddInfrastructureModule(
         this IServiceCollection services)
+    {
+        return AddInfrastructureModuleCore(services, configuration: null);
+    }
+
+    private static IServiceCollection AddInfrastructureModuleCore(
+        IServiceCollection services,
+        IConfiguration? configuration)
     {
         services.AddAetherInfrastructure();
         
@@ -43,6 +70,12 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         if (!services.Any(sd => sd.ServiceType == typeof(IDistributedCache)))
         {
             services.AddDistributedMemoryCache();
+        }
+        
+        // URL Template Services for HATEOAS (only if configuration is provided)
+        if (configuration != null)
+        {
+            services.AddUrlTemplateServices(configuration);
         }
         
         // DbContext

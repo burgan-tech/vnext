@@ -68,4 +68,14 @@ public class EfCoreInstanceTransitionRepository(
                 cancellationToken
             );
     }
+
+    /// <inheritdoc />
+    public async Task<InstanceTransition?> GetLatestIncompleteAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.InstanceTransitions
+            .Where(p => p.InstanceId == instanceId && p.FinishedAt == null)
+            .OrderByDescending(p => p.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 }

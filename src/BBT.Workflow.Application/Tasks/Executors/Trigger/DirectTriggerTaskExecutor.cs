@@ -10,6 +10,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 using Polly;
 
@@ -123,9 +124,9 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
                 statusCode: 404,
                 taskType: TaskType.ToString()));
         }
-
-        var headers = ExtractHeaders(context.ScriptContext);
-
+        
+        var headers = ConvertTaskHeadersToDictionary(task.Headers);
+        
         var transitionData = task.Body.HasValue
             ? new TransitionDataInput(task.Body)
             {
@@ -254,31 +255,41 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     {
         Logger.LogDebug("Using RemoteInvokerService for DirectTrigger task {TaskKey}", task.Key);
 
-        var bindingResult = await BuildDirectTriggerBindingAsync(task, context, cancellationToken);
-        
-        if (!bindingResult.IsSuccess)
+        // Create envelope from task using TaskBindingMapper
+        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        if (!envelopeResult.IsSuccess)
+        {
+            Logger.TaskEnvelopeCreationFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance.Id,
+                envelopeResult.Error.Message ?? "Failed to create envelope");
+            return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
+        }
+
+        // Enrich binding with runtime context (endpoint, headers)
+        var enrichResult = await EnrichBindingAsync<DirectTriggerBinding>(
+            envelopeResult.Value!,
+            task.TriggerDomain,
+            task.UseDapr,
+            context,
+            cancellationToken);
+
+        if (!enrichResult.IsSuccess)
         {
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext.Instance.Id,
-                bindingResult.Error.Message ?? "Failed to resolve endpoint");
-            return Result<TaskInvocationResult>.Fail(bindingResult.Error);
+                enrichResult.Error.Message ?? "Failed to resolve endpoint");
+            return Result<TaskInvocationResult>.Fail(enrichResult.Error);
         }
-
-        var binding = bindingResult.Value!;
-        var envelope = new TaskEnvelope
-        {
-            TaskType = TaskTypes.DirectTrigger,
-            TaskKey = task.Key,
-            Binding = JsonSerializer.SerializeToElement(binding)
-        };
 
         var traceContext = RemoteInvoker.CreateTraceContext(context.ScriptContext);
         var result = await RemoteInvoker.InvokeAsync(
             TaskTypes.DirectTrigger,
             task.Key,
-            envelope,
+            enrichResult.Value!,
             traceContext,
             cancellationToken);
 
@@ -294,40 +305,59 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         return result;
     }
 
-    private async Task<Result<DirectTriggerBinding>> BuildDirectTriggerBindingAsync(
-        DirectTriggerTask task,
+    private async Task<Result<TaskEnvelope>> EnrichBindingAsync<TBinding>(
+        TaskEnvelope envelope,
+        string targetDomain,
+        bool useDapr,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var headers = ExtractHeaders(context.ScriptContext);
+        // Deserialize binding
+        var binding = envelope.Binding.Deserialize<DirectTriggerBinding>();
+        if (binding == null)
+        {
+            return Result<TaskEnvelope>.Fail(Error.Failure(
+                WorkflowErrorCodes.TaskBindingMappingFailed,
+                "Failed to deserialize binding"));
+        }
 
-        var preferredKind = task.UseDapr ? EndpointKind.Dapr : EndpointKind.Url;
+        // Resolve endpoint
+        var preferredKind = useDapr ? EndpointKind.Dapr : EndpointKind.Url;
         var endpointResult = await _endpointResolver.GetEndpointAsync(
-            task.TriggerDomain, preferredKind, cancellationToken);
+            targetDomain, preferredKind, cancellationToken);
 
         if (!endpointResult.IsSuccess)
         {
-            return Result<DirectTriggerBinding>.Fail(endpointResult.Error);
+            return Result<TaskEnvelope>.Fail(endpointResult.Error);
         }
 
         var endpoint = endpointResult.Value!;
 
-        return Result.Ok(new DirectTriggerBinding
+        // Create enriched binding with runtime context
+        var enrichedBinding = new DirectTriggerBinding
         {
-            Domain = task.TriggerDomain,
-            Workflow = task.TriggerFlow,
-            InstanceId = task.TriggerInstanceId,
-            Key = task.TriggerKey,
-            TransitionName = task.TransitionName,
-            Tags = task.TriggerTags,
-            Version = task.TriggerVersion,
-            Body = task.Body,
-            Headers = headers != null ? JsonSerializer.Serialize(headers) : null,
-            Sync = task.TriggerSync,
-            UseDapr = task.UseDapr,
-            ValidateSSL = task.ValidateSSL,
+            Domain = binding.Domain,
+            Workflow = binding.Workflow,
+            TransitionName = binding.TransitionName,
+            InstanceId = binding.InstanceId,
+            Key = binding.Key,
+            Version = binding.Version,
+            Tags = binding.Tags,
+            Body = binding.Body,
+            Sync = binding.Sync,
+            UseDapr = binding.UseDapr,
+            ValidateSSL = binding.ValidateSSL,
+            TimeoutSeconds = binding.TimeoutSeconds,
+            Headers = binding.Headers,
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId
+        };
+
+        return Result.Ok(new TaskEnvelope
+        {
+            TaskType = envelope.TaskType,
+            TaskKey = envelope.TaskKey,
+            Binding = JsonSerializer.SerializeToElement(enrichedBinding)
         });
     }
 }

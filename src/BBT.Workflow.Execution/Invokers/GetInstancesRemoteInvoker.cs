@@ -308,6 +308,9 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
                 TaskType, taskKey);
         }
 
-        return _httpClientFactory.CreateClient(clientName);
+        var client = _httpClientFactory.CreateClient(clientName);
+        client.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+        
+        return client;
     }
 }

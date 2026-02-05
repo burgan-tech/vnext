@@ -1,4 +1,5 @@
 using BBT.Aether.AspNetCore.Controllers;
+using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Discovery;
@@ -19,6 +20,7 @@ namespace BBT.Workflow.Orchestration.Controllers.Utilities;
 [ServiceFilter(typeof(ResponseHeaderFilter))]
 public sealed class UtilityController(
     IDefinitionAppService definitionAppService,
+    IRuntimeCacheInitializer runtimeCacheInitializer,
     IRuntimeInfoProvider runtimeInfoProvider,
     IOptions<RuntimeOptions> runtimeOptions,
     IDomainDiscoveryResolver domainDiscoveryResolver,
@@ -80,6 +82,7 @@ public sealed class UtilityController(
     /// <summary>
     /// Handles broadcast cache invalidation requests from Dapr subscription.
     /// All pods receive this message via vnext-pubsub-broadcast.
+    /// Updates only in-memory cache since distributed cache is already updated by initiating pod.
     /// </summary>
     /// <param name="eventData">Cache invalidation event data.</param>
     /// <param name="cancellationToken">Cancellation token for the operation.</param>
@@ -110,13 +113,11 @@ public sealed class UtilityController(
             eventData.Domain, 
             eventData.RequestedBy);
         
-        var result = await definitionAppService.ReInitializeAsync(cancellationToken);
+        // Update only in-memory cache (distributed cache already updated by initiating pod)
+        await runtimeCacheInitializer.InitializeAsync(cancellationToken);
         
-        if (result.IsSuccess)
-            logger.DefinitionCacheInvalidationSucceeded(podInstance);
-        else
-            logger.DefinitionCacheInvalidationFailed(podInstance, result.Error.Message);
+        logger.DefinitionCacheInvalidationSucceeded(podInstance);
             
-        return FromResult(result);
+        return Ok();
     }
 } 

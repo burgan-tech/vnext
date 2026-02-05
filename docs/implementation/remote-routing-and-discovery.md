@@ -40,9 +40,71 @@ Remote execution:
 Remote clients live in `BBT.Workflow.Infrastructure/Instances/Remote` and:
 
 - Resolve endpoints with `IDomainDiscoveryResolver`.
-- Build URLs using `InstanceUrlTemplates` and `RemoteOptions.ApiVersion`.
+- Build URLs using **static `InstanceUrlTemplates`** and `RemoteOptions.ApiVersion`.
 - Use `HttpClient` + resilient policies configured in `AddVNextApiServices`.
 - Return `Result` / `ConditionalResult` with error normalization for transport failures.
+
+**Note:** Remote clients use static URL templates because they call internal controller routes that must remain fixed.
+
+## Client-Facing URL Templates (HATEOAS)
+
+Controllers in the Orchestration API generate HATEOAS links using **configurable URL templates** to support gateway routing patterns.
+
+### URL Template Builder
+
+`IUrlTemplateBuilder` (implemented by `UrlTemplateBuilder`) generates client-facing URLs from configured templates:
+
+- Used by `InstanceController` and `FunctionController` for HATEOAS link generation
+- Configured via `UrlTemplateOptions` in `appsettings.json`
+- Supports gateway prefixes and custom routing patterns
+- Independent from internal service-to-service URLs
+
+### Configuration
+
+`UrlTemplateOptions` (`UrlTemplates` section) configures client-facing URL patterns:
+
+```json
+{
+  "UrlTemplates": {
+    "Start": "/{0}/workflows/{1}/instances/start",
+    "Transition": "/{0}/workflows/{1}/instances/{2}/transitions/{3}",
+    "FunctionList": "/{0}/workflows/{1}/functions/{2}",
+    "InstanceList": "/{0}/workflows/{1}/instances",
+    "Instance": "/{0}/workflows/{1}/instances/{2}",
+    "InstanceHistory": "/{0}/workflows/{1}/instances/{2}/transitions"
+  }
+}
+```
+
+Template parameters:
+- `{0}` = domain
+- `{1}` = workflow
+- `{2}` = instance/instanceId
+- `{3}` = transitionKey/function
+
+### Gateway Routing Example
+
+For API Gateway with `/api/gateway` prefix:
+
+```json
+{
+  "UrlTemplates": {
+    "Start": "/api/gateway/{0}/workflows/{1}/instances/start",
+    "Transition": "/api/gateway/{0}/workflows/{1}/instances/{2}/transitions/{3}",
+    "FunctionList": "/api/gateway/{0}/workflows/{1}/functions/{2}",
+    "InstanceList": "/api/gateway/{0}/workflows/{1}/instances",
+    "Instance": "/api/gateway/{0}/workflows/{1}/instances/{2}",
+    "InstanceHistory": "/api/gateway/{0}/workflows/{1}/instances/{2}/transitions"
+  }
+}
+```
+
+### URL Types Comparison
+
+| URL Type | Purpose | Configuration | Used By |
+|----------|---------|---------------|---------|
+| Client-facing | HATEOAS links in responses | `UrlTemplates` (configurable) | Controllers |
+| Internal | Service-to-service calls | `InstanceUrlTemplates` (static) | Remote infrastructure |
 
 ## Service Discovery
 
@@ -73,6 +135,12 @@ Configuration: `ServiceDiscoveryOptions` (`BaseUrl`, `Domain`, `RegistryFlow`).
 
 ## Configuration
 
+`UrlTemplateOptions` (`UrlTemplates` section) - **Orchestration API only**:
+
+- Configures client-facing URL patterns for HATEOAS responses
+- Supports gateway routing and custom URL patterns
+- See "Client-Facing URL Templates" section above for details
+
 `RemoteOptions` (`vNextApi` section):
 
 - `BaseUrl`, `ApiVersion`
@@ -96,6 +164,7 @@ Configuration: `ServiceDiscoveryOptions` (`BaseUrl`, `Domain`, `RegistryFlow`).
 
 ## Implementation References
 
+### Gateway Routing
 - `src/BBT.Workflow.Application/Gateway/IInstanceCommandGateway.cs`
 - `src/BBT.Workflow.Application/Gateway/IInstanceQueryGateway.cs`
 - `src/BBT.Workflow.Infrastructure/Gateway/RoutedInstanceCommandGateway.cs`
@@ -104,12 +173,22 @@ Configuration: `ServiceDiscoveryOptions` (`BaseUrl`, `Domain`, `RegistryFlow`).
 - `src/BBT.Workflow.Infrastructure/Gateway/LocalInstanceQueryGateway.cs`
 - `src/BBT.Workflow.Infrastructure/Gateway/RemoteInstanceCommandGateway.cs`
 - `src/BBT.Workflow.Infrastructure/Gateway/RemoteInstanceQueryGateway.cs`
+
+### Service Discovery
 - `src/BBT.Workflow.Application/Discovery/IDomainDiscoveryResolver.cs`
 - `src/BBT.Workflow.Infrastructure/Discovery/DomainDiscoveryResolver.cs`
 - `src/BBT.Workflow.Application/Discovery/IDomainRegistrationService.cs`
 - `src/BBT.Workflow.Infrastructure/Discovery/DomainRegistrationService.cs`
+- `src/BBT.Workflow.Application/Discovery/ServiceDiscoveryOptions.cs`
+
+### Remote Clients
 - `src/BBT.Workflow.Infrastructure/Instances/Remote/RemoteInstanceCommandAppService.cs`
 - `src/BBT.Workflow.Infrastructure/Instances/Remote/RemoteInstanceQueryAppService.cs`
 - `src/BBT.Workflow.Infrastructure/Remote/Extensions/RemoteServiceExtensions.cs`
 - `src/BBT.Workflow.Infrastructure/Remote/Configuration/RemoteOptions.cs`
-- `src/BBT.Workflow.Application/Discovery/ServiceDiscoveryOptions.cs`
+
+### URL Templates
+- `src/BBT.Workflow.Domain/Definitions/UrlTemplateOptions.cs` - Configuration model
+- `src/BBT.Workflow.Domain/Definitions/IUrlTemplateBuilder.cs` - Builder interface
+- `src/BBT.Workflow.Infrastructure/Definitions/UrlTemplateBuilder.cs` - Implementation
+- `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs` - Static templates for internal use

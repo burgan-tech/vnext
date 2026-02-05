@@ -108,10 +108,14 @@ public sealed class EfCoreInstanceRepository(
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
-            return await query
-                .FirstOrDefaultAsync(
-                    p => p.Id == instanceId,
-                    cancellationToken);
+            var response = await query
+               .FirstOrDefaultAsync(
+                   p => p.Id == instanceId,
+                   cancellationToken);
+            if (response != null)
+            {
+                return response;
+            }
         }
 
         return await query
@@ -129,10 +133,14 @@ public sealed class EfCoreInstanceRepository(
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
-            return await query
+            var response = await query
                 .FirstOrDefaultAsync(
                     p => p.Id == instanceId,
                     cancellationToken);
+            if (response != null)
+            {
+                return response;
+            }
         }
 
         return await query
@@ -163,14 +171,14 @@ public sealed class EfCoreInstanceRepository(
         if (InstanceDataVersionComparer.IsFullVersion(version))
         {
             return await (from instance in context.Instances
-                    where instance.Status == InstanceStatus.Active
-                    join data in context.InstancesData on instance.Id equals data.InstanceId
-                    where instance.Key == key && data.Version == version
-                    select new InstanceAndDataModel
-                    {
-                        Instance = instance,
-                        InstanceData = data
-                    })
+                          where instance.Status == InstanceStatus.Active
+                          join data in context.InstancesData on instance.Id equals data.InstanceId
+                          where instance.Key == key && data.Version == version
+                          select new InstanceAndDataModel
+                          {
+                              Instance = instance,
+                              InstanceData = data
+                          })
                 .AsNoTracking()
                 .AsSplitQuery()
                 .FirstOrDefaultAsync(cancellationToken);
@@ -178,13 +186,13 @@ public sealed class EfCoreInstanceRepository(
 
         // For artifact or partial version → load all matching versions and use smart matching
         var candidates = await (from instance in context.Instances
-                where instance.Status == InstanceStatus.Active && instance.Key == key
-                join data in context.InstancesData on instance.Id equals data.InstanceId
-                select new InstanceAndDataModel
-                {
-                    Instance = instance,
-                    InstanceData = data
-                })
+                                where instance.Status == InstanceStatus.Active && instance.Key == key
+                                join data in context.InstancesData on instance.Id equals data.InstanceId
+                                select new InstanceAndDataModel
+                                {
+                                    Instance = instance,
+                                    InstanceData = data
+                                })
             .AsNoTracking()
             .AsSplitQuery()
             .ToListAsync(cancellationToken);
@@ -658,7 +666,7 @@ public sealed class EfCoreInstanceRepository(
         return (resultPagedList, null);
     }
 
- 
+
     public async Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default)
     {
         var instanceResult = await GetResultAsync(identifier, includeDetails: true, cancellationToken);
@@ -707,13 +715,13 @@ public sealed class EfCoreInstanceRepository(
 
         // Optimize query with proper indexing and reduced data transfer
         return await (from instance in context.Instances
-                where instance.Status == InstanceStatus.Active
-                join data in context.InstancesData on instance.Id equals data.InstanceId
-                select new InstanceAndDataModel
-                {
-                    Instance = instance,
-                    InstanceData = data
-                })
+                      where instance.Status == InstanceStatus.Active
+                      join data in context.InstancesData on instance.Id equals data.InstanceId
+                      select new InstanceAndDataModel
+                      {
+                          Instance = instance,
+                          InstanceData = data
+                      })
             .AsNoTracking() // Don't track changes for read-only operations
             .AsSplitQuery() // Use split queries for better performance with joins
             .ToListAsync(cancellationToken);

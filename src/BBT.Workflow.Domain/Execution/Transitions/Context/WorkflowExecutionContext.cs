@@ -63,6 +63,18 @@ public sealed class WorkflowExecutionContext
     
     /// <summary>Gets or sets the route values from the HTTP request.</summary>
     public Dictionary<string, string?> RouteValues { get; set; } = new();
+    
+    /// <summary>Gets or sets retry information for retry operations.</summary>
+    public RetryInfo? Retry { get; set; }
+}
+
+/// <summary>
+/// Contains information about a retry operation.
+/// </summary>
+public sealed class RetryInfo
+{
+    /// <summary>Gets or sets the ID of the transition being retried.</summary>
+    public Guid TransitionId { get; set; }
 }
 
 public sealed class TransitionDataInfo 
