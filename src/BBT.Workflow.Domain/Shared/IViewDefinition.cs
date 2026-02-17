@@ -54,6 +54,14 @@ public sealed class ViewDefinition : IViewDefinition
     public IReadOnlyList<ViewEntry> Views { get; private set; } = Array.Empty<ViewEntry>();
 
     /// <summary>
+    /// Parameterless constructor for EF Core deserialization.
+    /// </summary>
+    public ViewDefinition()
+    {
+        Views = Array.Empty<ViewEntry>();
+    }
+
+    /// <summary>
     /// Constructor that supports both old and new view formats for backward compatibility.
     /// If both formats are provided, the new 'views' format takes precedence.
     /// </summary>

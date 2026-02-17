@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Tasks.Coordinator;
 
@@ -13,7 +14,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Each action type maps to a specific pipeline behavior:
 /// - Log/Ignore: Pipeline continues execution
 /// - Abort/Notify/Rollback with transition: Sets error transition and skips to Finalize
-/// - Abort without transition: Requests boundary abort and skips to Finalize (no fault)
+/// - Abort/Unhandled without transition: Returns Fail so instance is marked Faulted
 /// </remarks>
 public static class BoundaryOutcomeHandler
 {
@@ -45,13 +46,12 @@ public static class BoundaryOutcomeHandler
         if (!string.IsNullOrEmpty(action.TransitionKey))
         {
             context.Directives.RequestNextTransition(
-                new NextTransitionRequest(action.TransitionKey, "error_boundary"));
+                new NextTransitionRequest(action.TransitionKey, TransitionRequestReasons.ErrorBoundary));
             return Result<StepOutcome>.Ok(StepOutcome.SkipToFinalize());
         }
 
-        // Abort without transition - request boundary abort and skip to finalize
-        // Pipeline will stop but NOT mark instance as faulted
-        context.Directives.RequestBoundaryAbort();
-        return Result<StepOutcome>.Ok(StepOutcome.SkipToFinalize());
+        // Abort/Unhandled without transition - return Fail so instance is marked Faulted
+        return Result<StepOutcome>.Fail(
+            action.PropagatedError ?? Error.Failure("ErrorBoundaryAbort", "Error boundary aborted."));
     }
 }

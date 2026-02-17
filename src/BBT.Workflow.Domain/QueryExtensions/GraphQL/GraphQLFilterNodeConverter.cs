@@ -199,7 +199,7 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
                     condition.NotIn = ReadValueArray(ref reader);
                     break;
                 case "isnull":
-                    condition.IsNull = reader.GetBoolean();
+                    condition.IsNull = reader.TokenType == JsonTokenType.Null ? null : reader.GetBoolean();
                     break;
                 default:
                     // This could be a nested field - handle as nested condition

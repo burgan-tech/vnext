@@ -101,14 +101,14 @@ public sealed class DomainRegistrationService(
 
             if (response.IsSuccessStatusCode)
             {
-                var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
                 logger.LogInformation(
                     "Domain registration completed successfully for domain '{DomainName}'. Response: {Response}",
                     domainName, responseContent);
             }
             else
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
                 var reason = $"HTTP {(int)response.StatusCode} - {errorContent}";
                 
                 throw new DomainRegistrationFailedException(domainName, requestUrl, reason);

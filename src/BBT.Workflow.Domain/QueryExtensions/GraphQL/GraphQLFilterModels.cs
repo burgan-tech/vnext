@@ -25,6 +25,81 @@ public sealed class GraphQLFilterRequest
     /// </summary>
     [JsonPropertyName("aggregations")]
     public AggregationRequest? Aggregations { get; set; }
+
+    /// <summary>
+    /// Sort order for results (instance columns and/or attributes JSON path).
+    /// </summary>
+    [JsonPropertyName("orderBy")]
+    public OrderByRequest? OrderBy { get; set; }
+}
+
+/// <summary>
+/// Single sort field with direction for orderBy
+/// </summary>
+public sealed class OrderByField
+{
+    /// <summary>
+    /// Field to sort by (e.g. "createdAt", "status", "attributes.clientId")
+    /// </summary>
+    [JsonPropertyName("field")]
+    public string? Field { get; set; }
+
+    /// <summary>
+    /// Sort direction: "asc" or "desc" (case-insensitive). Defaults to "asc" if missing.
+    /// </summary>
+    [JsonPropertyName("direction")]
+    public string? Direction { get; set; }
+}
+
+/// <summary>
+/// OrderBy request: single field or multiple fields.
+/// Supports {"field":"createdAt","direction":"desc"} or {"fields":[{"field":"status","direction":"asc"},...]}.
+/// </summary>
+public sealed class OrderByRequest
+{
+    /// <summary>
+    /// Single field (when not using fields array)
+    /// </summary>
+    [JsonPropertyName("field")]
+    public string? Field { get; set; }
+
+    /// <summary>
+    /// Direction for single field (when not using fields array)
+    /// </summary>
+    [JsonPropertyName("direction")]
+    public string? Direction { get; set; }
+
+    /// <summary>
+    /// Multiple sort fields
+    /// </summary>
+    [JsonPropertyName("fields")]
+    public List<OrderByField>? Fields { get; set; }
+
+    /// <summary>
+    /// Gets all order-by entries as a list for uniform handling (single or multi).
+    /// </summary>
+    public IReadOnlyList<(string Field, string Direction)> GetEntries()
+    {
+        if (Fields != null && Fields.Count > 0)
+        {
+            return Fields
+                .Where(f => !string.IsNullOrWhiteSpace(f.Field))
+                .Select(f => (f.Field!.Trim(), NormalizeDirection(f.Direction)))
+                .ToList();
+        }
+        if (!string.IsNullOrWhiteSpace(Field))
+        {
+            return new List<(string, string)> { (Field.Trim(), NormalizeDirection(Direction)) };
+        }
+        return Array.Empty<(string, string)>();
+    }
+
+    private static string NormalizeDirection(string? direction)
+    {
+        if (string.IsNullOrWhiteSpace(direction))
+            return "asc";
+        return direction!.Trim().Equals("desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
+    }
 }
 
 /// <summary>

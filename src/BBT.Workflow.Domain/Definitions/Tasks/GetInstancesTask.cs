@@ -45,9 +45,9 @@ public sealed class GetInstancesTask : WorkflowTask
     public string? Sort { get; private set; }
 
     /// <summary>
-    /// Filter expressions to apply to the query
+    /// Filter expression to apply to the query (JSON format)
     /// </summary>
-    public string[]? Filter { get; private set; }
+    public string? Filter { get; private set; }
 
     /// <summary>
     /// Whether to use Dapr service invocation instead of direct HTTP
@@ -96,7 +96,7 @@ public sealed class GetInstancesTask : WorkflowTask
         Sort = sort;
     }
 
-    public void SetFilter(string[]? filter)
+    public void SetFilter(string? filter)
     {
         Filter = filter;
     }
@@ -124,7 +124,7 @@ public sealed class GetInstancesTask : WorkflowTask
     internal void SetPageInternal(int page) => Page = page;
     internal void SetPageSizeInternal(int pageSize) => PageSize = pageSize;
     internal void SetSortInternal(string? sort) => Sort = sort;
-    internal void SetFilterInternal(string[]? filter) => Filter = filter;
+    internal void SetFilterInternal(string? filter) => Filter = filter;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
     internal void SetHeadersInternal(JsonElement? headers) => Headers = headers;
@@ -149,16 +149,23 @@ public sealed class GetInstancesTask : WorkflowTask
         if (config.TryGetProperty("sort", out var sortElement))
             Sort = sortElement.GetString();
 
-        if (config.TryGetProperty("filter", out var filterElement) && filterElement.ValueKind == JsonValueKind.Array)
+        if (config.TryGetProperty("filter", out var filterElement))
         {
-            var filterList = new List<string>();
-            foreach (var item in filterElement.EnumerateArray())
+            if (filterElement.ValueKind == JsonValueKind.String)
             {
-                var filterValue = item.GetString();
-                if (!string.IsNullOrWhiteSpace(filterValue))
-                    filterList.Add(filterValue);
+                Filter = filterElement.GetString();
             }
-            Filter = filterList.Count > 0 ? filterList.ToArray() : null;
+            else if (filterElement.ValueKind == JsonValueKind.Array)
+            {
+                var filterList = new List<string>();
+                foreach (var item in filterElement.EnumerateArray())
+                {
+                    var filterValue = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(filterValue))
+                        filterList.Add(filterValue);
+                }
+                Filter = filterList.Count > 0 ? filterList[0] : null;
+            }
         }
 
         if (config.TryGetProperty("useDapr", out var useDaprElement))

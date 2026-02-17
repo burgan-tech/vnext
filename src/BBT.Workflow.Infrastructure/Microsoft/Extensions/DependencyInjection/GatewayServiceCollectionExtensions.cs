@@ -1,5 +1,4 @@
 using BBT.Workflow.Gateway;
-using BBT.Workflow.Infrastructure.Gateway;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -27,11 +26,15 @@ public static class GatewayServiceCollectionExtensions
         services.AddScoped<LocalInstanceRetryGateway>();
         services.AddScoped<RemoteInstanceRetryGateway>();
 
+        services.AddScoped<LocalAuthorizeGateway>();
+        services.AddScoped<RemoteAuthorizeGateway>();
+
         // Routed gateways - route based on IRuntimeInfoProvider.IsDomainMatch()
         // These are registered as the interface implementations
         services.AddScoped<IInstanceCommandGateway, RoutedInstanceCommandGateway>();
         services.AddScoped<IInstanceRetryGateway, RoutedInstanceRetryGateway>();
         services.AddScoped<IInstanceQueryGateway, RoutedInstanceQueryGateway>();
+        services.AddScoped<IAuthorizeGateway, RoutedAuthorizeGateway>();
 
         return services;
     }

@@ -94,7 +94,13 @@ public interface IScriptContextBuilder
     /// Sets the definitions for the ScriptContext.
     /// </summary>
     IScriptContextBuilder WithDefinitions(Dictionary<string, object> definitions);
-    
+
+    /// <summary>
+    /// Sets the original transition request (body and headers) from the persisted InstanceTransition.
+    /// When set, ScriptContext.CurrentTransition will expose this data with header keys normalized to lowercase.
+    /// </summary>
+    IScriptContextBuilder WithCurrentTransition(InstanceTransition? instanceTransition);
+
     /// <summary>
     /// Builds the ScriptContext asynchronously with all configured properties.
     /// This method retrieves any data that needs to be fetched asynchronously and constructs the final ScriptContext.

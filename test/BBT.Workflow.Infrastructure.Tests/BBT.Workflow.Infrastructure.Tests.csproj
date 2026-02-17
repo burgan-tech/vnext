@@ -10,7 +10,8 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Data.Sqlite" Version="$(MicrosoftPackageVersion)"/>
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(MicrosoftPackageVersion)"/>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCorePackageVersion)"/>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCorePackageVersion)"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkPackageVersion)"/>
         <PackageReference Include="Testcontainers.PostgreSql" Version="$(TestcontainersPackageVersion)"/>
     </ItemGroup>

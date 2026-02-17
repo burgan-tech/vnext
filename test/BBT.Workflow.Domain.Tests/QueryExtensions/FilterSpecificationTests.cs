@@ -40,9 +40,8 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     [Fact]
     public void FilterSpecification_ShouldReturnTrueExpression_WhenEmptyFilters()
     {
-        // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(Array.Empty<string>(), filterMappings);
+        var spec = new FilterSpecification<TestEntity>("", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -59,7 +58,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var filterMappings = CreateFilterMappings();
         var jsonFilter = JsonSerializer.Serialize(new { Name = "John" });
-        var spec = new FilterSpecification<TestEntity>(new[] { jsonFilter }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>(jsonFilter, filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -75,7 +74,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(new[] { "Name=Jane" }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>("Name=Jane", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -89,11 +88,9 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     [Fact]
     public void FilterSpecification_ShouldCombineMultipleFiltersWithAnd()
     {
-        // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(
-            new[] { "Name=John", "Age=30" }, 
-            filterMappings);
+        var jsonFilter = JsonSerializer.Serialize(new { Name = "John", Age = 30 });
+        var spec = new FilterSpecification<TestEntity>(jsonFilter, filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -110,9 +107,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(
-            new[] { "InvalidFormat" }, 
-            filterMappings);
+        var spec = new FilterSpecification<TestEntity>("InvalidFormat", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -127,9 +122,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(
-            new[] { "UnmappedProperty=value" }, 
-            filterMappings);
+        var spec = new FilterSpecification<TestEntity>("UnmappedProperty=value", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -145,7 +138,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var filterMappings = CreateFilterMappings();
         var jsonFilter = JsonSerializer.Serialize(new { Name = "Alice", Age = 25 });
-        var spec = new FilterSpecification<TestEntity>(new[] { jsonFilter }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>(jsonFilter, filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -162,7 +155,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(new[] { "name=John" }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>("name=John", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -178,7 +171,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(new[] { "  Name  =  Jane  " }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>("  Name  =  Jane  ", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -194,7 +187,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(new[] { "Name=John" }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>("Name=John", filterMappings);
         var query = CreateTestEntities().AsQueryable();
 
         // Act
@@ -208,12 +201,9 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     [Fact]
     public void FilterSpecification_ShouldHandleMixedJsonAndKeyValueFilters()
     {
-        // Arrange
         var filterMappings = CreateFilterMappings();
-        var jsonFilter = JsonSerializer.Serialize(new { Name = "Alice" });
-        var spec = new FilterSpecification<TestEntity>(
-            new[] { jsonFilter, "Age=25" }, 
-            filterMappings);
+        var jsonFilter = JsonSerializer.Serialize(new { Name = "Alice", Age = 25 });
+        var spec = new FilterSpecification<TestEntity>(jsonFilter, filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -230,7 +220,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(new[] { "IsActive=true" }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>("IsActive=true", filterMappings);
 
         // Act
         var expression = spec.ToExpression();
@@ -246,7 +236,7 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
-        var spec = new FilterSpecification<TestEntity>(new[] { "Age=30" }, filterMappings);
+        var spec = new FilterSpecification<TestEntity>("Age=30", filterMappings);
 
         // Act
         var expression = spec.ToExpression();

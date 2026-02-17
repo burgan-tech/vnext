@@ -57,6 +57,12 @@ The BBT Workflow Engine is a comprehensive, domain-driven workflow management sy
 ### Security
 - [QueryExtensions Security](./security/queryextensions-security.md)
 
+### Breaking Changes
+- [Function–Workflow Validation (EN)](./breaking-changes/function-workflow-validation-en.md) – Functions with scope `I` or `F` must be declared in the workflow’s `functions` array
+- [Function–Workflow Validation (TR)](./breaking-changes/function-workflow-validation-tr.md) – Scope `I` veya `F` olan fonksiyonlar workflow’un `functions` dizisinde tanımlı olmalıdır
+- [Instance Filter Single String (EN)](./breaking-changes/instance-filter-single-string-en.md) – Instance list and GetInstances task accept a single filter string; `filter` is no longer an array; `SetFilter(string[]?)` is now `SetFilter(string?)`
+- [Instance Filter Tek String (TR)](./breaking-changes/instance-filter-single-string-tr.md) – Instance listesi ve GetInstances task tek filter string kabul eder; `filter` artık dizi değil; `SetFilter(string[]?)` yerine `SetFilter(string?)`
+
 ## Key Features
 
 ### Core Capabilities

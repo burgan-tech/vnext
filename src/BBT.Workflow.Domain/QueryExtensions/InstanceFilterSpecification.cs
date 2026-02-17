@@ -8,8 +8,8 @@ namespace BBT.Workflow.Definitions;
 
 public class InstanceFilterSpecification : FilterSpecification<Instance>
 {
-    public InstanceFilterSpecification(string[]? filters) 
-        : base(filters, CreateFilterMappings())
+    public InstanceFilterSpecification(string? filter)
+        : base(filter, CreateFilterMappings())
     {
     }
 

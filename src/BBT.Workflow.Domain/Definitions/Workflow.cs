@@ -39,7 +39,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         List<State> states,
         List<Transition> sharedTransitions,
         List<Reference> extensions,
-        Transition startTransition
+        Transition startTransition,
+        List<RoleGrant>? queryRoles = null
     ) : this()
     {
         Type = type;
@@ -54,6 +55,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         this.extensions = extensions ?? [];
         this.sharedTransitions = sharedTransitions ?? [];
         StartTransition = startTransition;
+        this.queryRoles = queryRoles ?? [];
     }
 
     /// <summary>
@@ -149,6 +151,18 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
 
     [JsonInclude] [JsonPropertyName("states")]
     private List<State> states = new();
+
+    [JsonInclude] [JsonPropertyName("queryRoles")]
+    private List<RoleGrant> queryRoles = new();
+
+    [JsonInclude] [JsonPropertyName("schema")] 
+    public Reference? Schema { get; private set; }
+
+    /// <summary>
+    /// Root-level query roles for state-based visibility. When a state has no queryRoles, this is used.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<RoleGrant> QueryRoles => queryRoles.AsReadOnly();
 
     /// <summary>
     /// It is a content set with multiple language options for the content to be displayed to the user.

@@ -34,13 +34,15 @@ public sealed class State : IHasKey
         VersionStrategy versionStrategy,
         List<LanguageLabel>? labels,
         List<OnExecuteTask>? onEntries,
-         List<OnExecuteTask>? onExits)
+         List<OnExecuteTask>? onExits,
+        List<RoleGrant>? queryRoles = null)
         : this(key, stateType, subType)
     {
         VersionStrategy = versionStrategy;
         this.labels = labels ?? [];
         this.onEntries = onEntries ?? [];
         this.onExits = onExits ?? [];
+        this.queryRoles = queryRoles ?? [];
         // view property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
 
@@ -76,6 +78,9 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("onExits")]
     private List<OnExecuteTask> onExits = new();
 
+    [JsonInclude] [JsonPropertyName("queryRoles")]
+    private List<RoleGrant> queryRoles = new();
+
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
@@ -94,6 +99,12 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonInclude] [JsonPropertyName("errorBoundary")]
     public ErrorBoundary? ErrorBoundary { get; private set; }
+
+    /// <summary>
+    /// State-level query roles. When present, overrides workflow root queryRoles for this state.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<RoleGrant> QueryRoles => queryRoles.AsReadOnly();
 
     /// <summary>
     /// Languages
@@ -189,7 +200,7 @@ public sealed class State : IHasKey
     /// </summary>
     public bool HasOnlyManualOrEventTransitions => 
         !Transitions.Any() || 
-        Transitions.All(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event);
+        Transitions.Any(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event);
 
     public IReadOnlyList<string> TransitionKeys() => Transitions.Select(t => t.Key).ToList();
 

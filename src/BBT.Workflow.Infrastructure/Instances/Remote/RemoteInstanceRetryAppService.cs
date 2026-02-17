@@ -105,7 +105,7 @@ public sealed class RemoteInstanceRetryAppService(
         // Success case
         if (response.IsSuccessStatusCode)
         {
-            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
             return Result<T>.Ok(result!);
         }
@@ -120,11 +120,11 @@ public sealed class RemoteInstanceRetryAppService(
     private static async Task<Result<T>> MapStatusCodeToError<T>(HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
         var statusCode = response.StatusCode;
 
         // Check if response has Aether error format header
-        if (response.Headers.TryGetValues("_bbt_error_format", out var values) &&
+        if (response.Headers.TryGetValues("_aether_error_format", out var values) &&
             values.Any(v => v.Equals("true", StringComparison.OrdinalIgnoreCase)))
         {
             try

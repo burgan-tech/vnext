@@ -88,6 +88,9 @@ public sealed class TransitionExecutionContext
     /// <summary>Gets whether this is a re-entry execution (automatic/scheduled).</summary>
     public bool IsReentry { get; init; }
 
+    /// <summary>Gets whether this transition was requested by an error boundary (e.g. Rollback/Notify). When true, state policy checks are bypassed so the transition can run from any state.</summary>
+    public bool IsErrorBoundaryTransition { get; init; }
+
     // Telemetry & Headers & Temporary storage
     /// <summary>Gets the distributed tracing trace identifier.</summary>
     public string TraceId { get; init; } = default!;

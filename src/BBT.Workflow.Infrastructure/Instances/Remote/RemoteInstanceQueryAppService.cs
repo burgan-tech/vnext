@@ -200,12 +200,9 @@ public sealed class RemoteInstanceQueryAppService(
                 queryParams.Add($"sort={Uri.EscapeDataString(input.Sort)}");
             }
 
-            if (input.Filter?.Length > 0)
+            if (!string.IsNullOrWhiteSpace(input.Filter))
             {
-                foreach (var filter in input.Filter)
-                {
-                    queryParams.Add($"filter={Uri.EscapeDataString(filter)}");
-                }
+                queryParams.Add($"filter={Uri.EscapeDataString(input.Filter)}");
             }
 
             if (!string.IsNullOrWhiteSpace(input.GroupBy))
@@ -510,7 +507,7 @@ public sealed class RemoteInstanceQueryAppService(
         // Success case
         if (response.IsSuccessStatusCode)
         {
-            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
             return Result<T>.Ok(result!);
         }
@@ -527,7 +524,7 @@ public sealed class RemoteInstanceQueryAppService(
         // Success case
         if (response.IsSuccessStatusCode)
         {
-            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
             return ConditionalResult<T>.Success(result!);
         }
@@ -555,11 +552,11 @@ public sealed class RemoteInstanceQueryAppService(
 
     private static async Task<Error> MapStatusCodeToErrorCore(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
         var statusCode = response.StatusCode;
 
         // Check if response has Aether error format header
-        if (response.Headers.TryGetValues("_bbt_error_format", out var values) &&
+        if (response.Headers.TryGetValues("_aether_error_format", out var values) &&
             values.Any(v => v.Equals("true", StringComparison.OrdinalIgnoreCase)))
         {
             try

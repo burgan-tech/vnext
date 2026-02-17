@@ -37,12 +37,14 @@ public sealed class Transition : IHasKey
         TriggerType triggerType,
         VersionStrategy versionStrategy,
         List<LanguageLabel> labels,
-      List<OnExecuteTask> onExecutionTasks
+      List<OnExecuteTask> onExecutionTasks,
+        List<RoleGrant>? roles = null
     ) : this(key, from, target, triggerType)
     {
         VersionStrategy = versionStrategy;
         this.labels = labels ?? [];
         this.onExecutionTasks = onExecutionTasks ?? [];
+        this.roles = roles ?? [];
         // View property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
     /// <summary>
@@ -91,11 +93,20 @@ public sealed class Transition : IHasKey
     [JsonInclude]
     [JsonPropertyName("onExecutionTasks")]
     private List<OnExecuteTask> onExecutionTasks = new();
+
+    [JsonInclude] [JsonPropertyName("roles")]
+    private List<RoleGrant> roles = new();
+
     [JsonInclude]
     [JsonPropertyName("views")]
     [JsonConverter(typeof(ViewDefinitionJsonConverter))]
     public ViewDefinition? View { get; private set; }
 
+    /// <summary>
+    /// Transition roles for authorization. DENY always overrides ALLOW.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<RoleGrant> Roles => roles.AsReadOnly();
 
     /// <summary>
     /// Language

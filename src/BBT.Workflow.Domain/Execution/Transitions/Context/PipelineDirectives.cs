@@ -7,7 +7,7 @@ namespace BBT.Workflow.Execution;
 /// Contains only identity information - full context is rebuilt by TransitionContextFactory.
 /// </summary>
 /// <param name="TransitionKey">The key of the next transition to execute.</param>
-/// <param name="Reason">Optional reason for the transition request (e.g., "auto", "schedule").</param>
+/// <param name="Reason">Optional reason for the transition request (e.g. <see cref="TransitionRequestReasons.ErrorBoundary"/>). Use constants from <see cref="TransitionRequestReasons"/> when applicable.</param>
 public sealed record NextTransitionRequest(
     string TransitionKey,
     string? Reason = null);
@@ -58,18 +58,6 @@ public sealed class PipelineDirectives
     /// Gets a value indicating whether an error transition has been set.
     /// </summary>
     public bool HasErrorTransition => _errorTransitionKey != null;
-
-    /// <summary>
-    /// Gets a value indicating whether an abort action was triggered by error boundary
-    /// without a target transition. Pipeline should stop and finalize without faulting.
-    /// </summary>
-    public bool BoundaryAbortRequested { get; private set; }
-
-    /// <summary>
-    /// Requests pipeline to abort without faulting.
-    /// Used when error boundary handles the error but no transition is specified.
-    /// </summary>
-    public void RequestBoundaryAbort() => BoundaryAbortRequested = true;
 
     /// <summary>
     /// Requests the pipeline to resume from a specific order.

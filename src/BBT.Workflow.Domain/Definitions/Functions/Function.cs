@@ -18,11 +18,13 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     [JsonConstructor]
     public Function(
         TaskScope scope,
-        OnExecuteTask task
+        OnExecuteTask task,
+        List<RoleGrant>? roles = null
     ) : this()
     {
         Scope = scope;
         Task = task;
+        this.roles = roles ?? [];
     }
 
     /// <summary>
@@ -47,6 +49,15 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
 
     public TaskScope Scope { get; private set; }
     [JsonInclude] public OnExecuteTask Task { get; private set; }
+
+    [JsonInclude] [JsonPropertyName("roles")]
+    private List<RoleGrant> roles = new();
+
+    /// <summary>
+    /// Function roles for authorization (domain-qualified). DENY always overrides ALLOW.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<RoleGrant> Roles => roles.AsReadOnly();
 
     public string ComponentKey => RuntimeSysSchemaInfo.Functions;
 

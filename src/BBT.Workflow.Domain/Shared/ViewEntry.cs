@@ -40,6 +40,13 @@ public sealed class ViewEntry
     [JsonPropertyName("loadData")]
     public bool? LoadData { get; private set; }
 
+    /// <summary>
+    /// Parameterless constructor for EF Core deserialization.
+    /// </summary>
+    public ViewEntry()
+    {
+    }
+
     [JsonConstructor]
     private ViewEntry(
         ScriptCode? rule,

@@ -43,6 +43,10 @@ public sealed class SharedTransitionAvailabilitySpecification : ITransitionSpeci
                 $"Transition '{context.TransitionKey}' not found"));
         }
         
+        // Error-boundary-requested transitions are allowed from any state
+        if (context.IsErrorBoundaryTransition)
+            return Result.Ok();
+        
         // If AvailableIn is empty or null, transition is available in all states
         if (transition.AvailableIn == null || !transition.AvailableIn.Any())
         {

@@ -20,6 +20,7 @@ public static class InstanceFieldDiscriminator
         "Status",
         "CreatedAt",
         "ModifiedAt",
+        "EffectiveState",
         "CompletedAt",
         "IsTransient",
         "EffectiveStateType",

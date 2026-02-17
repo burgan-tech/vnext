@@ -109,6 +109,41 @@ Any JSON field in `InstancesData.Data` can be queried using:
 
 GraphQL filters can also target Instance columns directly at the top level (e.g., `{"status":{"eq":"Active"}}`).
 
+## Instance list ordering (orderBy)
+
+Instance list results can be sorted via the `sort` or `orderBy` query parameter (same JSON format; `orderBy` wins if both are set).
+
+### OrderBy JSON format
+
+**Single field:**
+
+```
+?sort={"field":"createdAt","direction":"desc"}
+?orderBy={"field":"status","direction":"asc"}
+```
+
+**Multiple fields:**
+
+```
+?sort={"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}
+```
+
+- `direction`: `"asc"` or `"desc"` (case-insensitive). Defaults to `"asc"` if omitted.
+
+### Sortable fields
+
+| Field | Notes |
+|-------|-------|
+| `createdAt` | Creation timestamp |
+| `modifiedAt` | Modification timestamp |
+| `completedAt` | Completion timestamp |
+| `status` | Instance status |
+| `key` | Instance key |
+| `currentState` / `state` | Current state (state is alias) |
+| `attributes.fieldName` | JSON attribute (path into `InstancesData.Data`); nested paths supported (e.g. `attributes.nested.path`) |
+
+Instance columns are applied in the database; `attributes.*` ordering uses the latest instance data JSON and is subject to the same schema/security as filtering.
+
 ## Supported Operators
 
 ### Equality Operators

@@ -43,7 +43,7 @@ public sealed record ErrorHandlerRule
 
     /// <summary>
     /// Optional transition key to trigger when this rule matches.
-    /// Used with Abort/Rollback actions to navigate to a specific state.
+    /// Used with Rollback/Notify actions.
     /// </summary>
     [JsonPropertyName("transition")]
     public string? Transition { get; init; }

@@ -1,10 +1,9 @@
-using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
+using BBT.Workflow.Aspects;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
-using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Instances;
 
@@ -12,7 +11,7 @@ namespace BBT.Workflow.Instances;
 /// Instance
 /// </summary>
 public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTime, IHasExtraProperties
-{
+{  
     private Instance()
     {
     }
@@ -590,6 +589,7 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         }
     }
 
+    [SchemaValidation]
     public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)
     {
         lock (_dataListLock)
@@ -620,6 +620,7 @@ public sealed class Instance : AggregateRoot<Guid>, IHasCreatedAt, IHasModifyTim
         }
     }
 
+    [SchemaValidation]
     public InstanceData AddData(Guid id, JsonData inputData, VersionStrategy? versionStrategy = null)
     {
         lock (_dataListLock)

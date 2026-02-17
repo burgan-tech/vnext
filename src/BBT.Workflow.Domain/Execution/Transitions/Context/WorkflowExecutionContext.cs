@@ -58,6 +58,9 @@ public sealed class WorkflowExecutionContext
     /// <summary>Gets or sets whether this is a re-entry execution.</summary>
     public bool IsReentry { get; set; }
     
+    /// <summary>Gets or sets whether this transition was requested by an error boundary (e.g. Rollback/Notify). When true, state policy checks are bypassed so the transition can run from any state.</summary>
+    public bool IsErrorBoundaryTransition { get; set; }
+    
     /// <summary>Gets or sets the transition data payload.</summary>
     public TransitionDataInfo? Data { get; set; }
     

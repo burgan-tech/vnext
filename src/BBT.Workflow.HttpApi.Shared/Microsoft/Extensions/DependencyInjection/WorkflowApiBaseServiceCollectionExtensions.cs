@@ -8,6 +8,7 @@ using BBT.Aether.MultiSchema.EntityFrameworkCore.Interceptors;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
+using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
@@ -63,6 +64,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         
         services.AddEndpointsApiExplorer();
         services.AddAetherApiVersioning(apiTitle: "vNext API");
+        services.AddScoped<IWorkflowContext, WorkflowContext>();
 
         services.AddControllers()
             .AddJsonOptions(options =>
@@ -213,6 +215,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.UnauthorizedTransition, HttpStatusCode.Forbidden);
+            opt.Map(WorkflowErrorCodes.AuthorizationRoleDenied, HttpStatusCode.Forbidden);
+            opt.Map(WorkflowErrorCodes.AuthorizeRequiresExactlyOneTarget, HttpStatusCode.BadRequest);
+            opt.Map(WorkflowErrorCodes.AuthorizeQueryRolesRequiresInstance, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.InvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.NotFoundTransition, HttpStatusCode.NotFound);
             opt.Map(WorkflowErrorCodes.NotFoundInitialState, HttpStatusCode.NotFound);

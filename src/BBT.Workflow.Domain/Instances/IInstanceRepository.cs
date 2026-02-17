@@ -23,7 +23,7 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page, 
         int pageSize, 
-        string[]? filters,
+        string? filter,
         string? groupBy = null,
         string? aggregations = null,
         CancellationToken cancellationToken = default);
@@ -31,12 +31,14 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <summary>
     /// Gets paged results with optional groups for groupBy queries
     /// </summary>
+    /// <param name="sort">Optional orderBy JSON (e.g. {"field":"createdAt","direction":"desc"} or {"fields":[...]})</param>
     Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
-        string[]? filters,
+        string? filter,
         string? groupBy = null,
         string? aggregations = null,
+        string? sort = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

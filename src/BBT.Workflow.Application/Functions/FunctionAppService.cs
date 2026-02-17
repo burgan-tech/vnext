@@ -6,6 +6,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -100,6 +101,13 @@ public sealed class FunctionAppService(
         Dictionary<string, string?>? queryParameters = null,
         CancellationToken cancellationToken = default)
     {
+        if (workflow.Key != RuntimeSysSchemaInfo.Functions &&function.Scope!=TaskScope.Domain&&
+            !workflow.Functions.Any(f => f.Key == function.Key))
+        {
+            return Result<Dictionary<string, dynamic?>>.Fail(
+                WorkflowErrors.FunctionNotInWorkflow(function.Key, workflow.Key));
+        }
+
         var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(workflow)
             .WithInstance(instance)

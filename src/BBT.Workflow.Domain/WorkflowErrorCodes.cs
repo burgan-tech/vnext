@@ -116,6 +116,24 @@ public static class WorkflowErrorCodes
     public const string ExtensionExecutionFailed = "Extension:600001";
     
     #endregion
+    #region Function Errors (800xxx)
+    
+    public const string FunctionNotInWorkflow = "Function:800001";
+    
+    #endregion
+
+    #region Authorization Errors (110xxx)
+
+    /// <summary>Role denied for the requested transition or function.</summary>
+    public const string AuthorizationRoleDenied = "Authorization:110001";
+
+    /// <summary>Authorize requires exactly one of transitionKey, functionKey, or queryRoles (instance only).</summary>
+    public const string AuthorizeRequiresExactlyOneTarget = "Authorization:110002";
+
+    /// <summary>Query roles check is only valid for instance-level authorize.</summary>
+    public const string AuthorizeQueryRolesRequiresInstance = "Authorization:110003";
+
+    #endregion
     
     #region Discovery Errors (700xxx)
     

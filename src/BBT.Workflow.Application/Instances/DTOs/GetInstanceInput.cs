@@ -60,9 +60,9 @@ public sealed class GetInstanceListInput : IHasDomain
     public string[]? Extension { get; set; }
 
     /// <summary>
-    /// Filters to apply to the query (format: JSON)
+    /// Filter to apply to the query (JSON format, e.g. GraphQL-style or legacy)
     /// </summary>
-    public string[]? Filter { get; set; }
+    public string? Filter { get; set; }
 
     /// <summary>
     /// Page number for pagination (1-based)
@@ -79,8 +79,9 @@ public sealed class GetInstanceListInput : IHasDomain
     public string PageUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Field to sort by. Prefix with '-' for descending order.
-    /// Example: "CreatedAt" for ascending, "-CreatedAt" for descending
+    /// OrderBy JSON for sorting. Single: {"field":"createdAt","direction":"desc"}.
+    /// Multiple: {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}.
+    /// Instance columns: createdAt, modifiedAt, completedAt, status, key, currentState (or state). JSON: attributes.fieldName, attributes.nested.path.
     /// </summary>
     public string? Sort { get; set; }
 

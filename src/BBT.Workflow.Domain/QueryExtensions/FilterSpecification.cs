@@ -17,10 +17,10 @@ public class FilterSpecification<T> : IFilterSpecification<T>
     protected static readonly Regex KeyValueRegex = new(@"^\s*([^=]+?)\s*=\s*(.+?)\s*$", RegexOptions.Compiled);
 
     public FilterSpecification(
-        string[]? filters,
+        string? filter,
         Dictionary<string, Func<string, Expression<Func<T, bool>>>> filterMappings)
     {
-        _filters = filters;
+        _filters = string.IsNullOrWhiteSpace(filter) ? null : new[] { filter };
         _filterMappings = filterMappings;
     }
 

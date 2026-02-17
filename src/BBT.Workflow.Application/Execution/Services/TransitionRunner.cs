@@ -10,6 +10,7 @@ namespace BBT.Workflow.Execution.Services;
 /// Orchestrates transition execution with isolated DI scope and UoW.
 /// Transition chaining (auto/scheduled) is now handled by TransitionPipeline via sync dispatch.
 /// This runner focuses on UoW lifecycle management for a single transition execution.
+/// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and context management.
 /// </summary>
 public sealed class TransitionRunner(
     IServiceScopeFactory scopeFactory) : ITransitionRunner
@@ -35,29 +36,30 @@ public sealed class TransitionRunner(
     /// <summary>
     /// Executes the transition in a new DI scope with RequiresNew UoW.
     /// This ensures complete isolation from any ambient UoW.
+    /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and IWorkflowContext setup.
     /// </summary>
-    private async Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
+    private Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var sp = scope.ServiceProvider;
+        return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion, async (sp, cancellationToken) =>
+        {
+            var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+            var core = sp.GetRequiredService<IWorkflowExecutionCore>();
 
-        var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-        var core = sp.GetRequiredService<IWorkflowExecutionCore>();
+            await using var uow = await uowManager.BeginAsync(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                cancellationToken);
 
-        await using var uow = await uowManager.BeginAsync(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-            cancellationToken);
+            var coreResult = await core.ExecuteTransitionCoreAsync(context, cancellationToken);
+            if (!coreResult.IsSuccess)
+                return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-        var coreResult = await core.ExecuteTransitionCoreAsync(context, cancellationToken);
-        if (!coreResult.IsSuccess)
-            return Result<TransitionCoreOutput>.Fail(coreResult.Error);
+            // Commit is THE boundary
+            await uow.CommitAsync(cancellationToken);
 
-        // Commit is THE boundary
-        await uow.CommitAsync(cancellationToken);
-
-        return coreResult;
+            return coreResult;
+        }, cancellationToken);
     }
 }
 

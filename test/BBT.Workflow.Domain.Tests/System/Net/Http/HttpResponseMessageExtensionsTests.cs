@@ -166,6 +166,46 @@ public class HttpResponseMessageExtensionsTests
         Assert.Equal(jsonContent, result);
     }
 
+    [Fact]
+    public async Task ReadDecompressedContentAsync_WithDeflateContent_ShouldDecompress()
+    {
+        // Arrange
+        var originalContent = "Content with deflate encoding.";
+        var compressedBytes = CompressStringWithZLib(originalContent);
+
+        var response = new HttpResponseMessage
+        {
+            Content = new ByteArrayContent(compressedBytes)
+        };
+        response.Content.Headers.ContentEncoding.Add("deflate");
+
+        // Act
+        var result = await response.ReadDecompressedContentAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(originalContent, result);
+    }
+
+    [Fact]
+    public async Task ReadDecompressedContentAsync_WithBrotliContent_ShouldDecompress()
+    {
+        // Arrange
+        var originalContent = "Content with Brotli encoding.";
+        var compressedBytes = CompressStringWithBrotli(originalContent);
+
+        var response = new HttpResponseMessage
+        {
+            Content = new ByteArrayContent(compressedBytes)
+        };
+        response.Content.Headers.ContentEncoding.Add("br");
+
+        // Act
+        var result = await response.ReadDecompressedContentAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Equal(originalContent, result);
+    }
+
     #region Helper Methods
 
     private static byte[] CompressString(string text)
@@ -175,6 +215,28 @@ public class HttpResponseMessageExtensionsTests
         using (var gzip = new GZipStream(output, CompressionMode.Compress))
         {
             gzip.Write(bytes, 0, bytes.Length);
+        }
+        return output.ToArray();
+    }
+
+    private static byte[] CompressStringWithZLib(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        using var output = new MemoryStream();
+        using (var zlib = new ZLibStream(output, CompressionLevel.Fastest))
+        {
+            zlib.Write(bytes, 0, bytes.Length);
+        }
+        return output.ToArray();
+    }
+
+    private static byte[] CompressStringWithBrotli(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        using var output = new MemoryStream();
+        using (var brotli = new BrotliStream(output, CompressionMode.Compress))
+        {
+            brotli.Write(bytes, 0, bytes.Length);
         }
         return output.ToArray();
     }

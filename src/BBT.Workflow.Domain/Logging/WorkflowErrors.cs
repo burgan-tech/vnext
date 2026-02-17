@@ -369,6 +369,44 @@ public static class WorkflowErrors
 
     #endregion
 
+    #region Function Errors
+
+    /// <summary>
+    /// Function is not declared in the workflow's Functions list.
+    /// Used when executing a non-system function that is not referenced by the workflow.
+    /// </summary>
+    /// <param name="functionKey">The key of the function that was not found in the workflow.</param>
+    /// <param name="workflowKey">The key of the workflow.</param>
+    public static Error FunctionNotInWorkflow(string functionKey, string workflowKey)
+        => Error.Validation(
+            WorkflowErrorCodes.FunctionNotInWorkflow,
+            $"Function '{functionKey}' is not defined for workflow '{workflowKey}'",
+            target: functionKey);
+
+    #endregion
+
+    #region Authorization Errors
+
+    /// <summary>
+    /// Authorize requires exactly one of transitionKey, functionKey, or queryRoles (instance only).
+    /// </summary>
+    public static Error AuthorizeRequiresExactlyOneTarget()
+        => Error.Validation(
+            WorkflowErrorCodes.AuthorizeRequiresExactlyOneTarget,
+            "Authorize requires exactly one of transitionKey, functionKey, or queryRoles (instance only)",
+            target: "authorize");
+
+    /// <summary>
+    /// Query roles check is only valid for instance-level authorize.
+    /// </summary>
+    public static Error AuthorizeQueryRolesRequiresInstance()
+        => Error.Validation(
+            WorkflowErrorCodes.AuthorizeQueryRolesRequiresInstance,
+            "Query roles check is only valid for instance-level authorize",
+            target: "authorize");
+
+    #endregion
+
     #region Discovery Errors
 
     /// <summary>

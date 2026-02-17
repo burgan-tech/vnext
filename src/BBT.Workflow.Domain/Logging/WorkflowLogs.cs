@@ -351,6 +351,17 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string transitionKeys);
 
+    /// <summary>
+    /// Logs when error boundary Abort action is executed; instance will be marked Faulted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10059,
+        Level = LogLevel.Information,
+        Message = "Abort for task {TaskKey}. Instance will be marked Faulted.")]
+    public static partial void ErrorBoundaryAbortInstanceFaulted(
+        this ILogger logger,
+        string taskKey);
+
     #endregion
 
     #region Task Execution
@@ -1506,6 +1517,36 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string podInstance,
         string error);
+
+    #endregion
+
+    #region Authorization (authorize / permissions)
+
+    /// <summary>
+    /// Logs when authorize system function is invoked.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50030,
+        Level = LogLevel.Information,
+        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Role: {Role}, Allowed: {Allowed}")]
+    public static partial void AuthorizeRequest(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string role,
+        bool allowed);
+
+    /// <summary>
+    /// Logs when authorization matrix system function is invoked.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50031,
+        Level = LogLevel.Information,
+        Message = "Authorization matrix request. Domain: {Domain}, Workflow: {Workflow}")]
+    public static partial void AuthorizationMatrixRequest(
+        this ILogger logger,
+        string domain,
+        string workflow);
 
     #endregion
 }

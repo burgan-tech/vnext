@@ -7,6 +7,8 @@
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
         <!-- Microsoft packages -->
         <MicrosoftPackageVersion>10.0.*</MicrosoftPackageVersion>
+        <!-- EF Core pinned to avoid CS1705 (assembly version mismatch) across projects -->
+        <EfCorePackageVersion>10.0.3.0</EfCorePackageVersion>
         <!-- HealthChecks packages - currently only support .NET 9.0 -->
         <HealthChecksPackageVersion>9.0.0</HealthChecksPackageVersion>
         <!-- Dapr packages -->

@@ -48,7 +48,7 @@ public sealed class CreateTransitionRecordStep(
             .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, true, cancellationToken))
             .TapAsync(_ =>
                 instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
-            .Tap(_ => UpdateContextItems(context, instanceTransition.Id))
+            .Tap(_ => UpdateContextItems(context, instanceTransition))
             .Map(_ => StepOutcome.Continue());
     }
 
@@ -159,11 +159,12 @@ public sealed class CreateTransitionRecordStep(
     }
 
     /// <summary>
-    /// Updates context items with transition record ID.
+    /// Updates context items with transition record ID and the InstanceTransition for ScriptContext.CurrentTransition.
     /// </summary>
-    private static void UpdateContextItems(TransitionExecutionContext context, Guid transitionId)
+    private static void UpdateContextItems(TransitionExecutionContext context, InstanceTransition instanceTransition)
     {
-        context.Items["TransitionRecordId"] = transitionId;
+        context.Items["TransitionRecordId"] = instanceTransition.Id;
+        context.Items["InstanceTransition"] = instanceTransition;
         context.Items.Remove("NextTransitionKey");
     }
 }

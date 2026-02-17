@@ -19,7 +19,7 @@ public class GetInstancesTaskTests
                 "page": 2,
                 "pageSize": 25,
                 "sort": "-CreatedAt",
-                "filter": ["status:active", "type:premium"],
+                "filter": "status:active",
                 "useDapr": true
             }
             """;
@@ -35,9 +35,7 @@ public class GetInstancesTaskTests
         Assert.Equal(25, task.PageSize);
         Assert.Equal("-CreatedAt", task.Sort);
         Assert.NotNull(task.Filter);
-        Assert.Equal(2, task.Filter.Length);
-        Assert.Contains("status:active", task.Filter);
-        Assert.Contains("type:premium", task.Filter);
+        Assert.Equal("status:active", task.Filter);
         Assert.True(task.UseDapr);
     }
 
@@ -340,30 +338,23 @@ public class GetInstancesTaskTests
     [Fact]
     public void SetFilter_ShouldUpdateFilter()
     {
-        // Arrange
         var task = GetInstancesTask.CreateEmpty();
-        var filters = new[] { "status:active", "type:premium" };
+        var filter = "status:active";
 
-        // Act
-        task.SetFilter(filters);
+        task.SetFilter(filter);
 
-        // Assert
         Assert.NotNull(task.Filter);
-        Assert.Equal(2, task.Filter.Length);
-        Assert.Equal(filters, task.Filter);
+        Assert.Equal(filter, task.Filter);
     }
 
     [Fact]
     public void SetFilter_ShouldAcceptNull()
     {
-        // Arrange
         var task = GetInstancesTask.CreateEmpty();
-        task.SetFilter(new[] { "test" });
+        task.SetFilter("test");
 
-        // Act
         task.SetFilter(null);
 
-        // Assert
         Assert.Null(task.Filter);
     }
 
@@ -469,14 +460,11 @@ public class GetInstancesTaskTests
             }
             """;
 
-        // Act
         var task = GetInstancesTask.Create(config.ToJsonElement());
 
-        // Assert
+        // Array: first element is used
         Assert.NotNull(task.Filter);
-        Assert.Equal(2, task.Filter.Length);
-        Assert.Contains("status:active", task.Filter);
-        Assert.Contains("type:premium", task.Filter);
+        Assert.Equal("status:active", task.Filter);
     }
 
     [Fact]

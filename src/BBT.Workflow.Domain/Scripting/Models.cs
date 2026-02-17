@@ -110,6 +110,36 @@ public sealed class StandardTaskResponse
     public string? TaskType { get; set; }
 }
 
+/// <summary>
+/// Represents the original transition request data and headers persisted at transition record creation.
+/// Exposed on <see cref="ScriptContext.CurrentTransition"/> so mapping scripts can access the initial
+/// request payload regardless of later Body merges from task responses.
+/// </summary>
+/// <remarks>
+/// Header keys are normalized to lowercase for consistent access (e.g. context.CurrentTransition.Header.authorization).
+/// </remarks>
+public sealed class ScriptTransitionRequest
+{
+    /// <summary>
+    /// Original transition request body (dynamic, typically ExpandoObject from JSON).
+    /// </summary>
+    public dynamic? Data { get; }
+
+    /// <summary>
+    /// Original transition request headers with all keys normalized to lowercase.
+    /// </summary>
+    public dynamic? Header { get; }
+
+    /// <summary>
+    /// Creates a new instance with the given data and header.
+    /// </summary>
+    public ScriptTransitionRequest(dynamic? data, dynamic? header)
+    {
+        Data = data;
+        Header = header;
+    }
+}
+
 public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncDisposable
 {
     public static readonly JsonSerializerOptions JsonScriptBodyOptions = new()
@@ -137,6 +167,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 Body = null;
                 Headers = null;
                 RouteValues = null;
+                CurrentTransition = null;
             }
             catch (InvalidOperationException ex)
             {
@@ -260,7 +291,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// essential for making context-aware decisions in mapping implementations.
     /// </remarks>
     public Instance Instance { get; private set; }
-
+    
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
     /// for the current workflow execution context.
@@ -314,6 +345,19 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// This is particularly useful for transition-specific logic and task processing.
     /// </remarks>
     public Transition Transition { get; private set; }
+
+    /// <summary>
+    /// The original transition request data and headers that initiated this transition.
+    /// Populated from the persisted <see cref="Instances.InstanceTransition"/> when ScriptContext is built
+    /// during the transition pipeline (OnExecute, OnExit, OnEntry). Null when no transition record exists
+    /// (e.g. initial creation, queries, scheduled/auto transitions).
+    /// </summary>
+    /// <value>
+    /// - Data: Original request body (dynamic)
+    /// - Header: Original request headers with lowercase keys (dynamic)
+    /// - Null when ScriptContext is built outside transition task steps
+    /// </value>
+    public ScriptTransitionRequest? CurrentTransition { get; private set; }
 
     /// <summary>
     /// Contains workflow and component definitions available in the current execution context.
@@ -544,6 +588,15 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetMetadata(Dictionary<string, object> metadata)
         {
             _context.MetaData = metadata;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the current transition request (original body and headers) on the script context.
+        /// </summary>
+        public Builder SetCurrentTransition(ScriptTransitionRequest? value)
+        {
+            _context.CurrentTransition = value;
             return this;
         }
 

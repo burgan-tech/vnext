@@ -1,9 +1,8 @@
 using BBT.Aether.Results;
-using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Remote;
 
-namespace BBT.Workflow.Infrastructure.Gateway;
+namespace BBT.Workflow.Gateway;
 
 /// <summary>
 /// Remote implementation of instance retry gateway.

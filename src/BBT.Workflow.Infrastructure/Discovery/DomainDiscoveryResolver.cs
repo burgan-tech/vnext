@@ -129,7 +129,7 @@ public sealed class DomainDiscoveryResolver(
 
             if (!response.IsSuccessStatusCode)
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
                 logger.LogWarning(
                     "Discovery service returned {StatusCode} for domain '{Domain}': {Error}",
                     response.StatusCode, domain, errorContent);
@@ -386,7 +386,7 @@ public sealed class DomainDiscoveryResolver(
 
             if (!response.IsSuccessStatusCode)
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
                 logger.LogWarning(
                     "Discovery service returned {StatusCode} for domain '{Domain}': {Error}",
                     response.StatusCode, domain, errorContent);

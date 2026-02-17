@@ -1,10 +1,9 @@
 using BBT.Aether.Results;
-using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.DTOs;
 using BBT.Workflow.Runtime;
 
-namespace BBT.Workflow.Infrastructure.Gateway;
+namespace BBT.Workflow.Gateway;
 
 /// <summary>
 /// Routed implementation of instance query gateway.

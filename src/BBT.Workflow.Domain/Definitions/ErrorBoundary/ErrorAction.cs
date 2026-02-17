@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 public enum ErrorAction
 {
     /// <summary>
-    /// Abort the current execution. Optionally triggers an error transition if configured.
+    /// Abort the current execution. Instance is marked Faulted.
     /// </summary>
     Abort = 0,
 

@@ -24,6 +24,10 @@ public sealed class StateTransitionListSpecification : ITransitionSpecification
     /// </summary>
     public bool IsApplicable(TransitionExecutionContext context)
     {
+        // Not applicable for error-boundary-requested transitions (allowed from any state)
+        if (context.IsErrorBoundaryTransition)
+            return false;
+
         // Not applicable for well-known transitions (Cancel, UpdateData, Exit)
         if (IsWellKnownTransition(context.TransitionKey))
             return false;

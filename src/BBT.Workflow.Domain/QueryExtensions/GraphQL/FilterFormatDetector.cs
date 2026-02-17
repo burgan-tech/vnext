@@ -62,40 +62,6 @@ public static class FilterFormatDetector
     }
 
     /// <summary>
-    /// Detects format for an array of filters
-    /// Returns the dominant format, with GraphQL taking precedence if any are GraphQL
-    /// </summary>
-    public static FilterFormat DetectFormat(string[]? filters)
-    {
-        if (filters == null || filters.Length == 0)
-            return FilterFormat.Empty;
-
-        var hasGraphQL = false;
-        var hasLegacy = false;
-
-        foreach (var filter in filters)
-        {
-            if (string.IsNullOrWhiteSpace(filter))
-                continue;
-
-            var format = DetectFormat(filter);
-            if (format == FilterFormat.GraphQL)
-                hasGraphQL = true;
-            else if (format == FilterFormat.Legacy)
-                hasLegacy = true;
-        }
-
-        // GraphQL takes precedence - if any filter is GraphQL, treat all as GraphQL
-        if (hasGraphQL)
-            return FilterFormat.GraphQL;
-        
-        if (hasLegacy)
-            return FilterFormat.Legacy;
-
-        return FilterFormat.Empty;
-    }
-
-    /// <summary>
     /// Checks if a filter string is in GraphQL-style JSON format
     /// </summary>
     public static bool IsGraphQLFormat(string? filter)
@@ -112,78 +78,45 @@ public static class FilterFormatDetector
     }
 
     /// <summary>
-    /// Combines multiple GraphQL filter nodes into a single AND node
+    /// Parses a single filter string into a GraphQL filter node
     /// </summary>
-    public static GraphQLFilterNode? CombineFilters(string[]? filters)
+    public static GraphQLFilterNode? CombineFilters(string? filter)
     {
-        if (filters == null || filters.Length == 0)
+        if (string.IsNullOrWhiteSpace(filter))
             return null;
 
-        var nodes = new List<GraphQLFilterNode>();
-
-        foreach (var filter in filters)
-        {
-            if (string.IsNullOrWhiteSpace(filter))
-                continue;
-
-            var node = GraphQLFilterParser.ParseFilter(filter);
-            if (node != null && node.NodeType != FilterNodeType.Empty)
-            {
-                nodes.Add(node);
-            }
-        }
-
-        if (nodes.Count == 0)
-            return null;
-
-        if (nodes.Count == 1)
-            return nodes[0];
-
-        // Combine multiple nodes with AND
-        return new GraphQLFilterNode
-        {
-            And = nodes
-        };
+        var node = GraphQLFilterParser.ParseFilter(filter);
+        return node != null && node.NodeType != FilterNodeType.Empty ? node : null;
     }
 
     /// <summary>
-    /// Converts legacy filter strings to GraphQL filter format
+    /// Converts a legacy filter string to GraphQL filter format
     /// </summary>
-    public static GraphQLFilterNode? ConvertLegacyToGraphQL(string[]? legacyFilters)
+    public static GraphQLFilterNode? ConvertLegacyToGraphQL(string? legacyFilter)
     {
-        if (legacyFilters == null || legacyFilters.Length == 0)
+        if (string.IsNullOrWhiteSpace(legacyFilter))
             return null;
 
         var attributes = new Dictionary<string, FieldCondition>();
 
-        foreach (var filter in legacyFilters)
+        try
         {
-            if (string.IsNullOrWhiteSpace(filter))
-                continue;
+            var (field, op, value) = FilterOperatorParser.ParseOperator(legacyFilter);
 
-            try
-            {
-                var (field, op, value) = FilterOperatorParser.ParseOperator(filter);
-                
-                if (string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(op))
-                    continue;
+            if (string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(op))
+                return null;
 
-                if (!attributes.TryGetValue(field, out var condition))
-                {
-                    condition = new FieldCondition();
-                    attributes[field] = condition;
-                }
-
-                SetOperatorValue(condition, op, value);
-            }
-            catch (ArgumentException)
-            {
-                // Skip invalid filters with argument errors
-            }
-            catch (FormatException)
-            {
-                // Skip invalid filters with format errors
-            }
+            var condition = new FieldCondition();
+            attributes[field] = condition;
+            SetOperatorValue(condition, op, value);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (FormatException)
+        {
+            return null;
         }
 
         if (attributes.Count == 0)

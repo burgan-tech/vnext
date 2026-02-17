@@ -6,7 +6,7 @@ public class FunctionListQueryParameters
 {
 
     [JsonPropertyName("filter")]
-    public string[]? Filter { get; set; } =[];
+    public string? Filter { get; set; }
 
     [JsonPropertyName("page")]
     public int Page { get; set; } = 1;
@@ -16,4 +16,11 @@ public class FunctionListQueryParameters
     
     [JsonPropertyName("sort")]
     public string? Sort { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Alias for sort; same JSON format as sort. Only applied when function type is Data.
+    /// If both sort and orderBy provided, orderBy wins.
+    /// </summary>
+    [JsonPropertyName("orderBy")]
+    public string? OrderBy { get; set; }
 }

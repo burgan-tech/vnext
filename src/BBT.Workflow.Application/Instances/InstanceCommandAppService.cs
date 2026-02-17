@@ -8,6 +8,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
+using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Transitions.Services;
@@ -38,6 +39,7 @@ public sealed class InstanceCommandAppService(
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
     ISchemaMigrationOrchestrator schemaMigrationOrchestrator,
+    IWorkflowContext workflowContext,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -47,12 +49,14 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
-        
+
         // Step 1: Load workflow
-        var workflowResult = await LoadWorkflowAsync(input, cancellationToken);
+        var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
         if (!workflowResult.IsSuccess)
             return Result<StartInstanceOutput>.Fail(workflowResult.Error);
-        
+
+        var workflow = workflowResult.Value!;
+
         // Step 2: Migrate schema (MUST happen before any DB operations)
         var migrationSuccess = await schemaMigrationOrchestrator.MigrateSchemaWithLockAsync(
             input.Workflow, cancellationToken);
@@ -61,14 +65,14 @@ public sealed class InstanceCommandAppService(
             return Result<StartInstanceOutput>.Fail(
                 WorkflowErrors.SchemaMigrationLockFailed(input.Workflow));
         }
-        
+
         // Step 3: Check existing instance (AFTER schema migration)
         var existingInstanceResult = await CheckExistingInstanceAsync(input, cancellationToken);
         if (existingInstanceResult.HasValue)
             return existingInstanceResult.Value;
-        
+
         // Step 4-7: Continue with normal railway flow for NEW instances
-        return await PrepareInstanceAsync(workflowResult.Value, input, cancellationToken)
+        return await PrepareInstanceAsync(workflow, input, cancellationToken)
             .ThenAsync(async data =>
             {
                 await ScheduleWorkflowTimeoutIfConfiguredAsync(data.Workflow, data.Instance, cancellationToken);
@@ -94,10 +98,10 @@ public sealed class InstanceCommandAppService(
     {
         var instanceId = input.Instance.Id;
         var instanceKey = input.Instance.Key;
-        
+
         var existingInstance = !instanceKey.IsNullOrWhiteSpace()
             ? await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken)
-            : instanceId.HasValue 
+            : instanceId.HasValue
                 ? await instanceRepository.FindByIdentifierAsync(instanceId.Value.ToString(), cancellationToken)
                 : null;
 
@@ -106,7 +110,7 @@ public sealed class InstanceCommandAppService(
 
         if (existingInstance.IsCompleted)
             return null; // Completed instance, allow creating new one
-        
+
         // Strict idempotency: Return 409 Conflict for service-to-service calls
         // This prevents false positive correlations in SubFlow/SubProcess scenarios
         if (input.StrictIdempotency)
@@ -114,11 +118,11 @@ public sealed class InstanceCommandAppService(
             logger.LogWarning(
                 "Strict idempotency check failed: Active instance already exists with key '{InstanceKey}' or id '{InstanceId}'",
                 instanceKey, existingInstance.Id);
-            
+
             return Result<StartInstanceOutput>.Fail(
                 WorkflowErrors.ActiveInstanceAlreadyExists(existingInstance.Id, instanceKey));
         }
-        
+
         // Default idempotent behavior for client calls
         return Result<StartInstanceOutput>.Ok(new StartInstanceOutput
         {
@@ -128,14 +132,32 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Step 2: Loads the workflow definition.
+    /// Step 2: Loads the workflow definition from cache and sets it in WorkflowContext.
+    /// Note: TransitionRunner will also set it in its isolated scope.
     /// </summary>
-    private Task<Result<Definitions.Workflow>> LoadWorkflowAsync(
-        StartInstanceInput input,
+    private async Task<Result<Definitions.Workflow>> LoadWorkflowAsync(
+        string domain,
+        string workflow,
+        string? version,
         CancellationToken cancellationToken)
     {
-        return componentCacheStore.GetFlowAsync(
-            input.Domain, input.Workflow, input.Version, cancellationToken);
+        var workflowInScope = workflowContext.Workflow;
+        if (workflowInScope != null && workflowInScope.Key == workflow)
+        {
+            return Result<Definitions.Workflow>.Ok(workflowInScope);
+        }
+        var workflowResult = await componentCacheStore.GetFlowAsync(
+            domain, workflow, version, cancellationToken);
+
+        if (!workflowResult.IsSuccess)
+            return Result<Definitions.Workflow>.Fail(workflowResult.Error);
+
+        var workflowDefinition = workflowResult.Value!;
+
+        // Set workflow in current scope's context
+        workflowContext.SetWorkflow(workflowDefinition);
+
+        return Result<Definitions.Workflow>.Ok(workflowDefinition);
     }
 
     /// <summary>
@@ -160,7 +182,7 @@ public sealed class InstanceCommandAppService(
             .ThenAsync(instance => ValidateStartTransitionAsync(workflow, instance, input, cancellationToken))
             .ThenAsync(instance => MapInstanceDataAsync(workflow, instance, input, cancellationToken))
             .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken));
-        
+
         await uow.CommitAsync(cancellationToken);
         return result;
     }
@@ -355,6 +377,12 @@ public sealed class InstanceCommandAppService(
     {
         // Validate domain first
         runtimeInfoProvider.Check(input.Domain);
+
+        // Load workflow
+        var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result<TransitionOutput>.Fail(workflowResult.Error);
+
         return await ExecuteTransitionAsync(instance, transitionKey, input, cancellationToken)
             .OnSuccess(output => AddTransitionHeader(output, input));
     }

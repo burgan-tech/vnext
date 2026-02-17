@@ -252,39 +252,33 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         long executionDurationMs,
         CancellationToken cancellationToken)
     {
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
-            _metrics.RecordTaskExecution(TaskType, "failure");
+        var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseData = InvokerHelpers.TryParseJson(content);
+        var metadata = response.IsSuccessStatusCode
+            ? CreateMetadata(binding)
+            : CreateMetadata(binding, statusCode: (int)response.StatusCode);
 
-            _logger.LogWarning(
-                "DirectTrigger failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}. " +
-                "Status: {StatusCode}, Error: {Error}",
-                taskKey, binding.Domain, binding.Workflow, binding.Identifier, binding.TransitionName,
-                (int)response.StatusCode, errorContent);
+        _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
 
-            return TaskInvocationResult.Failure(
-                error: $"HTTP {(int)response.StatusCode}: {errorContent}",
+        return response.IsSuccessStatusCode
+            ? TaskInvocationResult.Success(
+                data: responseData,
+                body: content,
                 statusCode: (int)response.StatusCode,
                 executionDurationMs: executionDurationMs,
                 taskType: TaskType,
-                metadata: CreateMetadata(binding, statusCode: (int)response.StatusCode));
-        }
-
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-        var responseData = !string.IsNullOrEmpty(responseBody)
-            ? JsonSerializer.Deserialize<object>(responseBody)
-            : null;
-
-        _metrics.RecordTaskExecution(TaskType, "success");
-
-        return TaskInvocationResult.Success(
-            data: responseData,
-            body: responseBody,
-            statusCode: (int)response.StatusCode,
-            executionDurationMs: executionDurationMs,
-            taskType: TaskType,
-            metadata: CreateMetadata(binding));
+                headers: responseHeaders,
+                metadata: metadata)
+            : TaskInvocationResult.Failure(
+                error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                statusCode: (int)response.StatusCode,
+                body: content,
+                executionDurationMs: executionDurationMs,
+                taskType: TaskType,
+                headers: responseHeaders,
+                data: responseData,
+                metadata: metadata);
     }
 
     private static string BuildPath(DirectTriggerBinding binding)

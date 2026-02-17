@@ -54,4 +54,11 @@ public sealed class RemoteOptions
     /// Internal operation header name for bypass identification
     /// </summary>
     public string InternalOperationHeader { get; set; } = "X-Internal-Operation";
+
+    /// <summary>
+    /// Gets or sets whether SSL certificate validation is enabled.
+    /// When set to false, SSL certificate errors will be ignored (useful for development environments).
+    /// Default is true for security reasons.
+    /// </summary>
+    public bool ValidateSsl { get; set; } = true;
 } 

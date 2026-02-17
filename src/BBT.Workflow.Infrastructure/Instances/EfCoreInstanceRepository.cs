@@ -212,23 +212,21 @@ public sealed class EfCoreInstanceRepository(
     }
 
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
-        string[]? filters,
+        string? filter,
         CancellationToken cancellationToken = default)
     {
         // Apply PostgreSQL native JSON filters if provided
-        if (filters?.Any() == true)
+        if (!string.IsNullOrWhiteSpace(filter))
         {
             try
             {
-                // Use ApplyJsonFilters on Instance DbSet - this matches the working pattern
-                // The CTE inside ApplyJsonFilters will handle InstanceData filtering and return Instances
                 var filteredInstances = (await GetDbSetAsync())
                     .ApplyFilters(
-                        filters: filters,
-                        jsonColumnName: "Data", // InstanceData.Data is the JSON column
-                        tableName: "InstancesData", // Filter table name
-                        schema: currentSchema.Name ?? "public", // Default schema
-                        schemaValidator: schemaValidator // Security validation
+                        filter,
+                        jsonColumnName: "Data",
+                        tableName: "InstancesData",
+                        schema: currentSchema.Name ?? "public",
+                        schemaValidator: schemaValidator
                     );
 
                 return filteredInstances
@@ -236,34 +234,30 @@ public sealed class EfCoreInstanceRepository(
             }
             catch (ArgumentException)
             {
-                // Invalid filter format, fallback to specification-based filtering
                 var dbSet = await GetDbSetAsync();
                 var query = dbSet
                     .Include(i => i.DataList);
-                var filterSpec = new InstanceFilterSpecification(filters);
+                var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
             catch (FormatException)
             {
-                // Invalid filter format, fallback to specification-based filtering
                 var dbSet = await GetDbSetAsync();
                 var query = dbSet
                     .Include(i => i.DataList);
-                var filterSpec = new InstanceFilterSpecification(filters);
+                var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
             catch (Microsoft.EntityFrameworkCore.DbUpdateException)
             {
-                // Database error, fallback to specification-based filtering
                 var dbSet = await GetDbSetAsync();
                 var query = dbSet
                     .Include(i => i.DataList);
-                var filterSpec = new InstanceFilterSpecification(filters);
+                var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
         }
 
-        // If no filters, use the standard approach with includes
         var standardDbSet = await GetDbSetAsync();
         return standardDbSet
             .Include(i => i.DataList);
@@ -272,7 +266,7 @@ public sealed class EfCoreInstanceRepository(
     public async Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page,
         int pageSize,
-        string[]? filters,
+        string? filter,
         string? groupBy = null,
         string? aggregations = null,
         CancellationToken cancellationToken = default)
@@ -283,27 +277,43 @@ public sealed class EfCoreInstanceRepository(
             var context = await GetDbContextAsync();
             var dbSet = await GetDbSetAsync();
 
-            // Combine filters into a single JSON string if multiple filters exist
             string? combinedFilter = null;
-            if (filters != null && filters.Length > 0)
+            if (!string.IsNullOrWhiteSpace(filter))
             {
-                // If filters are in GraphQL format, combine them
-                if (FilterFormatDetector.DetectFormat(filters) == FilterFormat.GraphQL)
+                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
                 {
-                    var combinedNode = FilterFormatDetector.CombineFilters(filters);
-                    if (combinedNode != null)
+                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
+                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
                         {
                             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                             WriteIndented = false
                         });
                     }
+                    else
+                    {
+                        var combinedNode = FilterFormatDetector.CombineFilters(filter);
+                        if (combinedNode != null)
+                        {
+                            combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false
+                            });
+                        }
+                    }
                 }
                 else
                 {
-                    // For legacy format, use first filter
-                    combinedFilter = filters[0];
+                    var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
+                    if (legacyNode != null)
+                    {
+                        combinedFilter = JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            WriteIndented = false
+                        });
+                    }
                 }
             }
 
@@ -351,7 +361,7 @@ public sealed class EfCoreInstanceRepository(
 
         // Normal flow without groupBy/aggregations
         // GetFilteredQueryAsync already includes DataList, no need to include again
-        var query = await GetFilteredQueryAsync(filters, cancellationToken);
+        var query = await GetFilteredQueryAsync(filter, cancellationToken);
 
         // Manually materialize to ensure DataList is loaded
         var skipCount = (page - 1) * pageSize;
@@ -372,9 +382,10 @@ public sealed class EfCoreInstanceRepository(
     public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
-        string[]? filters,
+        string? filter,
         string? groupBy = null,
         string? aggregations = null,
+        string? sort = null,
         CancellationToken cancellationToken = default)
     {
         // If groupBy is provided, use ApplyFilterWithAggregationsAsync
@@ -383,27 +394,43 @@ public sealed class EfCoreInstanceRepository(
             var context = await GetDbContextAsync();
             var dbSet = await GetDbSetAsync();
 
-            // Combine filters into a single JSON string if multiple filters exist
             string? combinedFilter = null;
-            if (filters != null && filters.Length > 0)
+            if (!string.IsNullOrWhiteSpace(filter))
             {
-                // If filters are in GraphQL format, combine them
-                if (FilterFormatDetector.DetectFormat(filters) == FilterFormat.GraphQL)
+                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
                 {
-                    var combinedNode = FilterFormatDetector.CombineFilters(filters);
-                    if (combinedNode != null)
+                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
+                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
                         {
                             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                             WriteIndented = false
                         });
                     }
+                    else
+                    {
+                        var combinedNode = FilterFormatDetector.CombineFilters(filter);
+                        if (combinedNode != null)
+                        {
+                            combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false
+                            });
+                        }
+                    }
                 }
                 else
                 {
-                    // For legacy format, use first filter
-                    combinedFilter = filters[0];
+                    var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
+                    if (legacyNode != null)
+                    {
+                        combinedFilter = JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            WriteIndented = false
+                        });
+                    }
                 }
             }
 
@@ -474,13 +501,12 @@ public sealed class EfCoreInstanceRepository(
             var context = await GetDbContextAsync();
             var dbSet = await GetDbSetAsync();
 
-            // Combine filters
             string? combinedFilter = null;
-            if (filters != null && filters.Length > 0)
+            if (!string.IsNullOrWhiteSpace(filter))
             {
-                if (FilterFormatDetector.DetectFormat(filters) == FilterFormat.GraphQL)
+                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
                 {
-                    var combinedNode = FilterFormatDetector.CombineFilters(filters);
+                    var combinedNode = FilterFormatDetector.CombineFilters(filter);
                     if (combinedNode != null)
                     {
                         combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
@@ -492,7 +518,7 @@ public sealed class EfCoreInstanceRepository(
                 }
                 else
                 {
-                    combinedFilter = filters[0];
+                    combinedFilter = filter;
                 }
             }
 
@@ -532,20 +558,109 @@ public sealed class EfCoreInstanceRepository(
         }
 
         // Normal flow without groupBy/aggregations
-        // GetFilteredQueryAsync already includes DataList, no need to include again
-        var query = await GetFilteredQueryAsync(filters, cancellationToken);
+        var orderBy = GraphQLFilterParser.ParseOrderBy(sort);
+        var hasAttributesOrderBy = orderBy != null && orderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
+        var schema = currentSchema.Name ?? "public";
 
-        // Manually materialize to ensure DataList is loaded
         var skipCount = (page - 1) * pageSize;
-        var items = await query
-            .Skip(skipCount)
-            .Take(pageSize + 1) // Take one extra to check if there's a next page
-            .ToListAsync(cancellationToken);
+        List<Instance> items;
+        bool hasNextPage;
 
-        var hasNextPage = items.Count > pageSize;
-        if (hasNextPage)
+        if (string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
         {
-            items = items.Take(pageSize).ToList();
+            // No filter + attributes orderBy: raw SQL with ORDER BY, then load DataList by IDs
+            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema);
+            if (!string.IsNullOrEmpty(orderByClause))
+            {
+                var dbSet = await GetDbSetAsync();
+                var rawSql = $"SELECT s.* FROM \"{schema}\".\"Instances\" s ORDER BY {orderByClause} OFFSET {skipCount} LIMIT {pageSize + 1}";
+                var orderedInstances = await dbSet
+                    .FromSqlRaw(rawSql)
+                    .AsNoTracking()
+                    .ToListAsync(cancellationToken);
+
+                hasNextPage = orderedInstances.Count > pageSize;
+                if (hasNextPage)
+                    orderedInstances = orderedInstances.Take(pageSize).ToList();
+
+                items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
+            }
+            else
+            {
+                var query = await GetFilteredQueryAsync(filter, cancellationToken);
+                if (orderBy != null)
+                    query = InstanceOrderByApplicator.Apply(query, orderBy);
+                items = await query
+                    .Skip(skipCount)
+                    .Take(pageSize + 1)
+                    .ToListAsync(cancellationToken);
+                hasNextPage = items.Count > pageSize;
+                if (hasNextPage)
+                    items = items.Take(pageSize).ToList();
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
+        {
+            var combinedFilter = BuildCombinedFilterJson(filter);
+            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema);
+            if (!string.IsNullOrEmpty(combinedFilter) && !string.IsNullOrEmpty(orderByClause))
+            {
+                var dbSet = await GetDbSetAsync();
+                var filterNode = GraphQLFilterParser.ParseFilter(combinedFilter);
+                if (filterNode != null && filterNode.NodeType != FilterNodeType.Empty)
+                {
+                    var query = dbSet.ApplyGraphQLFilter(filterNode, "Data", "InstancesData", schema, schemaValidator, null, orderByClause);
+                    var orderedInstances = await query
+                        .Skip(skipCount)
+                        .Take(pageSize + 1)
+                        .ToListAsync(cancellationToken);
+
+                    hasNextPage = orderedInstances.Count > pageSize;
+                    if (hasNextPage)
+                        orderedInstances = orderedInstances.Take(pageSize).ToList();
+
+                    items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
+                }
+                else
+                {
+                    var query = await GetFilteredQueryAsync(filter, cancellationToken);
+                    if (orderBy != null)
+                        query = InstanceOrderByApplicator.Apply(query, orderBy);
+                    items = await query
+                        .Skip(skipCount)
+                        .Take(pageSize + 1)
+                        .ToListAsync(cancellationToken);
+                    hasNextPage = items.Count > pageSize;
+                    if (hasNextPage)
+                        items = items.Take(pageSize).ToList();
+                }
+            }
+            else
+            {
+                var query = await GetFilteredQueryAsync(filter, cancellationToken);
+                if (orderBy != null)
+                    query = InstanceOrderByApplicator.Apply(query, orderBy);
+                items = await query
+                    .Skip(skipCount)
+                    .Take(pageSize + 1)
+                    .ToListAsync(cancellationToken);
+                hasNextPage = items.Count > pageSize;
+                if (hasNextPage)
+                    items = items.Take(pageSize).ToList();
+            }
+        }
+        else
+        {
+            var query = await GetFilteredQueryAsync(filter, cancellationToken);
+            if (orderBy != null)
+                query = InstanceOrderByApplicator.Apply(query, orderBy);
+            items = await query
+                .Skip(skipCount)
+                .Take(pageSize + 1)
+                .ToListAsync(cancellationToken);
+            hasNextPage = items.Count > pageSize;
+            if (hasNextPage)
+                items = items.Take(pageSize).ToList();
         }
 
         var normalPagedList = new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
@@ -564,13 +679,24 @@ public sealed class EfCoreInstanceRepository(
         var context = await GetDbContextAsync();
         var dbSet = await GetDbSetAsync();
 
+        var schema = currentSchema.Name ?? "public";
         var response = await UnifiedFilterService.ExecuteRequestAsync(
             context,
             dbSet,
             request ?? new Definitions.GraphQL.GraphQLFilterRequest(),
             "Data",
-            currentSchema.Name ?? "public",
+            schema,
             query => query.Include(i => i.DataList).AsSplitQuery(),
+            applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
+            applyOrderByRaw: (ctx, sch, orderBy) =>
+            {
+                if (orderBy == null) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
+                var clause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, sch);
+                if (string.IsNullOrEmpty(clause)) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
+                return ((WorkflowDbContext)ctx).Instances
+                    .FromSqlRaw($"SELECT s.* FROM \"{sch}\".\"Instances\" s ORDER BY {clause}")
+                    .AsNoTracking();
+            },
             schemaValidator,
             cancellationToken);
 
@@ -738,6 +864,66 @@ public sealed class EfCoreInstanceRepository(
                      && i.Id != excludeInstanceId
                      && i.Status == InstanceStatus.Active,
                 cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads DataList for instances (ordered by id list) and returns list in the same order. Used when ORDER BY must be preserved (EF Include breaks order).
+    /// </summary>
+    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(List<Instance> orderedInstances, CancellationToken cancellationToken)
+    {
+        if (orderedInstances.Count == 0)
+            return [];
+        var ids = orderedInstances.Select(i => i.Id).ToList();
+        var dbSet = await GetDbSetAsync();
+        var instancesWithData = await dbSet
+            .Where(i => ids.Contains(i.Id))
+            .Include(i => i.DataList)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+        var byId = instancesWithData.ToDictionary(i => i.Id);
+        return ids.Select(id => byId[id]).ToList();
+    }
+
+    /// <summary>
+    /// Builds a single GraphQL filter JSON from the filter string (same logic as groupBy/aggregations path).
+    /// </summary>
+    private static string? BuildCombinedFilterJson(string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+            return null;
+        if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
+        {
+            if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
+            {
+                return JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = false
+                });
+            }
+            var combinedNode = FilterFormatDetector.CombineFilters(filter);
+            if (combinedNode != null)
+            {
+                return JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = false
+                });
+            }
+        }
+        else
+        {
+            var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
+            if (legacyNode != null)
+            {
+                return JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = false
+                });
+            }
+        }
+        return null;
     }
 
     /// <summary>

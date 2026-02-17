@@ -21,7 +21,7 @@ public static class PostgreSqlJsonFilterService
     /// </summary>
     /// <typeparam name="T">Entity type</typeparam>
     /// <param name="dbSet">Entity DbSet</param>
-    /// <param name="filters">Array of filter strings in format: "field=operator:value"</param>
+    /// <param name="filter">Filter string in format: "field=operator:value"</param>
     /// <param name="jsonColumnName">Name of the JSON column (e.g., "Data", "Json")</param>
     /// <param name="tableName">Name of the database table</param>
     /// <param name="schema">Database schema name</param>
@@ -30,18 +30,20 @@ public static class PostgreSqlJsonFilterService
     /// <returns>Filtered queryable</returns>
     public static IQueryable<T> ApplyJsonFilters<T>(
         this DbSet<T> dbSet,
-        string[] filters,
+        string? filter,
         string jsonColumnName = "Data",
         string tableName = "",
         string schema = "public",
         ISchemaValidator? schemaValidator = null,
         ILogger? logger = null) where T : class
     {
-        if (filters == null || !filters.Any())
+        if (string.IsNullOrWhiteSpace(filter))
             return dbSet;
 
         // Validate inputs
-        InputValidator.ValidateFilters(filters);
+        InputValidator.ValidateFilters(filter);
+
+        var filters = new[] { filter };
         
         // Validate schema and table names
         if (schemaValidator != null)
@@ -65,15 +67,15 @@ public static class PostgreSqlJsonFilterService
         var parameterIndex = 0;
 
         // Process JSON Data filters
-        foreach (var filter in jsonFilters)
+        foreach (var filterItem in jsonFilters)
         {
             try
             {
-                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filter);
-                
+                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filterItem);
+
                 var (condition, filterParameters) = BuildPostgreSqlCondition(
                     field, operatorType, operatorValue, jsonColumnName, ref parameterIndex);
-                
+
                 if (!string.IsNullOrEmpty(condition))
                 {
                     jsonWhereConditions.Add(condition);
@@ -82,26 +84,24 @@ public static class PostgreSqlJsonFilterService
             }
             catch (ArgumentException ex)
             {
-                // Log error but continue with other filters
-                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filter);
+                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filterItem);
             }
             catch (FormatException ex)
             {
-                // Log error but continue with other filters
-                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filter);
+                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filterItem);
             }
         }
 
         // Process Instance column filters
-        foreach (var filter in instanceFilters)
+        foreach (var filterItem in instanceFilters)
         {
             try
             {
-                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filter);
-                
+                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filterItem);
+
                 var (condition, filterParameters) = InstanceColumnConditionBuilder.BuildCondition(
                     field, operatorType, operatorValue, ref parameterIndex);
-                
+
                 if (!string.IsNullOrEmpty(condition))
                 {
                     instanceWhereConditions.Add(condition);
@@ -110,13 +110,11 @@ public static class PostgreSqlJsonFilterService
             }
             catch (ArgumentException ex)
             {
-                // Log error but continue with other filters
-                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filter);
+                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filterItem);
             }
             catch (FormatException ex)
             {
-                // Log error but continue with other filters
-                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filter);
+                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filterItem);
             }
         }
 
@@ -176,7 +174,7 @@ public static class PostgreSqlJsonFilterService
         string tableName = "") where T : class
     {
         return dbSet.ApplyJsonFilters(
-            new[] { $"{field}={operatorType}:{value}" },
+            $"{field}={operatorType}:{value}",
             jsonColumnName,
             tableName);
     }

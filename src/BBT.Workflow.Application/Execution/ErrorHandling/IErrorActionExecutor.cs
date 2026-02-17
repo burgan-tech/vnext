@@ -9,7 +9,7 @@ namespace BBT.Workflow.Execution.ErrorHandling;
 /// </summary>
 /// <remarks>
 /// Action behaviors:
-/// - Abort: Finalize current loop, return current state to client (not faulted)
+/// - Abort: Instance is marked Faulted; pipeline stops.
 /// - Notify/Rollback: If transition specified, finalize and request transition; else behave like Abort
 /// - Log: Log error only, continue pipeline lifecycle
 /// - Ignore: Low-level log, continue pipeline, ignore failure

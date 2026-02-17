@@ -1,3 +1,4 @@
+using System.Net;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Invokers;
@@ -91,6 +92,7 @@ public static class ExecutionServiceCollectionExtensions
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                 MaxConnectionsPerServer = 10,
                 UseCookies = false
             });
@@ -104,6 +106,7 @@ public static class ExecutionServiceCollectionExtensions
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                 MaxConnectionsPerServer = 10,
                 UseCookies = false,
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true

@@ -154,6 +154,15 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 return result;
             }
 
+            // No boundary + business failure (e.g. 404) - flow continues; do not resolve fallback
+            if (result is { IsSuccess: true, Value: var value } && value is { TaskError: null, HasFailedTasks: true })
+            {
+                _logger.LogDebug(
+                    "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.",
+                    taskKey);
+                return result;
+            }
+
             // Retry exhausted - resolve boundary for fallback actions
             return await HandlePostRetryFailureAsync(
                 result, onExecuteTask, boundaryChain, totalStopwatch.ElapsedMilliseconds, cancellationToken);
@@ -192,6 +201,16 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var executionError = failedResult.Value?.TaskError;
         if (executionError == null)
         {
+            // No TaskError with successful Result = no boundary + business failure; should not reach here
+            // (ExecuteWithPollyAsync returns early). Return result so pipeline continues.
+            if (failedResult.IsSuccess && failedResult.Value != null)
+            {
+                _logger.LogDebug(
+                    "Task {TaskKey}: no TaskError with successful Result (no-boundary business failure). Returning result for pipeline continuation.",
+                    taskKey);
+                return failedResult;
+            }
+
             // Infrastructure error - create from Result.Error
             executionError = _errorFactory.CreateFromError(
                 failedResult.Error, taskKey, "Unknown", totalDurationMs);

@@ -16,31 +16,31 @@ public static class UnifiedFilterService
     /// </summary>
     /// <typeparam name="T">Entity type</typeparam>
     /// <param name="dbSet">Entity DbSet</param>
-    /// <param name="filters">Array of filter strings (can be mixed formats)</param>
+    /// <param name="filter">Filter string (legacy or GraphQL-style JSON)</param>
     /// <param name="jsonColumnName">Name of the JSON column</param>
     /// <param name="tableName">Name of the database table</param>
     /// <param name="schema">Database schema name</param>
     /// <returns>Filtered queryable</returns>
     public static IQueryable<T> ApplyFilters<T>(
         this DbSet<T> dbSet,
-        string[]? filters,
+        string? filter,
         string jsonColumnName = "Data",
         string tableName = "",
         string schema = "public",
         ISchemaValidator? schemaValidator = null) where T : class
     {
-        if (filters == null || filters.Length == 0)
+        if (string.IsNullOrWhiteSpace(filter))
             return dbSet;
 
         // Validate inputs
-        InputValidator.ValidateFilters(filters);
+        InputValidator.ValidateFilters(filter);
 
-        var format = FilterFormatDetector.DetectFormat(filters);
+        var format = FilterFormatDetector.DetectFormat(filter);
 
         return format switch
         {
-            FilterFormat.GraphQL => ApplyGraphQLFilters(dbSet, filters, jsonColumnName, tableName, schema, schemaValidator),
-            FilterFormat.Legacy => PostgreSqlJsonFilterService.ApplyJsonFilters(dbSet, filters, jsonColumnName, tableName, schema, schemaValidator),
+            FilterFormat.GraphQL => ApplyGraphQLFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator),
+            FilterFormat.Legacy => PostgreSqlJsonFilterService.ApplyJsonFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator),
             _ => dbSet
         };
     }
@@ -50,14 +50,13 @@ public static class UnifiedFilterService
     /// </summary>
     private static IQueryable<T> ApplyGraphQLFilters<T>(
         DbSet<T> dbSet,
-        string[] filters,
+        string? filter,
         string jsonColumnName,
         string tableName,
         string schema,
         ISchemaValidator? schemaValidator) where T : class
     {
-        // Combine all filters into a single node
-        var combinedNode = FilterFormatDetector.CombineFilters(filters);
+        var combinedNode = FilterFormatDetector.CombineFilters(filter);
 
         if (combinedNode == null)
             return dbSet;
@@ -92,13 +91,15 @@ public static class UnifiedFilterService
         CancellationToken cancellationToken = default) where T : class
     {
         var request = GraphQLFilterParser.ParseRequest(filter, groupBy, aggregations);
-        return await ExecuteRequestAsync(dbContext, dbSet, request, jsonColumnName, schema, includeFunc, schemaValidator, cancellationToken);
+        return await ExecuteRequestAsync(dbContext, dbSet, request, jsonColumnName, schema, includeFunc, applyOrderBy: null, applyOrderByRaw: null, schemaValidator, cancellationToken);
     }
 
     /// <summary>
     /// Execute a complete GraphQL filter request
     /// </summary>
     /// <param name="includeFunc">Optional function to include navigation properties</param>
+    /// <param name="applyOrderBy">Optional function to apply request.OrderBy (instance columns only)</param>
+    /// <param name="applyOrderByRaw">Optional function to build ordered query when there is no filter but orderBy has attributes (e.g. raw SQL with ORDER BY subquery)</param>
     public static async Task<GraphQLFilterResponse<T>> ExecuteRequestAsync<T>(
         DbContext dbContext,
         DbSet<T> dbSet,
@@ -106,6 +107,8 @@ public static class UnifiedFilterService
         string jsonColumnName = "Data",
         string schema = "public",
         Func<IQueryable<T>, IQueryable<T>>? includeFunc = null,
+        Func<IQueryable<T>, OrderByRequest?, IQueryable<T>>? applyOrderBy = null,
+        Func<DbContext, string, OrderByRequest?, IQueryable<T>>? applyOrderByRaw = null,
         ISchemaValidator? schemaValidator = null,
         CancellationToken cancellationToken = default) where T : class
     {
@@ -142,14 +145,33 @@ public static class UnifiedFilterService
         }
 
         // Handle regular filter (no aggregations)
-        var query = request.Filter != null
-            ? dbSet.ApplyGraphQLFilter(request.Filter, jsonColumnName, "", schema, schemaValidator)
-            : dbSet;
+        var orderByClause = request.OrderBy != null ? GraphQLJsonFilterService.BuildOrderByClause(request.OrderBy, schema) : null;
+        var orderByHasAttributes = request.OrderBy != null && request.OrderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
+
+        IQueryable<T> query;
+        if (request.Filter != null)
+        {
+            query = dbSet.ApplyGraphQLFilter(request.Filter, jsonColumnName, "", schema, schemaValidator, orderByClause: orderByClause);
+        }
+        else if (orderByHasAttributes && orderByClause != null && applyOrderByRaw != null)
+        {
+            query = applyOrderByRaw(dbContext, schema, request.OrderBy!);
+        }
+        else
+        {
+            query = dbSet;
+        }
 
         // Apply include function if provided
         if (includeFunc != null)
         {
             query = includeFunc(query);
+        }
+
+        // Apply orderBy via applicator only when no filter and no attributes (filter/raw path already has ORDER BY)
+        if (request.Filter == null && !orderByHasAttributes && request.OrderBy != null && request.OrderBy.GetEntries().Count > 0 && applyOrderBy != null)
+        {
+            query = applyOrderBy(query, request.OrderBy);
         }
 
         response.Data = await query.ToListAsync(cancellationToken);

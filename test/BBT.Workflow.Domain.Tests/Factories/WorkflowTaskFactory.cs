@@ -31,11 +31,11 @@ public static class WorkflowTaskFactory
         int page = 1,
         int pageSize = 10,
         string? sort = null,
-        string[]? filter = null,
+        string? filter = null,
         bool useDapr = false)
     {
-        var filterJson = filter != null 
-            ? $@"""filter"": [{string.Join(", ", filter.Select(f => $@"""{f}"""))}],"
+        var filterJson = !string.IsNullOrWhiteSpace(filter)
+            ? $@"""filter"": ""{filter.Replace("\"", "\\\"")}"","
             : "";
         var sortJson = sort != null ? $@"""sort"": ""{sort}""," : "";
 

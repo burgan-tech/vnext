@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -48,6 +49,7 @@ public static class GraphQLJsonFilterService
     /// <summary>
     /// Apply GraphQL filter node using PostgreSQL native JSONB operators
     /// </summary>
+    /// <param name="orderByClause">Optional ORDER BY clause (e.g. from BuildOrderByClause). When null, defaults to s."CreatedAt" DESC.</param>
     public static IQueryable<T> ApplyGraphQLFilter<T>(
         this DbSet<T> dbSet,
         GraphQLFilterNode filterNode,
@@ -55,7 +57,8 @@ public static class GraphQLJsonFilterService
         string tableName = "",
         string schema = "public",
         ISchemaValidator? schemaValidator = null,
-        ILogger? logger = null) where T : class
+        ILogger? logger = null,
+        string? orderByClause = null) where T : class
     {
         // Validate schema and table names
         if (schemaValidator != null)
@@ -102,9 +105,71 @@ public static class GraphQLJsonFilterService
             FROM ""{schema}"".""Instances"" s
             JOIN FilteredData d ON s.""Id"" = d.""InstanceId""
             {(string.IsNullOrEmpty(instanceWhereClause) ? "" : $"WHERE {instanceWhereClause}")}
-            ORDER BY s.""CreatedAt"" DESC";
+            ORDER BY {(string.IsNullOrWhiteSpace(orderByClause) ? "s.\"CreatedAt\" DESC" : orderByClause)}";
 
         return dbSet.FromSqlRaw(rawSql, parameters.ToArray()).AsNoTracking();
+    }
+
+    /// <summary>
+    /// Builds ORDER BY clause SQL for instance list (instance columns and/or attributes JSON path).
+    /// </summary>
+    public static string? BuildOrderByClause(
+        OrderByRequest? orderBy,
+        string schema,
+        string instanceAlias = "s",
+        string dataTableName = "InstancesData")
+    {
+        if (orderBy == null)
+            return null;
+        var entries = orderBy.GetEntries();
+        if (entries.Count == 0)
+            return null;
+
+        var parts = new List<string>();
+        foreach (var (field, direction) in entries)
+        {
+            var dir = direction.Equals("desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+            var trimmed = field.Trim();
+            if (trimmed.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase))
+            {
+                var jsonPath = trimmed.Substring("attributes.".Length).Trim();
+                if (string.IsNullOrEmpty(jsonPath) || !IsSafeJsonPath(jsonPath))
+                    continue;
+                var accessor = BuildJsonTextAccessorForOrderBy(jsonPath);
+                parts.Add($"(SELECT {accessor} FROM \"{schema}\".\"{dataTableName}\" _d WHERE _d.\"InstanceId\" = {instanceAlias}.\"Id\" AND _d.\"IsLatest\" = true LIMIT 1) {dir}");
+            }
+            else if (InstanceFieldDiscriminator.IsInstanceColumn(trimmed))
+            {
+                try
+                {
+                    var columnName = InstanceFieldDiscriminator.GetInstanceColumnName(trimmed);
+                    parts.Add($"{instanceAlias}.\"{columnName}\" {dir}");
+                }
+                catch (ArgumentException) { }
+            }
+        }
+        if (parts.Count == 0)
+            return null;
+        return string.Join(", ", parts);
+    }
+
+    private static bool IsSafeJsonPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        var segments = path.Split('.');
+        var safeSegment = new Regex("^[a-zA-Z0-9_]+$");
+        return segments.All(seg => safeSegment.IsMatch(seg.Trim()));
+    }
+
+    private static string BuildJsonTextAccessorForOrderBy(string field)
+    {
+        if (field.Contains('.'))
+        {
+            var parts = field.Split('.');
+            var arrayElements = string.Join(",", parts.Select(p => $"'{p.Trim()}'"));
+            return "\"Data\" #>> ARRAY[" + arrayElements + "]";
+        }
+        return "\"Data\" ->> '" + field.Trim().Replace("'", "''") + "'";
     }
 
     /// <summary>

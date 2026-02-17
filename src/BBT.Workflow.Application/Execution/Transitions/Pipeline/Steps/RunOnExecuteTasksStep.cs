@@ -192,6 +192,10 @@ public sealed class RunOnExecuteTasksStep(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var instanceTransition = context.Items.TryGetValue("InstanceTransition", out var it) && it is InstanceTransition inst
+            ? inst
+            : null;
+
         return await scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(context.Workflow)
             .WithInstance(context.Instance)
@@ -199,6 +203,7 @@ public sealed class RunOnExecuteTasksStep(
             .WithBody(context.Data)
             .WithRuntime(runtimeInfoProvider)
             .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+            .WithCurrentTransition(instanceTransition)
             .BuildAsync(cancellationToken);
     }
 }

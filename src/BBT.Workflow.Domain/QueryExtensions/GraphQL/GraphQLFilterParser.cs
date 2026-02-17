@@ -139,15 +139,44 @@ public static class GraphQLFilterParser
     /// <param name="filter">Filter JSON string</param>
     /// <param name="groupBy">GroupBy JSON string</param>
     /// <param name="aggregations">Aggregations JSON string</param>
+    /// <param name="orderBy">OrderBy JSON string (optional)</param>
     /// <returns>Complete filter request</returns>
-    public static GraphQLFilterRequest ParseRequest(string? filter, string? groupBy, string? aggregations)
+    public static GraphQLFilterRequest ParseRequest(string? filter, string? groupBy, string? aggregations, string? orderBy = null)
     {
         return new GraphQLFilterRequest
         {
             Filter = ParseFilter(filter),
             GroupBy = ParseGroupBy(groupBy),
-            Aggregations = ParseAggregations(aggregations)
+            Aggregations = ParseAggregations(aggregations),
+            OrderBy = ParseOrderBy(orderBy)
         };
+    }
+
+    /// <summary>
+    /// Parse an orderBy JSON string into an OrderByRequest.
+    /// Supports single: {"field":"createdAt","direction":"desc"}
+    /// or multiple: {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}.
+    /// </summary>
+    /// <param name="jsonOrderBy">OrderBy JSON string</param>
+    /// <returns>Parsed orderBy request, or null if empty/invalid</returns>
+    public static OrderByRequest? ParseOrderBy(string? jsonOrderBy)
+    {
+        if (string.IsNullOrWhiteSpace(jsonOrderBy))
+            return null;
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<OrderByRequest>(jsonOrderBy, JsonOptions);
+            if (parsed == null)
+                return null;
+            if (parsed.GetEntries().Count == 0)
+                return null;
+            return parsed;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

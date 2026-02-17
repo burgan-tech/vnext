@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.ErrorHandling;
@@ -10,7 +11,7 @@ namespace BBT.Workflow.Execution.ErrorHandling;
 /// </summary>
 /// <remarks>
 /// Action behaviors:
-/// - Abort: Finalize current loop, return current state to client (not faulted)
+/// - Abort: Instance is marked Faulted; pipeline stops.
 /// - Notify/Rollback: If transition specified, finalize and request transition; else behave like Abort
 /// - Log: Log error only, continue pipeline lifecycle
 /// - Ignore: Low-level log, continue pipeline, ignore failure
@@ -155,30 +156,14 @@ public sealed class ErrorActionExecutor : IErrorActionExecutor
     }
 
     /// <summary>
-    /// Handles Abort action - finalizes current loop and returns.
-    /// If transition is specified, triggers that transition.
+    /// Handles Abort action. Instance is marked Faulted; pipeline stops.
     /// </summary>
     private ActionExecutionResult HandleAbort(
         BoundaryResolutionResult resolution,
         ExecutionError error,
         ErrorBoundaryLevel? level)
     {
-        var transitionKey = resolution.TransitionKey;
-
-        if (!string.IsNullOrEmpty(transitionKey))
-        {
-            _logger.LogInformation(
-                "Abort with transition for task {TaskKey}. Transition: {Transition}",
-                error.TaskKey,
-                transitionKey);
-
-            return ActionExecutionResult.Transition(transitionKey, ErrorAction.Abort, level, error);
-        }
-
-        _logger.LogInformation(
-            "Abort without transition for task {TaskKey}. Finalizing current state.",
-            error.TaskKey);
-
+        _logger.ErrorBoundaryAbortInstanceFaulted(error.TaskKey);
         return ActionExecutionResult.Abort(error.ToError(), level, error);
     }
 

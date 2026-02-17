@@ -276,15 +276,21 @@ public sealed class InstanceController(
         return FromResult(result.Result);
     }
 
+    /// <summary>
+    /// Gets a paged list of workflow instances with optional filter, groupBy, aggregations and orderBy.
+    /// </summary>
+    /// <param name="sort">OrderBy JSON: single {"field":"createdAt","direction":"desc"} or multiple {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}. Also accepted as orderBy.</param>
+    /// <param name="orderBy">Alias for sort; same JSON format. If both provided, orderBy wins.</param>
     [HttpGet("{domain}/workflows/{workflow}/instances")]
     public async Task<IActionResult> GetInstanceListAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
-        [FromQuery] string[]? filter = null,
+        [FromQuery] string? filter = null,
         [FromQuery] string[]? extension = null,
         [FromQuery][Range(1, 1000)] int page = 1,
         [FromQuery][Range(1, 100)] int pageSize = 10,
         [FromQuery] string? sort = null,
+        [FromQuery] string? orderBy = null,
         CancellationToken cancellationToken = default)
     {
         var requestContext = HttpContext.GetRequestBindingContext();
@@ -298,7 +304,7 @@ public sealed class InstanceController(
             PageSize = pageSize,
             PageUrl = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow),
             Filter = filter,
-            Sort = sort,
+            Sort = orderBy ?? sort,
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters
         };

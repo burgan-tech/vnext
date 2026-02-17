@@ -120,6 +120,7 @@ public sealed class TransitionContextFactory(
 
             // Flags
             IsReentry = input.IsReentry,
+            IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
 
             // Telemetry
             TraceId = traceId,

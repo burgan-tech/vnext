@@ -13,8 +13,9 @@
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />
     <PackageReference Include="Ulid" Version="$(UlidPackageVersion)" />
     <PackageReference Include="JsonSchema.Net" Version="$(JsonSchemaNetPackageVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(EfCorePackageVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCorePackageVersion)" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(MicrosoftPackageVersion)" />
     <ProjectReference Include="..\..\modules\BBT.Workflow.Modules.Scripting\BBT.Workflow.Modules.Scripting.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Events.Contracts\BBT.Workflow.Events.Contracts.csproj" />
   </ItemGroup>

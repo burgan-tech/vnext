@@ -8,6 +8,15 @@ namespace BBT.Workflow.Definitions;
 /// </summary>
 public sealed record ErrorBoundary
 {
+    /// <summary>
+    /// Parameterless constructor for EF Core and deserialization.
+    /// </summary>
+    public ErrorBoundary()
+    {
+        OnError = [];
+        OnTimeout = null;
+    }
+
     [JsonConstructor]
     public ErrorBoundary(
         IReadOnlyList<ErrorHandlerRule>? onError,

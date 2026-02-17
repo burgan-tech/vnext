@@ -23,7 +23,7 @@ public sealed record TimeoutPolicy
 
     /// <summary>
     /// Optional transition key to trigger on timeout.
-    /// Used with Abort/Rollback/Notify actions.
+    /// Used with Rollback/Notify actions.
     /// </summary>
     [JsonPropertyName("transition")]
     public string? Transition { get; init; }

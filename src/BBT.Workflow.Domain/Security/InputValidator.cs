@@ -34,6 +34,18 @@ public static class InputValidator
     public const int MaxFieldDepth = 10;
 
     /// <summary>
+    /// Validates a single filter string
+    /// </summary>
+    /// <param name="filter">Filter to validate</param>
+    /// <exception cref="ArgumentException">Thrown when validation fails</exception>
+    public static void ValidateFilters(string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+            return;
+        ValidateFilters(new[] { filter });
+    }
+
+    /// <summary>
     /// Validates an array of filters
     /// </summary>
     /// <param name="filters">Filters to validate</param>
@@ -42,10 +54,10 @@ public static class InputValidator
     {
         if (filters == null || filters.Length == 0)
             return;
-        
+
         if (filters.Length > MaxFiltersCount)
             throw new ArgumentException($"Too many filters: {filters.Length}. Maximum allowed: {MaxFiltersCount}");
-        
+
         for (int i = 0; i < filters.Length; i++)
         {
             var filter = filters[i];

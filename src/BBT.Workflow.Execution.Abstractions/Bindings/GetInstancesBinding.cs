@@ -32,9 +32,9 @@ public sealed class GetInstancesBinding
     public string? Sort { get; init; }
 
     /// <summary>
-    /// Filter expressions to apply to the query.
+    /// Filter expression to apply to the query (JSON format).
     /// </summary>
-    public string[]? Filter { get; init; }
+    public string? Filter { get; init; }
 
     /// <summary>
     /// Whether to use Dapr service invocation instead of direct HTTP.

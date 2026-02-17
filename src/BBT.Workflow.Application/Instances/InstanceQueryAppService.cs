@@ -80,26 +80,22 @@ public sealed class InstanceQueryAppService(
             async ct =>
             {
                 // Parse filter parameter - check if it's in GraphQLFilterRequest format
-                string[]? filters = input.Filter;
                 string? groupBy = input.GroupBy;
                 string? aggregations = input.Aggregations;
 
-                // If filter array has one element, check if it's GraphQLFilterRequest format
+                // If filter is provided, check if it's GraphQLFilterRequest format
                 Definitions.GraphQL.GraphQLFilterRequest? parsedRequest = null;
-                if (input.Filter != null && input.Filter.Length == 1 && string.IsNullOrWhiteSpace(groupBy))
+                if (!string.IsNullOrWhiteSpace(input.Filter) && string.IsNullOrWhiteSpace(groupBy))
                 {
-                    var filterString = input.Filter[0];
+                    var filterString = input.Filter;
                     if (GraphQLFilterParser.TryParseRequest(filterString, out var request) && request != null)
                     {
                         parsedRequest = request;
-                        // Extract filter and groupBy from GraphQLFilterRequest for backward compatibility path
-                        filters = request.Filter != null
-                            ? new[] { JsonSerializer.Serialize(request.Filter, new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                WriteIndented = false
-                            }) }
-                            : null;
+                        // Apply sort from query param (overrides envelope orderBy when provided)
+                        if (!string.IsNullOrWhiteSpace(input.Sort) && GraphQLFilterParser.ParseOrderBy(input.Sort) is { } orderBy)
+                        {
+                            parsedRequest.OrderBy = orderBy;
+                        }
 
                         if (request.GroupBy != null)
                         {
@@ -139,9 +135,10 @@ public sealed class InstanceQueryAppService(
                     var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
                         input.Page,
                         input.PageSize,
-                        filters,
+                        input.Filter,
                         groupBy,
                         aggregations,
+                        input.Sort,
                         ct);
                     pagedList = result.PagedList;
                     groups = result.Groups;
@@ -386,7 +383,7 @@ public sealed class InstanceQueryAppService(
         {
             Id = instance.Id,
             Flow = instance.Flow,
-            FlowVersion = instanceData?.Version ?? string.Empty,
+            FlowVersion =flow?.Version ?? string.Empty,
             Etag = instanceData?.ETag ?? string.Empty,
             Domain = domain,
             Key = instance.Key!,

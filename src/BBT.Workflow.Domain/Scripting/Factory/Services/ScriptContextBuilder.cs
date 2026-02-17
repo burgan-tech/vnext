@@ -1,3 +1,5 @@
+using System.Dynamic;
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
@@ -37,6 +39,7 @@ internal sealed class ScriptContextBuilder(
     private Guid? _instanceId;
     private bool _noTracking;
     private string? _transitionKey;
+    private InstanceTransition? _instanceTransition;
 
     public IScriptContextBuilder WithRuntime(IRuntimeInfoProvider runtimeInfoProvider)
     {
@@ -171,6 +174,12 @@ internal sealed class ScriptContextBuilder(
         return this;
     }
 
+    public IScriptContextBuilder WithCurrentTransition(InstanceTransition? instanceTransition)
+    {
+        _instanceTransition = instanceTransition;
+        return this;
+    }
+
     public async Task<ScriptContext> BuildAsync(CancellationToken cancellationToken = default)
     {
         // Resolve workflow if needed
@@ -181,6 +190,8 @@ internal sealed class ScriptContextBuilder(
 
         // Resolve transition if needed
         var transition = ResolveTransition(workflow);
+
+        var scriptTransitionRequest = BuildScriptTransitionRequest();
 
         // Build the ScriptContext using the domain builder
         return new ScriptContext.Builder(logger)
@@ -196,7 +207,36 @@ internal sealed class ScriptContextBuilder(
             .SetOutputResponse(_outputResponse)
             .SetMetadata(_metadata)
             .SetDefinitions(_definitions)
+            .SetCurrentTransition(scriptTransitionRequest)
             .Build();
+    }
+
+    /// <summary>
+    /// Builds ScriptTransitionRequest from persisted InstanceTransition when available.
+    /// Header keys are normalized to lowercase.
+    /// </summary>
+    private ScriptTransitionRequest? BuildScriptTransitionRequest()
+    {
+        if (_instanceTransition == null)
+            return null;
+
+        var data = _instanceTransition.Body.JsonElement.ToDynamic();
+        var header = ToHeaderDynamic(_instanceTransition.Header.JsonElement);
+        return new ScriptTransitionRequest(data, header);
+    }
+
+    /// <summary>
+    /// Converts header JsonElement to dynamic (ExpandoObject) with all keys normalized to lowercase.
+    /// </summary>
+    private static dynamic? ToHeaderDynamic(JsonElement headerElement)
+    {
+        if (headerElement.ValueKind != JsonValueKind.Object)
+            return headerElement.ToDynamic();
+
+        var headerExpando = new ExpandoObject() as IDictionary<string, object?>;
+        foreach (var property in headerElement.EnumerateObject())
+            headerExpando[property.Name.ToLowerInvariant()] = property.Value.ToDynamic();
+        return headerExpando;
     }
 
     private async Task<Definitions.Workflow> ResolveWorkflowAsync(CancellationToken cancellationToken)

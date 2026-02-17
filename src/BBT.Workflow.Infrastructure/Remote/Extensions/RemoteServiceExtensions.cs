@@ -1,14 +1,17 @@
-using BBT.Workflow.Remote.Configuration;
+using System.Net;
+using BBT.Workflow.Authorization.Remote;
+using BBT.Workflow.Infrastructure.Instances.Remote;
 using BBT.Workflow.Instances.Remote;
+using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Extensions.Http;
 using Polly.Timeout;
-using BBT.Workflow.Infrastructure.Instances.Remote;
 
 namespace BBT.Workflow.Remote.Extensions;
 
@@ -41,105 +44,78 @@ public static class RemoteServiceExtensions
 
         var options = optionsSection.Get<RemoteOptions>() ?? new RemoteOptions();
 
-        services.AddHttpClient<IRemoteInstanceCommandAppService, RemoteInstanceCommandAppService>((sp, client) =>
-            {
-                var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
-                var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
-
-                // Note: BaseAddress is no longer set here - it's resolved dynamically per request
-                // using IDomainDiscoveryResolver based on the target domain
-                client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-                client.DefaultRequestHeaders.Add("User-Agent",
-                    $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
-
-                // Add internal operation header for circuit breaker context
-                if (clientOptions.EnableCircuitBreakerBypass)
-                {
-                    client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
-                }
-                
-                // Increase buffer size limits to handle large responses
-                client.MaxResponseContentBufferSize = int.MaxValue;
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                // Increase response headers length limit (default is 64KB)
-                MaxResponseHeadersLength = 1024 * 1024, // 1MB
-                // Increase request content buffer size limit (default is 2GB)
-                MaxRequestContentBufferSize = int.MaxValue
-            })
-            .AddPolicyHandler(GetTimeoutPolicy(options))
-            .AddPolicyHandler(GetRetryPolicy(options))
-            .AddPolicyHandler(GetCircuitBreakerPolicy(options));
-        services.AddHttpClient<IRemoteInstanceRetryAppService, RemoteInstanceRetryAppService>((sp, client) =>
-            {
-                var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
-                var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
-
-                // Note: BaseAddress is no longer set here - it's resolved dynamically per request
-                // using IDomainDiscoveryResolver based on the target domain
-                client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-                client.DefaultRequestHeaders.Add("User-Agent",
-                    $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
-
-                // Add internal operation header for circuit breaker context
-                if (clientOptions.EnableCircuitBreakerBypass)
-                {
-                    client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
-                }
-                
-                // Increase buffer size limits to handle large responses
-                client.MaxResponseContentBufferSize = int.MaxValue;
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                // Increase response headers length limit (default is 64KB)
-                MaxResponseHeadersLength = 1024 * 1024, // 1MB
-                // Increase request content buffer size limit (default is 2GB)
-                MaxRequestContentBufferSize = int.MaxValue
-            })
-            .AddPolicyHandler(GetTimeoutPolicy(options))
-            .AddPolicyHandler(GetRetryPolicy(options))
-            .AddPolicyHandler(GetCircuitBreakerPolicy(options));
-
-        services.AddHttpClient<IRemoteInstanceQueryAppService, RemoteInstanceQueryAppService>((sp, client) =>
-            {
-                var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
-                var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
-
-                // Note: BaseAddress is no longer set here - it's resolved dynamically per request
-                // using IDomainDiscoveryResolver based on the target domain
-                client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-                client.DefaultRequestHeaders.Add("User-Agent",
-                    $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
-
-                // Add internal operation header for circuit breaker context
-                if (clientOptions.EnableCircuitBreakerBypass)
-                {
-                    client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
-                }
-                
-                // Increase buffer size limits to handle large responses
-                client.MaxResponseContentBufferSize = int.MaxValue;
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                // Increase response headers length limit (default is 64KB)
-                MaxResponseHeadersLength = 1024 * 1024, // 1MB
-                // Increase request content buffer size limit (default is 2GB)
-                MaxRequestContentBufferSize = int.MaxValue
-            })
-            .AddPolicyHandler(GetTimeoutPolicy(options))
-            .AddPolicyHandler(GetRetryPolicy(options))
-            .AddPolicyHandler(GetCircuitBreakerPolicy(options));
+        services.AddRemoteService<IRemoteInstanceCommandAppService, RemoteInstanceCommandAppService>(options);
+        services.AddRemoteService<IRemoteInstanceRetryAppService, RemoteInstanceRetryAppService>(options);
+        services.AddRemoteService<IRemoteInstanceQueryAppService, RemoteInstanceQueryAppService>(options);
+        services.AddRemoteService<IRemoteAuthorizeAppService, RemoteAuthorizeAppService>(options);
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers a remote vnext service with resilient HttpClient configuration (timeout, headers, handler, retry, circuit breaker).
+    /// Use this to avoid duplicating HttpClient setup for each remote service.
+    /// </summary>
+    /// <typeparam name="TClient">The interface type (e.g. IRemoteInstanceCommandAppService).</typeparam>
+    /// <typeparam name="TImplementation">The implementation type that uses HttpClient (e.g. RemoteInstanceCommandAppService).</typeparam>
+    /// <param name="services">Service collection.</param>
+    /// <param name="options">Remote options used for timeout and policy configuration.</param>
+    /// <returns>The HttpClient builder for optional further configuration.</returns>
+    public static IHttpClientBuilder AddRemoteService<TClient, TImplementation>(
+        this IServiceCollection services,
+        RemoteOptions options)
+        where TClient : class
+        where TImplementation : class, TClient
+    {
+        return services
+            .AddHttpClient<TClient, TImplementation>(ConfigureRemoteHttpClient)
+            .ConfigurePrimaryHttpMessageHandler(() => CreatePrimaryHttpMessageHandler(options))
+            .AddPolicyHandler(GetTimeoutPolicy(options))
+            .AddPolicyHandler(GetRetryPolicy(options))
+            .AddPolicyHandler(GetCircuitBreakerPolicy(options));
+    }
+
+    /// <summary>
+    /// Configures HttpClient with timeout, Accept/User-Agent headers, optional circuit-bypass header, and buffer limits.
+    /// BaseAddress is resolved per request via IDomainDiscoveryResolver.
+    /// </summary>
+    private static void ConfigureRemoteHttpClient(IServiceProvider sp, HttpClient client)
+    {
+        var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
+        var clientOptions = sp.GetRequiredService<IOptions<RemoteOptions>>().Value;
+
+        client.Timeout = TimeSpan.FromSeconds(clientOptions.TimeoutSeconds);
+        client.DefaultRequestHeaders.Add("Accept", "application/json");
+        client.DefaultRequestHeaders.Add("User-Agent",
+            $"vnext-runtime/{runtimeInfoProvider.Version} ({runtimeInfoProvider.Domain})");
+
+        if (clientOptions.EnableCircuitBreakerBypass)
+        {
+            client.DefaultRequestHeaders.Add(clientOptions.InternalOperationHeader, "true");
+        }
+
+        client.MaxResponseContentBufferSize = int.MaxValue;
+    }
+
+    /// <summary>
+    /// Creates the primary HTTP message handler with decompression, increased header/content buffer limits,
+    /// and optional SSL validation (disabled when ValidateSsl is false, e.g. for development).
+    /// </summary>
+    private static HttpMessageHandler CreatePrimaryHttpMessageHandler(RemoteOptions options)
+    {
+        var handler = new HttpClientHandler()
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            MaxResponseHeadersLength = 1024 * 1024, // 1MB
+            MaxRequestContentBufferSize = int.MaxValue
+        };
+
+        if (!options.ValidateSsl)
+        {
+            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        }
+
+        return handler;
     }
 
     /// <summary>

@@ -191,16 +191,21 @@ public sealed class RunOnEntryTasksStep(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var instanceTransition = context.Items.TryGetValue("InstanceTransition", out var it) && it is InstanceTransition inst
+            ? inst
+            : null;
+
         var builder = scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(context.Workflow)
             .WithInstance(context.Instance)
             .WithBody(context.Data)
             .WithRuntime(runtimeInfoProvider)
-            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
-        
+            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+            .WithCurrentTransition(instanceTransition);
+
         if (context.Transition != null)
-            builder.WithTransition(context.Transition);
-        
+            builder = builder.WithTransition(context.Transition);
+
         return await builder.BuildAsync(cancellationToken);
     }
 }

@@ -118,6 +118,14 @@ public sealed class ErrorBoundaryValidator
                 [$"{context}.{nameof(ErrorHandlerRule.Transition)}"]));
         }
 
+        // Transition must not be specified when Action is Abort
+        if (rule.Action == ErrorAction.Abort && !string.IsNullOrEmpty(rule.Transition))
+        {
+            results.Add(new ValidationResult(
+                "Transition must not be specified when Action is Abort.",
+                [$"{context}.{nameof(ErrorHandlerRule.Transition)}"]));
+        }
+
         // Validate Transition is required for Notify action (acts like Rollback)
         if (rule.Action == ErrorAction.Notify && string.IsNullOrEmpty(rule.Transition))
         {
@@ -257,6 +265,14 @@ public sealed class ErrorBoundaryValidator
             results.AddRange(ValidateRetryPolicy(
                 policy.DefaultRetryPolicy,
                 $"{context}.{nameof(TimeoutPolicy.DefaultRetryPolicy)}"));
+        }
+
+        // Transition must not be specified when Action is Abort
+        if (policy.Action == ErrorAction.Abort && !string.IsNullOrEmpty(policy.Transition))
+        {
+            results.Add(new ValidationResult(
+                "Transition must not be specified when Action is Abort.",
+                [$"{context}.{nameof(TimeoutPolicy.Transition)}"]));
         }
 
         // Validate Transition references a valid state

@@ -227,12 +227,9 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
         if (!string.IsNullOrEmpty(binding.Sort))
             queryParams.Add($"sort={Uri.EscapeDataString(binding.Sort)}");
 
-        if (binding.Filter is { Length: > 0 })
+        if (!string.IsNullOrWhiteSpace(binding.Filter))
         {
-            foreach (var filter in binding.Filter.Where(f => !string.IsNullOrEmpty(f)))
-            {
-                queryParams.Add($"filter={Uri.EscapeDataString(filter)}");
-            }
+            queryParams.Add($"filter={Uri.EscapeDataString(binding.Filter)}");
         }
 
         if (queryParams.Count > 0)

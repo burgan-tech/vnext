@@ -9,6 +9,7 @@ using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Functions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -53,6 +54,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();
