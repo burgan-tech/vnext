@@ -29,6 +29,13 @@ public interface IInstanceQueryAppService : IApplicationService
     Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves the list of transition execution records for an instance by instance key or ID.
+    /// </summary>
+    Task<Result<GetInstanceTransitionsOutput>> GetInstanceTransitionsAsync(
+        GetInstanceTransitionsInput input,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Retrieves only the instance data (attributes) with optional ETag support

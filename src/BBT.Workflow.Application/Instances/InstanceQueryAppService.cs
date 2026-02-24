@@ -22,6 +22,7 @@ public sealed class InstanceQueryAppService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
+    IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -224,6 +225,53 @@ public sealed class InstanceQueryAppService(
                     Transitions = transitions
                 });
             });
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<GetInstanceTransitionsOutput>> GetInstanceTransitionsAsync(
+        GetInstanceTransitionsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .ThenAsync(async instance =>
+            {
+                var transitions = await instanceTransitionRepository.GetListByInstanceIdAsync(instance.Id, cancellationToken);
+                var items = transitions.Select(MapToTransitionItemOutput).ToList();
+                return Result<GetInstanceTransitionsOutput>.Ok(new GetInstanceTransitionsOutput { Items = items });
+            });
+    }
+
+    private static InstanceTransitionItemOutput MapToTransitionItemOutput(InstanceTransition t)
+    {
+        return new InstanceTransitionItemOutput
+        {
+            Id = t.Id,
+            InstanceId = t.InstanceId,
+            TransitionId = t.TransitionId,
+            FromState = t.FromState,
+            ToState = t.ToState,
+            StartedAt = t.StartedAt,
+            FinishedAt = t.FinishedAt,
+            Duration = t.Duration,
+            Body = TryParseJsonElement(t.Body?.Json),
+            Header = TryParseJsonElement(t.Header?.Json)
+        };
+    }
+
+    private static JsonElement? TryParseJsonElement(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json == "{}")
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<JsonElement>(json);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -54,6 +54,7 @@ public static class InstanceColumnConditionBuilder
             "endswith" => BuildEndsWithCondition(properColumnName, value, ref parameterIndex),
             "in" => BuildInCondition(properColumnName, value, ref parameterIndex),
             "nin" => BuildNotInCondition(properColumnName, value, ref parameterIndex),
+            "contains" => BuildAnyCondition(properColumnName, value, ref parameterIndex),
             _ => throw new ArgumentException($"Unsupported operator: {operatorType}", nameof(operatorType))
         };
     }
@@ -251,6 +252,23 @@ public static class InstanceColumnConditionBuilder
         }
 
         var condition = $"s.\"{columnName}\" NOT IN ({string.Join(", ", paramPlaceholders)})";
+        return (condition, parameters);
+    }
+
+    /// <summary>
+    /// Build any condition with type inference
+    /// </summary>
+    private static (string, List<NpgsqlParameter>) BuildAnyCondition(
+        string columnName, string value, ref int parameterIndex)
+    {
+        var parameters = new List<NpgsqlParameter>();
+        var paramIndex = parameterIndex++;
+
+        var columnType = GetColumnType(columnName);
+        var parameter = CreateTypedParameter(value, columnType);
+        parameters.Add(parameter);
+
+        var condition = $"{{{paramIndex}}} = ANY(s.\"{columnName}\")";
         return (condition, parameters);
     }
 

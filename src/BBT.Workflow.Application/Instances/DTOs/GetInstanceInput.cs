@@ -138,6 +138,23 @@ public sealed class GetInstanceHistoryInput : IHasDomain
 }
 
 /// <summary>
+/// Input for retrieving instance transition records (execution log) by instance key or ID.
+/// </summary>
+public sealed class GetInstanceTransitionsInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Input for retrieving instance data (attributes only)
 /// </summary>
 public sealed class GetInstanceDataInput : IHasDomain

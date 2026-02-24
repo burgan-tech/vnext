@@ -14,6 +14,15 @@ public class EfCoreInstanceTransitionRepository(
     : EfCoreRepository<WorkflowDbContext, InstanceTransition, Guid>(dbContext, serviceProvider),
         IInstanceTransitionRepository
 {
+    /// <inheritdoc />
+    public async Task<List<InstanceTransition>> GetListByInstanceIdAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .Where(p => p.InstanceId == instanceId)
+            .OrderBy(p => p.StartedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Inserts a new instance transition and transfers to data sinks
     /// </summary>

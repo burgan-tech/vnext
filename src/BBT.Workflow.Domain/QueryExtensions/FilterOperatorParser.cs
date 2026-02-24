@@ -8,7 +8,7 @@ namespace BBT.Workflow.Definitions;
 public static class FilterOperatorParser
 {
     private static readonly Regex OperatorRegex = new(
-        @"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):(.+)$", 
+        @"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin|contains):(.+)$", 
         RegexOptions.Compiled | RegexOptions.IgnoreCase,
         TimeSpan.FromMilliseconds(100));
     

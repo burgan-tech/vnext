@@ -13,7 +13,7 @@ public static class FilterFormatDetector
     /// Supports Instance column names (key, status, flow, createdAt, etc.)
     /// </summary>
     private static readonly Regex LegacyFilterPattern = new(
-        @"^(attributes=|key=|status=|flow=|currentstate=|state=|createdat=|modifiedat=|completedat=|istransient=)?[a-zA-Z0-9._]+=(?:eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):.+$",
+        @"^(attributes=|key=|status=|flow=|currentstate=|state=|createdat=|modifiedat=|tags=|completedat=|istransient=)?[a-zA-Z0-9._]+=(?:eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin|contains):.+$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase,
         TimeSpan.FromMilliseconds(100));
 

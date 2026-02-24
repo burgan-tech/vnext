@@ -99,6 +99,7 @@ Filters can target these Instance columns:
 | `modifiedAt` | Modification timestamp |
 | `completedAt` | Completion timestamp |
 | `isTransient` | Boolean flag |
+| `tags` | Array |
 
 ### JSON Attributes
 
@@ -142,6 +143,7 @@ GraphQL filters can also target Instance columns directly at the top level (e.g.
 |----------|-------------|---------|----------------|
 | `in` | Value in list | `filter=attributes=clientId=in:122,177,83` | `(Data ->> 'clientId') IN ('122','177','83')` |
 | `nin` | Value not in list | `filter=attributes=clientId=nin:122,177` | `(Data ->> 'clientId') NOT IN ('122','177')` |
+| `contains` | List contains value | `filter=attributes=tags=contains:idm` | `(Data ->> ['idm','user']) contains 'idm'` |
 
 **GraphQL-only operator:** `isNull` (e.g., `{"attributes":{"field":{"isNull":true}}}`)
 

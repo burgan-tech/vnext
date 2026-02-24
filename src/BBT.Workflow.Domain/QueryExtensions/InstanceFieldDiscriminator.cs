@@ -23,7 +23,8 @@ public static class InstanceFieldDiscriminator
         "CompletedAt",
         "IsTransient",
         "EffectiveStateType",
-        "EffectiveStateSubType"
+        "EffectiveStateSubType",
+        "Tags"
     };
 
     /// <summary>

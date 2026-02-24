@@ -28,6 +28,12 @@ public static class InstanceUrlTemplates
     public const string InstanceHistoryTemplate = "/{0}/workflows/{1}/instances/{2}/transitions";
 
     /// <summary>
+    /// URL template for instance transition records (execution log) endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/transitions/history
+    /// </summary>
+    public const string InstanceTransitionRecordsTemplate = "/{0}/workflows/{1}/instances/{2}/transitions/history";
+
+    /// <summary>
     /// URL template for instance transition endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/transitions/{transitionKey}
     /// </summary>
@@ -135,6 +141,17 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string InstanceHistory(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(InstanceHistoryTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for instance transition records (execution log) endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance key or ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string InstanceTransitionRecords(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(InstanceTransitionRecordsTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for instance transition endpoint.

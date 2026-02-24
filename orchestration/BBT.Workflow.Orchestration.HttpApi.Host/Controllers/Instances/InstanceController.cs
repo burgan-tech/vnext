@@ -316,6 +316,46 @@ public sealed class InstanceController(
         var response = await queryAppService.GetInstanceHistoryAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
+
+    /// <summary>
+    /// Retrieves the list of transition execution records for an instance (by instance key or ID).
+    /// Response includes HATEOAS links (self, instance).
+    /// </summary>
+    /// <response code="200">Transition records returned successfully</response>
+    /// <response code="404">Instance not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/transitions/history")]
+    [ProducesResponseType(typeof(GetInstanceTransitionsOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceTransitionRecordsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetInstanceTransitionsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance
+        };
+
+        var response = await queryAppService.GetInstanceTransitionsAsync(input, cancellationToken);
+        if (response.IsSuccess)
+        {
+            var route = InstanceUrlTemplates.InstanceTransitionRecords(domain, workflow, instance, InstanceUrlTemplates.GetApiVersionPrefix("1"));
+            var items = response.Value!.Items;
+            var tempPagedList = new HateoasPagedList<InstanceTransitionItemOutput>(
+                items,
+                1,
+                items.Count,
+                false);
+            var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, items, route);
+            response.Value!.Links = hateoasResult.Links;
+            return Result.Ok(response.Value).ToAcceptedResult(HttpContext);
+        }
+
+        return response.ToActionResult(HttpContext);
+    }
     
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data")]
