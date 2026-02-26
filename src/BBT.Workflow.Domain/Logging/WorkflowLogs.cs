@@ -800,6 +800,47 @@ public static partial class WorkflowLogs
         string errorCode,
         string errorMessage);
 
+    /// <summary>
+    /// Logs when forwarding a transition to a subflow instance is started.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40086,
+        Level = LogLevel.Debug,
+        Message = "Forwarding transition {TransitionKey} to subflow instance {SubflowInstanceId} for parent instance {ParentInstanceId}")]
+    public static partial void SubFlowForwardStarted(
+        this ILogger logger,
+        string transitionKey,
+        Guid subflowInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a transition was successfully forwarded to a subflow instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40087,
+        Level = LogLevel.Information,
+        Message = "Successfully forwarded transition {TransitionKey} to subflow instance {SubflowInstanceId} for parent instance {ParentInstanceId}")]
+    public static partial void SubFlowForwardSucceeded(
+        this ILogger logger,
+        string transitionKey,
+        Guid subflowInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when forwarding a transition to a subflow instance failed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40088,
+        Level = LogLevel.Warning,
+        Message = "Forward to subflow instance {SubflowInstanceId} failed for parent instance {ParentInstanceId}, transition {TransitionKey}: {ErrorCode} - {ErrorMessage}")]
+    public static partial void SubFlowForwardFailed(
+        this ILogger logger,
+        Guid subflowInstanceId,
+        Guid parentInstanceId,
+        string transitionKey,
+        string errorCode,
+        string errorMessage);
+
     #endregion
 
     #region Instance Management

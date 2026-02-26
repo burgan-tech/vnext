@@ -20,7 +20,7 @@ public sealed class TransitionExecutionContext
     public string Domain { get; init; } = default!;
 
     /// <summary>Gets the workflow instance identifier.</summary>
-    [Enrich(Name = "vnext.instanceid")]
+    [Enrich(Name = "vnext.instance.id")]
     public Guid InstanceId { get; init; }
 
     /// <summary>Gets the workflow key.</summary>

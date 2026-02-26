@@ -67,6 +67,31 @@ public sealed class DaprServiceTask : WorkflowTask
     {
         Headers = JsonSerializer.SerializeToElement(headers);
     }
+
+    /// <summary>
+    /// Adds or updates a single header by key. If the key already exists, its value is overwritten.
+    /// </summary>
+    /// <param name="key">The header key. Must not be null or whitespace.</param>
+    /// <param name="value">The header value; can be null.</param>
+    public void AddHeader(string key, string? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        var d = TaskHeadersHelper.ToMutableDictionary(Headers);
+        d[key] = value;
+        Headers = TaskHeadersHelper.FromDictionary(d);
+    }
+
+    /// <summary>
+    /// Removes a header by key. Does nothing if the key does not exist.
+    /// </summary>
+    /// <param name="key">The header key to remove. Must not be null or whitespace.</param>
+    public void RemoveHeader(string key)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        var d = TaskHeadersHelper.ToMutableDictionary(Headers);
+        d.Remove(key);
+        Headers = TaskHeadersHelper.FromDictionary(d);
+    }
     
     /// <summary>
     /// Internal property setters for object pooling

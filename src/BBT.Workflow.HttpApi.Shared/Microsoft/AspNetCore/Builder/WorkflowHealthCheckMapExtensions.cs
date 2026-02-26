@@ -1,8 +1,10 @@
 using System.Net.Mime;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BBT.Workflow.Runtime;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Microsoft.AspNetCore.Builder;
@@ -15,6 +17,7 @@ public static class WorkflowHealthCheckMapExtensions
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+
     public static WebApplication MapAppHealthChecks(this WebApplication app)
     {
         app.MapHealthChecks("/health",
@@ -35,6 +38,10 @@ public static class WorkflowHealthCheckMapExtensions
                 Predicate = (check) => check.Tags.Contains("live"), ResponseWriter = WriteResponse
             });
 
+        app.MapGet("/version", (IRuntimeInfoProvider runtimeInfoProvider) =>
+                Results.Ok(new { version = runtimeInfoProvider.Version }))
+            .ExcludeFromDescription();
+
         return app;
     }
 
@@ -42,11 +49,14 @@ public static class WorkflowHealthCheckMapExtensions
         HttpContext context,
         HealthReport report)
     {
+        var runtimeInfoProvider = context.RequestServices.GetService<IRuntimeInfoProvider>();
+
         var json = JsonSerializer.Serialize(
             new
             {
                 Status = report.Status.ToString(),
                 Duration = report.TotalDuration,
+                Version = runtimeInfoProvider?.Version,
                 Info = report.Entries
                     .Select(e =>
                         new

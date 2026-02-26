@@ -16,10 +16,12 @@ public interface ISubflowForwardingService
     /// <param name="transitionKey">The transition key to execute.</param>
     /// <param name="input">The transition input containing domain, workflow, and data.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <param name="parentInstanceId">Optional parent instance ID for trace/log correlation when forwarding cross-domain.</param>
     /// <returns>Result containing TransitionOutput on success or Error on failure.</returns>
     Task<Result<TransitionOutput>> ForwardTransitionAsync(
         Guid instanceId,
         string transitionKey,
         TransitionInput input,
-        CancellationToken ct);
+        CancellationToken ct,
+        Guid? parentInstanceId = null);
 }

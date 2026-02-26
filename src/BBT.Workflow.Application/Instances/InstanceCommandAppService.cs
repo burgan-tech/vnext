@@ -49,7 +49,6 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
-
         // Step 1: Load workflow
         var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
         if (!workflowResult.IsSuccess)

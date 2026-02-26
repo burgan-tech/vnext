@@ -23,5 +23,24 @@ public static class TelemetryConstants
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
         public const string JobName = "vnext.job.name";
+        /// <summary>
+        /// Parent instance ID for subflow/subprocess correlation in traces and logs.
+        /// </summary>
+        public const string ParentInstanceId = "vnext.parent.instance.id";
+        /// <summary>
+        /// Subflow instance ID for subflow/subprocess correlation in traces and logs.
+        /// </summary>
+        public const string SubflowInstanceId = "vnext.subflow.instance.id";
+    }
+
+    /// <summary>
+    /// HTTP header names used for cross-domain correlation.
+    /// </summary>
+    public static class HeaderNames
+    {
+        /// <summary>
+        /// Request header carrying the parent instance ID when invoking subflow/subprocess remotely.
+        /// </summary>
+        public const string ParentInstanceId = "X-Parent-Instance-Id";
     }
 }

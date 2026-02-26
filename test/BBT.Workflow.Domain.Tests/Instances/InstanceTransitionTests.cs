@@ -1,4 +1,5 @@
 using System;
+using BBT.Workflow.Definitions;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
@@ -25,6 +26,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             instanceId,
             transitionId,
             fromState,
+            TriggerType.Manual,
             body,
             header
         );
@@ -36,6 +38,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal(fromState, instanceTransition.FromState);
         Assert.Equal(body, instanceTransition.Body);
         Assert.Equal(header, instanceTransition.Header);
+        Assert.Equal(TriggerType.Manual, instanceTransition.TriggerType);
         Assert.Null(instanceTransition.ToState);
         Assert.Null(instanceTransition.FinishedAt);
         Assert.Null(instanceTransition.Duration);
@@ -53,6 +56,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -71,6 +75,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "from-state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -96,6 +101,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "from-state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -119,6 +125,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "from-state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -143,6 +150,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "state",
+            TriggerType.Manual,
             bodyData,
             JsonData.CreateFrom("{}")
         );
@@ -165,6 +173,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             headerData
         );
@@ -186,6 +195,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "from-state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -222,6 +232,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "state",
+            TriggerType.Manual,
             body,
             header
         );
@@ -246,6 +257,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "state",
+            TriggerType.Manual,
             body,
             header
         );
@@ -266,6 +278,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition",
             "state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -285,6 +298,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition1",
             "state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -296,6 +310,7 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
             Guid.NewGuid(),
             "transition2",
             "state",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );

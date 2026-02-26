@@ -45,6 +45,7 @@ public sealed record StartSubflowJob(
 /// Contains the data needed to forward the transition after lock release.
 /// </summary>
 /// <param name="SubflowInstanceId">The instance ID of the active subflow to forward to.</param>
+/// <param name="ParentInstanceId">The parent instance ID for trace/log correlation and remote request header.</param>
 /// <param name="TransitionKey">The transition key being forwarded.</param>
 /// <param name="SubflowDomain">The domain of the subflow.</param>
 /// <param name="SubflowName">The workflow name of the subflow.</param>
@@ -56,6 +57,7 @@ public sealed record StartSubflowJob(
 /// <param name="RouteValues">The route values to forward.</param>
 public sealed record ForwardToSubflowJob(
     Guid SubflowInstanceId,
+    Guid ParentInstanceId,
     string TransitionKey,
     string SubflowDomain,
     string SubflowName,

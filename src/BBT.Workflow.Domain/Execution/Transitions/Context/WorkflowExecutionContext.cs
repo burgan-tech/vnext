@@ -16,7 +16,7 @@ public sealed class WorkflowExecutionContext
     public string Domain { get; set; } = default!;
     
     /// <summary>Gets or sets the workflow instance identifier.</summary>
-    [Enrich(Name = "vnext.instanceid")]
+    [Enrich(Name = "vnext.instance.id")]
     public string InstanceId { get; set; }
     
     /// <summary>Gets or sets the workflow key.</summary>

@@ -43,76 +43,84 @@ public sealed class SubflowCompletionService(
             completedInput.Domain,
             completedInput.Flow);
 
-        // Check if this domain is handled by this runtime instance
-        try
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            runtimeInfoProvider.Check(completedInput.Domain);
-        }
-        catch (NotFoundDomainException)
+            [TelemetryConstants.TagNames.InstanceId] = completedInput.InstanceId,
+            [TelemetryConstants.TagNames.ParentInstanceId] = completedInput.InstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = completedInput.SubInstanceId
+        }))
         {
-            // Silently ignore - this is expected in multi-domain scenarios
-            activity?.SetTag("vnext.subflow.result", "domain_not_handled");
-            return;
-        }
-
-        try
-        {
-            // Get parent instance
-            var parentInstance = await instanceRepository.FindAsync(
-                completedInput.InstanceId, true, cancellationToken);
-
-            if (parentInstance == null)
+            // Check if this domain is handled by this runtime instance
+            try
             {
-                logger.InstanceNotFound(
+                runtimeInfoProvider.Check(completedInput.Domain);
+            }
+            catch (NotFoundDomainException)
+            {
+                // Silently ignore - this is expected in multi-domain scenarios
+                activity?.SetTag("vnext.subflow.result", "domain_not_handled");
+                return;
+            }
+
+            try
+            {
+                // Get parent instance
+                var parentInstance = await instanceRepository.FindAsync(
+                    completedInput.InstanceId, true, cancellationToken);
+
+                if (parentInstance == null)
+                {
+                    logger.InstanceNotFound(
+                        completedInput.InstanceId,
+                        completedInput.Flow);
+                    activity?.SetTag("vnext.subflow.result", "parent_not_found");
+                    return;
+                }
+
+                var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
+                if (correlation == null)
+                {
+                    logger.SubFlowCorrelationNotFound(completedInput.SubInstanceId);
+                    activity?.SetTag("vnext.subflow.result", "correlation_not_found");
+                    return;
+                }
+
+                // Complete correlation and persist changes
+                await CompleteAndPersistCorrelationAsync(
+                    parentInstance,
+                    completedInput.SubInstanceId,
                     completedInput.InstanceId,
-                    completedInput.Flow);
-                activity?.SetTag("vnext.subflow.result", "parent_not_found");
-                return;
-            }
+                    cancellationToken);
 
-            var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
-            if (correlation == null)
-            {
-                logger.SubFlowCorrelationNotFound(completedInput.SubInstanceId);
-                activity?.SetTag("vnext.subflow.result", "correlation_not_found");
-                return;
-            }
-            
-            // Complete correlation and persist changes
-            await CompleteAndPersistCorrelationAsync(
-                parentInstance,
-                completedInput.SubInstanceId,
-                completedInput.InstanceId,
-                cancellationToken);
+                // If this is a SubProcess (non-blocking), just return after marking correlation as completed
+                if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
+                {
+                    activity?.SetTag("vnext.subflow.type", "subprocess");
+                    SubFlowActivityHelper.SetSuccess(activity);
+                    return;
+                }
 
-            // If this is a SubProcess (non-blocking), just return after marking correlation as completed
-            if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
-            {
-                activity?.SetTag("vnext.subflow.type", "subprocess");
+                activity?.SetTag("vnext.subflow.type", "subflow");
+
+                // Process parent workflow continuation for SubFlow (blocking)
+                await ProcessParentWorkflowContinuationAsync(
+                    correlation,
+                    completedInput,
+                    parentInstance,
+                    cancellationToken);
+
                 SubFlowActivityHelper.SetSuccess(activity);
-                return;
             }
+            catch (Exception ex)
+            {
+                SubFlowActivityHelper.SetError(activity, ex.Message, ex);
+                logger.SubFlowCompletionFailed(
+                    ex,
+                    completedInput.SubInstanceId,
+                    completedInput.InstanceId);
 
-            activity?.SetTag("vnext.subflow.type", "subflow");
-
-            // Process parent workflow continuation for SubFlow (blocking)
-            await ProcessParentWorkflowContinuationAsync(
-                correlation,
-                completedInput,
-                parentInstance,
-                cancellationToken);
-
-            SubFlowActivityHelper.SetSuccess(activity);
-        }
-        catch (Exception ex)
-        {
-            SubFlowActivityHelper.SetError(activity, ex.Message, ex);
-            logger.SubFlowCompletionFailed(
-                ex,
-                completedInput.SubInstanceId,
-                completedInput.InstanceId);
-
-            throw;
+                throw;
+            }
         }
     }
 

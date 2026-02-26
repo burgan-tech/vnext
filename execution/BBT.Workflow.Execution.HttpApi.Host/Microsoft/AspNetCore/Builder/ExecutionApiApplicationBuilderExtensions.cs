@@ -15,6 +15,7 @@ public static class ExecutionApiApplicationBuilderExtensions
     public static WebApplication UseExecutionApiModule(this WebApplication app)
     {
         app.UseAetherAmbientServiceProvider();
+        app.UseAppVersion();
         if (app.Environment.IsDevelopment())
         {
             app.UseDeveloperExceptionPage();
@@ -29,6 +30,7 @@ public static class ExecutionApiApplicationBuilderExtensions
         app.MapSubscribeHandler();
         app.UseHttpsRedirection();
         app.UseCorrelationId();
+        app.UseParentInstanceIdEnrichment();
         app.UseSecurityHeaders();
         app.UseCurrentUser();
         app.UseStaticFiles();

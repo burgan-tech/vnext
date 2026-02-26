@@ -5,6 +5,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -19,11 +20,13 @@ public class SubflowForwardingServiceTests
 {
     private readonly IInstanceCommandGateway _mockGateway;
     private readonly SubflowForwardingService _service;
+    private readonly ILogger<SubflowForwardingService> _mockLogger;
 
     public SubflowForwardingServiceTests()
     {
         _mockGateway = Substitute.For<IInstanceCommandGateway>();
-        _service = new SubflowForwardingService(_mockGateway);
+        _mockLogger = Substitute.For<ILogger<SubflowForwardingService>>();
+        _service = new SubflowForwardingService(_mockGateway, _mockLogger);
     }
 
     [Fact]

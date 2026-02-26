@@ -1,6 +1,7 @@
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Aether.Users;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -46,19 +47,23 @@ public sealed class TransitionRunner(
         {
             var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
             var core = sp.GetRequiredService<IWorkflowExecutionCore>();
+            var currentUser = sp.GetRequiredService<ICurrentUser>();
 
-            await using var uow = await uowManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                cancellationToken);
+            using (currentUser.ChangeFromHeaders(context.Headers))
+            {
+                await using var uow = await uowManager.BeginAsync(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                    cancellationToken);
 
-            var coreResult = await core.ExecuteTransitionCoreAsync(context, cancellationToken);
-            if (!coreResult.IsSuccess)
-                return Result<TransitionCoreOutput>.Fail(coreResult.Error);
+                var coreResult = await core.ExecuteTransitionCoreAsync(context, cancellationToken);
+                if (!coreResult.IsSuccess)
+                    return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-            // Commit is THE boundary
-            await uow.CommitAsync(cancellationToken);
+                // Commit is THE boundary
+                await uow.CommitAsync(cancellationToken);
 
-            return coreResult;
+                return coreResult;
+            }
         }, cancellationToken);
     }
 }

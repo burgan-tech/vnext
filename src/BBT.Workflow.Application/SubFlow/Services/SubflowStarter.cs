@@ -112,83 +112,98 @@ public sealed class SubflowStarter(
         activity?.SetTag("vnext.subflow.parent.state", stateKey);
         activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
 
-        // Prepare instance creation input
-        var createInstanceInput = new CreateInstanceInput
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            Id = correlation.SubFlowInstanceId,
-            Callback = configuration["DAPR_APP_ID"],
-            Key = parentInstance.Key ?? string.Empty,
-            Attributes = inputMappingResult?.Data != null
-                ? JsonSerializer.SerializeToElement(inputMappingResult.Data)
-                : null,
-            Tags =
-            [
-                $"parent.key:{parentInstance.Key}",
-                $"parent.domain:{workflow.Domain}",
-                $"parent.flow:{workflow.Key}"
-            ],
-            ExtraProperties = new ExtraPropertyDictionary
+            [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId
+        }))
+        {
+            // Prepare instance creation input
+            var createInstanceInput = new CreateInstanceInput
             {
-                [DomainConsts.MetaDataKeys.Id] = parentInstance.Id,
-                [DomainConsts.MetaDataKeys.Key] = parentInstance.Key ?? string.Empty,
-                [DomainConsts.MetaDataKeys.Domain] = workflow.Domain,
-                [DomainConsts.MetaDataKeys.Flow] = workflow.Key,
-                [DomainConsts.MetaDataKeys.Version] = workflow.Version,
-                [DomainConsts.MetaDataKeys.State] = stateKey,
-                [DomainConsts.MetaDataKeys.Transition] = transitionKey,
-                [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode
-            }
-        };
+                Id = correlation.SubFlowInstanceId,
+                Callback = configuration["DAPR_APP_ID"],
+                Key = parentInstance.Key ?? string.Empty,
+                Attributes = inputMappingResult?.Data != null
+                    ? JsonSerializer.SerializeToElement(inputMappingResult.Data)
+                    : null,
+                Tags =
+                [
+                    $"parent.key:{parentInstance.Key}",
+                    $"parent.domain:{workflow.Domain}",
+                    $"parent.flow:{workflow.Key}"
+                ],
+                ExtraProperties = new ExtraPropertyDictionary
+                {
+                    [DomainConsts.MetaDataKeys.Id] = parentInstance.Id,
+                    [DomainConsts.MetaDataKeys.Key] = parentInstance.Key ?? string.Empty,
+                    [DomainConsts.MetaDataKeys.Domain] = workflow.Domain,
+                    [DomainConsts.MetaDataKeys.Flow] = workflow.Key,
+                    [DomainConsts.MetaDataKeys.Version] = workflow.Version,
+                    [DomainConsts.MetaDataKeys.State] = stateKey,
+                    [DomainConsts.MetaDataKeys.Transition] = transitionKey,
+                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode
+                }
+            };
 
-        // Apply additional properties from input mapping if available
-        if (inputMappingResult != null)
-        {
-            if (!inputMappingResult.Key.IsNullOrEmpty())
+            // Apply additional properties from input mapping if available
+            if (inputMappingResult != null)
             {
-                createInstanceInput.Key = inputMappingResult.Key;
+                if (!inputMappingResult.Key.IsNullOrEmpty())
+                {
+                    createInstanceInput.Key = inputMappingResult.Key;
+                }
+
+                if (!inputMappingResult.Tags.IsNullOrEmpty())
+                {
+                    var existingTags = createInstanceInput.Tags?.ToList() ?? new List<string>();
+                    existingTags.AddRange(inputMappingResult.Tags);
+                    createInstanceInput.Tags = existingTags.ToArray();
+                }
             }
 
-            if (!inputMappingResult.Tags.IsNullOrEmpty())
+            var headers = new Dictionary<string, string?>();
+            if (inputMappingResult?.Headers is IDictionary<string, string?> fromMapping)
             {
-                var existingTags = createInstanceInput.Tags?.ToList() ?? new List<string>();
-                existingTags.AddRange(inputMappingResult.Tags);
-                createInstanceInput.Tags = existingTags.ToArray();
+                foreach (var kv in fromMapping)
+                    headers[kv.Key] = kv.Value;
             }
-        }
+            headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
 
-        var subFlowStartInput = new StartInstanceInput(
-            subFlowReference.Domain,
-            subFlowReference.Key,
-            subFlowReference.Version,
-            sync: true
-        )
-        {
-            Instance = createInstanceInput,
-            Headers = inputMappingResult?.Headers ?? new Dictionary<string, string?>(),
-            RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>(),
-            StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
-        };
-
-        var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
-
-        if (!startResult.IsSuccess)
-        {
-            var error = startResult.Error;
-
-            SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
-            logger.SubFlowStartFailed(
+            var subFlowStartInput = new StartInstanceInput(
+                subFlowReference.Domain,
                 subFlowReference.Key,
-                parentInstance.Id,
-                error.Code,
-                error.Message ?? string.Empty);
+                subFlowReference.Version,
+                sync: true
+            )
+            {
+                Instance = createInstanceInput,
+                Headers = headers,
+                RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>(),
+                StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
+            };
 
-            return Result.Fail(error);
+            var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
+
+            if (!startResult.IsSuccess)
+            {
+                var error = startResult.Error;
+
+                SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
+                logger.SubFlowStartFailed(
+                    subFlowReference.Key,
+                    parentInstance.Id,
+                    error.Code,
+                    error.Message ?? string.Empty);
+
+                return Result.Fail(error);
+            }
+
+            SubFlowActivityHelper.SetSuccess(activity);
+            logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
+
+            return Result.Ok();
         }
-
-        SubFlowActivityHelper.SetSuccess(activity);
-        logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
-
-        return Result.Ok();
     }
 
     /// <summary>

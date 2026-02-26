@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Testing;
+using BBT.Workflow.Definitions;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Xunit;
@@ -31,6 +32,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             instance.Id,
             "test-transition",
             "InitialState",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -58,6 +60,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             instance.Id,
             "test-transition",
             "InitialState",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -86,6 +89,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             instance.Id,
             "test-transition",
             "InitialState",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
@@ -116,6 +120,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             instance.Id,
             "test-transition",
             "InitialState",
+            TriggerType.Manual,
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );

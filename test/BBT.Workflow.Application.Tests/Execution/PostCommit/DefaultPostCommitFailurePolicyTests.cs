@@ -183,6 +183,7 @@ public class DefaultPostCommitFailurePolicyTests
     {
         var job = new ForwardToSubflowJob(
             Guid.NewGuid(),
+            Guid.NewGuid(),
             "test-transition",
             "test-domain",
             "test-workflow",

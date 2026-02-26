@@ -15,6 +15,7 @@
     <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" Version="$(PrometheusVersion)" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Infrastructure\BBT.Workflow.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

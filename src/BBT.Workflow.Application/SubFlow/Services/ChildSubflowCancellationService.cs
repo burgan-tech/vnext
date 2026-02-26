@@ -31,30 +31,36 @@ public sealed class ChildSubflowCancellationService(
         string? version,
         CancellationToken cancellationToken = default)
     {
-        try
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            var result = await instanceCommandGateway.TransitionAsync(
-                instanceId,
-                WellKnownTransitionKeys.Cancel,
-                new Instances.TransitionInput(
-                    domain: domain,
-                    workflow: flow,
-                    version: version),
-                cancellationToken: cancellationToken);
-
-            if (result.IsSuccess)
+            [TelemetryConstants.TagNames.InstanceId] = instanceId
+        }))
+        {
+            try
             {
-                logger.ChildSubflowCancelSucceeded(instanceId);
-                return Result.Ok();
-            }
+                var result = await instanceCommandGateway.TransitionAsync(
+                    instanceId,
+                    WellKnownTransitionKeys.Cancel,
+                    new Instances.TransitionInput(
+                        domain: domain,
+                        workflow: flow,
+                        version: version),
+                    cancellationToken: cancellationToken);
 
-            logger.ChildSubflowCancelFailed(instanceId);
-            return Result.Fail(WorkflowErrors.ChildSubflowCancellationFailed(instanceId, "Transition failed"));
-        }
-        catch (Exception ex)
-        {
-            logger.ChildSubflowCancelError(ex, instanceId);
-            return Result.Fail(WorkflowErrors.ChildSubflowCancellationFailed(instanceId, ex.Message));
+                if (result.IsSuccess)
+                {
+                    logger.ChildSubflowCancelSucceeded(instanceId);
+                    return Result.Ok();
+                }
+
+                logger.ChildSubflowCancelFailed(instanceId);
+                return Result.Fail(WorkflowErrors.ChildSubflowCancellationFailed(instanceId, "Transition failed"));
+            }
+            catch (Exception ex)
+            {
+                logger.ChildSubflowCancelError(ex, instanceId);
+                return Result.Fail(WorkflowErrors.ChildSubflowCancellationFailed(instanceId, ex.Message));
+            }
         }
     }
 }

@@ -23,6 +23,29 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     }
     
     /// <summary>
+    /// Adds app version middleware that writes X-App-Version header to every response.
+    /// Should be registered early in the pipeline to cover all responses including errors.
+    /// </summary>
+    /// <param name="app">The application builder</param>
+    /// <returns>The application builder for chaining</returns>
+    public static IApplicationBuilder UseAppVersion(this IApplicationBuilder app)
+    {
+        return app.UseMiddleware<AppVersionMiddleware>();
+    }
+
+    /// <summary>
+    /// Adds middleware that reads X-Parent-Instance-Id from the request and enriches Activity (tag/baggage) and log scope
+    /// so that traces and logs for subflow/subprocess requests are searchable by parent instance ID.
+    /// Should be registered after UseCorrelationId() and before controllers.
+    /// </summary>
+    /// <param name="app">The application builder</param>
+    /// <returns>The application builder for chaining</returns>
+    public static IApplicationBuilder UseParentInstanceIdEnrichment(this IApplicationBuilder app)
+    {
+        return app.UseMiddleware<ParentInstanceIdEnrichmentMiddleware>();
+    }
+
+    /// <summary>
     /// Adds HTTP metrics middleware to the pipeline
     /// </summary>
     public static IApplicationBuilder UseWorkflowHttpMetrics(this IApplicationBuilder app)

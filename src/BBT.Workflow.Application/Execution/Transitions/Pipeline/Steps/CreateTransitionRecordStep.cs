@@ -76,6 +76,7 @@ public sealed class CreateTransitionRecordStep(
             context.InstanceId,
             transitionKey,
             context.Instance.GetCurrentState,
+            context.Trigger,
             new JsonData(context.Data),
             new JsonData(JsonSerializer.Serialize(context.Headers)));
 

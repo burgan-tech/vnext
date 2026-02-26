@@ -162,6 +162,11 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.ToState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
+            b.Property(p => p.TriggerType)
+                .IsRequired()
+                .HasConversion<int>()
+                .HasDefaultValue(TriggerType.Manual);
+
             b.OwnsOne(p => p.Body, d =>
             {
                 d.Ignore(g => g.JsonElement);

@@ -3,6 +3,7 @@ using BBT.Aether.Domain.Services;
 using BBT.Aether.Uow;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
+using BBT.Workflow.Definitions;
 using Microsoft.EntityFrameworkCore;
 
 namespace BBT.Workflow.Instances;
@@ -76,6 +77,16 @@ public class EfCoreInstanceTransitionRepository(
         return await context.InstanceTransitions
             .Where(p => p.InstanceId == instanceId && p.FinishedAt == null)
             .OrderByDescending(p => p.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceTransition?> GetLastCompletedManualTransitionAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.InstanceTransitions
+            .Where(p => p.InstanceId == instanceId && p.FinishedAt != null && p.TriggerType == TriggerType.Manual)
+            .OrderByDescending(p => p.FinishedAt)
             .FirstOrDefaultAsync(cancellationToken);
     }
 }

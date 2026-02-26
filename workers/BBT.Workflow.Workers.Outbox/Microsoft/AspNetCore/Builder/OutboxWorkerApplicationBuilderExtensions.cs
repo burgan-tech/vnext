@@ -15,6 +15,7 @@ public static class OutboxWorkerApplicationBuilderExtensions
     public static WebApplication UseWorkerOutbox(this WebApplication app)
     {
         app.UseAetherAmbientServiceProvider();
+        app.UseAppVersion();
         if (app.Environment.IsDevelopment())
         {
             app.UseDeveloperExceptionPage();

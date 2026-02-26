@@ -20,4 +20,13 @@ public interface IInstanceTransitionRepository : IRepository<InstanceTransition,
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The latest incomplete transition, or null if none found.</returns>
     Task<InstanceTransition?> GetLatestIncompleteAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the most recent completed manual transition for an instance.
+    /// Used to resolve $PreviousUser for instance authorization (CreatedBy of that transition).
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The last completed manual transition, or null if none found.</returns>
+    Task<InstanceTransition?> GetLastCompletedManualTransitionAsync(Guid instanceId, CancellationToken cancellationToken = default);
 }

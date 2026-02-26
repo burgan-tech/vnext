@@ -15,6 +15,7 @@ public static class InboxWorkerApplicationBuilderExtensions
     public static WebApplication UseWorkerInbox(this WebApplication app)
     {
         app.UseAetherAmbientServiceProvider();
+        app.UseAppVersion();
         if (app.Environment.IsDevelopment())
         {
             app.UseDeveloperExceptionPage();

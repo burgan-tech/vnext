@@ -34,6 +34,7 @@ public class ForwardToActiveSubflowStep : ITransitionStep
         // Enqueue post-commit job - actual forward happens after lock release
         context.Directives.EnqueuePostCommit(new ForwardToSubflowJob(
             context.Instance.Subflow!.SubFlowInstanceId,
+            context.InstanceId,
             context.TransitionKey,
             context.Instance.Subflow.SubFlowDomain,
             context.Instance.Subflow.SubFlowName,

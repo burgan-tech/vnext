@@ -25,51 +25,57 @@ public sealed class StartSubflowJobHandler(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        // Refresh instance to get the correlation that was added during the step
-        var instanceResult = await instanceRepository.GetResultAsync(context.InstanceId.ToString(), true, cancellationToken);
-        if (!instanceResult.IsSuccess)
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            logger.SubFlowInstanceNotFound(context.InstanceId, job.CorrelationId);
-            return Result.Fail(instanceResult.Error);
-        }
-
-        var instance = instanceResult.Value!;
-
-        // Find the correlation that was created during the step
-        var correlation = instance.ChildCorrelations.SingleOrDefault(x => x.Id == job.CorrelationId);
-        if (correlation is null)
+            [TelemetryConstants.TagNames.InstanceId] = context.InstanceId
+        }))
         {
-            logger.SubFlowCorrelationNotFoundForStart(job.CorrelationId, context.InstanceId);
-            return Result.Fail(WorkflowErrors.SubFlowCorrelationNotFound(job.CorrelationId, context.InstanceId));
+            // Refresh instance to get the correlation that was added during the step
+            var instanceResult = await instanceRepository.GetResultAsync(context.InstanceId.ToString(), true, cancellationToken);
+            if (!instanceResult.IsSuccess)
+            {
+                logger.SubFlowInstanceNotFound(context.InstanceId, job.CorrelationId);
+                return Result.Fail(instanceResult.Error);
+            }
+
+            var instance = instanceResult.Value!;
+
+            // Find the correlation that was created during the step
+            var correlation = instance.ChildCorrelations.SingleOrDefault(x => x.Id == job.CorrelationId);
+            if (correlation is null)
+            {
+                logger.SubFlowCorrelationNotFoundForStart(job.CorrelationId, context.InstanceId);
+                return Result.Fail(WorkflowErrors.SubFlowCorrelationNotFound(job.CorrelationId, context.InstanceId));
+            }
+
+            // Resolve target state from job's target state key
+            var target = context.Workflow.States.SingleOrDefault(s => s.Key == job.TargetStateKey);
+            if (target?.SubFlow is null)
+            {
+                logger.SubFlowTargetStateNotFound(job.TargetStateKey, context.InstanceId);
+                return Result.Fail(WorkflowErrors.SubFlowTargetStateNotFound(job.TargetStateKey, context.InstanceId));
+            }
+
+            // Build script context for subflow mapping
+            await using var scriptContext = await CreateScriptContextAsync(context, instance, cancellationToken);
+
+            // Start the subflow (Result pattern - no try-catch needed)
+            var startResult = await subflowStarter.StartAsync(
+                context.Workflow,
+                instance,
+                target,
+                context.Transition!,
+                correlation,
+                scriptContext,
+                cancellationToken);
+
+            if (startResult.IsSuccess)
+            {
+                logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
+            }
+
+            return startResult;
         }
-
-        // Resolve target state from job's target state key
-        var target = context.Workflow.States.SingleOrDefault(s => s.Key == job.TargetStateKey);
-        if (target?.SubFlow is null)
-        {
-            logger.SubFlowTargetStateNotFound(job.TargetStateKey, context.InstanceId);
-            return Result.Fail(WorkflowErrors.SubFlowTargetStateNotFound(job.TargetStateKey, context.InstanceId));
-        }
-        
-        // Build script context for subflow mapping
-        await using var scriptContext = await CreateScriptContextAsync(context, instance, cancellationToken);
-
-        // Start the subflow (Result pattern - no try-catch needed)
-        var startResult = await subflowStarter.StartAsync(
-            context.Workflow,
-            instance,
-            target,
-            context.Transition!,
-            correlation,
-            scriptContext,
-            cancellationToken);
-
-        if (startResult.IsSuccess)
-        {
-            logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
-        }
-
-        return startResult;
     }
 
     /// <summary>

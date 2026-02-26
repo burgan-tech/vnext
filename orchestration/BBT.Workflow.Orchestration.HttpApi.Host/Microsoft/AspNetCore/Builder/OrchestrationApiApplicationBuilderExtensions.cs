@@ -15,6 +15,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
     public static WebApplication UseOrchestrationApiModule(this WebApplication app)
     {
         app.UseAetherAmbientServiceProvider();
+        app.UseAppVersion();
         if (app.Environment.IsDevelopment())
         {
             app.UseDeveloperExceptionPage();
@@ -30,6 +31,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
         app.UseHttpsRedirection();
         app.UseRuntime();
         app.UseCorrelationId();
+        app.UseParentInstanceIdEnrichment();
         app.UseSecurityHeaders();
         app.UseCurrentUser();
         app.UseStaticFiles();

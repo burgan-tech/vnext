@@ -52,7 +52,7 @@ public static class SubFlowActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.Domain, domain);
         activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, parentInstanceId);
-        activity.SetTag("vnext.subflow.instance.id", subInstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subInstanceId);
         activity.SetTag("vnext.subflow.operation", "completion");
     }
 
@@ -76,7 +76,7 @@ public static class SubFlowActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, parentInstanceId);
         activity.SetTag("vnext.subflow.domain", subFlowDomain);
         activity.SetTag("vnext.subflow.flow", subFlowKey);
-        activity.SetTag("vnext.subflow.instance.id", subFlowInstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subFlowInstanceId);
         activity.SetTag("vnext.subflow.operation", "start");
     }
 
@@ -86,16 +86,23 @@ public static class SubFlowActivityHelper
     /// <param name="activity">The activity to enrich.</param>
     /// <param name="subFlowInstanceId">The SubFlow instance ID being forwarded to.</param>
     /// <param name="transitionKey">The transition key being forwarded.</param>
+    /// <param name="parentInstanceId">Optional parent instance ID for trace/log correlation when forwarding cross-domain.</param>
     public static void EnrichWithForward(
         Activity? activity,
         Guid subFlowInstanceId,
-        string transitionKey)
+        string transitionKey,
+        Guid? parentInstanceId = null)
     {
         if (activity is null) return;
 
-        activity.SetTag("vnext.subflow.instance.id", subFlowInstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subFlowInstanceId);
         activity.SetTag(TelemetryConstants.TagNames.TransitionKey, transitionKey);
         activity.SetTag("vnext.subflow.operation", "forward");
+        if (parentInstanceId.HasValue)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.ParentInstanceId, parentInstanceId.Value.ToString());
+            activity.SetBaggage(TelemetryConstants.TagNames.ParentInstanceId, parentInstanceId.Value.ToString());
+        }
     }
 
     /// <summary>

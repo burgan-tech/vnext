@@ -46,7 +46,7 @@ public class ForwardToSubflowJobHandlerTests
         });
 
         _mockForwardingService
-            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>(), Arg.Any<Guid?>())
             .Returns(forwardResult);
 
         // Act
@@ -75,7 +75,7 @@ public class ForwardToSubflowJobHandlerTests
         });
 
         _mockForwardingService
-            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>(), Arg.Any<Guid?>())
             .Returns(forwardResult);
 
         // Act
@@ -97,7 +97,7 @@ public class ForwardToSubflowJobHandlerTests
         var validationError = Error.Validation("Transition:100020", "Transition not available in current state");
         
         _mockForwardingService
-            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>(), Arg.Any<Guid?>())
             .Returns(Result<TransitionOutput>.Fail(validationError));
 
         // Act
@@ -123,7 +123,7 @@ public class ForwardToSubflowJobHandlerTests
         var systemError = Error.Dependency("remote_service_error", "Remote API service error");
         
         _mockForwardingService
-            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>(), Arg.Any<Guid?>())
             .Returns(Result<TransitionOutput>.Fail(systemError));
 
         // Act
@@ -142,6 +142,7 @@ public class ForwardToSubflowJobHandlerTests
     {
         return new ForwardToSubflowJob(
             SubflowInstanceId: Guid.NewGuid(),
+            ParentInstanceId: Guid.NewGuid(),
             TransitionKey: "test-transition",
             SubflowDomain: "test-domain",
             SubflowName: "test-subflow",

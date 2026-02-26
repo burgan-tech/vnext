@@ -1,5 +1,6 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
@@ -14,12 +15,15 @@ namespace BBT.Workflow.Authorization;
 /// Application service for authorize and authorization matrix system functions.
 /// Evaluates role grants: DENY always wins; if no DENY match, any ALLOW match yields allowed.
 /// When instance has active subflow, forwards authorize request to subflow via IAuthorizeGateway.
+/// For predefined roles ($InstanceStarter, $PreviousUser), matching is done against ICurrentUser.ActorUserName.
 /// </summary>
 public sealed class AuthorizeAppService(
     IServiceProvider serviceProvider,
     IRuntimeInfoProvider runtimeInfoProvider,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
+    IInstanceTransitionRepository instanceTransitionRepository,
+    ICurrentUser currentUser,
     IAuthorizeGateway authorizeGateway,
     ILogger<AuthorizeAppService> logger) : ApplicationService(serviceProvider), IAuthorizeAppService
 {
@@ -45,7 +49,7 @@ public sealed class AuthorizeAppService(
             return Result<AuthorizeOutput>.Fail(workflowResult.Error);
 
         var wf = workflowResult.Value!;
-        var allowed = await EvaluateAuthorizeAsync(wf, role, transitionKey, functionKey, null, checkQueryRoles, componentCacheStore, domain, workflowVersion, cancellationToken);
+        var allowed = await EvaluateAuthorizeAsync(wf, role, transitionKey, functionKey, null, checkQueryRoles, domain, workflowVersion, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
@@ -95,7 +99,7 @@ public sealed class AuthorizeAppService(
                 cancellationToken);
         }
 
-        var allowed = await EvaluateAuthorizeAsync(wf, role, transitionKey, functionKey, instance, checkQueryRoles, componentCacheStore, domain, workflowVersion, cancellationToken);
+        var allowed = await EvaluateAuthorizeAsync(wf, role, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
@@ -248,15 +252,15 @@ public sealed class AuthorizeAppService(
     /// <summary>
     /// Evaluates authorize for a single target: transition, function, or state-based query roles.
     /// Caller validates exactly one target is specified.
+    /// Resolves predefined instance roles ($InstanceStarter, $PreviousUser) when instance is present.
     /// </summary>
-    private static async Task<bool> EvaluateAuthorizeAsync(
+    private async Task<bool> EvaluateAuthorizeAsync(
         Definitions.Workflow workflow,
         string role,
         string? transitionKey,
         string? functionKey,
         Instance? instance,
         bool checkQueryRoles,
-        IComponentCacheStore componentCacheStore,
         string domain,
         string? workflowVersion,
         CancellationToken cancellationToken)
@@ -265,36 +269,100 @@ public sealed class AuthorizeAppService(
             return false;
 
         if (checkQueryRoles)
-            return EvaluateQueryRoles(workflow, role, instance);
+            return await EvaluateQueryRolesAsync(workflow, role, instance, cancellationToken);
 
+        IReadOnlyCollection<RoleGrant>? roleGrants = null;
         if (!string.IsNullOrWhiteSpace(transitionKey))
         {
             var transition = workflow.FindTransitionInContext(transitionKey);
-            return transition != null && EvaluateRoles(role, transition.Roles);
+            if (transition != null)
+                roleGrants = transition.Roles;
         }
-
-        if (!string.IsNullOrWhiteSpace(functionKey))
+        else if (!string.IsNullOrWhiteSpace(functionKey))
         {
             var fnResult = await componentCacheStore.GetFunctionAsync(domain, functionKey, workflowVersion, cancellationToken);
-            return fnResult.IsSuccess && EvaluateRoles(role, fnResult.Value!.Roles);
+            if (fnResult.IsSuccess)
+                roleGrants = fnResult.Value!.Roles;
         }
+
+        if (roleGrants == null || roleGrants.Count == 0)
+            return false;
+
+        if (instance != null)
+            return await EvaluateRolesWithPredefinedAsync(role, roleGrants, instance, cancellationToken);
+
+        return EvaluateRoles(role, roleGrants);
+    }
+
+    /// <summary>
+    /// Evaluates role grants with resolution of predefined instance roles ($InstanceStarter, $PreviousUser).
+    /// For predefined roles, matching is against CurrentUser.ActorUserName (instance starter or previous transition creator).
+    /// DENY always wins; then any ALLOW match (including resolved predefined) yields true.
+    /// </summary>
+    private async Task<bool> EvaluateRolesWithPredefinedAsync(
+        string role,
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        Instance instance,
+        CancellationToken cancellationToken)
+    {
+        var normalizedRole = role.Trim();
+        var currentActorUserName = currentUser.ActorUserName?.Trim();
+
+        string? previousUserCreatedBy = null;
+        if (roleGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)))
+            previousUserCreatedBy = (await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken))?.CreatedBy;
+
+        bool IsMatch(RoleGrant g)
+        {
+            var resolvedValue = ResolvePredefinedRole(g.Role, instance, previousUserCreatedBy);
+            if (resolvedValue != null)
+                return !string.IsNullOrEmpty(currentActorUserName) && string.Equals(currentActorUserName, resolvedValue, StringComparison.Ordinal);
+            return string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (roleGrants.Any(g => g.IsDeny && IsMatch(g)))
+            return false;
+
+        if (roleGrants.Any(g => g.IsAllow && IsMatch(g)))
+            return true;
 
         return false;
     }
 
     /// <summary>
-    /// Evaluates state-based query roles: instance current state → state queryRoles or workflow root queryRoles; DENY wins, else ALLOW.
+    /// Resolves predefined role to the effective user identifier (CreatedBy) for comparison with CurrentUser.ActorUserName.
     /// </summary>
-    private static bool EvaluateQueryRoles(Definitions.Workflow workflow, string role, Instance? instance)
+    private static string? ResolvePredefinedRole(string? grantRole, Instance instance, string? previousUserCreatedBy)
+    {
+        if (string.IsNullOrWhiteSpace(grantRole))
+            return null;
+        if (string.Equals(grantRole, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal))
+            return instance.CreatedBy;
+        if (string.Equals(grantRole, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal))
+            return previousUserCreatedBy;
+        return null;
+    }
+
+    /// <summary>
+    /// Evaluates state-based query roles: instance effective state → state queryRoles or workflow root queryRoles.
+    /// Resolves predefined instance roles ($InstanceStarter, $PreviousUser) when instance is present. DENY wins, else ALLOW.
+    /// </summary>
+    private async Task<bool> EvaluateQueryRolesAsync(
+        Definitions.Workflow workflow,
+        string role,
+        Instance? instance,
+        CancellationToken cancellationToken)
     {
         if (instance == null)
             return false;
-        var currentStateKey = instance.GetCurrentState;
+        var currentStateKey = instance.GetEffectiveState;
         if (string.IsNullOrWhiteSpace(currentStateKey))
             return false;
         var state = workflow.FindState(currentStateKey);
-        var queryRoles = state != null && state.QueryRoles.Count > 0 ? state.QueryRoles : workflow.QueryRoles;
-        return EvaluateRoles(role, queryRoles);
+        var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
+        if (queryRoles.Count == 0)
+            return false;
+        return await EvaluateRolesWithPredefinedAsync(role, queryRoles, instance, cancellationToken);
     }
 
     /// <summary>
