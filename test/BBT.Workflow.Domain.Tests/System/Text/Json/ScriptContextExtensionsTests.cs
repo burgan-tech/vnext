@@ -301,7 +301,7 @@ public class ScriptContextExtensionsTests : DomainTestBase<DomainEntryPoint>
         object? routeValues = null)
     {
         var workflow = Workflow.Create();
-        var instance = Instance.Create(Guid.NewGuid(), "test-flow", "test-key");
+        var instance = Instance.Create(Guid.NewGuid(), "test-flow","1.0.0", "test-key");
 
         return new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
             .SetWorkflow(workflow)

@@ -68,7 +68,8 @@ public class SetBusyStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -84,7 +85,8 @@ public class SetBusyStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsCompleted.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -100,7 +102,8 @@ public class SetBusyStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsActive.ShouldBeTrue(); // Should remain Active
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -125,7 +128,7 @@ public class SetBusyStepTests
         var domain = "test-domain";
 
         var workflow = CreateMockWorkflow(workflowKey, domain);
-        var instance = Instance.Create(instanceId, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
         var transition = Transition.Create("test-transition", null, "state1", TriggerType.Manual, "Patch");
 
@@ -152,27 +155,27 @@ public class SetBusyStepTests
     private Definitions.Workflow CreateMockWorkflow(string key, string domain)
     {
         var json = """
-        {
-            "type": "F",
-            "timeout": null,
-            "labels": [],
-            "functions": [],
-            "features": [],
-            "states": [
-                {
-                    "key": "state1",
-                    "stateType": "Intermediate",
-                    "transitions": []
-                }
-            ],
-            "sharedTransitions": [],
-            "extensions": [],
-            "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
-        }
-        """;
+                   {
+                       "type": "F",
+                       "timeout": null,
+                       "labels": [],
+                       "functions": [],
+                       "features": [],
+                       "states": [
+                           {
+                               "key": "state1",
+                               "stateType": "Intermediate",
+                               "transitions": []
+                           }
+                       ],
+                       "sharedTransitions": [],
+                       "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+                   }
+                   """;
 
-        var options = new System.Text.Json.JsonSerializerOptions 
-        { 
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
             PropertyNameCaseInsensitive = true,
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
         };

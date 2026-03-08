@@ -22,7 +22,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var flow = "sys-flows";
 
         // Act
-        var instance = Instance.Create(id, flow, key);
+        var instance = Instance.Create(id, flow, "1.0.0",key);
 
         // Assert
         Assert.Equal(id, instance.Id);
@@ -1228,7 +1228,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     public void Create_ShouldAllowNullOrEmptyKey(string? key)
     {
         // Arrange & Act
-        var instance = Instance.Create(Guid.NewGuid(), "test-flow", key);
+        var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0",key);
 
         // Assert
         Assert.Equal(key, instance.Key);
@@ -1240,7 +1240,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     public void Create_ShouldThrow_WhenFlowIsInvalid(string? flow)
     {
         // Arrange & Act & Assert
-        Assert.Throws<ArgumentException>(() => Instance.Create(Guid.NewGuid(), flow!, "key"));
+        Assert.Throws<ArgumentException>(() => Instance.Create(Guid.NewGuid(), flow!,"1.0.0", "key"));
     }
 
     [Fact]

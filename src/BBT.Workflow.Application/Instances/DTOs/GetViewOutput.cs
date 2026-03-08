@@ -11,9 +11,9 @@ public sealed class GetViewOutput
     public string Key { get; set; }
     
     /// <summary>
-    /// The view content as JSON
+    /// The view content. When <see cref="Type"/> is Json, DeepLink, Http, or URN, this is a JSON object or array; when Html or Markdown, this is a string.
     /// </summary>
-    public string? Content { get; set; }
+    public object? Content { get; set; }
 
     /// <summary>
     /// The view type

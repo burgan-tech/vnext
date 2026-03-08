@@ -3,6 +3,7 @@ using BBT.Aether.Application.Dtos;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Pagination;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Domain.Shared;
@@ -28,6 +29,7 @@ public sealed class FunctionController(
     IFunctionAppService functionAppService,
     IAuthorizeAppService authorizeAppService,
     IInstanceQueryAppService queryAppService,
+    ICurrentUser currentUser,
     IPaginationLinkGenerator linkGenerator,
     IServiceScopeFactory serviceScopeFactory,
     IUrlTemplateBuilder urlTemplateBuilder) : AetherControllerBase
@@ -78,7 +80,7 @@ public sealed class FunctionController(
 
         if (functionType == Definitions.Functions.FunctionTypeConst.Authorize)
         {
-            var role = requestContext.QueryParameters.GetValueOrDefault("role", null);
+            var role = currentUser.Roles?.Length > 0 ? string.Join(",", currentUser.Roles) : requestContext.QueryParameters.GetValueOrDefault("role", null);
             var transitionKey = requestContext.QueryParameters.GetValueOrDefault("transitionKey", null);
             var functionKey = requestContext.QueryParameters.GetValueOrDefault("functionKey", null);
             var version = requestContext.QueryParameters.GetValueOrDefault("version", null);
@@ -148,7 +150,11 @@ public sealed class FunctionController(
             return FromResult(await ProcessExtensionsFunctionListAsync(domain, workflow, pagedList,
                 requestContext.Headers, requestContext.QueryParameters, cancellationToken));
         }
-
+        if (functionType == Definitions.Functions.FunctionTypeConst.Hierarchy)
+        {
+            return FromResult(await ProcessHierarchyFunctionListAsync(domain, workflow, pagedList,
+                cancellationToken));
+        }
         return FromResult(await ProcessCustomFunctionListAsync(function, workflow, domain, pagedList,
             requestContext.Headers, requestContext.QueryParameters, cancellationToken));
     }
@@ -176,7 +182,7 @@ public sealed class FunctionController(
         if (functionType == Definitions.Functions.FunctionTypeConst.View)
         {
             return FromResult(await ProcessViewFunctionAsync(domain, workflow, instance, parameters.Version,
-                parameters.Platform, parameters.TransitionKey, requestContext.Headers, requestContext.QueryParameters,
+                parameters.TransitionKey, requestContext.Headers, requestContext.QueryParameters,
                 cancellationToken));
         }
 
@@ -208,8 +214,7 @@ public sealed class FunctionController(
 
         if (functionType == Definitions.Functions.FunctionTypeConst.Authorize)
         {
-            var role = parameters.Role ??
-                       requestContext.QueryParameters.GetValueOrDefault("role", null) ?? string.Empty;
+            var role = currentUser.Roles?.Length > 0 ? string.Join(",", currentUser.Roles) : (parameters.Role ?? requestContext.QueryParameters.GetValueOrDefault("role", null) ?? string.Empty);
             var version = parameters.Version ?? requestContext.QueryParameters.GetValueOrDefault("version", null);
             var checkQueryRoles = parameters.QueryRoles == true
                 || string.Equals(requestContext.QueryParameters.GetValueOrDefault("queryRoles", null), "true", StringComparison.OrdinalIgnoreCase);
@@ -226,7 +231,17 @@ public sealed class FunctionController(
                 domain, workflow, instance, version, cancellationToken);
             return FromResult(result);
         }
-
+        if (functionType == Definitions.Functions.FunctionTypeConst.Hierarchy)
+        {
+            var input = new GetInstanceHierarchyInput
+            {
+                Domain = domain,
+                Workflow = workflow,
+                Instance = instance
+            };
+            var result = await queryAppService.GetInstanceHierarchyAsync(input, cancellationToken);
+            return FromResult(result);
+        }
         return FromResult(await functionAppService.GetFunctionByInstanceAsync(function, workflow, domain, instance,
             requestContext.Headers, requestContext.QueryParameters, cancellationToken));
     }
@@ -255,6 +270,8 @@ public sealed class FunctionController(
         Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
+        // State function uses role from ICurrentUser (claims bound by middleware), not query string.
+        var role = currentUser.Roles?.FirstOrDefault();
         var input = new GetInstanceStateInput
         {
             Domain = domain,
@@ -263,7 +280,8 @@ public sealed class FunctionController(
             Version = version,
             Extensions = extensions,
             Headers = headers,
-            QueryParams = queryParams
+            QueryParams = queryParams,
+            Role = role
         };
         return await queryAppService.GetInstanceStateAsync(input, cancellationToken);
     }
@@ -304,7 +322,6 @@ public sealed class FunctionController(
         string workflow,
         string instance,
         string? version,
-        string? platform,
         string? transitionKey,
         Dictionary<string, string?> headers,
         Dictionary<string, string?> queryParams,
@@ -320,9 +337,8 @@ public sealed class FunctionController(
             QueryParameters = queryParams
         };
 
-        return await queryAppService.GetPlatformSpecificViewAsync(
+        return await queryAppService.GetViewAsync(
             input,
-            platform ?? string.Empty,
             transitionKey ?? string.Empty,
             cancellationToken);
     }
@@ -434,7 +450,34 @@ public sealed class FunctionController(
 
         return Result<HateoasPagedResultDto<GetSchemaOutput>>.Ok(output);
     }
-
+    private async Task<Result<HateoasPagedResultDto<GetInstanceHierarchyOutput>>> ProcessHierarchyFunctionListAsync(
+        string domain,
+        string workflow,
+        HateoasPagedList<GetInstanceOutput> instanceListResult,
+        CancellationToken cancellationToken)
+    {
+        var tasks = instanceListResult.Items.Select(async instance =>
+        {
+            await using var scope = serviceScopeFactory.CreateAsyncScope();
+            var scopedQueryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
+            var input = new GetInstanceHierarchyInput
+            {
+                Domain = domain,
+                Workflow = workflow,
+                Instance = instance.Key!
+            };
+            return await scopedQueryService.GetInstanceHierarchyAsync(input, cancellationToken);
+        });
+ 
+        var results = await Task.WhenAll(tasks);
+        var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
+ 
+        var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
+            Definitions.Functions.FunctionTypeConst.Hierarchy, InstanceUrlTemplates.GetApiVersionPrefix("1"));
+        var output = linkGenerator.CreateHateoasResult(instanceListResult, list, route);
+ 
+        return Result<HateoasPagedResultDto<GetInstanceHierarchyOutput>>.Ok(output);
+    }
     private async Task<Result<HateoasPagedResultDto<GetViewOutput>>> ProcessViewFunctionListAsync(
         string domain,
         string workflow,
@@ -452,7 +495,7 @@ public sealed class FunctionController(
                 Instance = instance.Key!,
                 Version = instance.FlowVersion
             };
-            return await scopedQueryService.GetPlatformSpecificViewAsync(input, string.Empty, string.Empty,
+            return await scopedQueryService.GetViewAsync(input,  string.Empty,
                 cancellationToken);
         });
 

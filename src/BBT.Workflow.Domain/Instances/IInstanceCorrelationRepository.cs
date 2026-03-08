@@ -10,6 +10,20 @@ namespace BBT.Workflow.Instances;
 public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelation, Guid>
 {
     /// <summary>
+    /// Finds all correlations where the specified instance ID is the parent instance.
+    /// Includes both active and completed correlations for building full hierarchy trees.
+    /// </summary>
+    /// <param name="parentInstanceId">The unique identifier of the parent workflow instance.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>
+    /// A task representing the asynchronous operation.
+    /// The result contains all correlations where the instance is a parent (active and completed).
+    /// </returns>
+    Task<List<InstanceCorrelation>> GetByParentAsync(
+        Guid parentInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds active correlations where the specified instance ID is the parent instance.
     /// This method is used to identify all active child flows for a given parent workflow.
     /// </summary>

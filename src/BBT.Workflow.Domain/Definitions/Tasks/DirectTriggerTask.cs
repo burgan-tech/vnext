@@ -51,6 +51,7 @@ public sealed class DirectTriggerTask : WorkflowTask
     /// <summary>
     /// Version of the target workflow (optional)
     /// </summary>
+    [Obsolete("Version is not used for direct trigger tasks.")]
     public string? TriggerVersion { get; private set; }
 
     /// <summary>
@@ -117,6 +118,7 @@ public sealed class DirectTriggerTask : WorkflowTask
         TriggerKey = key;
     }
 
+    [Obsolete("Version is not used for direct trigger tasks.")]
     public void SetVersion(string? version)
     {
         TriggerVersion = version;
@@ -191,6 +193,7 @@ public sealed class DirectTriggerTask : WorkflowTask
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetTriggerSyncInternal(bool sync) => TriggerSync = sync;
     internal void SetTriggerTagsInternal(string[]? tags) => TriggerTags = tags;
+    [Obsolete("Version is not used for direct trigger tasks.")]
     internal void SetTriggerVersionInternal(string? version) => TriggerVersion = version;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;

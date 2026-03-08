@@ -158,7 +158,7 @@ public class ForwardToSubflowJobHandlerTests
     private static TransitionExecutionContext CreateContext()
     {
         var instanceId = Guid.NewGuid();
-        var instance = Instance.Create(instanceId, "sys_flows", "test-key");
+        var instance = Instance.Create(instanceId, "sys_flows", "1.0.0","test-key");
         // Instance.Status is Active by default after creation
 
         return new TransitionExecutionContext

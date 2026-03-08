@@ -36,6 +36,12 @@ public sealed class HandleSubFlowStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // Idempotent re-entry: already in this SubFlow state with active correlation - do not start subflow again
+        if (HasActiveCorrelationForSameState(context))
+        {
+            return Result<StepOutcome>.Ok(CreateStepOutcome(context));
+        }
+
         // Railway chain: Validate config -> Execute operations -> Create outcome
         return await Result.Ok(context)
             .Ensure(
@@ -54,11 +60,24 @@ public sealed class HandleSubFlowStep(
     }
 
     /// <summary>
+    /// Returns true when there is already an active subflow correlation for the same target state.
+    /// Used to avoid starting the subflow again on idempotent re-entry (e.g. shared transition with target $self).
+    /// </summary>
+    private static bool HasActiveCorrelationForSameState(TransitionExecutionContext context)
+        => context.Instance.Subflow != null &&
+           context.Target != null &&
+           context.Instance.Subflow.ParentState == context.Target.Key;
+
+    /// <summary>
     /// Creates configuration invalid error.
     /// </summary>
     private Error CreateConfigInvalidError(TransitionExecutionContext context)
     {
-        logger.SubFlowConfigInvalid(context.Target!.Key, context.InstanceId);
+        if (context.Target?.SubFlow == null)
+        {
+            logger.SubFlowConfigInvalid(context.Target!.Key, context.InstanceId);    
+        }
+        
         return WorkflowErrors.ConfigInvalid(context.InstanceId, context.Target.Key);
     }
 

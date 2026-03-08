@@ -35,5 +35,9 @@ public abstract class PublishBaseInput
     [StringLength(WorkflowConstants.MaxVersionLength)]
     public string Version { get; set; }
     
+    [Required]
+    [StringLength(WorkflowConstants.MaxVersionLength)]
+    public string FlowVersion { get; set; }
+    
     public List<string> Tags { get; set; } = [];
 }

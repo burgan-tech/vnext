@@ -14,6 +14,7 @@ namespace BBT.Workflow.Authorization;
 /// <summary>
 /// Application service for authorize and authorization matrix system functions.
 /// Evaluates role grants: DENY always wins; if no DENY match, any ALLOW match yields allowed.
+/// Uses ICurrentUser.Roles (multiple roles); if any caller role is allowed, result is allowed.
 /// When instance has active subflow, forwards authorize request to subflow via IAuthorizeGateway.
 /// For predefined roles ($InstanceStarter, $PreviousUser), matching is done against ICurrentUser.ActorUserName.
 /// </summary>
@@ -22,9 +23,9 @@ public sealed class AuthorizeAppService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
-    IInstanceTransitionRepository instanceTransitionRepository,
-    ICurrentUser currentUser,
+    ITransitionAuthorizationManager transitionAuthorizationManager,
     IAuthorizeGateway authorizeGateway,
+    ICurrentUser currentUser,
     ILogger<AuthorizeAppService> logger) : ApplicationService(serviceProvider), IAuthorizeAppService
 {
     /// <inheritdoc />
@@ -49,7 +50,8 @@ public sealed class AuthorizeAppService(
             return Result<AuthorizeOutput>.Fail(workflowResult.Error);
 
         var wf = workflowResult.Value!;
-        var allowed = await EvaluateAuthorizeAsync(wf, role, transitionKey, functionKey, null, checkQueryRoles, domain, workflowVersion, cancellationToken);
+        var callerRoles = GetCallerRoles(role);
+        var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, null, checkQueryRoles, domain, workflowVersion, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
@@ -87,11 +89,12 @@ public sealed class AuthorizeAppService(
         if (instance?.Subflow != null)
         {
             var subflow = instance.Subflow;
+            var roleForForward = currentUser.Roles?.Length > 0 ? string.Join(",", currentUser.Roles) : role;
             return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,
                 subflow.SubFlowInstanceId.ToString(),
-                role,
+                roleForForward,
                 transitionKey,
                 functionKey,
                 version,
@@ -99,9 +102,22 @@ public sealed class AuthorizeAppService(
                 cancellationToken);
         }
 
-        var allowed = await EvaluateAuthorizeAsync(wf, role, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
+        var callerRoles = GetCallerRoles(role);
+        var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
+    }
+
+    /// <summary>
+    /// Resolves caller roles: ICurrentUser.Roles when present; otherwise single role parameter as fallback.
+    /// </summary>
+    private IReadOnlyList<string>? GetCallerRoles(string? roleParameter)
+    {
+        if (currentUser.Roles is { Length: > 0 } roles)
+            return roles;
+        if (!string.IsNullOrWhiteSpace(roleParameter))
+            return [roleParameter.Trim()];
+        return null;
     }
 
     /// <inheritdoc />
@@ -251,10 +267,35 @@ public sealed class AuthorizeAppService(
 
     /// <summary>
     /// Evaluates authorize for a single target: transition, function, or state-based query roles.
-    /// Caller validates exactly one target is specified.
+    /// If any caller role is allowed, returns true. Caller validates exactly one target is specified.
     /// Resolves predefined instance roles ($InstanceStarter, $PreviousUser) when instance is present.
     /// </summary>
     private async Task<bool> EvaluateAuthorizeAsync(
+        Definitions.Workflow workflow,
+        IReadOnlyList<string>? callerRoles,
+        string? transitionKey,
+        string? functionKey,
+        Instance? instance,
+        bool checkQueryRoles,
+        string domain,
+        string? workflowVersion,
+        CancellationToken cancellationToken)
+    {
+        if (callerRoles is null || callerRoles.Count == 0)
+            return false;
+
+        foreach (var role in callerRoles)
+        {
+            if (string.IsNullOrWhiteSpace(role))
+                continue;
+            var allowed = await EvaluateAuthorizeForSingleRoleAsync(workflow, role.Trim(), transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
+            if (allowed)
+                return true;
+        }
+        return false;
+    }
+
+    private async Task<bool> EvaluateAuthorizeForSingleRoleAsync(
         Definitions.Workflow workflow,
         string role,
         string? transitionKey,
@@ -265,82 +306,28 @@ public sealed class AuthorizeAppService(
         string? workflowVersion,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(role))
-            return false;
-
         if (checkQueryRoles)
             return await EvaluateQueryRolesAsync(workflow, role, instance, cancellationToken);
 
-        IReadOnlyCollection<RoleGrant>? roleGrants = null;
         if (!string.IsNullOrWhiteSpace(transitionKey))
         {
             var transition = workflow.FindTransitionInContext(transitionKey);
-            if (transition != null)
-                roleGrants = transition.Roles;
+            if (transition == null)
+                return false;
+            return await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(workflow, transition, instance, role, cancellationToken);
         }
-        else if (!string.IsNullOrWhiteSpace(functionKey))
+
+        if (!string.IsNullOrWhiteSpace(functionKey))
         {
             var fnResult = await componentCacheStore.GetFunctionAsync(domain, functionKey, workflowVersion, cancellationToken);
-            if (fnResult.IsSuccess)
-                roleGrants = fnResult.Value!.Roles;
+            if (!fnResult.IsSuccess)
+                return false;
+            if (fnResult.Value!.Roles.Count == 0)
+                return true; // No roles defined on function → allow
+            return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, fnResult.Value!.Roles, instance, cancellationToken);
         }
-
-        if (roleGrants == null || roleGrants.Count == 0)
-            return false;
-
-        if (instance != null)
-            return await EvaluateRolesWithPredefinedAsync(role, roleGrants, instance, cancellationToken);
-
-        return EvaluateRoles(role, roleGrants);
-    }
-
-    /// <summary>
-    /// Evaluates role grants with resolution of predefined instance roles ($InstanceStarter, $PreviousUser).
-    /// For predefined roles, matching is against CurrentUser.ActorUserName (instance starter or previous transition creator).
-    /// DENY always wins; then any ALLOW match (including resolved predefined) yields true.
-    /// </summary>
-    private async Task<bool> EvaluateRolesWithPredefinedAsync(
-        string role,
-        IReadOnlyCollection<RoleGrant> roleGrants,
-        Instance instance,
-        CancellationToken cancellationToken)
-    {
-        var normalizedRole = role.Trim();
-        var currentActorUserName = currentUser.ActorUserName?.Trim();
-
-        string? previousUserCreatedBy = null;
-        if (roleGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)))
-            previousUserCreatedBy = (await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken))?.CreatedBy;
-
-        bool IsMatch(RoleGrant g)
-        {
-            var resolvedValue = ResolvePredefinedRole(g.Role, instance, previousUserCreatedBy);
-            if (resolvedValue != null)
-                return !string.IsNullOrEmpty(currentActorUserName) && string.Equals(currentActorUserName, resolvedValue, StringComparison.Ordinal);
-            return string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase);
-        }
-
-        if (roleGrants.Any(g => g.IsDeny && IsMatch(g)))
-            return false;
-
-        if (roleGrants.Any(g => g.IsAllow && IsMatch(g)))
-            return true;
 
         return false;
-    }
-
-    /// <summary>
-    /// Resolves predefined role to the effective user identifier (CreatedBy) for comparison with CurrentUser.ActorUserName.
-    /// </summary>
-    private static string? ResolvePredefinedRole(string? grantRole, Instance instance, string? previousUserCreatedBy)
-    {
-        if (string.IsNullOrWhiteSpace(grantRole))
-            return null;
-        if (string.Equals(grantRole, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal))
-            return instance.CreatedBy;
-        if (string.Equals(grantRole, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal))
-            return previousUserCreatedBy;
-        return null;
     }
 
     /// <summary>
@@ -361,28 +348,7 @@ public sealed class AuthorizeAppService(
         var state = workflow.FindState(currentStateKey);
         var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
         if (queryRoles.Count == 0)
-            return false;
-        return await EvaluateRolesWithPredefinedAsync(role, queryRoles, instance, cancellationToken);
-    }
-
-    /// <summary>
-    /// Evaluates role against role grants. DENY always wins; else any ALLOW match → true; else false.
-    /// </summary>
-    private static bool EvaluateRoles(string role, IReadOnlyCollection<RoleGrant> roleGrants)
-    {
-        if (roleGrants.Count == 0)
-            return false;
-        var normalizedRole = role.Trim();
-        foreach (var g in roleGrants)
-        {
-            if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsDeny)
-                return false;
-        }
-        foreach (var g in roleGrants)
-        {
-            if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsAllow)
-                return true;
-        }
-        return false;
+            return true; // No query roles defined → allow
+        return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, queryRoles, instance, cancellationToken);
     }
 }

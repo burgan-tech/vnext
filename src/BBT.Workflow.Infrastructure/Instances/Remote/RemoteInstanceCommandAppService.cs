@@ -3,6 +3,9 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
+using BBT.Aether.Users;
+using BBT.Workflow.CurrentUser;
+using BBT.Workflow.Remote;
 using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Options;
@@ -16,7 +19,8 @@ namespace BBT.Workflow.Instances.Remote;
 public sealed class RemoteInstanceCommandAppService(
     HttpClient httpClient,
     IOptions<RemoteOptions> options,
-    IDomainDiscoveryResolver endpointResolver)
+    IDomainDiscoveryResolver endpointResolver,
+    ICurrentUser currentUser)
     : IRemoteInstanceCommandAppService
 {
     private readonly RemoteOptions _options = options.Value;
@@ -77,14 +81,8 @@ public sealed class RemoteInstanceCommandAppService(
                 Content = content
             };
 
-            if (input.Headers != null)
-                foreach (var header in input.Headers)
-                {
-                    if (!IsRestrictedHeader(header.Key))
-                    {
-                        requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -151,14 +149,8 @@ public sealed class RemoteInstanceCommandAppService(
                 Content = content
             };
 
-            if (input.Headers != null)
-                foreach (var header in input.Headers)
-                {
-                    if (!IsRestrictedHeader(header.Key))
-                    {
-                        requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -198,8 +190,6 @@ public sealed class RemoteInstanceCommandAppService(
                 transitionKey, ApiVersionPrefix);
 
             var queryParams = new List<string>();
-            if (!string.IsNullOrEmpty(input.Version))
-                queryParams.Add($"version={Uri.EscapeDataString(input.Version)}");
             if (input.Sync)
                 queryParams.Add("sync=true");
 
@@ -218,13 +208,8 @@ public sealed class RemoteInstanceCommandAppService(
                 Content = content
             };
 
-            foreach (var header in input.Headers)
-            {
-                if (!IsRestrictedHeader(header.Key))
-                {
-                    requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                }
-            }
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -270,6 +255,9 @@ public sealed class RemoteInstanceCommandAppService(
             {
                 Content = content
             };
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -319,6 +307,9 @@ public sealed class RemoteInstanceCommandAppService(
                 Content = content
             };
 
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
@@ -347,7 +338,8 @@ public sealed class RemoteInstanceCommandAppService(
         }
 
         // Map status codes to appropriate Error types (per Railway Pattern)
-        return await MapStatusCodeToError<T>(response, cancellationToken);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+        return Result<T>.Fail(error);
     }
 
     /// <summary>
@@ -356,141 +348,10 @@ public sealed class RemoteInstanceCommandAppService(
     private static async Task<Result> HandleResponseAsync(HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        // Success case
         if (response.IsSuccessStatusCode)
-        {
             return Result.Ok();
-        }
 
-        // Map status codes to appropriate Error types
-        var error = await MapStatusCodeToErrorCore(response, cancellationToken);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
         return Result.Fail(error);
-    }
-
-    /// <summary>
-    /// Maps HTTP status codes to appropriate Error types following Railway Pattern guidelines.
-    /// - 400 Bad Request → Validation Error
-    /// - 404 Not Found → NotFound Error
-    /// - 409 Conflict → Conflict Error
-    /// - 401 Unauthorized → Unauthorized Error
-    /// - 403 Forbidden → Forbidden Error
-    /// - 5xx Server Error → Dependency Error (external service failed)
-    /// - Other → Dependency Error
-    /// </summary>
-    private static async Task<Result<T>> MapStatusCodeToError<T>(HttpResponseMessage response,
-        CancellationToken cancellationToken)
-    {
-        var error = await MapStatusCodeToErrorCore(response, cancellationToken);
-        return Result<T>.Fail(error);
-    }
-
-    private static async Task<Error> MapStatusCodeToErrorCore(HttpResponseMessage response,
-        CancellationToken cancellationToken)
-    {
-        var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
-        var statusCode = response.StatusCode;
-
-        // Check if response has Aether error format header
-        if (response.Headers.TryGetValues("_aether_error_format", out var values) &&
-            values.Any(v => v.Equals("true", StringComparison.OrdinalIgnoreCase)))
-        {
-            try
-            {
-                var errorResponse = JsonSerializer.Deserialize<ServiceErrorResponse>(errorContent, JsonOptions);
-                if (errorResponse?.Error != null)
-                {
-                    // Use the prefix from remote service if available, otherwise infer from status code
-                    var prefix = errorResponse.Error.Prefix ?? InferPrefixFromStatusCode(statusCode);
-                    var code = errorResponse.Error.Code ?? "remote_error";
-
-                    // Map to appropriate Error type based on prefix
-                    return prefix switch
-                    {
-                        ErrorCodes.Prefixes.Validation => Error.Validation(code, errorResponse.Error.Message,
-                            errorResponse.Error.Target),
-                        ErrorCodes.Prefixes.NotFound => Error.NotFound(code, errorResponse.Error.Message,
-                            errorResponse.Error.Target),
-                        ErrorCodes.Prefixes.Conflict => Error.Conflict(code, errorResponse.Error.Message,
-                            errorResponse.Error.Target),
-                        ErrorCodes.Prefixes.Unauthorized => Error.Unauthorized(code, errorResponse.Error.Message),
-                        ErrorCodes.Prefixes.Forbidden => Error.Forbidden(code, errorResponse.Error.Message),
-                        ErrorCodes.Prefixes.Dependency => Error.Dependency(code, errorResponse.Error.Message,
-                            errorResponse.Error.Target),
-                        ErrorCodes.Prefixes.Transient => Error.Transient(code, errorResponse.Error.Message,
-                            errorResponse.Error.Target),
-                        _ => Error.Failure(code, errorResponse.Error.Message, errorResponse.Error.Details)
-                    };
-                }
-            }
-            catch (JsonException)
-            {
-                // If JSON deserialization fails, fall back to status code mapping
-            }
-        }
-
-        // Map status code to appropriate Error type (Railway Pattern best practice)
-        return statusCode switch
-        {
-            System.Net.HttpStatusCode.BadRequest => Error.Validation(
-                "remote_bad_request",
-                $"Remote API validation error: {errorContent}"),
-
-            System.Net.HttpStatusCode.NotFound => Error.NotFound(
-                "remote_not_found",
-                "Requested resource not found on remote API",
-                errorContent),
-
-            System.Net.HttpStatusCode.Conflict => Error.Conflict(
-                "remote_conflict",
-                $"Remote API conflict: {errorContent}"),
-
-            System.Net.HttpStatusCode.Unauthorized => Error.Unauthorized(
-                "remote_unauthorized",
-                "Unauthorized access to remote API"),
-
-            System.Net.HttpStatusCode.Forbidden => Error.Forbidden(
-                "remote_forbidden",
-                "Forbidden access to remote API"),
-
-            System.Net.HttpStatusCode.InternalServerError or
-                System.Net.HttpStatusCode.BadGateway or
-                System.Net.HttpStatusCode.ServiceUnavailable or
-                System.Net.HttpStatusCode.GatewayTimeout => Error.Dependency(
-                    "remote_service_error",
-                    $"Remote API service error: {response.ReasonPhrase}",
-                    ((int)statusCode).ToString()),
-
-            _ => Error.Dependency(
-                "remote_http_error",
-                $"Remote API returned HTTP {(int)statusCode}: {response.ReasonPhrase}",
-                ((int)statusCode).ToString())
-        };
-    }
-
-    /// <summary>
-    /// Infers error prefix from HTTP status code for Aether error format
-    /// </summary>
-    private static string InferPrefixFromStatusCode(System.Net.HttpStatusCode statusCode)
-    {
-        return statusCode switch
-        {
-            System.Net.HttpStatusCode.BadRequest => ErrorCodes.Prefixes.Validation,
-            System.Net.HttpStatusCode.NotFound => ErrorCodes.Prefixes.NotFound,
-            System.Net.HttpStatusCode.Conflict => ErrorCodes.Prefixes.Conflict,
-            System.Net.HttpStatusCode.Unauthorized => ErrorCodes.Prefixes.Unauthorized,
-            System.Net.HttpStatusCode.Forbidden => ErrorCodes.Prefixes.Forbidden,
-            _ => ErrorCodes.Prefixes.Dependency
-        };
-    }
-
-    /// <summary>
-    /// Checks if a header is restricted and cannot be set manually
-    /// </summary>
-    private static bool IsRestrictedHeader(string headerName)
-    {
-        return headerName.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) ||
-               headerName.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
-               headerName.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
-               headerName.Equals("Connection", StringComparison.OrdinalIgnoreCase);
     }
 }

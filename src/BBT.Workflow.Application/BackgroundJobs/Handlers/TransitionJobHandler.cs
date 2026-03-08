@@ -34,7 +34,6 @@ public sealed class TransitionJobHandler(
             var transitionInput = new TransitionInput(
                     args.Domain,
                     args.Workflow,
-                    args.Version,
                     new TransitionDataInput(args.Data)
                     {
                         Key = args.InstanceKey,
@@ -47,7 +46,7 @@ public sealed class TransitionJobHandler(
                 };
 
             var context =
-                transitionInput.ToExecutionContext(args.InstanceId.ToString(), args.TransitionKey);
+                transitionInput.ToExecutionContext(args.InstanceId.ToString(), args.Version, args.TransitionKey);
             context.Actor = args.ExecutionActor;
 
             // Use the background-specific method that handles pre-reserved instances

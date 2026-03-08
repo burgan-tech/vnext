@@ -25,13 +25,7 @@ public sealed class ViewComponentValidator : IComponentValidator
                 result.AddError("Failed to deserialize view from attributes.", nameof(View));
                 return result;
             }
-
-            // Validate required content field
-            if (string.IsNullOrWhiteSpace(view.Content))
-            {
-                result.AddError("View content is required.", $"{nameof(View)}.{nameof(View.Content)}");
-            }
-
+            
             // Validate view type
             if (view.Type == default)
             {

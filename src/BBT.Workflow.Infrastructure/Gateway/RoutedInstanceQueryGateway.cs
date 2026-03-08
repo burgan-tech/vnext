@@ -85,13 +85,12 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
     /// <inheritdoc />
     public Task<Result<GetViewOutput>> GetFunctionWithViewAsync(
         GetFunctionWithInstanceInput input,
-        string? platform,
         string? transitionKey,
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetFunctionWithViewAsync(input, platform, transitionKey, cancellationToken)
-            : _remote.GetFunctionWithViewAsync(input, platform, transitionKey, cancellationToken);
+            ? _local.GetFunctionWithViewAsync(input, transitionKey, cancellationToken)
+            : _remote.GetFunctionWithViewAsync(input, transitionKey, cancellationToken);
     }
 
     /// <inheritdoc />

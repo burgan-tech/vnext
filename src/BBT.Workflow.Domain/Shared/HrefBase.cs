@@ -23,11 +23,16 @@ public sealed class TransitionItem : HrefBase
     /// Transition name
     /// </summary>
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
-    /// Schema href link
+    /// View href for this transition. When HasView is true, the view endpoint returns meaningful content when called with this transition key.
     /// </summary>
-    public HrefBase? Schema {get; set; }
+    public ViewHref? View { get; set; }
+
+    /// <summary>
+    /// Schema href for this transition. When HasSchema is true, the schema endpoint returns meaningful content for this transition key.
+    /// </summary>
+    public SchemaHref? Schema { get; set; }
 }
 
 /// <summary>
@@ -38,10 +43,26 @@ public sealed class DataHref : HrefBase
 }
 
 /// <summary>
+/// Schema href link with has-schema flag. When true, the schema endpoint returns meaningful content for the transition.
+/// </summary>
+public sealed class SchemaHref : HrefBase
+{
+    /// <summary>
+    /// Whether this transition has a schema reference. When true, the schema endpoint returns meaningful content.
+    /// </summary>
+    public bool HasSchema { get; set; }
+}
+
+/// <summary>
 /// View href link with load data flag
 /// </summary>
 public sealed class ViewHref : HrefBase
 {
+    /// <summary>
+    /// Whether the current state has a view definition (state view or wizard single-transition view). When true, the view endpoint returns meaningful content.
+    /// </summary>
+    public bool HasView { get; set; }
+
     /// <summary>
     /// Whether to load data
     /// </summary>

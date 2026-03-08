@@ -1,5 +1,4 @@
 using System.Text.Json;
-using BBT.Aether.Application.Services;
 using BBT.Aether.Guids;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
@@ -18,7 +17,6 @@ namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowCompletionService" />
 public sealed class SubflowCompletionService(
-    IServiceProvider serviceProvider,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
     IScriptEngine scriptEngine,
@@ -27,7 +25,7 @@ public sealed class SubflowCompletionService(
     IGuidGenerator guidGenerator,
     IWorkflowExecutionService workflowExecutionService,
     ILogger<SubflowCompletionService> logger)
-    : ApplicationService(serviceProvider), ISubflowCompletionService
+    : ISubflowCompletionService
 {
     /// <inheritdoc />
     public async Task CompletionAsync(

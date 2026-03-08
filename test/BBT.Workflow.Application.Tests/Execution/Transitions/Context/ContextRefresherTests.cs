@@ -164,7 +164,7 @@ public class ContextRefresherTests
 
     private Instance CreateMockInstance(Guid instanceId, string workflowKey, string currentState)
     {
-        var instance = Instance.Create(instanceId, workflowKey, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0", workflowKey);
         
         // Set current state
         typeof(Instance)

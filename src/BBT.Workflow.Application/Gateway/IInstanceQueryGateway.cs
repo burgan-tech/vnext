@@ -72,13 +72,11 @@ public interface IInstanceQueryGateway
     /// Routes to local or remote based on target domain in input.
     /// </summary>
     /// <param name="input">The get function with instance input containing domain, workflow, and instance.</param>
-    /// <param name="platform">Optional platform identifier (web, ios, android).</param>
     /// <param name="transitionKey">Optional transition key for transition-specific views.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result containing the view output.</returns>
     Task<Result<GetViewOutput>> GetFunctionWithViewAsync(
         GetFunctionWithInstanceInput input,
-        string? platform,
         string? transitionKey,
         CancellationToken cancellationToken = default);
 

@@ -16,11 +16,6 @@ public sealed class RetryInstanceInput
     public required string Workflow { get; init; }
 
     /// <summary>
-    /// The workflow version. If not specified, uses the version from the incomplete transition.
-    /// </summary>
-    public string? Version { get; init; }
-
-    /// <summary>
     /// The instance identifier (ID or key).
     /// </summary>
     public required string Instance { get; init; }

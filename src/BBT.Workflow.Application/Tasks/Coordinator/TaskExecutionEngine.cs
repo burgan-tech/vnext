@@ -31,7 +31,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private readonly IWorkflowMetrics _workflowMetrics;
     private readonly IErrorBoundaryResolver _boundaryResolver;
     private readonly IErrorActionExecutor _actionExecutor;
-    private readonly IRetryPolicyFactory _retryPolicyFactory;
     private readonly IExecutionErrorFactory _errorFactory;
     private readonly ILogger<TaskExecutionEngine> _logger;
 
@@ -46,7 +45,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         IWorkflowMetrics workflowMetrics,
         IErrorBoundaryResolver boundaryResolver,
         IErrorActionExecutor actionExecutor,
-        IRetryPolicyFactory retryPolicyFactory,
         IExecutionErrorFactory errorFactory,
         ILogger<TaskExecutionEngine> logger)
     {
@@ -57,7 +55,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         _workflowMetrics = workflowMetrics;
         _boundaryResolver = boundaryResolver;
         _actionExecutor = actionExecutor;
-        _retryPolicyFactory = retryPolicyFactory;
         _errorFactory = errorFactory;
         _logger = logger;
     }
@@ -76,96 +73,98 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             GetStateBoundary(context),
             context.Workflow.ErrorBoundary);
 
-        // 2. Find Retry policy from boundary (pre-resolve for Polly)
-        var retryPolicy = FindRetryPolicy(boundaryChain)
-                          ?? new RetryPolicy { MaxRetries = 0 };
-
         _logger.LogInformation(
-            "Executing task {TaskKey} with Polly-first approach. MaxRetries: {MaxRetries}",
-            onExecuteTask.Task.Key, retryPolicy.MaxRetries);
+            "Executing task {TaskKey} with error-aware retry.",
+            onExecuteTask.Task.Key);
 
-        // 3. Execute with Polly (first attempt + retries in one flow)
-        return await ExecuteWithPollyAsync(
+        // 2. Execute with error-aware retry (retry policy resolved per failure from matching rule)
+        return await ExecuteWithErrorAwareRetryAsync(
             onExecuteTask, instanceTransitionId, taskTrigger, context,
-            retryPolicy, boundaryChain, cancellationToken);
+            boundaryChain, cancellationToken);
     }
 
     /// <summary>
-    /// Executes a task with Polly. Handles both initial attempt and retries in one flow.
-    /// After retries are exhausted, resolves boundary for fallback actions.
+    /// Executes a task with error-aware retry. Resolves retry policy per failure from the rule
+    /// that matches the current error (Task -> State -> Global). Only retries when the matching rule has Action = Retry.
+    /// After retries are exhausted or no retry applies, resolves boundary for fallback actions.
     /// </summary>
     /// <param name="onExecuteTask">The task definition to execute.</param>
     /// <param name="instanceTransitionId">Optional transition ID for tracking.</param>
     /// <param name="taskTrigger">The trigger type for persistence strategy selection.</param>
     /// <param name="context">The script context containing workflow and instance data.</param>
-    /// <param name="retryPolicy">The retry policy to use (pre-resolved from boundary chain).</param>
-    /// <param name="boundaryChain">The compiled boundary chain for fallback resolution.</param>
+    /// <param name="boundaryChain">The compiled boundary chain for resolution and fallback.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The execution result with boundary action if applicable.</returns>
-    private async Task<Result<TasksExecutionResult>> ExecuteWithPollyAsync(
+    private async Task<Result<TasksExecutionResult>> ExecuteWithErrorAwareRetryAsync(
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
         ScriptContext context,
-        RetryPolicy retryPolicy,
         CompiledBoundaryChain boundaryChain,
         CancellationToken cancellationToken)
     {
         var taskKey = onExecuteTask.Task.Key;
         var totalStopwatch = Stopwatch.StartNew();
-
-        _logger.LogDebug(
-            "Starting Polly execution for task {TaskKey}. MaxRetries: {MaxRetries}, BackoffType: {BackoffType}",
-            taskKey, retryPolicy.MaxRetries, retryPolicy.BackoffType);
-
-        var pollyPolicy = _retryPolicyFactory.CreateAsyncPolicy<Result<TasksExecutionResult>>(
-            retryPolicy,
-            // Retry if: Result failed OR task execution failed
-            shouldRetry: result => !result.IsSuccess || result.Value is { IsSuccess: false },
-            onRetry: (outcome, delay, attempt, _) =>
-            {
-                var errorMessage = outcome.Exception?.Message ??
-                                   outcome.Result.Value?.TaskError?.ErrorMessage ??
-                                   "Unknown error";
-
-                _logger.LogInformation(
-                    "Polly retry {Attempt}/{MaxRetries} for task {TaskKey}. Delay: {Delay}ms. Error: {Error}",
-                    attempt, retryPolicy.MaxRetries, taskKey, delay.TotalMilliseconds, errorMessage);
-
-                return Task.CompletedTask;
-            });
+        Result<TasksExecutionResult> result;
 
         try
         {
-            // Execute with Polly - includes first attempt + retries
-            var result = await pollyPolicy.ExecuteAsync(
-                async ct => await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, context, boundaryChain, ct),
-                cancellationToken);
+            var attempt = 0;
+
+            while (true)
+            {
+                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, context, boundaryChain, cancellationToken);
+
+                // Success - return directly
+                if (result is { IsSuccess: true, Value.IsSuccess: true })
+                {
+                    totalStopwatch.Stop();
+                    _logger.LogInformation(
+                        "Task {TaskKey} completed successfully. Total duration: {Duration}ms",
+                        taskKey, totalStopwatch.ElapsedMilliseconds);
+                    return result;
+                }
+
+                // No boundary + business failure (e.g. 404) - flow continues; do not resolve fallback
+                if (result is { IsSuccess: true, Value: var value } && value is { TaskError: null, HasFailedTasks: true })
+                {
+                    totalStopwatch.Stop();
+                    _logger.LogDebug(
+                        "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.",
+                        taskKey);
+                    return result;
+                }
+
+                // Failure - resolve execution error and check if we should retry
+                ExecutionError? executionError = result.IsSuccess && result.Value != null ? result.Value.TaskError : null;
+                if (executionError == null)
+                {
+                    executionError = _errorFactory.CreateFromError(
+                        result.Error, taskKey, "Unknown", totalStopwatch.ElapsedMilliseconds);
+                }
+
+                var retryPolicy = GetRetryPolicyForError(boundaryChain, executionError.NormalizedError);
+                if (retryPolicy == null || attempt >= retryPolicy.MaxRetries)
+                    break;
+
+                var delay = ApplyJitterIfNeeded(retryPolicy.CalculateDelay(attempt + 1), retryPolicy.UseJitter);
+                _logger.LogInformation(
+                    "Error-aware retry {Attempt}/{MaxRetries} for task {TaskKey}. Delay: {Delay}ms. Error: {Error}",
+                    attempt + 1, retryPolicy.MaxRetries, taskKey, delay.TotalMilliseconds, executionError.ErrorMessage);
+
+                await Task.Delay(delay, cancellationToken);
+                attempt++;
+            }
 
             totalStopwatch.Stop();
 
-            // Success - return directly
-            if (result is { IsSuccess: true, Value.IsSuccess: true })
-            {
-                _logger.LogInformation(
-                    "Task {TaskKey} completed successfully. Total duration: {Duration}ms",
-                    taskKey, totalStopwatch.ElapsedMilliseconds);
-
-                return result;
-            }
-
-            // No boundary + business failure (e.g. 404) - flow continues; do not resolve fallback
-            if (result is { IsSuccess: true, Value: var value } && value is { TaskError: null, HasFailedTasks: true })
-            {
-                _logger.LogDebug(
-                    "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.",
-                    taskKey);
-                return result;
-            }
-
-            // Retry exhausted - resolve boundary for fallback actions
+            // Retry exhausted or matching rule is not Retry - resolve boundary for fallback actions
             return await HandlePostRetryFailureAsync(
-                result, onExecuteTask, boundaryChain, totalStopwatch.ElapsedMilliseconds, cancellationToken);
+                result,
+                onExecuteTask,
+                boundaryChain,
+                totalStopwatch.ElapsedMilliseconds,
+                cancellationToken);
         }
         catch (Exception ex)
         {
@@ -182,7 +181,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// Resolves boundary for fallback actions (Abort, Notify, Rollback, Log, Ignore).
     /// Retry action is excluded since retries are already exhausted.
     /// </summary>
-    /// <param name="failedResult">The failed result from Polly execution.</param>
+    /// <param name="failedResult">The failed result from execution (after retries exhausted or no retry applies).</param>
     /// <param name="onExecuteTask">The task definition that failed.</param>
     /// <param name="boundaryChain">The compiled boundary chain for resolution.</param>
     /// <param name="totalDurationMs">Total execution duration including retries.</param>
@@ -203,7 +202,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         {
             // No TaskError with successful Result = no boundary + business failure; should not reach here
             // (ExecuteWithPollyAsync returns early). Return result so pipeline continues.
-            if (failedResult.IsSuccess && failedResult.Value != null)
+            if (failedResult is { IsSuccess: true, Value: not null })
             {
                 _logger.LogDebug(
                     "Task {TaskKey}: no TaskError with successful Result (no-boundary business failure). Returning result for pipeline continuation.",
@@ -296,38 +295,38 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     }
 
     /// <summary>
-    /// Finds the first Retry policy from the boundary chain.
-    /// Checks Task -> State -> Global levels in order.
+    /// Gets the retry policy for the given error from the boundary chain.
+    /// Uses the first matching rule (Task -> State -> Global) and returns its RetryPolicy
+    /// only if that rule's action is Retry and has a valid policy with MaxRetries > 0.
     /// </summary>
     /// <param name="boundaryChain">The compiled boundary chain to search.</param>
-    /// <returns>The first Retry policy found, or null if no Retry rule exists.</returns>
-    private static RetryPolicy? FindRetryPolicy(CompiledBoundaryChain boundaryChain)
+    /// <param name="error">The normalized error to match.</param>
+    /// <returns>The retry policy for the matching rule, or null if no Retry rule matches or policy is invalid.</returns>
+    private static RetryPolicy? GetRetryPolicyForError(CompiledBoundaryChain boundaryChain, NormalizedError error)
     {
-        // Task level - highest priority
-        var retryRule = boundaryChain.TaskBoundary?.SortedRules
-            .FirstOrDefault(r => r.Rule.Action == ErrorAction.Retry);
-        if (retryRule != null)
-            return retryRule.Rule.RetryPolicy;
+        var match = boundaryChain.FindMatch(error);
+        if (!match.HasValue)
+            return null;
 
-        // State level
-        retryRule = boundaryChain.StateBoundary?.SortedRules
-            .FirstOrDefault(r => r.Rule.Action == ErrorAction.Retry);
-        if (retryRule != null)
-            return retryRule.Rule.RetryPolicy;
+        var handlerRule = match.Value.Rule.Rule;
+        if (handlerRule.Action != ErrorAction.Retry || handlerRule.RetryPolicy == null || handlerRule.RetryPolicy.MaxRetries <= 0)
+            return null;
 
-        // Global level - fallback
-        retryRule = boundaryChain.GlobalBoundary?.SortedRules
-            .FirstOrDefault(r => r.Rule.Action == ErrorAction.Retry);
-        return retryRule?.Rule.RetryPolicy;
+        return handlerRule.RetryPolicy;
     }
 
     /// <summary>
-    /// Gets state-level error boundary from executor context.
-    /// Resolves the current state from Instance.CurrentState key and Workflow definition.
+    /// Applies jitter to the delay when enabled (±25%) to prevent thundering herd.
     /// </summary>
-    private static ErrorBoundary? GetStateBoundary(TaskExecutorContext executorContext)
+    private static TimeSpan ApplyJitterIfNeeded(TimeSpan delay, bool useJitter)
     {
-        return GetStateBoundary(executorContext.ScriptContext);
+        if (!useJitter)
+            return delay;
+
+        const double jitterFactor = 0.25;
+        var jitter = delay.TotalMilliseconds * jitterFactor * (Random.Shared.NextDouble() * 2 - 1);
+        var adjustedDelay = delay.TotalMilliseconds + jitter;
+        return TimeSpan.FromMilliseconds(Math.Max(0, adjustedDelay));
     }
 
     /// <summary>
@@ -339,7 +338,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var instance = context.Instance;
         var workflow = context.Workflow;
 
-        if (string.IsNullOrEmpty(instance.CurrentState) || workflow == null)
+        if (string.IsNullOrEmpty(instance.CurrentState))
             return null;
 
         var state = workflow.FindState(instance.CurrentState);
@@ -420,7 +419,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// Applies the output response to the script context.
     /// </summary>
     private void ApplyOutputToContext(
-        WorkflowTask task,
         StandardTaskResponse response,
         TaskTrigger taskTrigger,
         ScriptContext context)
@@ -435,7 +433,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     }
 
     /// <summary>
-    /// Executes task without boundary resolution. Used by Polly retry.
+    /// Executes task without boundary resolution. Used by error-aware retry loop.
     /// Returns raw execution result for retry evaluation - does NOT trigger boundary resolution.
     /// This prevents infinite loops where retry → ExecuteAsync → HandleBusinessFailureAsync → retry.
     /// </summary>
@@ -541,7 +539,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var responseJson = new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
 
         // ALWAYS apply output to context
-        ApplyOutputToContext(task, response, taskTrigger, context);
+        ApplyOutputToContext(response, taskTrigger, context);
 
         // Mark task completed with business status
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);

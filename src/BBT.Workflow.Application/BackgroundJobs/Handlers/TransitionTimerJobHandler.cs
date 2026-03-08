@@ -31,15 +31,12 @@ public sealed class TransitionTimerJobHandler(
             BackgroundJobActivityHelper.EnrichActivity(activity, args);
             BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
-            var input = new TransitionInput(
-                args.Domain,
-                args.FlowName,
-                args.Version
-            );
+            var input = new TransitionInput(args.Domain, args.FlowName);
 
             // Convert TransitionInput to WorkflowExecutionContext
             var executionContext = input.ToExecutionContext(
                 args.InstanceId.ToString(),
+                args.Version,
                 args.TransitionKey);
 
             // Override trigger type to Scheduled for timer-based transitions

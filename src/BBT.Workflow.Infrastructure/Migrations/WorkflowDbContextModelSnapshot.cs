@@ -170,7 +170,13 @@ namespace BBT.Workflow.Migrations
 
                     b.Property<string>("Flow")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("FlowVersion")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("character varying(180)");
 
                     b.Property<string>("Key")
                         .HasMaxLength(100)

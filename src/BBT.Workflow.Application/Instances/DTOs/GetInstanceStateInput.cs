@@ -28,7 +28,14 @@ public sealed class GetInstanceStateInput : IHasDomain
     /// Extensions to be appended to the data href URL
     /// </summary>
     public string[]? Extensions { get; set; }
-    public Dictionary<string, string?> Headers { get; set; }
-     public Dictionary<string, string?> QueryParams { get; set; }
 
+    public Dictionary<string, string?> Headers { get; set; }
+
+    public Dictionary<string, string?> QueryParams { get; set; }
+
+    /// <summary>
+    /// Caller role for filtering available transitions by transition role grants.
+    /// When set, only transitions allowed for this role are returned; when null or empty, all available transitions are returned.
+    /// </summary>
+    public string? Role { get; set; }
 }

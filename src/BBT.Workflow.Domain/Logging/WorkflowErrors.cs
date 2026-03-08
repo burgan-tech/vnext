@@ -189,6 +189,17 @@ public static class WorkflowErrors
             target: transitionKey);
 
     /// <summary>
+    /// When the instance has an active SubFlow, a shared transition's target must be $self so the state does not change.
+    /// </summary>
+    /// <param name="transitionKey">The shared transition key.</param>
+    /// <param name="currentTarget">The transition's target value (must be $self).</param>
+    public static Error SharedTransitionTargetMustBeSelfWhenInSubFlow(string transitionKey, string currentTarget)
+        => Error.Validation(
+            WorkflowErrorCodes.SharedTransitionTargetMustBeSelfWhenInSubFlow,
+            $"Shared transition '{transitionKey}' cannot be executed while in active SubFlow with target '{currentTarget}'. Target must be '$self'.",
+            target: transitionKey);
+
+    /// <summary>
     /// StartTransition can only be executed from Initial state.
     /// </summary>
     /// <param name="instanceId">The instance ID.</param>

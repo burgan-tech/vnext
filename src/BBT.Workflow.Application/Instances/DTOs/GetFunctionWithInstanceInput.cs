@@ -28,8 +28,14 @@ public sealed class GetFunctionWithInstanceInput : IHasDomain
     /// Extensions to be appended to the data href URL
     /// </summary>
     public string[]? Extensions { get; set; }
+
     public Dictionary<string, string?> Headers { get; set; }
+
     public Dictionary<string, string?> QueryParams { get; set; }
 
+    /// <summary>
+    /// Caller role for state function (e.g. to filter available transitions by transition role grants when calling SubFlow state).
+    /// </summary>
+    public string? Role { get; set; }
 }
 

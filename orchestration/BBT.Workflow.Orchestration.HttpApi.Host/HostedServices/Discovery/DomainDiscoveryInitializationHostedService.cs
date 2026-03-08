@@ -22,7 +22,7 @@ public sealed class DomainDiscoveryInitializationHostedService(
             var discoveryResolver = scope.ServiceProvider.GetRequiredService<IDomainDiscoveryResolver>();
             
             // Step 1: Register this domain
-            // await registrationService.RegisterDomainAsync(stoppingToken);
+            await registrationService.RegisterDomainAsync(stoppingToken);
             
             // Step 2: Fetch and cache all domains
             await discoveryResolver.RefreshBulkCacheAsync(stoppingToken);

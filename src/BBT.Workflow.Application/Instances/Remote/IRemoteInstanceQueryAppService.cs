@@ -51,7 +51,6 @@ public interface IRemoteInstanceQueryAppService
     /// </summary>
     Task<Result<GetViewOutput>> GetFunctionWithViewAsync(
         GetFunctionWithInstanceInput input,
-        string? platform,
         string? transitionKey,
         CancellationToken cancellationToken = default);
 

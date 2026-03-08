@@ -104,7 +104,6 @@ public static class TaskBindingMapper
     {
         Domain = task.TriggerDomain,
         Workflow = task.TriggerFlow,
-        Version = task.TriggerVersion,
         InstanceId = task.TriggerInstanceId,
         Key = task.TriggerKey,
         TransitionName =  task.TransitionName,

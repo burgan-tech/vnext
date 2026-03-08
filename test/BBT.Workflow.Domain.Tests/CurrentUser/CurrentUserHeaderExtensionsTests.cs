@@ -172,4 +172,21 @@ public sealed class CurrentUserHeaderExtensionsTests
             null,
             null);
     }
+
+    [Fact]
+    public void ParseRolesFromHeader_WhenCommaOrSpaceSeparated_ReturnsTrimmedRoles()
+    {
+        CurrentUserHeaderExtensions.ParseRolesFromHeader("Admin,User").ShouldBe(new[] { "Admin", "User" });
+        CurrentUserHeaderExtensions.ParseRolesFromHeader("Admin User").ShouldBe(new[] { "Admin", "User" });
+        CurrentUserHeaderExtensions.ParseRolesFromHeader("Admin , User , Maker").ShouldBe(new[] { "Admin", "User", "Maker" });
+        CurrentUserHeaderExtensions.ParseRolesFromHeader("  a  b  c  ").ShouldBe(new[] { "a", "b", "c" });
+    }
+
+    [Fact]
+    public void ParseRolesFromHeader_WhenNullOrWhiteSpace_ReturnsNull()
+    {
+        CurrentUserHeaderExtensions.ParseRolesFromHeader(null).ShouldBeNull();
+        CurrentUserHeaderExtensions.ParseRolesFromHeader("").ShouldBeNull();
+        CurrentUserHeaderExtensions.ParseRolesFromHeader("   ").ShouldBeNull();
+    }
 }

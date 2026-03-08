@@ -115,7 +115,6 @@ public sealed class InstanceRetryAppService(
         {
             Domain = subflowCorrelation.SubFlowDomain,
             Workflow = subflowCorrelation.SubFlowName,
-            Version = subflowCorrelation.SubFlowVersion,
             Instance = subflowCorrelation.SubFlowInstanceId.ToString(),
             Sync = input.Sync,
             Data = input.Data,
@@ -155,7 +154,7 @@ public sealed class InstanceRetryAppService(
         var workflowResult = await componentCacheStore.GetFlowAsync(
             input.Domain,
             input.Workflow,
-            input.Version,
+            instance.FlowVersion,
             cancellationToken);
 
         return workflowResult.Map(workflow => (instance, workflow));
@@ -226,8 +225,8 @@ public sealed class InstanceRetryAppService(
         {
             Domain = input.Domain,
             InstanceId = data.Instance.Id.ToString(),
-            WorkflowKey = input.Workflow,
-            WorkflowVersion = input.Version ?? data.Workflow.Version,
+            WorkflowKey = data.Instance.Flow,
+            WorkflowVersion = data.Instance.FlowVersion,
             TransitionKey = data.Transition.TransitionId,
             TriggerType = TriggerType.Manual, // Retry is always manual
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,

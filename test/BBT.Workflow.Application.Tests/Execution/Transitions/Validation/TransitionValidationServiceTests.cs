@@ -541,7 +541,7 @@ public class TransitionValidationServiceTests
 
     private Instance CreateMockInstance(Guid instanceId, string workflowKey, string domain)
     {
-        var instance = Instance.Create(instanceId, workflowKey, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey,"1.0.0", workflowKey);
         return instance;
     }
 

@@ -129,7 +129,6 @@ public class SubflowForwardingServiceTests
         return new TransitionInput(
             "test-domain",
             "test-workflow",
-            "1.0.0",
             new TransitionDataInput(null),
             true
         );

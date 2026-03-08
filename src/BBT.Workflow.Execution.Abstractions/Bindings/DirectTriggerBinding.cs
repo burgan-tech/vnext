@@ -34,11 +34,6 @@ public sealed class DirectTriggerBinding
     public string? Key { get; set; }
 
     /// <summary>
-    /// Version of the target workflow (optional)
-    /// </summary>
-    public string? Version { get; set; }
-
-    /// <summary>
     /// Tags of the target workflow (optional)
     /// </summary>
     public string[]? Tags { get; set; }

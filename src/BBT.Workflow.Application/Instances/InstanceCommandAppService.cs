@@ -9,8 +9,10 @@ using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
 using BBT.Workflow.DefinitionContext;
-using BBT.Workflow.Logging;
+using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Headers;
@@ -145,6 +147,7 @@ public sealed class InstanceCommandAppService(
         {
             return Result<Definitions.Workflow>.Ok(workflowInScope);
         }
+
         var workflowResult = await componentCacheStore.GetFlowAsync(
             domain, workflow, version, cancellationToken);
 
@@ -374,42 +377,67 @@ public sealed class InstanceCommandAppService(
         TransitionInput input,
         CancellationToken cancellationToken = default)
     {
-        // Validate domain first
         runtimeInfoProvider.Check(input.Domain);
 
-        // Load workflow
-        var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
+        // Resolve instance first; workflow is loaded from instance's Flow and FlowVersion (not from request)
+        var instanceResult = await instanceRepository.GetActiveAsync(instance, cancellationToken);
+        if (!instanceResult.IsSuccess)
+            return Result<TransitionOutput>.Fail(instanceResult.Error);
+
+        var resolvedInstance = instanceResult.Value!;
+
+        var workflowResult = await LoadWorkflowAsync(
+            input.Domain,
+            resolvedInstance.Flow,
+            resolvedInstance.FlowVersion,
+            cancellationToken);
         if (!workflowResult.IsSuccess)
             return Result<TransitionOutput>.Fail(workflowResult.Error);
 
-        return await ExecuteTransitionAsync(instance, transitionKey, input, cancellationToken)
-            .OnSuccess(output => AddTransitionHeader(output, input));
+        var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
+
+        return await workflowExecutionService
+            .ExecuteTransitionAsync(context, cancellationToken)
+            .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion));
     }
 
     /// <summary>
-    /// Executes the transition and returns the output.
-    /// Lock management is handled by TransitionPipeline for proper lifecycle scoping.
+    /// Builds execution context for transition using instance's Flow and FlowVersion (not from request).
     /// </summary>
-    private Task<Result<TransitionOutput>> ExecuteTransitionAsync(
-        string instanceId,
+    private static WorkflowExecutionContext BuildTransitionContext(
+        Instance resolvedInstance,
         string transitionKey,
-        TransitionInput input,
-        CancellationToken cancellationToken)
+        TransitionInput input)
     {
-        var context = input.ToExecutionContext(instanceId, transitionKey);
-
-        // Execute transition - lock is managed by TransitionPipeline
-        return workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
+        return new WorkflowExecutionContext
+        {
+            Domain = input.Domain,
+            InstanceId = resolvedInstance.Id.ToString(),
+            WorkflowKey = resolvedInstance.Flow,
+            WorkflowVersion = resolvedInstance.FlowVersion,
+            TransitionKey = transitionKey,
+            TriggerType = TriggerType.Manual,
+            Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            RequestedAt = DateTimeOffset.UtcNow,
+            Headers = input.Headers,
+            RouteValues = input.RouteValues,
+            Data = new TransitionDataInfo(input.Data?.Key, input.Data?.Attributes)
+            {
+                Tags = input.Data?.Tags,
+            },
+            IsReentry = false,
+        };
     }
 
     /// <summary>
-    /// Adds workflow header to the transition response.
+    /// Adds workflow header to the transition response using instance flow and version.
     /// </summary>
-    private void AddTransitionHeader(TransitionOutput output, TransitionInput input)
+    private void AddTransitionHeader(TransitionOutput output, string flow, string? version)
     {
         headerService.AddHeader(
             WorkflowInfo.Name,
-            WorkflowInfo.Generate(runtimeInfoProvider.Domain, input.Workflow, input.Version, output.Id)
+            WorkflowInfo.Generate(runtimeInfoProvider.Domain, flow, version, output.Id)
         );
     }
 
@@ -431,7 +459,7 @@ public sealed class InstanceCommandAppService(
         return Task.FromResult(workflow.GetInitialState()
             .Map(initialState =>
             {
-                var instance = Instance.Create(instanceId, workflow.Key, instanceKey);
+                var instance = Instance.Create(instanceId, workflow.Key, workflow.Version, instanceKey);
                 instance.SetInfoMetadata(isSync, callback, workflow.Type.Code, metadata);
                 instance.ChangeState(initialState);
 

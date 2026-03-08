@@ -7,13 +7,16 @@ namespace BBT.Workflow.Instances;
 public sealed class TransitionInput(
     string domain,
     string workflow,
-    string? version,
     TransitionDataInput? data = null,
     bool sync = false)
 {
     public string Domain { get; set; } = domain;
+
+    /// <summary>
+    /// Workflow key. Kept for backward compatibility (e.g. schema). For transition execution, workflow is resolved from the instance.
+    /// </summary>
     public string Workflow { get; set; } = workflow;
-    public string? Version { get; set; } = version;
+    
     public TransitionDataInput? Data { get; set; } = data;
     public Dictionary<string, string?> Headers { get; set; } = new();
     public Dictionary<string, string?> RouteValues { get; set; } = new();
@@ -23,16 +26,17 @@ public sealed class TransitionInput(
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>
+    /// <param name="flowVersion">The workflow version</param>
     /// <param name="transitionKey">The transition key to execute</param>
     /// <returns>A new WorkflowExecutionContext instance</returns>
-    public WorkflowExecutionContext ToExecutionContext(string instanceId, string transitionKey)
+    public WorkflowExecutionContext ToExecutionContext(string instanceId, string flowVersion, string transitionKey)
     {
         return new WorkflowExecutionContext
         {
             Domain = Domain,
             InstanceId = instanceId,
             WorkflowKey = Workflow,
-            WorkflowVersion = Version,
+            WorkflowVersion = flowVersion,
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual, // TransitionInput always represents manual triggers
             Mode = Sync ? ExecMode.Sync : ExecMode.Async,

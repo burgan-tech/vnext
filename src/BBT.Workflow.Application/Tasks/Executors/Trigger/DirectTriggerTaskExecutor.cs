@@ -138,7 +138,6 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         var input = new TransitionInput(
             domain: task.TriggerDomain,
             workflow: task.TriggerFlow,
-            version: task.TriggerVersion,
             data: transitionData,
             sync: task.TriggerSync)
         {
@@ -341,7 +340,6 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             TransitionName = binding.TransitionName,
             InstanceId = binding.InstanceId,
             Key = binding.Key,
-            Version = binding.Version,
             Tags = binding.Tags,
             Body = binding.Body,
             Sync = binding.Sync,

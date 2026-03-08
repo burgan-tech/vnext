@@ -31,6 +31,12 @@ public sealed class GetInstanceInput : IHasDomain
     public string? IfNoneMatch { get; set; }
 
     /// <summary>
+    /// Optional instance data version. When null or empty, latest data is used.
+    /// When set, instance data is resolved to that version (semantic/partial match supported).
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
     /// HTTP headers from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? Headers { get; set; }
@@ -86,6 +92,12 @@ public sealed class GetInstanceListInput : IHasDomain
     public string? Sort { get; set; }
 
     /// <summary>
+    /// Optional instance data version. When null or empty, latest data is used.
+    /// When set, instance data is resolved to that version (semantic/partial match supported).
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
     /// HTTP headers from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? Headers { get; set; }
@@ -128,6 +140,12 @@ public sealed class GetInstanceHistoryInput : IHasDomain
     public string[]? Extensions { get; set; }
 
     /// <summary>
+    /// Optional instance data version. When null or empty, latest data is used.
+    /// When set, instance data is resolved to that version (semantic/partial match supported).
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
     /// HTTP headers from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? Headers { get; set; }
@@ -158,6 +176,12 @@ public sealed class GetInstanceDataInput : IHasDomain
     /// ETag value for conditional requests (If-None-Match header)
     /// </summary>
     public string? IfNoneMatch { get; set; }
+
+    /// <summary>
+    /// Optional instance data version. When null or empty, latest data is used.
+    /// When set, instance data is resolved to that version (semantic/partial match supported).
+    /// </summary>
+    public string? Version { get; set; }
 
     /// <summary>
     /// Extensions requested for data enrichment

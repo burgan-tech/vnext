@@ -69,7 +69,7 @@ public class SubFlowBypassSpecificationTests
     private static TransitionExecutionContext CreateContext(bool hasActiveSubFlow)
     {
         var instanceId = Guid.NewGuid();
-        var instance = Instance.Create(instanceId, "sys_flows", "test-key");
+        var instance = Instance.Create(instanceId, "sys_flows", "1.0.0","test-key");
 
         if (hasActiveSubFlow)
         {

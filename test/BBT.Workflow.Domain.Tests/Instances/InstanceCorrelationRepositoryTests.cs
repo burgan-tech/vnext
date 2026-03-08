@@ -244,7 +244,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
     /// </summary>
     private async Task<Instance> CreateTestInstanceAsync(string key)
     {
-        var instance = Instance.Create(Guid.NewGuid(), "test-workflow", key);
+        var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0",key);
         await InstanceRepository.InsertAsync(instance);
         return instance;
     }

@@ -33,12 +33,4 @@
     <Project Path="workers/BBT.Workflow.Workers.Inbox/BBT.Workflow.Workers.Inbox.csproj" />
     <Project Path="workers/BBT.Workflow.Workers.Outbox/BBT.Workflow.Workers.Outbox.csproj" />
   </Folder>
-<!--  <Project Path="../aether/framework/src/BBT.Aether.Abstractions/BBT.Aether.Abstractions.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.Application/BBT.Aether.Application.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.Aspects/BBT.Aether.Aspects.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.AspNetCore/BBT.Aether.AspNetCore.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.Core/BBT.Aether.Core.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.Domain/BBT.Aether.Domain.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.Infrastructure/BBT.Aether.Infrastructure.csproj" />-->
-<!--  <Project Path="../aether/framework/src/BBT.Aether.TestBase/BBT.Aether.TestBase.csproj" />-->
 </Solution>

@@ -14,5 +14,7 @@ namespace BBT.Workflow.Definitions.Functions
         public const string Authorize = "authorize";
         /// <summary>System function: returns authorization matrix for the workflow.</summary>
         public const string AuthorizationMatrix = "permissions";
+        /// <summary>System function: returns runtime hierarchy of an instance as recursive tree.</summary>
+        public const string Hierarchy = "hierarchy";
     }
 }

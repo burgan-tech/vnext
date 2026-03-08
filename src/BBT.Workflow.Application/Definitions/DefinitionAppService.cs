@@ -50,9 +50,9 @@ public sealed class DefinitionAppService(
                 if (!migrationResult.IsSuccess)
                     return migrationResult;
             }
-
+            
             var instance = await instanceRepository.FindByIdentifierAsync(input.Key, cancellationToken)
-                           ?? Instance.Create(GuidGenerator.Create(), input.Flow, input.Key);
+                           ?? Instance.Create(GuidGenerator.Create(), input.Flow, input.FlowVersion, input.Key);
 
             instance.AddTags(input.Tags.ToArray());
 
@@ -242,7 +242,7 @@ public sealed class DefinitionAppService(
         CancellationToken cancellationToken)
     {
         var instance = await instanceRepo.FindByIdentifierAsync(dataItem.Key, cancellationToken)
-                       ?? Instance.Create(GuidGenerator.Create(), input.Key, dataItem.Key);
+                       ?? Instance.Create(GuidGenerator.Create(), input.Key, input.FlowVersion, dataItem.Key);
 
         if (instance.FindData(dataItem.Version) != null)
         {

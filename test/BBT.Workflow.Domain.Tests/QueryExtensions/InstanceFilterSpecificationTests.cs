@@ -200,9 +200,9 @@ public class InstanceFilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     {
         return new List<Instance>
         {
-            Instance.Create(Guid.NewGuid(), "workflow-a", "key-1"),
-            Instance.Create(Guid.NewGuid(), "workflow-a", "key-2"),
-            Instance.Create(Guid.NewGuid(), "workflow-b", "key-3")
+            Instance.Create(Guid.NewGuid(), "workflow-a", "1.0.0","key-1"),
+            Instance.Create(Guid.NewGuid(), "workflow-a", "1.0.0","key-2"),
+            Instance.Create(Guid.NewGuid(), "workflow-b", "1.0.0","key-3")
         };
     }
 }

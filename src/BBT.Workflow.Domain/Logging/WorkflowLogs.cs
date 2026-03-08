@@ -1590,4 +1590,22 @@ public static partial class WorkflowLogs
         string workflow);
 
     #endregion
+
+    #region View Resolution
+
+    /// <summary>
+    /// Logs when resolving view content from a remote domain via GetInstanceAsync.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20100,
+        Level = LogLevel.Debug,
+        Message = "Resolving view from remote domain. ViewDomain: {ViewDomain}, ViewFlow: {ViewFlow}, ViewKey: {ViewKey}, RequestDomain: {RequestDomain}")]
+    public static partial void ResolvingViewFromRemoteDomain(
+        this ILogger logger,
+        string viewDomain,
+        string viewFlow,
+        string viewKey,
+        string requestDomain);
+
+    #endregion
 }

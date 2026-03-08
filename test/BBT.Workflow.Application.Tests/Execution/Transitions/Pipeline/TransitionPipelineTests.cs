@@ -360,7 +360,7 @@ public class TransitionPipelineTests
         var domain = "test-domain";
 
         var workflow = CreateMockWorkflow(workflowKey, domain);
-        var instance = Instance.Create(instanceId, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
         var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
 

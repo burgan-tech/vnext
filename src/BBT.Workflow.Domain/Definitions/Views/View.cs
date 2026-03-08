@@ -20,16 +20,14 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     [JsonConstructor]
     private View(
         ViewType type,
-        string content,
+        object content,
         string display,
-        LanguageLabel[]? labels,
-        PlatformOverrides? platformOverrides) : this()
+        LanguageLabel[]? labels) : this()
     {
         Type = type;
-        Content = Check.NotNullOrWhiteSpace(content, nameof(Content));
+        Content = content;
         Display = display;
         Labels = labels ?? [];
-        PlatformOverrides = platformOverrides;
     }
 
     /// <summary>
@@ -65,7 +63,7 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// <summary>
     /// Content
     /// </summary>
-    public string Content { get; private set; } = string.Empty;
+    public object Content { get; private set; } = string.Empty;
     
     /// <summary>
     /// Display
@@ -77,13 +75,6 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// </summary>
     public LanguageLabel[]? Labels { get; private set; } = [];
     
-    /// <summary>
-    /// Platform-specific overrides for view content.
-    /// This property is deprecated (Issue #56). Use rule-based view selection in State/Transition view definitions instead.
-    /// </summary>
-    [Obsolete("PlatformOverrides is deprecated. Use rule-based view selection in State/Transition view definitions instead. See Issue #56.")]
-    public PlatformOverrides? PlatformOverrides { get; private set; }
-    
     public string ComponentKey => RuntimeSysSchemaInfo.Views;
 
     public static string GenerateCacheKey(
@@ -93,6 +84,44 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
         string version)
     {
         return $"{nameof(View)}:{domain}:{flow}:{key}:{version}";
+    }
+
+    /// <summary>
+    /// Returns content typed by <see cref="Type"/>: for Json, DeepLink, Http, URN attempts JSON parse (on failure returns original string);
+    /// for Html, Markdown returns the content string. Used when exposing view content (e.g. view function response).
+    /// </summary>
+    /// <returns>Parsed JSON as <see cref="JsonElement"/> for JSON-structured types when parseable; otherwise the original content string.</returns>
+    public object GetContentAsTyped()
+    {
+        return GetContentAsTypedFromString(Content, Type.ToString());
+    }
+
+    /// <summary>
+    /// Returns content typed by view type string: for Json, DeepLink, Http, URN attempts JSON parse (on failure returns original string);
+    /// for Html, Markdown or other types returns the content string. Shared logic for instance and remote view content.
+    /// </summary>
+    /// <param name="content">Raw view content (e.g. JSON string or markup).</param>
+    /// <param name="type">View type name (e.g. Json, Html, Markdown).</param>
+    /// <returns>Parsed JSON as <see cref="JsonElement"/> for JSON-structured types when parseable; otherwise the original content string.</returns>
+    public static object GetContentAsTypedFromString(object? content, string? type)
+    {
+        if (content == null)
+            return string.Empty;
+
+        var typeUpper = (type ?? string.Empty).Trim().ToUpperInvariant();
+        if (typeUpper is "JSON" or "DEEPLINK" or "HTTP" or "URN")
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<JsonElement>(content.ToString() ?? string.Empty);
+            }
+            catch (JsonException)
+            {
+                return content;
+            }
+        }
+
+        return content;
     }
 
     private void SetKey(string key)

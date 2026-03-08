@@ -66,11 +66,10 @@ public sealed class RemoteInstanceQueryGateway : IInstanceQueryGateway
     /// <inheritdoc />
     public Task<Result<GetViewOutput>> GetFunctionWithViewAsync(
         GetFunctionWithInstanceInput input,
-        string? platform,
         string? transitionKey,
         CancellationToken cancellationToken = default)
     {
-        return _remoteService.GetFunctionWithViewAsync(input, platform, transitionKey, cancellationToken);
+        return _remoteService.GetFunctionWithViewAsync(input, transitionKey, cancellationToken);
     }
 
     /// <inheritdoc />

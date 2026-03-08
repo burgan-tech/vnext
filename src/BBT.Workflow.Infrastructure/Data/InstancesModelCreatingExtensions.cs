@@ -23,6 +23,14 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.Key)
                 .HasMaxLength(InstanceConstants.MaxKeyLength);
 
+            b.Property(p => p.Flow)
+                .IsRequired()
+                .HasMaxLength(WorkflowConstants.MaxKeyLength);
+            
+            b.Property(p => p.FlowVersion)
+                .IsRequired()
+                .HasMaxLength(WorkflowConstants.MaxVersionLength);
+
             b.Property(p => p.Tags)
                 .HasColumnType("text[]");
 

@@ -139,7 +139,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
     /// </summary>
     private async Task<Instance> CreateTestInstanceAsync()
     {
-        var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "test-key");
+        var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0","test-key");
         await InstanceRepository.InsertAsync(instance);
         return instance;
     }

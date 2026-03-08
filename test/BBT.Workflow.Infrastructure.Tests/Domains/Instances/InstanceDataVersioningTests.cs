@@ -113,7 +113,7 @@ $$;
         // First create an Instance (parent) record
         await using (var ctx = CreateContext())
         {
-            var instance = Instance.Create(instanceId, "test-flow");
+            var instance = Instance.Create(instanceId, "test-flow", "1.0.0");
             ctx.Instances.Add(instance);
             await ctx.SaveChangesAsync();
         }
@@ -185,8 +185,8 @@ $$;
         // Create parent Instance records
         await using (var ctx = CreateContext())
         {
-            ctx.Instances.Add(Instance.Create(instanceId1, "test-flow-1"));
-            ctx.Instances.Add(Instance.Create(instanceId2, "test-flow-2"));
+            ctx.Instances.Add(Instance.Create(instanceId1, "test-flow-1", "1.0.0"));
+            ctx.Instances.Add(Instance.Create(instanceId2, "test-flow-2","1.0.0"));
             await ctx.SaveChangesAsync();
         }
 
@@ -262,7 +262,7 @@ $$;
 
         await using (var ctx = CreateContext())
         {
-            ctx.Instances.Add(Instance.Create(instanceId, "test-flow"));
+            ctx.Instances.Add(Instance.Create(instanceId, "test-flow", "1.0.0"));
             await ctx.SaveChangesAsync();
         }
 

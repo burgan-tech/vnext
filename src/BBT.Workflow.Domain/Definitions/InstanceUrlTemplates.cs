@@ -83,6 +83,12 @@ public static class InstanceUrlTemplates
     public const string PermissionsTemplate = "/{0}/workflows/{1}/instances/{2}/functions/permissions";
 
     /// <summary>
+    /// URL template for instance hierarchy function endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/hierarchy
+    /// </summary>
+    public const string HierarchyTemplate = "/{0}/workflows/{1}/instances/{2}/functions/hierarchy";
+
+    /// <summary>
     /// URL template for start instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/start
     /// </summary>
@@ -260,6 +266,17 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string Permissions(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(PermissionsTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for instance hierarchy function endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance key or ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string Hierarchy(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(HierarchyTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for start instance endpoint.

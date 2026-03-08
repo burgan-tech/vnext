@@ -19,12 +19,14 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     internal Instance(
         Guid id,
         string flow,
+        string flowVersion,
         string? key
     ) : base(id)
     {
         IsTransient = true;
         CreatedAt = DateTime.UtcNow;
         Flow = Check.NotNullOrWhiteSpace(flow, nameof(Flow), WorkflowConstants.MaxKeyLength);
+        FlowVersion = Check.NotNullOrWhiteSpace(flowVersion, nameof(FlowVersion), WorkflowConstants.MaxVersionLength);
         Key = Check.Length(key, nameof(Key), InstanceConstants.MaxKeyLength);
         Status = InstanceStatus.Active;
 
@@ -35,15 +37,20 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         _dataList = [];
     }
 
+    /// <summary>
+    /// Creates a new instance with the given identity and flow. Optionally sets the flow version (used at start; null is treated as latest at runtime).
+    /// </summary>
     public static Instance Create(
         Guid id,
         string flow,
+        string flowVersion,
         string? key = null
     )
     {
         return new Instance(
             id,
             flow,
+            flowVersion,
             key
         );
     }
@@ -59,6 +66,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Flow key.
     /// </summary>
     public string Flow { get; private set; }
+
+    /// <summary>
+    /// Flow version at instance start. Null for legacy instances (resolved as latest at runtime).
+    /// </summary>
+    public string FlowVersion { get; private set; }
 
     /// <summary>
     /// Current state key - engine internal state (hidden from external world)
@@ -231,6 +243,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             CreatedAt = CreatedAt,
             ModifiedAt = ModifiedAt,
             Flow = Flow,
+            FlowVersion = FlowVersion,
             Key = Key,
             Status = Status,
             CompletedAt = CompletedAt,

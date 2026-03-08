@@ -1,4 +1,3 @@
-using BBT.Aether.Application.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -7,10 +6,9 @@ namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowStateService" />
 public sealed class SubflowStateService(
-    IServiceProvider serviceProvider,
     IInstanceRepository instanceRepository,
     ILogger<SubflowStateService> logger)
-    : ApplicationService(serviceProvider), ISubflowStateService
+    :  ISubflowStateService
 {
     /// <inheritdoc />
     public async Task UpdateParentStateAsync(

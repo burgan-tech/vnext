@@ -49,6 +49,7 @@ public static class PipelineServiceCollectionExtensions
         // State Machine Validation - Specification Pattern
         services.AddScoped<ITransitionSpecification, ResumeModeSpecification>();
         services.AddScoped<ITransitionSpecification, SubFlowBypassSpecification>();
+        services.AddScoped<ITransitionSpecification, SharedTransitionTargetSelfWhenInSubFlowSpecification>();
         services.AddScoped<ITransitionSpecification, WellKnownTransitionSpecification>();
         services.AddScoped<ITransitionSpecification, ActorAuthorizationSpecification>();
         services.AddScoped<ITransitionSpecification, StateTransitionListSpecification>();

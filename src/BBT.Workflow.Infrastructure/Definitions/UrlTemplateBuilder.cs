@@ -79,9 +79,11 @@ public sealed class UrlTemplateBuilder : IUrlTemplateBuilder
     }
     
     /// <inheritdoc />
-    public string BuildViewUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+    public string BuildViewUrl(string domain, string workflow, string instance, string? transitionKey = null, string? apiVersionPrefix = null)
     {
         var path = string.Format(_options.View, domain, workflow, instance);
+        if (!string.IsNullOrEmpty(transitionKey))
+            path += "?transitionKey=" + Uri.EscapeDataString(transitionKey);
         return BuildUrl(path, apiVersionPrefix);
     }
     

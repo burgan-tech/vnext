@@ -99,6 +99,7 @@ public class ScriptContextTests
         var instance = Instance.Create(
             Guid.NewGuid(),
             "test-flow",
+            "1.0.0",
             "test-key");
 
         // Act
@@ -229,7 +230,7 @@ public class ScriptContextTests
         // Arrange
         var builder = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>());
         var workflow = Definitions.Workflow.Create();
-        var instance = Instance.Create(Guid.NewGuid(), "test-flow", "test-key");
+        var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0","test-key");
         var runtime = Substitute.For<IRuntimeInfoProvider>();
 
         // Act

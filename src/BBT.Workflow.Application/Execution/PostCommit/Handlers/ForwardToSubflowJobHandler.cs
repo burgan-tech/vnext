@@ -95,14 +95,12 @@ public sealed class ForwardToSubflowJobHandler(
         return new TransitionInput(
             job.SubflowDomain,
             job.SubflowName,
-            job.SubflowVersion,
             new TransitionDataInput(job.DataElement)
             {
                 Key = job.InstanceKey,
                 Tags = job.Tags
             },
-            true // sync = true for forward
-        )
+            true) // sync = true for forward
         {
             Headers = headers,
             RouteValues = job.RouteValues

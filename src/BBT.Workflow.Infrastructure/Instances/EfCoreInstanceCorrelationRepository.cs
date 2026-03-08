@@ -20,6 +20,19 @@ public sealed class EfCoreInstanceCorrelationRepository(
         IInstanceCorrelationRepository
 {
     /// <inheritdoc />
+    public async Task<List<InstanceCorrelation>> GetByParentAsync(
+        Guid parentInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetDbSetAsync())
+            .AsNoTracking()
+            .Where(c => c.ParentInstanceId == parentInstanceId)
+            .OrderBy(c => c.ParentState)
+            .ThenBy(c => c.CompletedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<InstanceCorrelation>> GetActiveByParentAsync(
         Guid parentInstanceId,
         CancellationToken cancellationToken = default)

@@ -40,7 +40,7 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// <summary>
     /// Gets or sets the workflow version.
     /// </summary>
-    public string? Version { get; set; }
+    public string Version { get; set; } = default!;
     
     /// <summary>
     /// Gets or sets the transition data as JSON.

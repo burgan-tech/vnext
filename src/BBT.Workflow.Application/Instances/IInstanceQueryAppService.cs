@@ -47,9 +47,8 @@ public interface IInstanceQueryAppService : IApplicationService
     /// <summary>
     /// Retrieves platform-specific view content for an instance
     /// </summary>
-    Task<Result<GetViewOutput>> GetPlatformSpecificViewAsync(
+    Task<Result<GetViewOutput>> GetViewAsync(
         GetViewInput input,
-        string? platform,
         string? transitionKey,
         CancellationToken cancellationToken = default);
     
@@ -66,5 +65,13 @@ public interface IInstanceQueryAppService : IApplicationService
     /// </summary>
     Task<Result<GetExtensionsOutput>> GetExtensionsAsync(
         GetExtensionsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves the runtime hierarchy of an instance as a recursive tree.
+    /// Includes direct and indirect child subflow/subprocess instances.
+    /// </summary>
+    Task<Result<GetInstanceHierarchyOutput>> GetInstanceHierarchyAsync(
+        GetInstanceHierarchyInput input,
         CancellationToken cancellationToken = default);
 }

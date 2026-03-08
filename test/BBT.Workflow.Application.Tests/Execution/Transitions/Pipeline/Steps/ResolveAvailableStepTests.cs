@@ -207,7 +207,7 @@ public class ResolveAvailableStepTests
         var domain = "test-domain";
 
         var workflow = CreateMockWorkflow(workflowKey, domain, hasOnlyManualTransitions);
-        var instance = Instance.Create(instanceId, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
         var transition = Transition.Create("test-transition", null, "state1", TriggerType.Manual, "Patch");
 
@@ -239,7 +239,7 @@ public class ResolveAvailableStepTests
         var domain = "test-domain";
 
         var workflow = CreateMockWorkflowWithFinishState(workflowKey, domain);
-        var instance = Instance.Create(instanceId, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var finishState = workflow.GetState("finish").Value!;
         var transition = Transition.Create("complete", "state1", "finish", TriggerType.Manual, "Patch");
 
@@ -271,7 +271,7 @@ public class ResolveAvailableStepTests
         var domain = "test-domain";
 
         var workflow = CreateMockWorkflowWithNoTransitions(workflowKey, domain);
-        var instance = Instance.Create(instanceId, workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
         var transition = Transition.Create("test-transition", null, "state1", TriggerType.Manual, "Patch");
 

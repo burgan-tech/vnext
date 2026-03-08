@@ -286,8 +286,6 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/{binding.Identifier}/transitions/{binding.TransitionName}";
 
         var queryParams = new List<string>();
-        if (!string.IsNullOrEmpty(binding.Version))
-            queryParams.Add($"version={Uri.EscapeDataString(binding.Version)}");
         if (binding.Sync)
             queryParams.Add("sync=true");
 

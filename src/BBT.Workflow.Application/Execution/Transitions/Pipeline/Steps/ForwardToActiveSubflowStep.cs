@@ -31,6 +31,12 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
         }
 
+        // Parent shared transition available in current state: execute on parent, do not forward
+        if (IsParentSharedTransition(context))
+        {
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+        }
+
         // Enqueue post-commit job - actual forward happens after lock release
         context.Directives.EnqueuePostCommit(new ForwardToSubflowJob(
             context.Instance.Subflow!.SubFlowInstanceId,
@@ -72,4 +78,12 @@ public class ForwardToActiveSubflowStep : ITransitionStep
     /// </summary>
     private static bool HasActiveSubflow(TransitionExecutionContext context)
         => context.Instance.HasActiveSubFlow || context.Instance.Subflow != null;
+
+    /// <summary>
+    /// Returns true if the requested transition is a parent shared transition (and was validated, so available in current state).
+    /// When true, the transition runs on the parent; we do not forward to the active subflow.
+    /// </summary>
+    private static bool IsParentSharedTransition(TransitionExecutionContext context)
+        => context.Transition != null &&
+           context.Workflow.FindSharedTransition(context.TransitionKey) != null;
 }

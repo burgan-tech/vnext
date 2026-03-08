@@ -106,7 +106,7 @@ public sealed class CompiledBoundaryChain
 
         return FindMatchInternal(boundary => boundary.FindMatchExcluding(
             error.ExceptionType ?? string.Empty,
-            error.Code,
+            error.OriginalCode,
             error.StatusCode,
             excludeSet));
     }

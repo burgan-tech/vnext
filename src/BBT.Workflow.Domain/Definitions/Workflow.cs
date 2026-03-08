@@ -425,15 +425,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
             .Select(t => t.Key)
             .ToList();
 
-        // Get manual shared transitions
-        var manualSharedTransitions = SharedTransitions
-            .Where(t => t.AvailableIn.Contains(currentState.Key) &&
+        // Get manual shared transitions (AvailableIn empty/null = available in all states, aligned with SharedTransitionAvailabilitySpecification)
+        var manualSharedTransitions = GetAvailableSharedTransitionKeysOnly(currentState);
+        manualTransitions.AddRange(manualSharedTransitions);
+        return manualTransitions;
+    }
+
+    /// <summary>
+    /// Gets only the manual/event shared transition keys available in the given state.
+    /// Does not include state-level transitions. Used when instance is in subflow to expose parent shared transitions only.
+    /// </summary>
+    public List<string> GetAvailableSharedTransitionKeysOnly(State currentState)
+    {
+        return SharedTransitions
+            .Where(t => (t.AvailableIn == null || !t.AvailableIn.Any() || t.AvailableIn.Contains(currentState.Key)) &&
                         (t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event))
             .Select(t => t.Key)
             .ToList();
-
-        manualTransitions.AddRange(manualSharedTransitions);
-        return manualTransitions;
     }
 
     public static Workflow Create()
