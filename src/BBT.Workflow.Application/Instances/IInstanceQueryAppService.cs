@@ -38,9 +38,10 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
     
     /// <summary>
-    /// Retrieves the complete state information for an instance including data href, view, state, status, correlations, transitions and ETag
+    /// Retrieves the complete state information for an instance including data href, view, state, status, correlations, transitions and ETag.
+    /// Returns ConditionalResult for If-None-Match support (304 when representation unchanged).
     /// </summary>
-    Task<Result<GetInstanceStateOutput>> GetInstanceStateAsync(
+    Task<ConditionalResult<GetInstanceStateOutput>> GetInstanceStateAsync(
         GetInstanceStateInput input,
         CancellationToken cancellationToken = default);
     

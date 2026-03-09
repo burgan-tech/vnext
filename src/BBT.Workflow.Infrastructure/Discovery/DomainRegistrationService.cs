@@ -1,6 +1,6 @@
 using System;
 using System.Net.Http.Json;
-using System.Text.Json;
+using BBT.Workflow;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
@@ -28,12 +28,6 @@ public sealed class DomainRegistrationService(
     /// </summary>
     public const string HttpClientName = "ServiceDiscovery";
     private const string VNextApiBaseUrlKey = "vNextApi:BaseUrl";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
 
     /// <inheritdoc />
     public async Task RegisterDomainAsync(CancellationToken cancellationToken = default)
@@ -97,7 +91,7 @@ public sealed class DomainRegistrationService(
         {
             var httpClient = httpClientFactory.CreateClient(HttpClientName);
             
-            var response = await httpClient.PostAsJsonAsync(requestUrl, requestBody, JsonOptions, cancellationToken);
+            var response = await httpClient.PostAsJsonAsync(requestUrl, requestBody, JsonSerializerConstants.JsonOptions, cancellationToken);
 
             if (response.IsSuccessStatusCode)
             {

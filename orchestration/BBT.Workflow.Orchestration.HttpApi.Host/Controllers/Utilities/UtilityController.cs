@@ -95,29 +95,38 @@ public sealed class UtilityController(
         [FromBody] DefinitionCacheInvalidationEvent eventData,
         CancellationToken cancellationToken = default)
     {
-        var podInstance = Environment.GetEnvironmentVariable("HOSTNAME") 
-            ?? Environment.GetEnvironmentVariable("POD_NAME") 
+        var podInstance = Environment.GetEnvironmentVariable("HOSTNAME")
+            ?? Environment.GetEnvironmentVariable("POD_NAME")
             ?? Environment.MachineName;
         var hostEnvironment = configuration["ASPNETCORE_ENVIRONMENT"];
-        // Environment match validation
-        if (!string.Equals(eventData.Environment, hostEnvironment, StringComparison.OrdinalIgnoreCase))
+
+        try
         {
-            logger.LogDebug(
-                "Definition cache invalidation ignored - environment mismatch. PodInstance: {PodInstance}, EventEnvironment: {EventEnvironment}, CurrentEnvironment: {CurrentEnvironment}",
-                podInstance, eventData.Environment, hostEnvironment);
+            // Environment match validation
+            if (!string.Equals(eventData.Environment, hostEnvironment, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogDebug(
+                    "Definition cache invalidation ignored - environment mismatch. PodInstance: {PodInstance}, EventEnvironment: {EventEnvironment}, CurrentEnvironment: {CurrentEnvironment}",
+                    podInstance, eventData.Environment, hostEnvironment);
+                return Ok();
+            }
+
+            logger.DefinitionCacheInvalidationReceived(
+                podInstance,
+                eventData.Domain,
+                eventData.RequestedBy);
+
+            // Update only in-memory cache (distributed cache already updated by initiating pod)
+            await runtimeCacheInitializer.InitializeAsync(cancellationToken);
+
+            logger.DefinitionCacheInvalidationSucceeded(podInstance);
+
             return Ok();
         }
-        
-        logger.DefinitionCacheInvalidationReceived(
-            podInstance,
-            eventData.Domain, 
-            eventData.RequestedBy);
-        
-        // Update only in-memory cache (distributed cache already updated by initiating pod)
-        await runtimeCacheInitializer.InitializeAsync(cancellationToken);
-        
-        logger.DefinitionCacheInvalidationSucceeded(podInstance);
-            
-        return Ok();
+        catch (Exception ex)
+        {
+            logger.DefinitionCacheInvalidationFailed(podInstance, ex.ToString());
+            return Ok();
+        }
     }
 } 

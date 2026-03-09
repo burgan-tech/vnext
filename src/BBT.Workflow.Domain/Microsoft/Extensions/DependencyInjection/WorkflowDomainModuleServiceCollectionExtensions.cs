@@ -1,3 +1,4 @@
+using BBT.Workflow.Canonicalization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Rules;
@@ -37,6 +38,7 @@ public static class WorkflowDomainModuleServiceCollectionExtensions
         services.AddSingleton<IResultRuleEngine<State>, ResultRuleEngine<State>>();
         services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
         services.AddSingleton<IJsonSchemaValidator, CachedJsonSchemaValidator>();
+        services.AddScoped<IJsonCanonicalizer, JsonCanonicalizer>();
         return services;
     }
 }

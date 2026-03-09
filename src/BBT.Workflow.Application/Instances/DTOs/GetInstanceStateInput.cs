@@ -20,6 +20,11 @@ public sealed class GetInstanceStateInput : IHasDomain
     public string Instance { get; set; } = string.Empty;
 
     /// <summary>
+    /// ETag value for conditional requests (If-None-Match header).
+    /// </summary>
+    public string? IfNoneMatch { get; set; }
+
+    /// <summary>
     /// Version of the workflow
     /// </summary>
     public string? Version { get; set; }

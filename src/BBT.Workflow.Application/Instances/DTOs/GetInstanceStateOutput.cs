@@ -38,7 +38,34 @@ public sealed class GetInstanceStateOutput
     public List<TransitionItem> Transitions { get; set; } = [];
 
     /// <summary>
-    /// ETag from the latest instance data
+    /// Representation ETag (RFC 7232 quoted) for cache validation.
     /// </summary>
-    public string ETag { get; set; } = string.Empty;
+    public string? Etag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_etag))
+                return null;
+            var unquoted = _etag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _etag = value;
+    }
+    private string? _etag = string.Empty;
+
+    /// <summary>
+    /// Entity (DB row) version for concurrency, RFC 7232 quoted. Exposed as X-Entity-ETag response header.
+    /// </summary>
+    public string? EntityEtag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_entityEtag))
+                return null;
+            var unquoted = _entityEtag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _entityEtag = value;
+    }
+    private string? _entityEtag = string.Empty;
 }

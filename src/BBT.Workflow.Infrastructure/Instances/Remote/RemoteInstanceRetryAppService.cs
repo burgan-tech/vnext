@@ -2,6 +2,7 @@ using System;
 using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Instances;
@@ -28,12 +29,6 @@ public sealed class RemoteInstanceRetryAppService(
     private readonly RemoteOptions _options = options.Value;
 
     private string ApiVersionPrefix => InstanceUrlTemplates.GetApiVersionPrefix(_options.ApiVersion);
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
 
     /// <summary>
     /// Retries a faulted workflow instance by calling the remote API
@@ -68,7 +63,7 @@ public sealed class RemoteInstanceRetryAppService(
 
             // Build request body from data if provided
             var content = input.Data != null
-                ? new StringContent(JsonSerializer.Serialize(input.Data, JsonOptions), Encoding.UTF8, "application/json")
+                ? new StringContent(JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions), Encoding.UTF8, "application/json")
                 : new StringContent("{}", Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -101,11 +96,11 @@ public sealed class RemoteInstanceRetryAppService(
         if (response.IsSuccessStatusCode)
         {
             var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
+            var result = JsonSerializer.Deserialize<T>(responseContent, JsonSerializerConstants.JsonOptions);
             return Result<T>.Ok(result!);
         }
 
-        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
         return Result<T>.Fail(error);
     }
 }

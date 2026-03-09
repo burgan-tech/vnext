@@ -5,6 +5,7 @@ using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitoring;
+using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Extentions;
@@ -57,6 +58,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionAppService, FunctionAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
+        services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();

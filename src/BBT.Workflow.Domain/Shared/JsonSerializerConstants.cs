@@ -25,7 +25,9 @@ public static class JsonSerializerConstants
             DictionaryKeyPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true,
             IncludeFields = true,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            ReferenceHandler = ReferenceHandler.IgnoreCycles,
+            MaxDepth = 256
         };
 
         // Add converters for proper serialization of enums and dynamic objects

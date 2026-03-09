@@ -93,7 +93,7 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// <returns>Parsed JSON as <see cref="JsonElement"/> for JSON-structured types when parseable; otherwise the original content string.</returns>
     public object GetContentAsTyped()
     {
-        return GetContentAsTypedFromString(Content, Type.ToString());
+        return GetContentAsTypedFromObject(Content, Type.ToString());
     }
 
     /// <summary>
@@ -103,7 +103,7 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// <param name="content">Raw view content (e.g. JSON string or markup).</param>
     /// <param name="type">View type name (e.g. Json, Html, Markdown).</param>
     /// <returns>Parsed JSON as <see cref="JsonElement"/> for JSON-structured types when parseable; otherwise the original content string.</returns>
-    public static object GetContentAsTypedFromString(object? content, string? type)
+    public static object GetContentAsTypedFromObject(object? content, string? type)
     {
         if (content == null)
             return string.Empty;

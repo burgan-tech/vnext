@@ -215,15 +215,15 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
         };
 
         var stateResult = await _instanceQueryGateway.GetFunctionWithStateAsync(input, cancellationToken);
-        if (!stateResult.IsSuccess)
+        if (!stateResult.Result.IsSuccess)
         {
             return Result.Fail(Error.Failure(
                 WorkflowErrorCodes.TaskExecution,
-                $"Notification task state fetch failed: {stateResult.Error.Message}",
-                detail: stateResult.Error.Detail));
+                $"Notification task state fetch failed: {stateResult.Result.Error.Message}",
+                detail: stateResult.Result.Error.Detail));
         }
 
-        context.ScriptContext.SetBody(new { state = stateResult.Value });
+        context.ScriptContext.SetBody(new { state = stateResult.Result.Value });
         return Result.Ok();
     }
 }

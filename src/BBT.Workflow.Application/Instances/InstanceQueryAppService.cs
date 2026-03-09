@@ -17,6 +17,7 @@ using Microsoft.Extensions.Logging;
 using BBT.Workflow.Shared;
 using System.Text.Json;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Aether.MultiSchema;
 
@@ -37,6 +38,7 @@ public sealed class InstanceQueryAppService(
     ICurrentSchema currentSchema,
     ITransitionAuthorizationManager transitionAuthorizationManager,
     ICurrentUser currentUser,
+    IRepresentationEtagService representationEtagService,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -50,14 +52,6 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async instance =>
                 {
-                    // Check ETag for conditional requests
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) &&
-                        instance.LatestData != null &&
-                        instance.LatestData.ETag.MatchesIfNoneMatch(input.IfNoneMatch))
-                    {
-                        return ConditionalResult<GetInstanceOutput>.NotModified();
-                    }
-
                     var result = await BuildInstanceOutputAsync(
                         input.Domain,
                         input.Extensions,
@@ -75,7 +69,18 @@ public sealed class InstanceQueryAppService(
                         return ConditionalResult<GetInstanceOutput>.Fail(result.Error);
                     }
 
-                    return ConditionalResult<GetInstanceOutput>.Success(result.Value!);
+                    var response = result.Value!;
+                    var entityEtag = instance.LatestData?.ETag ?? string.Empty;
+                    response.EntityEtag = entityEtag;
+                    var representationEtag = representationEtagService.Generate(response);
+
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    {
+                        return ConditionalResult<GetInstanceOutput>.NotModified();
+                    }
+
+                    response.Etag = representationEtag;
+                    return ConditionalResult<GetInstanceOutput>.Success(response);
                 },
                 onFailure: error => ConditionalResult<GetInstanceOutput>.Fail(error));
     }
@@ -303,9 +308,9 @@ public sealed class InstanceQueryAppService(
                 subFlowInput,
                 cancellationToken);
 
-            if (subFlowResult.IsSuccess && subFlowResult.Value != null)
+            if (subFlowResult.Result.IsSuccess && subFlowResult.Result.Value != null)
             {
-                var subFlowValue = subFlowResult.Value;
+                var subFlowValue = subFlowResult.Result.Value;
 
                 // Extract transition names from TransitionItem list
                 var transitionNames = subFlowValue.Transitions?
@@ -426,7 +431,7 @@ public sealed class InstanceQueryAppService(
             Id = instance.Id,
             Flow = instance.Flow,
             FlowVersion = instance.FlowVersion,
-            Etag = instanceData?.ETag ?? string.Empty,
+            EntityEtag = instanceData?.ETag ?? string.Empty,
             Domain = domain,
             Key = instance.Key!,
             Tags = instance.Tags,
@@ -522,19 +527,11 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     var (flow, instance) = data;
-
-                    // Check ETag for conditional requests
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) &&
-                        instance.LatestData != null &&
-                        instance.LatestData.ETag.MatchesIfNoneMatch(input.IfNoneMatch))
-                    {
-                        return ConditionalResult<GetInstanceDataOutput>.NotModified();
-                    }
+                    var entityEtag = instance.LatestData?.ETag ?? string.Empty;
 
                     var result = new GetInstanceDataOutput
                     {
-                        Data = instance.LatestData?.Data.JsonElement,
-                        Etag = instance.LatestData?.ETag ?? string.Empty
+                        Data = instance.LatestData?.Data.JsonElement
                     };
 
                     result.Data = await ApplySchemaFieldFilterAsync(flow, result.Data, instance, cancellationToken) ??
@@ -550,37 +547,44 @@ public sealed class InstanceQueryAppService(
 
                         result.Extensions = subFlowExtensionsResult.Value?.Extensions ??
                                             new Dictionary<string, object>();
-
-                        return ConditionalResult<GetInstanceDataOutput>.Success(result);
                     }
-
-                    // No active SubFlow - process extensions locally
-                    var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
-                        .WithWorkflow(flow)
-                        .WithInstance(instance)
-                        .WithRuntime(runtimeInfoProvider)
-                        .WithTransition(string.Empty)
-                        .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
-                        .WithHeaders(input.Headers)
-                        .WithQueryParameters(input.QueryParameters)
-                        .BuildAsync(cancellationToken);
-
-                    // Execute extensions with fail-fast behavior
-                    var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
-                        input.Extensions,
-                        scriptContext,
-                        flow,
-                        ExtensionScope.GetInstance,
-                        cancellationToken);
-
-                    // Propagate extension errors - fail-fast behavior
-                    if (!extensionsResult.IsSuccess)
+                    else
                     {
-                        return ConditionalResult<GetInstanceDataOutput>.Fail(extensionsResult.Error);
+                        // No active SubFlow - process extensions locally
+                        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+                            .WithWorkflow(flow)
+                            .WithInstance(instance)
+                            .WithRuntime(runtimeInfoProvider)
+                            .WithTransition(string.Empty)
+                            .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
+                            .WithHeaders(input.Headers)
+                            .WithQueryParameters(input.QueryParameters)
+                            .BuildAsync(cancellationToken);
+
+                        var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
+                            input.Extensions,
+                            scriptContext,
+                            flow,
+                            ExtensionScope.GetInstance,
+                            cancellationToken);
+
+                        if (!extensionsResult.IsSuccess)
+                        {
+                            return ConditionalResult<GetInstanceDataOutput>.Fail(extensionsResult.Error);
+                        }
+
+                        result.Extensions = extensionsResult.Value!;
                     }
 
-                    result.Extensions = extensionsResult.Value!;
+                    result.EntityEtag = entityEtag;
+                    var representationEtag = representationEtagService.Generate(result);
 
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    {
+                        return ConditionalResult<GetInstanceDataOutput>.NotModified();
+                    }
+
+                    result.Etag = representationEtag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
@@ -628,18 +632,35 @@ public sealed class InstanceQueryAppService(
         return viewDefinition;
     }
 
-    public async Task<Result<GetInstanceStateOutput>> GetInstanceStateAsync(
+    public async Task<ConditionalResult<GetInstanceStateOutput>> GetInstanceStateAsync(
         GetInstanceStateInput input,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        // Railway chain: Get Instance → Get Workflow → Build State Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data => BuildInstanceStateOutputAsync(data.instance, data.workflow, input, cancellationToken));
+            .MatchAsync(
+                onSuccess: async data =>
+                {
+                    var buildResult = await BuildInstanceStateOutputAsync(data.instance, data.workflow, input, cancellationToken);
+                    if (!buildResult.IsSuccess)
+                        return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
+
+                    var output = buildResult.Value!;
+                    var entityEtag = data.instance.LatestData?.ETag ?? string.Empty;
+                    output.EntityEtag = entityEtag;
+                    var representationEtag = representationEtagService.Generate(output);
+
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                        return ConditionalResult<GetInstanceStateOutput>.NotModified();
+
+                    output.Etag = representationEtag;
+                    return ConditionalResult<GetInstanceStateOutput>.Success(output);
+                },
+                onFailure: error => ConditionalResult<GetInstanceStateOutput>.Fail(error));
     }
 
     /// <summary>
@@ -788,8 +809,7 @@ public sealed class InstanceQueryAppService(
             State = subFlowStateInfo.CurrentState ?? string.Empty,
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
-            Transitions = transitionItems,
-            ETag = instance.LatestData?.ETag ?? string.Empty
+            Transitions = transitionItems
         });
     }
 

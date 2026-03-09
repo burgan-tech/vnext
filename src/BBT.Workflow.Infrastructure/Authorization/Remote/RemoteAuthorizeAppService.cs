@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Instances;
@@ -28,13 +29,6 @@ public sealed class RemoteAuthorizeAppService(
     private readonly RemoteOptions _options = options.Value;
 
     private string ApiVersionPrefix => InstanceUrlTemplates.GetApiVersionPrefix(_options.ApiVersion);
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-        WriteIndented = false
-    };
 
     /// <inheritdoc />
     public async Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
@@ -82,11 +76,11 @@ public sealed class RemoteAuthorizeAppService(
             if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Forbidden)
             {
                 var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
-                var output = JsonSerializer.Deserialize<AuthorizeOutput>(responseContent, JsonOptions);
+                var output = JsonSerializer.Deserialize<AuthorizeOutput>(responseContent, JsonSerializerConstants.JsonOptions);
                 return Result<AuthorizeOutput>.Ok(output ?? new AuthorizeOutput { Allowed = false });
             }
 
-            var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+            var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
             return Result<AuthorizeOutput>.Fail(error);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
@@ -124,11 +118,11 @@ public sealed class RemoteAuthorizeAppService(
             if (response.StatusCode == HttpStatusCode.OK)
             {
                 var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
-                var output = JsonSerializer.Deserialize<AuthorizationMatrixOutput>(responseContent, JsonOptions);
+                var output = JsonSerializer.Deserialize<AuthorizationMatrixOutput>(responseContent, JsonSerializerConstants.JsonOptions);
                 return Result<AuthorizationMatrixOutput>.Ok(output!);
             }
 
-            var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+            var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
             return Result<AuthorizationMatrixOutput>.Fail(error);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)

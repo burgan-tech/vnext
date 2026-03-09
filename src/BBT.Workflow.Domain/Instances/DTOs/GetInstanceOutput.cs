@@ -29,6 +29,23 @@ public sealed class GetInstanceOutput
         set => _etag = value;
     }
     private string? _etag = string.Empty;
+
+    /// <summary>
+    /// Entity (DB row) version for concurrency and write operations, returned with quotes per RFC 7232. Exposed as X-Entity-ETag response header.
+    /// </summary>
+    public string? EntityEtag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_entityEtag))
+                return null;
+            var unquoted = _entityEtag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _entityEtag = value;
+    }
+    private string? _entityEtag = string.Empty;
+
     public List<string>? Tags { get; set; } = [];
     /// <summary>
     /// Instance metadata (state, audit, duration). Excludes fields already at root (id, key, flow, domain, flowVersion, eTag, tags).
@@ -142,6 +159,22 @@ public sealed class GetInstanceDataOutput
         set => _etag = value;
     }
     private string? _etag = string.Empty;
+
+    /// <summary>
+    /// Entity (DB row) version for concurrency and write operations, returned with quotes per RFC 7232. Exposed as X-Entity-ETag response header.
+    /// </summary>
+    public string? EntityEtag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_entityEtag))
+                return null;
+            var unquoted = _entityEtag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _entityEtag = value;
+    }
+    private string? _entityEtag = string.Empty;
 
     public Dictionary<string, object>? Extensions { get; set; }
 }

@@ -1,9 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text.Json;
 using System.Web;
 using BBT.Aether.DistributedCache;
 using BBT.Aether.DistributedLock;
+using BBT.Workflow;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -27,12 +27,6 @@ public sealed class DomainDiscoveryResolver(
     private const string BulkCacheLockKey = "discovery:bulk-lock";
     private const int LockExpiryInSeconds = 30;
     private const string IfNoneMatchHeader = "If-None-Match";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true
-    };
 
     /// <inheritdoc />
     public async Task<Result<DiscoveryEndpoint>> GetEndpointAsync(
@@ -137,7 +131,7 @@ public sealed class DomainDiscoveryResolver(
                     WorkflowErrors.DomainDiscoveryFailed(domain, $"HTTP {response.StatusCode}"));
             }
 
-            var dto = await response.Content.ReadFromJsonAsync<SingleDomainResponse>(JsonOptions, cancellationToken);
+            var dto = await response.Content.ReadFromJsonAsync<SingleDomainResponse>(JsonSerializerConstants.JsonOptions, cancellationToken);
 
             if (dto?.Data is null || string.IsNullOrWhiteSpace(dto.Data.BaseUrl))
             {
@@ -318,7 +312,7 @@ public sealed class DomainDiscoveryResolver(
             try
             {
                 var httpClient = httpClientFactory.CreateClient(DomainRegistrationService.HttpClientName);
-                var response = await httpClient.GetFromJsonAsync<FunctionDataListResponse>(nextUrl, JsonOptions, cancellationToken);
+                var response = await httpClient.GetFromJsonAsync<FunctionDataListResponse>(nextUrl, JsonSerializerConstants.JsonOptions, cancellationToken);
 
                 if (response?.Items is { Count: > 0 })
                 {
@@ -394,7 +388,7 @@ public sealed class DomainDiscoveryResolver(
                 return ETagCheckResult.Failed();
             }
 
-            var dto = await response.Content.ReadFromJsonAsync<SingleDomainResponse>(JsonOptions, cancellationToken);
+            var dto = await response.Content.ReadFromJsonAsync<SingleDomainResponse>(JsonSerializerConstants.JsonOptions, cancellationToken);
 
             if (dto?.Data is null || string.IsNullOrWhiteSpace(dto.Data.BaseUrl))
             {

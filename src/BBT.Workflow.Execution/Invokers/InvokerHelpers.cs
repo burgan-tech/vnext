@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BBT.Workflow.Execution.Invokers;
 
@@ -9,7 +10,17 @@ namespace BBT.Workflow.Execution.Invokers;
 internal static class InvokerHelpers
 {
     /// <summary>
+    /// JSON options for TriggerTask response parsing: MaxDepth 256 and IgnoreCycles to handle large/deep payloads safely.
+    /// </summary>
+    private static readonly JsonSerializerOptions TriggerTaskJsonOptions = new()
+    {
+        MaxDepth = 256,
+        ReferenceHandler = ReferenceHandler.IgnoreCycles
+    };
+
+    /// <summary>
     /// Attempts to parse JSON content. Returns the original content if parsing fails.
+    /// Used for TriggerTask (e.g. GetInstances / GetInstanceData) response body parsing.
     /// </summary>
     /// <param name="content">The content to parse.</param>
     /// <returns>Parsed JSON object or the original content if parsing fails.</returns>
@@ -20,7 +31,7 @@ internal static class InvokerHelpers
 
         try
         {
-            return JsonSerializer.Deserialize<object>(content);
+            return JsonSerializer.Deserialize<object>(content, TriggerTaskJsonOptions);
         }
         catch (JsonException)
         {

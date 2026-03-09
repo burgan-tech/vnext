@@ -162,14 +162,14 @@ public class InstanceRetryGatewayTests
         };
 
         _queryGateway.GetFunctionWithStateAsync(input, Arg.Any<CancellationToken>())
-            .Returns(Result<GetInstanceStateOutput>.Ok(expectedOutput));
+            .Returns(ConditionalResult<GetInstanceStateOutput>.Success(expectedOutput));
 
         // Act
         var result = await _queryGateway.GetFunctionWithStateAsync(input);
 
         // Assert
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.Status.ShouldBe(InstanceStatus.Faulted);
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Status.ShouldBe(InstanceStatus.Faulted);
     }
 
     [Fact]

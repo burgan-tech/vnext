@@ -25,12 +25,6 @@ public sealed class RemoteInstanceQueryAppService(
 
     private string ApiVersionPrefix => InstanceUrlTemplates.GetApiVersionPrefix(_options.ApiVersion);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
-
     /// <summary>
     /// Retrieves a single instance with optional extensions
     /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}
@@ -305,7 +299,7 @@ public sealed class RemoteInstanceQueryAppService(
     /// Retrieves function result for an instance (e.g., "state" function returns GetInstanceStateOutput)
     /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/{function}
     /// </summary>
-    public async Task<Result<GetInstanceStateOutput>> GetFunctionWithStateAsync(
+    public async Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
@@ -349,15 +343,21 @@ public sealed class RemoteInstanceQueryAppService(
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
             var forwardHeaders = currentUser.ToForwardHeaders();
             CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            if (!string.IsNullOrEmpty(input.IfNoneMatch))
+                requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
-            // Status code → Result.Fail (per Railway Pattern)
-            return await HandleResponseAsync<GetInstanceStateOutput>(response, cancellationToken);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
+                return ConditionalResult<GetInstanceStateOutput>.NotModified();
+
+            var result = await HandleResponseAsync<GetInstanceStateOutput>(response, cancellationToken);
+            return result.IsSuccess
+                ? ConditionalResult<GetInstanceStateOutput>.Success(result.Value!)
+                : ConditionalResult<GetInstanceStateOutput>.Fail(result.Error);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
-            // Network errors → Transient error (per Railway Pattern)
-            return Result<GetInstanceStateOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
+            return ConditionalResult<GetInstanceStateOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
         }
     }
 
@@ -535,11 +535,11 @@ public sealed class RemoteInstanceQueryAppService(
         if (response.IsSuccessStatusCode)
         {
             var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
+            var result = JsonSerializer.Deserialize<T>(responseContent, JsonSerializerConstants.JsonOptions);
             return Result<T>.Ok(result!);
         }
 
-        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
         return Result<T>.Fail(error);
     }
 
@@ -551,11 +551,11 @@ public sealed class RemoteInstanceQueryAppService(
         if (response.IsSuccessStatusCode)
         {
             var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
+            var result = JsonSerializer.Deserialize<T>(responseContent, JsonSerializerConstants.JsonOptions);
             return ConditionalResult<T>.Success(result!);
         }
 
-        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
         return ConditionalResult<T>.Fail(error);
     }
 }

@@ -259,12 +259,18 @@ public sealed class InstanceController(
         };
 
         var result = await queryAppService.GetInstanceAsync(input, cancellationToken);
-        
-        if (result.Result.IsSuccess && !string.IsNullOrEmpty(result.Result.Value?.Etag))
+
+        if (result.IsNotModified)
+            return StatusCode(304);
+
+        if (result.Result.IsSuccess && result.Result.Value is { } value)
         {
-            HttpContext.Response.Headers[HeadersConstants.ETag] = result.Result.Value.Etag;
+            if (!string.IsNullOrEmpty(value.Etag))
+                HttpContext.Response.Headers[HeadersConstants.ETag] = value.Etag;
+            if (!string.IsNullOrEmpty(value.EntityEtag))
+                HttpContext.Response.Headers[HeadersConstants.XEntityETag] = value.EntityEtag;
         }
-        
+
         return FromResult(result.Result);
     }
 
@@ -338,8 +344,6 @@ public sealed class InstanceController(
                 var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, instanceOutputs, route);
                 response.Value!.Links = hateoasResult.Links;
             }
-
-            return Result.Ok(response.Value).ToAcceptedResult(HttpContext);
         }
 
         return response.ToActionResult(HttpContext);
@@ -395,12 +399,18 @@ public sealed class InstanceController(
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
-        
-        if (result.Result.IsSuccess && !string.IsNullOrEmpty(result.Result.Value?.Etag))
+
+        if (result.IsNotModified)
+            return StatusCode(304);
+
+        if (result.Result.IsSuccess && result.Result.Value is { } value)
         {
-            HttpContext.Response.Headers[HeadersConstants.ETag] = result.Result.Value.Etag;
+            if (!string.IsNullOrEmpty(value.Etag))
+                HttpContext.Response.Headers[HeadersConstants.ETag] = value.Etag;
+            if (!string.IsNullOrEmpty(value.EntityEtag))
+                HttpContext.Response.Headers[HeadersConstants.XEntityETag] = value.EntityEtag;
         }
-        
+
         return FromResult(result.Result);
     }
 } 

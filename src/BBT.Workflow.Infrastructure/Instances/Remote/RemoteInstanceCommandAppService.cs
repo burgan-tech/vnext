@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Aether.Users;
@@ -26,12 +27,6 @@ public sealed class RemoteInstanceCommandAppService(
     private readonly RemoteOptions _options = options.Value;
 
     private string ApiVersionPrefix => InstanceUrlTemplates.GetApiVersionPrefix(_options.ApiVersion);
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
 
     /// <summary>
     /// Starts a new workflow instance by calling the remote API
@@ -73,7 +68,7 @@ public sealed class RemoteInstanceCommandAppService(
                 Attributes = input.Instance.Attributes
             };
 
-            var jsonContent = JsonSerializer.Serialize(requestBody, JsonOptions);
+            var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -141,7 +136,7 @@ public sealed class RemoteInstanceCommandAppService(
                 ExtraProperties = input.Instance.ExtraProperties
             };
 
-            var jsonContent = JsonSerializer.Serialize(requestBody, JsonOptions);
+            var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -199,7 +194,7 @@ public sealed class RemoteInstanceCommandAppService(
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var content = input.Data != null
-                ? new StringContent(JsonSerializer.Serialize(input.Data, JsonOptions), Encoding.UTF8,
+                ? new StringContent(JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions), Encoding.UTF8,
                     "application/json")
                 : new StringContent("{}", Encoding.UTF8, "application/json");
 
@@ -248,7 +243,7 @@ public sealed class RemoteInstanceCommandAppService(
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var jsonContent = JsonSerializer.Serialize(input, JsonOptions);
+            var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -299,7 +294,7 @@ public sealed class RemoteInstanceCommandAppService(
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var jsonContent = JsonSerializer.Serialize(input, JsonOptions);
+            var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -333,12 +328,12 @@ public sealed class RemoteInstanceCommandAppService(
         if (response.IsSuccessStatusCode)
         {
             var responseContent = await response.ReadDecompressedContentAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<T>(responseContent, JsonOptions);
+            var result = JsonSerializer.Deserialize<T>(responseContent, JsonSerializerConstants.JsonOptions);
             return Result<T>.Ok(result!);
         }
 
         // Map status codes to appropriate Error types (per Railway Pattern)
-        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
         return Result<T>.Fail(error);
     }
 
@@ -351,7 +346,7 @@ public sealed class RemoteInstanceCommandAppService(
         if (response.IsSuccessStatusCode)
             return Result.Ok();
 
-        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonOptions);
+        var error = await RemoteHttpResponseHelper.MapToErrorAsync(response, cancellationToken, JsonSerializerConstants.JsonOptions);
         return Result.Fail(error);
     }
 }

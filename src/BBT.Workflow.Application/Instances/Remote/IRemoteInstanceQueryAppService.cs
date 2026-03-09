@@ -41,7 +41,7 @@ public interface IRemoteInstanceQueryAppService
     /// Retrieves function result for an instance (e.g., "state" function returns GetInstanceStateOutput)
     /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/{function}
     /// </summary>
-    Task<Result<GetInstanceStateOutput>> GetFunctionWithStateAsync(
+    Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default);
     

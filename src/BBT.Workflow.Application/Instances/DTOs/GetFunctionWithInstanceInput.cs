@@ -20,6 +20,11 @@ public sealed class GetFunctionWithInstanceInput : IHasDomain
     public string Instance { get; set; } = string.Empty;
     
     /// <summary>
+    /// ETag for conditional requests (If-None-Match). When set, state endpoint may return 304.
+    /// </summary>
+    public string? IfNoneMatch { get; set; }
+
+    /// <summary>
     /// Version of the workflow
     /// </summary>
     public string? Version { get; set; }

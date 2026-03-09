@@ -185,7 +185,7 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
         CancellationToken cancellationToken)
     {
         var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var content = await response.ReadDecompressedContentAsync(cancellationToken);
         var responseData = InvokerHelpers.TryParseJson(content);
         var metadata = CreateMetadata(binding, reasonPhrase: response.ReasonPhrase);
 

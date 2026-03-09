@@ -62,8 +62,8 @@ public interface IInstanceQueryGateway
     /// </summary>
     /// <param name="input">The get function with instance input containing domain, workflow, and instance.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Result containing the instance state output.</returns>
-    Task<Result<GetInstanceStateOutput>> GetFunctionWithStateAsync(
+    /// <returns>ConditionalResult for instance state (supports 304 when If-None-Match matches).</returns>
+    Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default);
 

@@ -94,12 +94,12 @@ public sealed class InstanceRetryAppService(
             subflowStateInput,
             cancellationToken);
 
-        if (!subflowStateResult.IsSuccess)
+        if (!subflowStateResult.Result.IsSuccess)
         {
-            return Result<RetryInstanceOutput>.Fail(subflowStateResult.Error);
+            return Result<RetryInstanceOutput>.Fail(subflowStateResult.Result.Error);
         }
 
-        var subflowState = subflowStateResult.Value!;
+        var subflowState = subflowStateResult.Result.Value!;
 
         // SubFlow not Faulted → Error (both instance and subflow are not faulted)
         if (subflowState.Status == null || !subflowState.Status.Equals(InstanceStatus.Faulted))

@@ -77,7 +77,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 options.JsonSerializerOptions.DictionaryKeyPolicy = centralOptions.DictionaryKeyPolicy;
                 options.JsonSerializerOptions.PropertyNameCaseInsensitive = centralOptions.PropertyNameCaseInsensitive;
                 options.JsonSerializerOptions.DefaultIgnoreCondition = centralOptions.DefaultIgnoreCondition;
-                options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+                options.JsonSerializerOptions.ReferenceHandler = centralOptions.ReferenceHandler;
+                options.JsonSerializerOptions.MaxDepth = centralOptions.MaxDepth;
                 
                 // Add converters from centralized configuration
                 foreach (var converter in centralOptions.Converters)

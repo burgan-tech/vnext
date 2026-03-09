@@ -175,8 +175,21 @@ public sealed class FunctionController(
 
         if (functionType == Definitions.Functions.FunctionTypeConst.Longpooling)
         {
-            return FromResult(await ProcessLongpoolingFunctionAsync(domain, workflow, instance, parameters.Version,
-                parameters.Extensions, requestContext.Headers, requestContext.QueryParameters, cancellationToken));
+            var stateResult = await ProcessLongpoolingFunctionAsync(domain, workflow, instance, ifNoneMatch,
+                parameters.Version, parameters.Extensions, requestContext.Headers, requestContext.QueryParameters, cancellationToken);
+
+            if (stateResult.IsNotModified)
+                return StatusCode(304);
+
+            if (stateResult.Result.IsSuccess && stateResult.Result.Value is { } stateValue)
+            {
+                if (!string.IsNullOrEmpty(stateValue.Etag))
+                    HttpContext.Response.Headers[HeadersConstants.ETag] = stateValue.Etag;
+                if (!string.IsNullOrEmpty(stateValue.EntityEtag))
+                    HttpContext.Response.Headers[HeadersConstants.XEntityETag] = stateValue.EntityEtag;
+            }
+
+            return FromResult(stateResult.Result);
         }
 
         if (functionType == Definitions.Functions.FunctionTypeConst.View)
@@ -260,23 +273,24 @@ public sealed class FunctionController(
         return StatusCode(403, result.Value);
     }
 
-    private async Task<Result<GetInstanceStateOutput>> ProcessLongpoolingFunctionAsync(
+    private async Task<ConditionalResult<GetInstanceStateOutput>> ProcessLongpoolingFunctionAsync(
         string domain,
         string workflow,
         string instance,
+        string? ifNoneMatch,
         string? version,
         string[]? extensions,
         Dictionary<string, string?> headers,
         Dictionary<string, string?> queryParams,
         CancellationToken cancellationToken)
     {
-        // State function uses role from ICurrentUser (claims bound by middleware), not query string.
         var role = currentUser.Roles?.FirstOrDefault();
         var input = new GetInstanceStateInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
+            IfNoneMatch = ifNoneMatch,
             Version = version,
             Extensions = extensions,
             Headers = headers,
@@ -308,7 +322,7 @@ public sealed class FunctionController(
         });
 
         var results = await Task.WhenAll(tasks);
-        var list = results.Where(r => r.IsSuccess).Select(r => r.Value!).ToList();
+        var list = results.Where(r => r.Result.IsSuccess).Select(r => r.Result.Value!).ToList();
 
         var route = urlTemplateBuilder.BuildFunctionListUrl(domain, workflow,
             Definitions.Functions.FunctionTypeConst.Longpooling, InstanceUrlTemplates.GetApiVersionPrefix("1"));
@@ -532,9 +546,12 @@ public sealed class FunctionController(
 
         var response = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
 
-        if (response.Result.IsSuccess && !string.IsNullOrEmpty(response.Result.Value?.Etag))
+        if (response.Result.IsSuccess && response.Result.Value is { } dataValue)
         {
-            HttpContext.Response.Headers[HeadersConstants.ETag] = response.Result.Value.Etag;
+            if (!string.IsNullOrEmpty(dataValue.Etag))
+                HttpContext.Response.Headers[HeadersConstants.ETag] = dataValue.Etag;
+            if (!string.IsNullOrEmpty(dataValue.EntityEtag))
+                HttpContext.Response.Headers[HeadersConstants.XEntityETag] = dataValue.EntityEtag;
         }
 
         return response;

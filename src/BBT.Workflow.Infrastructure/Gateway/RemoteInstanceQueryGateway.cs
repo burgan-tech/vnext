@@ -56,7 +56,7 @@ public sealed class RemoteInstanceQueryGateway : IInstanceQueryGateway
     }
 
     /// <inheritdoc />
-    public Task<Result<GetInstanceStateOutput>> GetFunctionWithStateAsync(
+    public Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {

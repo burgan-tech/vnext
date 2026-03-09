@@ -120,7 +120,7 @@ public sealed class ViewContentResolutionService(
         var attrs = DeserializeAttributes(instanceOutput.Attributes);
         var contentRaw = attrs?.Content ?? string.Empty;
         var type = attrs?.Type ?? string.Empty;
-        var contentTyped = View.GetContentAsTypedFromString(contentRaw, type);
+        var contentTyped = View.GetContentAsTypedFromObject(contentRaw, type);
         return new GetViewOutput
         {
             Key = instanceOutput.Key ?? viewKey,

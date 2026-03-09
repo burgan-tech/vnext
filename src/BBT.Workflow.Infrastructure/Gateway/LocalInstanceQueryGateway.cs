@@ -85,7 +85,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetInstanceStateOutput>> GetFunctionWithStateAsync(
+    public async Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
@@ -104,7 +104,8 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                 Extensions = input.Extensions,
                 Headers = input.Headers,
                 QueryParams = input.QueryParams,
-                Role = input.Role
+                Role = input.Role,
+                IfNoneMatch = input.IfNoneMatch
             };
             return await queryService.GetInstanceStateAsync(stateInput, cancellationToken);
         }
