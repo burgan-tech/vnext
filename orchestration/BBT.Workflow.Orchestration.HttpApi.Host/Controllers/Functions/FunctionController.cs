@@ -183,8 +183,8 @@ public sealed class FunctionController(
 
             if (stateResult.Result.IsSuccess && stateResult.Result.Value is { } stateValue)
             {
-                if (!string.IsNullOrEmpty(stateValue.Etag))
-                    HttpContext.Response.Headers[HeadersConstants.ETag] = stateValue.Etag;
+                if (!string.IsNullOrEmpty(stateValue.ETag))
+                    HttpContext.Response.Headers[HeadersConstants.ETag] = stateValue.ETag;
                 if (!string.IsNullOrEmpty(stateValue.EntityEtag))
                     HttpContext.Response.Headers[HeadersConstants.XEntityETag] = stateValue.EntityEtag;
             }
@@ -548,8 +548,8 @@ public sealed class FunctionController(
 
         if (response.Result.IsSuccess && response.Result.Value is { } dataValue)
         {
-            if (!string.IsNullOrEmpty(dataValue.Etag))
-                HttpContext.Response.Headers[HeadersConstants.ETag] = dataValue.Etag;
+            if (!string.IsNullOrEmpty(dataValue.ETag))
+                HttpContext.Response.Headers[HeadersConstants.ETag] = dataValue.ETag;
             if (!string.IsNullOrEmpty(dataValue.EntityEtag))
                 HttpContext.Response.Headers[HeadersConstants.XEntityETag] = dataValue.EntityEtag;
         }

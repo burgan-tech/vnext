@@ -79,7 +79,7 @@ public sealed class InstanceQueryAppService(
                         return ConditionalResult<GetInstanceOutput>.NotModified();
                     }
 
-                    response.Etag = representationEtag;
+                    response.ETag = representationEtag;
                     return ConditionalResult<GetInstanceOutput>.Success(response);
                 },
                 onFailure: error => ConditionalResult<GetInstanceOutput>.Fail(error));
@@ -584,7 +584,7 @@ public sealed class InstanceQueryAppService(
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.Etag = representationEtag;
+                    result.ETag = representationEtag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
@@ -657,7 +657,7 @@ public sealed class InstanceQueryAppService(
                     if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
                         return ConditionalResult<GetInstanceStateOutput>.NotModified();
 
-                    output.Etag = representationEtag;
+                    output.ETag = representationEtag;
                     return ConditionalResult<GetInstanceStateOutput>.Success(output);
                 },
                 onFailure: error => ConditionalResult<GetInstanceStateOutput>.Fail(error));

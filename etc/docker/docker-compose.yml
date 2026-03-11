@@ -140,7 +140,36 @@ services:
       - dapr-scheduler
       - redis
       - vault
-  
+
+  vnext-db-migrator-dapr:
+    image: "daprio/daprd"
+    container_name: vnext-db-migrator-dapr
+    command: [
+      "./daprd",
+      "--app-id", "vnext-db-migrator",
+      "--app-port", "44200",
+      "--resources-path", "./components",
+      "--dapr-grpc-port", "44211",
+      "--dapr-http-port", "44210",
+      "--scheduler-host-address", "dapr-scheduler:50007",
+      "--placement-host-address", "dapr-placement:50005",
+      "--app-channel-address", "host.orb.local"
+    ]
+    volumes:
+      - "../../etc/workers/db-migrator/dapr/components:/components"
+    ports:
+      - "44210:44210"
+      - "44211:44211"
+    networks:
+      - bbt-development
+    extra_hosts:
+      - "host.orb.local:host-gateway"
+    depends_on:
+      - dapr-placement
+      - dapr-scheduler
+      - redis
+      - vault
+
   # Mockoon API Mock Server
   mockoon:
     image: mockoon/cli:latest

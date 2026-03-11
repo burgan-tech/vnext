@@ -121,6 +121,50 @@ services:
       - redis
       - vault
 
+  vnext-db-migrator-dapr:
+    image: "daprio/daprd"
+    container_name: vnext-db-migrator-dapr
+    command: [
+      "./daprd",
+      "--app-id", "vnext-db-migrator",
+      "--app-port", "44200",
+      "--resources-path", "./components",
+      "--dapr-grpc-port", "44211",
+      "--dapr-http-port", "44210",
+      "--scheduler-host-address", "dapr-scheduler:50007",
+      "--placement-host-address", "dapr-placement:50005"
+    ]
+    volumes:
+      - "../../etc/workers/db-migrator/dapr/components:/components"
+    ports:
+      - "44210:44210"
+      - "44211:44211"
+    networks:
+      - bbt-development
+    depends_on:
+      - dapr-placement
+      - dapr-scheduler
+      - redis
+      - vault
+
+  vnext-db-migrator:
+    container_name: vnext-db-migrator
+    build:
+      context: ../..
+      dockerfile: workers/BBT.Workflow.DbMigrator/Dockerfile
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=Aether_WorkflowDb;Username=postgres;Password=postgres;"
+      DAPR_HTTP_PORT: "44210"
+      DAPR_GRPC_PORT: "44211"
+      DAPR_LOCK_STORE_NAME: "vnext-lock"
+      ASPNETCORE_ENVIRONMENT: "Staging"
+    network_mode: "service:vnext-db-migrator-dapr"
+    depends_on:
+      - vnext-db-migrator-dapr
+      - postgres
+      - redis
+    restart: "no"
+
   dapr-placement:
     image: "daprio/dapr"
     container_name: dapr-placement

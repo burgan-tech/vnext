@@ -14,7 +14,7 @@
     <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCorePackageVersion)" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="$(MicrosoftPackageVersion)">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="$(EfCorePackageVersion)">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

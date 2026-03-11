@@ -13,7 +13,7 @@ public sealed class SchemaMigrationOrchestrator(
     IDistributedLockService lockService,
     ILogger<SchemaMigrationOrchestrator> logger) : ISchemaMigrationOrchestrator
 {
-    private const int LockExpiryInSeconds = 300; // 5 minutes
+    private const int LockExpiryInSeconds = 120; // 2 minutes
     private const string LockKeyPrefix = "schema-migration";
 
     /// <inheritdoc />

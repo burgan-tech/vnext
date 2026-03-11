@@ -44,7 +44,9 @@ public static class OrchestrationApiServiceCollectionExtensions
     private static IServiceCollection AddHostedServices(this IServiceCollection services)
     {
         // Add any Orchestration-specific hosted services
+        #if DEBUG
         services.AddHostedService<MultiSchemaMigrationHostedService>();
+        #endif
         services.AddHostedService<CacheCleanupHostedService>();
         services.AddHostedService<CacheInitializationHostedService>();
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();

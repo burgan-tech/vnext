@@ -265,8 +265,8 @@ public sealed class InstanceController(
 
         if (result.Result.IsSuccess && result.Result.Value is { } value)
         {
-            if (!string.IsNullOrEmpty(value.Etag))
-                HttpContext.Response.Headers[HeadersConstants.ETag] = value.Etag;
+            if (!string.IsNullOrEmpty(value.ETag))
+                HttpContext.Response.Headers[HeadersConstants.ETag] = value.ETag;
             if (!string.IsNullOrEmpty(value.EntityEtag))
                 HttpContext.Response.Headers[HeadersConstants.XEntityETag] = value.EntityEtag;
         }
@@ -405,8 +405,8 @@ public sealed class InstanceController(
 
         if (result.Result.IsSuccess && result.Result.Value is { } value)
         {
-            if (!string.IsNullOrEmpty(value.Etag))
-                HttpContext.Response.Headers[HeadersConstants.ETag] = value.Etag;
+            if (!string.IsNullOrEmpty(value.ETag))
+                HttpContext.Response.Headers[HeadersConstants.ETag] = value.ETag;
             if (!string.IsNullOrEmpty(value.EntityEtag))
                 HttpContext.Response.Headers[HeadersConstants.XEntityETag] = value.EntityEtag;
         }

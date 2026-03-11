@@ -30,6 +30,7 @@
     <Project Path="test/BBT.Workflow.TestBase/BBT.Workflow.TestBase.csproj" />
   </Folder>
   <Folder Name="/workers/">
+    <Project Path="workers/BBT.Workflow.DbMigrator/BBT.Workflow.DbMigrator.csproj" />
     <Project Path="workers/BBT.Workflow.Workers.Inbox/BBT.Workflow.Workers.Inbox.csproj" />
     <Project Path="workers/BBT.Workflow.Workers.Outbox/BBT.Workflow.Workers.Outbox.csproj" />
   </Folder>

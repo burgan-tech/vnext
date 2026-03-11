@@ -25,6 +25,7 @@ env:
   INIT_IMAGE_NAME: ${{ github.repository }}/init
   INBOX_IMAGE_NAME: ${{ github.repository }}/inbox
   OUTBOX_IMAGE_NAME: ${{ github.repository }}/outbox
+  DBMIGRATOR_IMAGE_NAME: ${{ github.repository }}/db-migrator
 
 jobs:
   build-and-publish:
@@ -37,6 +38,7 @@ jobs:
       init_image: ${{ steps.meta-init.outputs.tags }}
       inbox_image: ${{ steps.meta-inbox.outputs.tags }}
       outbox_image: ${{ steps.meta-outbox.outputs.tags }}
+      dbmigrator_image: ${{ steps.meta-dbmigrator.outputs.tags }}
     
     steps:
     # Option 1: GitHub App Token (Recommended)
@@ -184,7 +186,18 @@ jobs:
           type=raw,value=latest
           type=ref,event=branch
           type=sha,prefix={{branch}}-
-    
+
+    - name: Extract metadata for DbMigrator image
+      id: meta-dbmigrator
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}
+        tags: |
+          type=raw,value=${{ steps.version.outputs.version }}
+          type=raw,value=latest
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+
     - name: Build solution
       run: |
         echo "Restoring dependencies..."
@@ -266,6 +279,18 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Build and push DbMigrator Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./workers/BBT.Workflow.DbMigrator/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta-dbmigrator.outputs.tags }}
+        labels: ${{ steps.meta-dbmigrator.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
     
     - name: Create Git tag
       run: |
@@ -316,6 +341,11 @@ jobs:
           #### Outbox Worker
           ```bash
           docker pull ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          ```
+          
+          #### DbMigrator (run-once job)
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
           ```
           
           ### 🚀 Quick Start
@@ -457,6 +487,13 @@ jobs:
         image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
         format: spdx-json
         output-file: outbox-sbom.spdx.json
+
+    - name: Generate SBOM for DbMigrator image
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        format: spdx-json
+        output-file: dbmigrator-sbom.spdx.json
     
     - name: Upload SBOMs as artifacts
       uses: actions/upload-artifact@v4
@@ -468,6 +505,7 @@ jobs:
           init-sbom.spdx.json
           inbox-sbom.spdx.json
           outbox-sbom.spdx.json
+          dbmigrator-sbom.spdx.json
         retention-days: 90
     
     - name: Security scan - Execution image
@@ -507,6 +545,14 @@ jobs:
       id: scan-outbox
       with:
         image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+        fail-build: false
+        output-format: sarif
+
+    - name: Security scan - DbMigrator image
+      uses: anchore/scan-action@v3
+      id: scan-dbmigrator
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
         fail-build: false
         output-format: sarif
     
@@ -558,6 +604,15 @@ jobs:
           fi
         fi
         
+        if [ -n "${{ steps.scan-dbmigrator.outputs.sarif }}" ] && [ -f "${{ steps.scan-dbmigrator.outputs.sarif }}" ]; then
+          echo "Found dbmigrator SARIF: ${{ steps.scan-dbmigrator.outputs.sarif }}"
+          if [ -n "$FOUND_FILES" ]; then
+            FOUND_FILES="$FOUND_FILES,${{ steps.scan-dbmigrator.outputs.sarif }}"
+          else
+            FOUND_FILES="${{ steps.scan-dbmigrator.outputs.sarif }}"
+          fi
+        fi
+        
         if [ -n "$FOUND_FILES" ]; then
           echo "has_sarif=true" >> $GITHUB_OUTPUT
           echo "sarif_files=$FOUND_FILES" >> $GITHUB_OUTPUT
@@ -605,6 +660,7 @@ jobs:
           sed -i "s|image: .*orchestrator.*|image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
           sed -i "s|image: .*inbox.*|image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
           sed -i "s|image: .*outbox.*|image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
+          sed -i "s|image: .*db-migrator.*|image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
           echo "Updated docker-compose.yml with version $VERSION"
         fi
         
@@ -613,6 +669,7 @@ jobs:
           sed -i "s|image: .*orchestrator.*|image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
           sed -i "s|image: .*inbox.*|image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
           sed -i "s|image: .*outbox.*|image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
+          sed -i "s|image: .*db-migrator.*|image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
           echo "Updated docker-compose.stage.yml with version $VERSION"
         fi
     
@@ -674,6 +731,11 @@ jobs:
         echo "${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**DbMigrator (run-once job):**" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🎯 Next Steps" >> $GITHUB_STEP_SUMMARY
         echo "1. 🐳 Images are available in GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
         echo "2. 🏷️ Git tag v${{ steps.version.outputs.version }} has been created" >> $GITHUB_STEP_SUMMARY
@@ -690,9 +752,18 @@ jobs:
         echo "docker pull ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "docker pull ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "docker pull ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Start services:**" >> $GITHUB_STEP_SUMMARY
         echo '```bash' >> $GITHUB_STEP_SUMMARY
         echo "cd etc/docker && docker-compose up -d" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
+
+    - name: Trigger Helm Chart Release
+      uses: peter-evans/repository-dispatch@v3
+      with:
+        token: ${{ steps.generate_token.outputs.token }}
+        repository: burgan-tech/vnext-helm-charts
+        event-type: app-release
+        client-payload: '{"app_version": "${{ github.event.release.tag_name }}"}'

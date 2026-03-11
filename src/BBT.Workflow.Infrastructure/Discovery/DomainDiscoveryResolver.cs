@@ -261,7 +261,7 @@ public sealed class DomainDiscoveryResolver(
                         DomainName = item.Data.DomainName,
                         BaseUrl = item.Data.BaseUrl,
                         AppId = item.Data.AppId,
-                        ItemETag = item.Etag
+                        ItemETag = item.ETag
                     }).ToList(),
                     BulkETag = null // Will be set from response header if needed
                 };
@@ -423,9 +423,9 @@ public sealed class DomainDiscoveryResolver(
             {
                 responseETag = response.Headers.ETag.Tag.Trim('"');
             }
-            else if (!string.IsNullOrWhiteSpace(dto.Etag))
+            else if (!string.IsNullOrWhiteSpace(dto.ETag))
             {
-                responseETag = dto.Etag.Trim('"');
+                responseETag = dto.ETag.Trim('"');
             }
 
             return ETagCheckResult.Success(endpoint, responseETag);
@@ -549,7 +549,7 @@ public sealed class DomainDiscoveryResolver(
     private sealed record FunctionDataItem
     {
         public FunctionData Data { get; init; } = new();
-        public string Etag { get; init; } = string.Empty;
+        public string ETag { get; init; } = string.Empty;
         public Dictionary<string, object>? Extensions { get; init; }
     }
 
@@ -583,7 +583,7 @@ public sealed class DomainDiscoveryResolver(
     private sealed record SingleDomainResponse
     {
         public FunctionData Data { get; init; } = new();
-        public string Etag { get; init; } = string.Empty;
+        public string ETag { get; init; } = string.Empty;
         public Dictionary<string, object>? Extensions { get; init; }
     }
 }

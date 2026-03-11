@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "DbMigrator": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "APP_DOMAIN": "core",
+        "DAPR_APP_ID": "vnext-db-migrator",
+        "DAPR_HTTP_PORT": "44110",
+        "DAPR_GRPC_PORT": "44111",
+        "DAPR_PLACEMENT_HOST": "localhost:50005",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_SERVICE_NAME": "vnext-db-migrator",
+        "DAPR_SECRET_STORE_NAME": "vnext-secret",
+        "DAPR_LOCK_STORE_NAME": "vnext-lock"
+      }
+    }
+  }
+}

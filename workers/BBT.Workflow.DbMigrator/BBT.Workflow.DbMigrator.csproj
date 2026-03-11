@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <Import Project="..\..\common.props"/>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <UserSecretsId>dotnet-BBT.Workflow.DbMigrator-a1b2c3d4-e5f6-4a3b-8c9d-0e1f2a3b4c5d</UserSecretsId>
+        <RootNamespace>BBT.Workflow.DbMigrator</RootNamespace>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftPackageVersion)"/>
+        <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)"/>
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+        <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj"/>
+        <ProjectReference Include="..\..\src\BBT.Workflow.Infrastructure\BBT.Workflow.Infrastructure.csproj"/>
+    </ItemGroup>
+</Project>

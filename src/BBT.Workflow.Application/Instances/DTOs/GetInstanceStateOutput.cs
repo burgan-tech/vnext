@@ -40,7 +40,7 @@ public sealed class GetInstanceStateOutput
     /// <summary>
     /// Representation ETag (RFC 7232 quoted) for cache validation.
     /// </summary>
-    public string? Etag
+    public string? ETag
     {
         get
         {

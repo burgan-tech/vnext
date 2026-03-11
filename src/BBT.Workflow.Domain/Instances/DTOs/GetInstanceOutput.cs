@@ -16,7 +16,7 @@ public sealed class GetInstanceOutput
     /// <summary>
     /// ETag value returned with quotes per RFC 7232.
     /// </summary>
-    public string? Etag
+    public string? ETag
     {
         get
         {
@@ -146,7 +146,7 @@ public sealed class GetInstanceDataOutput
     /// <summary>
     /// ETag value returned with quotes per RFC 7232.
     /// </summary>
-    public string? Etag
+    public string? ETag
     {
         get
         {

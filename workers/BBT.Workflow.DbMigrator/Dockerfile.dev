@@ -1,0 +1,11 @@
+# Development image with SDK for hot reload
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine
+
+# Install debugger for development
+RUN apk add --no-cache curl bash unzip && \
+    curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l /vsdbg
+
+WORKDIR /app
+
+# Source code is mounted via volume; run once (no watch loop - job exits after migration)
+CMD ["dotnet", "run", "--project", "workers/BBT.Workflow.DbMigrator/BBT.Workflow.DbMigrator.csproj"]

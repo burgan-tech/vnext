@@ -17,7 +17,6 @@ using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.Schemas;
 using Dapr.Jobs.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -40,7 +39,6 @@ public sealed class InstanceCommandAppService(
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
-    ISchemaMigrationOrchestrator schemaMigrationOrchestrator,
     IWorkflowContext workflowContext,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
@@ -58,21 +56,12 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
-        // Step 2: Migrate schema (MUST happen before any DB operations)
-        var migrationSuccess = await schemaMigrationOrchestrator.MigrateSchemaWithLockAsync(
-            input.Workflow, cancellationToken);
-        if (!migrationSuccess)
-        {
-            return Result<StartInstanceOutput>.Fail(
-                WorkflowErrors.SchemaMigrationLockFailed(input.Workflow));
-        }
-
-        // Step 3: Check existing instance (AFTER schema migration)
+        // Step 2: Check existing instance
         var existingInstanceResult = await CheckExistingInstanceAsync(input, cancellationToken);
         if (existingInstanceResult.HasValue)
             return existingInstanceResult.Value;
 
-        // Step 4-7: Continue with normal railway flow for NEW instances
+        // Step 3-6: Continue with normal railway flow for NEW instances
         return await PrepareInstanceAsync(workflow, input, cancellationToken)
             .ThenAsync(async data =>
             {
