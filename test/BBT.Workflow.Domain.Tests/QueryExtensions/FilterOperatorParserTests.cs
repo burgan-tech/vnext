@@ -26,6 +26,8 @@ public class FilterOperatorParserTests : DomainTestBase<DomainEntryPoint>
     [Theory]
     [InlineData("name=eq:John", "name", "eq", "John")]
     [InlineData("age=gt:25", "age", "gt", "25")]
+    [InlineData("code=sgt:M", "code", "sgt", "M")]
+    [InlineData("startedAt=dgt:2024-01-01", "startedAt", "dgt", "2024-01-01")]
     [InlineData("price=lt:100.50", "price", "lt", "100.50")]
     [InlineData("status=ne:active", "status", "ne", "active")]
     public void ParseOperator_ShouldParseValidOperator(string input, string expectedField, string expectedOp, string expectedValue)

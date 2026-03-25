@@ -72,6 +72,13 @@ Alternatively, pass `groupBy` and `aggregations` as query parameters:
 ?filter={"status":{"eq":"Active"}}&groupBy={"field":"attributes.status"}&aggregations={"count":true}
 ```
 
+When `groupBy`/`aggregations` are combined with GraphQL filter, instance columns in `filter` (for example `createdAt`, `modifiedAt`, `completedAt`, `status`, `key`) are applied together with JSON attribute filters.
+Example:
+
+```
+?filter={"createdAt":{"dgt":"2024-01-01T00:00:00Z"}}&groupBy={"field":"attributes.advisor"}&aggregations={"count":true}
+```
+
 **Format precedence:** If any `filter` value is GraphQL JSON, the request is handled as GraphQL format.
 
 ### URL Encoding
@@ -99,6 +106,7 @@ Filters can target these Instance columns:
 | `modifiedAt` | Modification timestamp |
 | `completedAt` | Completion timestamp |
 | `isTransient` | Boolean flag |
+| `tags` | PostgreSQL `text[]`; use `contains` for a single tag value (see Collection Operators) |
 
 ### JSON Attributes
 
@@ -163,6 +171,19 @@ Instance columns are applied in the database; `attributes.*` ordering uses the l
 | `le` | Less than or equal | `filter=attributes=testValue=le:3` | `(Data ->> 'testValue')::numeric <= 3` |
 | `between` | Between two values | `filter=attributes=testValue=between:2,4` | `(Data ->> 'testValue')::numeric BETWEEN 2 AND 4` |
 
+**Typed comparisons (JSON text / ISO dates):** `gt`/`lt` always use numeric casts on the JSON text extractor. For non-numeric values use:
+
+| Operator | Description | Example | SQL Equivalent |
+|----------|-------------|---------|----------------|
+| `sgt` | String greater than (lexicographic) | `filter=attributes=code=sgt:M` or `{"attributes":{"code":{"sgt":"M"}}}` | `(Data ->> 'code') > @p` (text, no `::numeric`) |
+| `slt` | String less than | `filter=attributes=code=slt:Z` | `(Data ->> 'code') < @p` |
+| `dgt` | Date/time greater than | `filter=attributes=startedAt=dgt:2024-01-01` or `{"attributes":{"startedAt":{"dgt":"2024-01-01T00:00:00Z"}}}` | `(Data ->> 'startedAt')::timestamptz > @p` |
+| `dlt` | Date/time less than | `filter=attributes=startedAt=dlt:2024-12-31` | `(Data ->> 'startedAt')::timestamptz < @p` |
+
+Date values are parsed with invariant culture (`AdjustToUniversal`), same as instance `createdAt` filters. Invalid date strings are rejected when building the filter.
+
+**Instance columns:** `sgt`/`slt` are allowed only on string-typed columns (e.g. `key`, `flow`). `dgt`/`dlt` are allowed only on `createdAt`, `modifiedAt`, `completedAt`. Use `gt`/`lt` for numeric instance fields (e.g. state type integers).
+
 ### String Operators
 
 | Operator | Description | Example | SQL Equivalent |
@@ -177,6 +198,23 @@ Instance columns are applied in the database; `attributes.*` ordering uses the l
 |----------|-------------|---------|----------------|
 | `in` | Value in list | `filter=attributes=clientId=in:122,177,83` | `(Data ->> 'clientId') IN ('122','177','83')` |
 | `nin` | Value not in list | `filter=attributes=clientId=nin:122,177` | `(Data ->> 'clientId') NOT IN ('122','177')` |
+| `contains` | JSON **array** membership (GraphQL). **Scalar:** value is one primitive element (string/number/bool) — checks the array at that path contains it. **Object:** value is a JSON object — checks the array contains **one element** that matches that object (same-element semantics for `type` + `id`). | See examples below | `(Data->'field') @> @p::jsonb` with `@p` a one-element jsonb array |
+
+**`contains` examples (GraphQL):**
+
+- Primitive string array in data, e.g. `"invitedUser":["pm-001"]`:
+
+  `{"attributes":{"invitedUser":{"contains":"pm-001"}}}`
+
+- Object array in data, e.g. `members: [{"type":"member","memberId":"X"}, ...]` — require **one** object with both fields:
+
+  `{"attributes":{"members":{"contains":{"type":"member","memberId":"X"}}}}`
+
+- Instance `tags` (`text[]`), legacy or root-level JSON:
+
+  `tags=contains:my-tag` or `{"tags":{"contains":"my-tag"}}`
+
+Do **not** pass a JSON array as the `contains` value (e.g. `["pm-001"]`); use a scalar string instead. `contains` with an object is **GraphQL-only** (not practical in legacy `field=contains:...` for raw JSON objects).
 
 **GraphQL-only operator:** `isNull` (e.g., `{"attributes":{"field":{"isNull":true}}}`)
 
@@ -194,6 +232,7 @@ The filtering system automatically handles different data types. GraphQL JSON fi
 filter=attributes=clientId=eq:177
 filter=attributes=status=ne:inactive
 filter=attributes=email=endswith:@example.com
+filter=attributes=code=sgt:AA
 ```
 
 ### Numeric Values
@@ -206,6 +245,19 @@ filter=attributes=email=endswith:@example.com
 filter=attributes=testValue=gt:2
 filter=attributes=amount=between:50.00,150.00
 filter=attributes=count=le:100
+```
+
+### Date / time in JSON (ISO strings)
+
+```json
+{"startedAt": "2024-06-01T10:00:00Z", "dueDate": "2024-12-31"}
+```
+
+**Examples (use `dgt` / `dlt`, not `gt` / `lt`):**
+
+```
+filter=attributes=startedAt=dgt:2024-01-01
+filter={"attributes":{"dueDate":{"dlt":"2025-01-01"}}}
 ```
 
 ### Boolean Values

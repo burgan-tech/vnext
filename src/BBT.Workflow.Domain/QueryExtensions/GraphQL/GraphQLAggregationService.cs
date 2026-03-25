@@ -40,12 +40,20 @@ public static class GraphQLAggregationService
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
-        var (selectClause, _) = BuildAggregationSelectClause(aggregations, jsonColumnName);
-        var whereClause = filterNode != null 
-            ? GraphQLJsonFilterService.BuildWhereClause(filterNode, jsonColumnName, parameters, ref parameterIndex)
-            : string.Empty;
+        var (jsonWhereClause, instanceWhereClause) = GraphQLJsonFilterService.BuildSeparatedWhereClauses(
+            filterNode,
+            jsonColumnName,
+            parameters,
+            ref parameterIndex,
+            dataTableAlias: "d");
+        var requiresJoin = !string.IsNullOrWhiteSpace(instanceWhereClause);
 
-        var sql = BuildAggregationSql(selectClause, whereClause, null, schema);
+        var (selectClause, _) = BuildAggregationSelectClause(
+            aggregations,
+            jsonColumnName,
+            requiresJoin ? "d" : null);
+
+        var sql = BuildAggregationSql(selectClause, jsonWhereClause, instanceWhereClause, null, schema, requiresJoin);
 
         using var connection = dbContext.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
@@ -107,14 +115,21 @@ public static class GraphQLAggregationService
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
-        var (selectClause, groupByClause) = BuildGroupBySelectClause(
-            groupByFields, groupBy.Aggregations ?? new AggregationRequest { Count = true }, jsonColumnName);
-        
-        var whereClause = filterNode != null 
-            ? GraphQLJsonFilterService.BuildWhereClause(filterNode, jsonColumnName, parameters, ref parameterIndex)
-            : string.Empty;
+        var (jsonWhereClause, instanceWhereClause) = GraphQLJsonFilterService.BuildSeparatedWhereClauses(
+            filterNode,
+            jsonColumnName,
+            parameters,
+            ref parameterIndex,
+            dataTableAlias: "d");
+        var requiresJoin = !string.IsNullOrWhiteSpace(instanceWhereClause);
 
-        var sql = BuildAggregationSql(selectClause, whereClause, groupByClause, schema);
+        var (selectClause, groupByClause) = BuildGroupBySelectClause(
+            groupByFields,
+            groupBy.Aggregations ?? new AggregationRequest { Count = true },
+            jsonColumnName,
+            requiresJoin ? "d" : null);
+
+        var sql = BuildAggregationSql(selectClause, jsonWhereClause, instanceWhereClause, groupByClause, schema, requiresJoin);
 
         using var connection = dbContext.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
@@ -160,7 +175,8 @@ public static class GraphQLAggregationService
 
     private static (string selectClause, string? groupByClause) BuildAggregationSelectClause(
         AggregationRequest aggregations,
-        string jsonColumnName)
+        string jsonColumnName,
+        string? dataTableAlias = null)
     {
         var selectParts = new List<string>();
 
@@ -172,7 +188,7 @@ public static class GraphQLAggregationService
             }
             else if (aggregations.Count is string countField)
             {
-                var accessor = BuildJsonTextAccessor(countField, jsonColumnName);
+                var accessor = BuildJsonTextAccessor(countField, jsonColumnName, dataTableAlias);
                 selectParts.Add($"COUNT({accessor}) AS count_result");
             }
             else
@@ -183,25 +199,25 @@ public static class GraphQLAggregationService
 
         if (!string.IsNullOrEmpty(aggregations.Sum))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Sum, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Sum, jsonColumnName, dataTableAlias);
             selectParts.Add($"SUM(({accessor})::numeric) AS sum_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Avg))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Avg, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Avg, jsonColumnName, dataTableAlias);
             selectParts.Add($"AVG(({accessor})::numeric) AS avg_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Min))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Min, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Min, jsonColumnName, dataTableAlias);
             selectParts.Add($"MIN({accessor}) AS min_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Max))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Max, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Max, jsonColumnName, dataTableAlias);
             selectParts.Add($"MAX({accessor}) AS max_result");
         }
 
@@ -216,7 +232,8 @@ public static class GraphQLAggregationService
     private static (string selectClause, string groupByClause) BuildGroupBySelectClause(
         List<string> groupByFields,
         AggregationRequest aggregations,
-        string jsonColumnName)
+        string jsonColumnName,
+        string? dataTableAlias = null)
     {
         var selectParts = new List<string>();
         var groupByParts = new List<string>();
@@ -224,7 +241,7 @@ public static class GraphQLAggregationService
         // Add group by fields to select
         foreach (var field in groupByFields)
         {
-            var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(field, jsonColumnName, dataTableAlias);
             selectParts.Add($"{accessor} AS \"{SanitizeAlias(field)}\"");
             groupByParts.Add(accessor);
         }
@@ -238,7 +255,7 @@ public static class GraphQLAggregationService
             }
             else if (aggregations.Count is string countField)
             {
-                var accessor = BuildJsonTextAccessor(countField, jsonColumnName);
+                var accessor = BuildJsonTextAccessor(countField, jsonColumnName, dataTableAlias);
                 selectParts.Add($"COUNT({accessor}) AS count_result");
             }
             else
@@ -249,25 +266,25 @@ public static class GraphQLAggregationService
 
         if (!string.IsNullOrEmpty(aggregations.Sum))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Sum, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Sum, jsonColumnName, dataTableAlias);
             selectParts.Add($"SUM(({accessor})::numeric) AS sum_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Avg))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Avg, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Avg, jsonColumnName, dataTableAlias);
             selectParts.Add($"AVG(({accessor})::numeric) AS avg_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Min))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Min, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Min, jsonColumnName, dataTableAlias);
             selectParts.Add($"MIN({accessor}) AS min_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Max))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Max, jsonColumnName);
+            var accessor = BuildJsonTextAccessor(aggregations.Max, jsonColumnName, dataTableAlias);
             selectParts.Add($"MAX({accessor}) AS max_result");
         }
 
@@ -276,19 +293,35 @@ public static class GraphQLAggregationService
 
     private static string BuildAggregationSql(
         string selectClause,
-        string whereClause,
+        string jsonWhereClause,
+        string instanceWhereClause,
         string? groupByClause,
-        string schema)
+        string schema,
+        bool requiresJoin)
     {
         var sb = new StringBuilder();
 
         sb.AppendLine($@"SELECT {selectClause}");
-        sb.AppendLine($@"FROM ""{schema}"".""InstancesData""");
-        sb.AppendLine(@"WHERE ""IsLatest"" = true");
-
-        if (!string.IsNullOrEmpty(whereClause))
+        if (requiresJoin)
         {
-            sb.AppendLine($"AND ({whereClause})");
+            sb.AppendLine($@"FROM ""{schema}"".""InstancesData"" d");
+            sb.AppendLine($@"INNER JOIN ""{schema}"".""Instances"" s ON s.""Id"" = d.""InstanceId""");
+            sb.AppendLine(@"WHERE d.""IsLatest"" = true");
+        }
+        else
+        {
+            sb.AppendLine($@"FROM ""{schema}"".""InstancesData""");
+            sb.AppendLine(@"WHERE ""IsLatest"" = true");
+        }
+
+        if (!string.IsNullOrEmpty(jsonWhereClause))
+        {
+            sb.AppendLine($"AND ({jsonWhereClause})");
+        }
+
+        if (!string.IsNullOrEmpty(instanceWhereClause))
+        {
+            sb.AppendLine($"AND ({instanceWhereClause})");
         }
 
         if (!string.IsNullOrEmpty(groupByClause))
@@ -300,7 +333,7 @@ public static class GraphQLAggregationService
         return sb.ToString();
     }
 
-    private static string BuildJsonTextAccessor(string field, string jsonColumnName)
+    private static string BuildJsonTextAccessor(string field, string jsonColumnName, string? dataTableAlias = null)
     {
         // Handle "attributes." prefix if present
         if (field.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase))
@@ -308,14 +341,18 @@ public static class GraphQLAggregationService
             field = field.Substring("attributes.".Length);
         }
 
+        var qualifiedJsonColumn = string.IsNullOrWhiteSpace(dataTableAlias)
+            ? $"\"{jsonColumnName}\""
+            : $"\"{dataTableAlias}\".\"{jsonColumnName}\"";
+
         if (field.Contains('.'))
         {
             var parts = field.Split('.');
             var arrayElements = string.Join(",", parts.Select(p => $"'{p}'"));
-            return $"(\"{jsonColumnName}\" #>> ARRAY[{arrayElements}])";
+            return $"({qualifiedJsonColumn} #>> ARRAY[{arrayElements}])";
         }
-        
-        return $"(\"{jsonColumnName}\" ->> '{field}')";
+
+        return $"({qualifiedJsonColumn} ->> '{field}')";
     }
 
     private static string SanitizeAlias(string field)

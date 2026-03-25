@@ -410,6 +410,24 @@ public class InstanceColumnFilterTests
                 "Status", "gt", "Active", ref parameterIndex));
     }
 
+    [Fact]
+    public void BuildCondition_SgtOnDateTimeColumn_ShouldThrow()
+    {
+        var parameterIndex = 0;
+        Should.Throw<ArgumentException>(() =>
+            InstanceColumnConditionBuilder.BuildCondition(
+                "CreatedAt", "sgt", "2024-01-01", ref parameterIndex));
+    }
+
+    [Fact]
+    public void BuildCondition_DgtOnStringColumn_ShouldThrow()
+    {
+        var parameterIndex = 0;
+        Should.Throw<ArgumentException>(() =>
+            InstanceColumnConditionBuilder.BuildCondition(
+                "Key", "dgt", "2024-01-01", ref parameterIndex));
+    }
+
     [Theory]
     [InlineData("Key", "eq", "test-key")]
     [InlineData("Flow", "like", "workflow")]
@@ -417,6 +435,8 @@ public class InstanceColumnFilterTests
     [InlineData("Status", "in", "Active,Busy")]
     [InlineData("CreatedAt", "between", "2024-01-01,2024-12-31")]
     [InlineData("ModifiedAt", "gt", "2024-06-01")]
+    [InlineData("ModifiedAt", "dgt", "2024-06-01")]
+    [InlineData("Key", "sgt", "A")]
     [InlineData("CompletedAt", "le", "2024-12-31")]
     [InlineData("IsTransient", "eq", "true")]
     public void BuildCondition_AllColumns_ShouldWorkCorrectly(string column, string op, string value)

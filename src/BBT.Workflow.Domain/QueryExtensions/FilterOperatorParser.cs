@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -8,7 +9,7 @@ namespace BBT.Workflow.Definitions;
 public static class FilterOperatorParser
 {
     private static readonly Regex OperatorRegex = new(
-        @"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):(.+)$", 
+        @"^([^=]+)=(eq|ne|gt|ge|lt|le|sgt|slt|dgt|dlt|between|match|like|startswith|endswith|in|nin):(.+)$", 
         RegexOptions.Compiled | RegexOptions.IgnoreCase,
         TimeSpan.FromMilliseconds(100));
     
@@ -71,6 +72,10 @@ public static class FilterOperatorParser
             "ge" => CreateComparisonExpression(jsonProperty, value, ExpressionType.GreaterThanOrEqual),
             "lt" => CreateComparisonExpression(jsonProperty, value, ExpressionType.LessThan),
             "le" => CreateComparisonExpression(jsonProperty, value, ExpressionType.LessThanOrEqual),
+            "sgt" => CreateStringOnlyComparisonExpression(jsonProperty, value, ExpressionType.GreaterThan),
+            "slt" => CreateStringOnlyComparisonExpression(jsonProperty, value, ExpressionType.LessThan),
+            "dgt" => CreateDateOnlyComparisonExpression(jsonProperty, value, ExpressionType.GreaterThan),
+            "dlt" => CreateDateOnlyComparisonExpression(jsonProperty, value, ExpressionType.LessThan),
             "between" => CreateBetweenExpression(jsonProperty, value),
             "match" or "like" => CreateContainsExpression(jsonProperty, value),
             "startswith" => CreateStartsWithExpression(jsonProperty, value),
@@ -149,6 +154,21 @@ public static class FilterOperatorParser
         );
     }
 
+    private static Expression CreateStringOnlyComparisonExpression(
+        Expression jsonProperty, string value, ExpressionType comparison) =>
+        Expression.MakeBinary(comparison, jsonProperty, Expression.Constant(value));
+
+    private static Expression CreateDateOnlyComparisonExpression(
+        Expression jsonProperty, string value, ExpressionType comparison)
+    {
+        var dateValue = FilterTimestampTzValueParser.ParseForTimestampTz(value);
+
+        return Expression.MakeBinary(
+            comparison,
+            Expression.Call(typeof(DateTime), "Parse", null, jsonProperty),
+            Expression.Constant(dateValue));
+    }
+
     private static Expression CreateBetweenExpression(Expression jsonProperty, string value)
     {
         var match = BetweenRegex.Match(value);
@@ -215,6 +235,10 @@ public static class FilterOperatorParser
             "ge" => CreateSimpleComparisonExpression(property, value, ExpressionType.GreaterThanOrEqual),
             "lt" => CreateSimpleComparisonExpression(property, value, ExpressionType.LessThan),
             "le" => CreateSimpleComparisonExpression(property, value, ExpressionType.LessThanOrEqual),
+            "sgt" => CreateSimpleStringLexicographicExpression(property, value, ExpressionType.GreaterThan),
+            "slt" => CreateSimpleStringLexicographicExpression(property, value, ExpressionType.LessThan),
+            "dgt" => CreateSimpleDateComparisonExpression(property, value, ExpressionType.GreaterThan),
+            "dlt" => CreateSimpleDateComparisonExpression(property, value, ExpressionType.LessThan),
             "between" => CreateSimpleBetweenExpression(property, value),
             "match" or "like" => CreateSimpleContainsExpression(property, value),
             "startswith" => CreateSimpleStartsWithExpression(property, value),
@@ -239,6 +263,38 @@ public static class FilterOperatorParser
         var propertyType = property.Type;
         var convertedValue = ConvertValueToType(value, propertyType);
         return Expression.MakeBinary(comparison, property, Expression.Constant(convertedValue, propertyType));
+    }
+
+    private static Expression CreateSimpleStringLexicographicExpression(
+        Expression property, string value, ExpressionType comparison)
+    {
+        var propertyType = property.Type;
+        if (propertyType != typeof(string))
+        {
+            throw new ArgumentException(
+                $"Operator sgt/slt is only supported for string properties; got {propertyType.Name}. Use gt/lt for numeric or dgt/dlt for dates.");
+        }
+
+        return Expression.MakeBinary(comparison, property, Expression.Constant(value, typeof(string)));
+    }
+
+    private static Expression CreateSimpleDateComparisonExpression(
+        Expression property, string value, ExpressionType comparison)
+    {
+        var propertyType = property.Type;
+        var nonNullable = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+        if (nonNullable != typeof(DateTime))
+        {
+            throw new ArgumentException(
+                $"Operator dgt/dlt is only supported for DateTime properties; got {propertyType.Name}.");
+        }
+
+        var dateValue = FilterTimestampTzValueParser.ParseForTimestampTz(value);
+
+        ConstantExpression constant = propertyType == typeof(DateTime?)
+            ? Expression.Constant((DateTime?)dateValue, typeof(DateTime?))
+            : Expression.Constant(dateValue, typeof(DateTime));
+        return Expression.MakeBinary(comparison, property, constant);
     }
 
     private static Expression CreateSimpleBetweenExpression(Expression property, string value)

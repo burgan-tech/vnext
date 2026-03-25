@@ -13,7 +13,7 @@ public static class FilterFormatDetector
     /// Supports Instance column names (key, status, flow, createdAt, etc.)
     /// </summary>
     private static readonly Regex LegacyFilterPattern = new(
-        @"^(attributes=|key=|status=|flow=|currentstate=|state=|createdat=|modifiedat=|completedat=|istransient=)?[a-zA-Z0-9._]+=(?:eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):.+$",
+        @"^(attributes=|key=|status=|flow=|currentstate=|state=|createdat=|modifiedat=|completedat=|istransient=)?[a-zA-Z0-9._]+=(?:eq|ne|gt|ge|lt|le|sgt|slt|dgt|dlt|between|match|like|startswith|endswith|in|nin):.+$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase,
         TimeSpan.FromMilliseconds(100));
 
@@ -149,6 +149,18 @@ public static class FilterFormatDetector
                 break;
             case "le":
                 condition.Le = ParseValue(value);
+                break;
+            case "sgt":
+                condition.Sgt = ParseValue(value);
+                break;
+            case "slt":
+                condition.Slt = ParseValue(value);
+                break;
+            case "dgt":
+                condition.Dgt = ParseValue(value);
+                break;
+            case "dlt":
+                condition.Dlt = ParseValue(value);
                 break;
             case "between":
                 var parts = value.Split(',').Select(v => ParseValue(v.Trim())).ToArray();

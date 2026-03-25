@@ -342,8 +342,9 @@ public static class GraphQLFilterParser
         return lowerName switch
         {
             "eq" or "ne" or "gt" or "ge" or "lt" or "le" or
+            "sgt" or "slt" or "dgt" or "dlt" or
             "between" or "like" or "match" or "startswith" or "endswith" or
-            "in" or "nin" or "isnull" => true,
+            "in" or "nin" or "contains" or "isnull" => true,
             _ => false
         };
     }

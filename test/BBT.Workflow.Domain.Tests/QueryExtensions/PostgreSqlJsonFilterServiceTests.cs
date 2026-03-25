@@ -91,6 +91,49 @@ public class PostgreSqlJsonFilterServiceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void BuildFilteredQuery_ShouldGenerateSql_ForStringGreaterThan_WithoutNumericCast()
+    {
+        var filters = new[] { "code=sgt:M" };
+
+        var (sql, parameters) = PostgreSqlJsonFilterService.BuildFilteredQuery<TestEntity>(
+            filters, "Json", "TestEntities");
+
+        Assert.NotEmpty(sql);
+        Assert.Contains(">", sql);
+        Assert.DoesNotContain("::numeric", sql);
+        Assert.Single(parameters);
+    }
+
+    [Fact]
+    public void BuildFilteredQuery_ShouldGenerateSql_ForDateGreaterThan_WithTimestamptzCast()
+    {
+        var filters = new[] { "startedAt=dgt:2024-01-01" };
+
+        var (sql, parameters) = PostgreSqlJsonFilterService.BuildFilteredQuery<TestEntity>(
+            filters, "Json", "TestEntities");
+
+        Assert.NotEmpty(sql);
+        Assert.Contains("::timestamptz", sql);
+        Assert.Contains(">", sql);
+        Assert.Single(parameters);
+    }
+
+    [Fact]
+    public void BuildFilteredQuery_ShouldGenerateSql_ForDateGreaterThan_WithUnixEpochSeconds()
+    {
+        const long unixSeconds = 1_704_067_200L;
+        var filters = new[] { $"startedAt=dgt:{unixSeconds}" };
+
+        var (sql, parameters) = PostgreSqlJsonFilterService.BuildFilteredQuery<TestEntity>(
+            filters, "Json", "TestEntities");
+
+        Assert.NotEmpty(sql);
+        Assert.Contains("::timestamptz", sql);
+        Assert.Single(parameters);
+        Assert.Equal(System.DateTimeOffset.FromUnixTimeSeconds(unixSeconds).UtcDateTime, parameters[0].Value);
+    }
+
+    [Fact]
     public void BuildFilteredQuery_ShouldGenerateSql_ForBetweenFilter()
     {
         // Arrange

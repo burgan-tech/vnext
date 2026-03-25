@@ -1,4 +1,8 @@
 using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -77,7 +81,7 @@ public static class GraphQLJsonFilterService
         var parameterIndex = 0;
 
         var (jsonWhereClause, instanceWhereClause) = BuildSeparatedWhereClauses(
-            filterNode, jsonColumnName, parameters, ref parameterIndex, logger);
+            filterNode, jsonColumnName, parameters, ref parameterIndex, logger: logger);
 
         if (string.IsNullOrEmpty(jsonWhereClause) && string.IsNullOrEmpty(instanceWhereClause))
             return dbSet;
@@ -173,15 +177,28 @@ public static class GraphQLJsonFilterService
     }
 
     /// <summary>
-    /// Build separated WHERE clauses from GraphQL filter node (JSON and Instance filters)
+    /// Build separated WHERE clauses from GraphQL filter node (JSON and Instance filters).
     /// </summary>
-    private static (string jsonWhereClause, string instanceWhereClause) BuildSeparatedWhereClauses(
-        GraphQLFilterNode node,
+    /// <param name="node">Parsed filter node.</param>
+    /// <param name="jsonColumnName">JSON column name.</param>
+    /// <param name="parameters">Output SQL parameters.</param>
+    /// <param name="parameterIndex">Current parameter index for placeholder generation.</param>
+    /// <param name="dataTableAlias">
+    /// Optional table alias for JSON column qualification (e.g. <c>d</c> to produce <c>("d"."Data" -&gt;&gt; 'field')</c>).
+    /// When null/empty, the JSON column remains unqualified to preserve existing query behavior.
+    /// </param>
+    /// <param name="logger">Optional logger for condition build warnings.</param>
+    public static (string jsonWhereClause, string instanceWhereClause) BuildSeparatedWhereClauses(
+        GraphQLFilterNode? node,
         string jsonColumnName,
         List<NpgsqlParameter> parameters,
         ref int parameterIndex,
+        string? dataTableAlias = null,
         ILogger? logger = null)
     {
+        if (node == null || node.NodeType == FilterNodeType.Empty)
+            return (string.Empty, string.Empty);
+
         var jsonClauses = new List<string>();
         var instanceClauses = new List<string>();
 
@@ -190,7 +207,19 @@ public static class GraphQLJsonFilterService
         var jsonWhereClause = jsonClauses.Count > 0 ? string.Join(" AND ", jsonClauses) : string.Empty;
         var instanceWhereClause = instanceClauses.Count > 0 ? string.Join(" AND ", instanceClauses) : string.Empty;
 
+        if (!string.IsNullOrWhiteSpace(jsonWhereClause) && !string.IsNullOrWhiteSpace(dataTableAlias))
+        {
+            jsonWhereClause = QualifyJsonColumnReferences(jsonWhereClause, jsonColumnName, dataTableAlias!);
+        }
+
         return (jsonWhereClause, instanceWhereClause);
+    }
+
+    private static string QualifyJsonColumnReferences(string clause, string jsonColumnName, string dataTableAlias)
+    {
+        var columnToken = $"(\"{jsonColumnName}\"";
+        var aliasToken = $"(\"{dataTableAlias}\".\"{jsonColumnName}\"";
+        return clause.Replace(columnToken, aliasToken, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -395,7 +424,10 @@ public static class GraphQLJsonFilterService
         {
             try
             {
-                var stringValue = ConvertToString(value);
+                var stringValue = op.Equals("contains", StringComparison.OrdinalIgnoreCase) &&
+                                   columnName.Equals("Tags", StringComparison.Ordinal)
+                    ? ConvertContainsValueToTagString(value)
+                    : ConvertToString(value);
                 var (conditionSql, conditionParams) = InstanceColumnConditionBuilder.BuildCondition(
                     columnName, op, stringValue, ref parameterIndex);
                 
@@ -509,6 +541,7 @@ public static class GraphQLJsonFilterService
             System.Text.Json.JsonValueKind.Array => element.EnumerateArray()
                 .Select(ConvertJsonElement)
                 .ToArray(),
+            System.Text.Json.JsonValueKind.Object => element.Clone(),
             _ => element.GetRawText()
         };
     }
@@ -519,8 +552,9 @@ public static class GraphQLJsonFilterService
         return lowerName switch
         {
             "eq" or "ne" or "gt" or "ge" or "lt" or "le" or
+            "sgt" or "slt" or "dgt" or "dlt" or
             "between" or "like" or "match" or "startswith" or "endswith" or
-            "in" or "nin" or "isnull" => true,
+            "in" or "nin" or "contains" or "isnull" => true,
             _ => false
         };
     }
@@ -541,12 +575,17 @@ public static class GraphQLJsonFilterService
             "ge" => BuildNumericCondition(field, value, ">=", jsonColumnName, parameters, ref parameterIndex),
             "lt" => BuildNumericCondition(field, value, "<", jsonColumnName, parameters, ref parameterIndex),
             "le" => BuildNumericCondition(field, value, "<=", jsonColumnName, parameters, ref parameterIndex),
+            "sgt" => BuildStringComparisonCondition(field, value, ">", jsonColumnName, parameters, ref parameterIndex),
+            "slt" => BuildStringComparisonCondition(field, value, "<", jsonColumnName, parameters, ref parameterIndex),
+            "dgt" => BuildDateComparisonCondition(field, value, ">", jsonColumnName, parameters, ref parameterIndex),
+            "dlt" => BuildDateComparisonCondition(field, value, "<", jsonColumnName, parameters, ref parameterIndex),
             "between" => BuildBetweenCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
             "like" or "match" => BuildLikeCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
             "startswith" => BuildStartsWithCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
             "endswith" => BuildEndsWithCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
             "in" => BuildInCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
             "nin" => BuildNotInCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
+            "contains" => BuildJsonArrayContainsCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
             "isnull" => BuildIsNullCondition(field, value, jsonColumnName),
             _ => throw new ArgumentException($"Unsupported operator: {operatorType}")
         };
@@ -598,6 +637,124 @@ public static class GraphQLJsonFilterService
         return $"(\"{jsonColumnName}\" ->> '{field}')";
     }
 
+    /// <summary>
+    /// JSON path as jsonb (for array containment). Use for "contains" on JSON array fields — not text extraction.
+    /// </summary>
+    private static string BuildJsonbAccessor(string field, string jsonColumnName)
+    {
+        if (IsNestedPath(field))
+        {
+            var parts = field.Split('.');
+            var arrayElements = string.Join(",", parts.Select(p => $"'{p}'"));
+            return $"(\"{jsonColumnName}\" #> ARRAY[{arrayElements}])";
+        }
+
+        return $"(\"{jsonColumnName}\"->'{field}')";
+    }
+
+    private static string BuildJsonArrayContainsCondition(
+        string field, object? value, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        var payload = SerializeSingleElementJsonArray(value);
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = payload, NpgsqlDbType = NpgsqlDbType.Jsonb });
+
+        var accessor = BuildJsonbAccessor(field, jsonColumnName);
+        return $"{accessor} @> {{{paramIndex}}}::jsonb";
+    }
+
+    private static string SerializeSingleElementJsonArray(object? value)
+    {
+        if (value is System.Text.Json.JsonElement je)
+        {
+            return je.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.Object => WrapJsonObjectAsSingleElementJsonArray(je),
+                System.Text.Json.JsonValueKind.Array =>
+                    throw new ArgumentException(
+                        "contains does not accept a JSON array value. Use a scalar (e.g. \"pm-001\") for primitive arrays, or an object for object arrays."),
+                _ => JsonSerializer.Serialize(
+                    new[] { ConvertJsonElementToArrayElement(je) },
+                    new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping })
+            };
+        }
+
+        var element = ConvertFilterValueToJsonArrayElement(value);
+        return JsonSerializer.Serialize(
+            new[] { element },
+            new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+    }
+
+    /// <summary>
+    /// Produces <c>[{ ... }]</c> for jsonb <c>@></c> without double-encoding the object.
+    /// </summary>
+    private static string WrapJsonObjectAsSingleElementJsonArray(System.Text.Json.JsonElement objectElement)
+    {
+        if (objectElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            throw new ArgumentException("Expected a JSON object for contains object-array containment.");
+        }
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartArray();
+            objectElement.WriteTo(writer);
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static string ConvertContainsValueToTagString(object? value)
+    {
+        return value switch
+        {
+            string s => s,
+            System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.String =>
+                je.GetString() ?? string.Empty,
+            _ => throw new ArgumentException("Tags contains expects a string value.", nameof(value))
+        };
+    }
+
+    private static object ConvertFilterValueToJsonArrayElement(object? value)
+    {
+        return value switch
+        {
+            null => throw new ArgumentException("contains operator requires a non-null value."),
+            System.Text.Json.JsonElement je => ConvertJsonElementToArrayElement(je),
+            bool b => b,
+            byte bt => bt,
+            short s => s,
+            int i => i,
+            long l => l,
+            decimal d => d,
+            double dbl => dbl,
+            float f => f,
+            string s => s,
+            _ => ConvertToString(value)
+        };
+    }
+
+    private static object ConvertJsonElementToArrayElement(System.Text.Json.JsonElement je)
+    {
+        return je.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.String => je.GetString() ?? string.Empty,
+            System.Text.Json.JsonValueKind.Number when je.TryGetInt64(out var l) => l,
+            System.Text.Json.JsonValueKind.Number when je.TryGetDecimal(out var d) => d,
+            System.Text.Json.JsonValueKind.True => true,
+            System.Text.Json.JsonValueKind.False => false,
+            System.Text.Json.JsonValueKind.Null => string.Empty,
+            System.Text.Json.JsonValueKind.Object =>
+                throw new InvalidOperationException("Object-shaped contains must use WrapJsonObjectAsSingleElementJsonArray."),
+            System.Text.Json.JsonValueKind.Array =>
+                throw new InvalidOperationException("Array-shaped contains must be rejected before ConvertJsonElementToArrayElement."),
+            _ => je.GetRawText()
+        };
+    }
+
     private static string BuildNestedJsonContainmentPattern(string field, object? value, bool isNumeric, bool isBoolean)
     {
         var parts = field.Split('.');
@@ -645,6 +802,17 @@ public static class GraphQLJsonFilterService
             long l => l.ToString(CultureInfo.InvariantCulture),
             decimal d => d.ToString(CultureInfo.InvariantCulture),
             double dbl => dbl.ToString(CultureInfo.InvariantCulture),
+            System.Text.Json.JsonElement je => je.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.String => je.GetString() ?? string.Empty,
+                System.Text.Json.JsonValueKind.Number => je.GetRawText(),
+                System.Text.Json.JsonValueKind.True => "true",
+                System.Text.Json.JsonValueKind.False => "false",
+                System.Text.Json.JsonValueKind.Null => string.Empty,
+                System.Text.Json.JsonValueKind.Object => je.GetRawText(),
+                System.Text.Json.JsonValueKind.Array => je.GetRawText(),
+                _ => je.GetRawText()
+            },
             _ => value.ToString() ?? string.Empty
         };
     }
@@ -747,6 +915,31 @@ public static class GraphQLJsonFilterService
 
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
         return $"{accessor}::numeric {sqlOperator} {{{paramIndex}}}";
+    }
+
+    private static string BuildStringComparisonCondition(
+        string field, object? value, string sqlOperator, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        var stringValue = ConvertToString(value);
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = stringValue, NpgsqlDbType = NpgsqlDbType.Text });
+
+        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+        return $"{accessor} {sqlOperator} {{{paramIndex}}}";
+    }
+
+    private static string BuildDateComparisonCondition(
+        string field, object? value, string sqlOperator, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        var dateValue = FilterTimestampTzValueParser.ParseForTimestampTz(value);
+
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = dateValue, NpgsqlDbType = NpgsqlDbType.TimestampTz });
+
+        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+        return $"{accessor}::timestamptz {sqlOperator} {{{paramIndex}}}";
     }
 
     private static string BuildBetweenCondition(

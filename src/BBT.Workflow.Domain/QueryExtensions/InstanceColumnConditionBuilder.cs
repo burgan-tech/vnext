@@ -1,4 +1,3 @@
-using System.Globalization;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -14,7 +13,7 @@ public static class InstanceColumnConditionBuilder
     /// Build PostgreSQL WHERE condition for an Instance table column
     /// </summary>
     /// <param name="columnName">Instance column name (e.g., "Key", "Status", "CreatedAt")</param>
-    /// <param name="operatorType">Filter operator (eq, ne, gt, ge, lt, le, between, like, startswith, endswith, in, nin)</param>
+    /// <param name="operatorType">Filter operator (eq, ne, gt, ge, lt, le, sgt, slt, dgt, dlt, between, like, startswith, endswith, in, nin)</param>
     /// <param name="value">Filter value (string representation)</param>
     /// <param name="parameterIndex">Parameter index counter (ref for auto-increment)</param>
     /// <returns>Tuple of (SQL condition string, list of NpgsqlParameters)</returns>
@@ -48,6 +47,10 @@ public static class InstanceColumnConditionBuilder
             "ge" => BuildComparisonCondition(properColumnName, value, ">=", ref parameterIndex),
             "lt" => BuildComparisonCondition(properColumnName, value, "<", ref parameterIndex),
             "le" => BuildComparisonCondition(properColumnName, value, "<=", ref parameterIndex),
+            "sgt" => BuildLexicographicComparisonIfStringColumn(properColumnName, value, ">", ref parameterIndex),
+            "slt" => BuildLexicographicComparisonIfStringColumn(properColumnName, value, "<", ref parameterIndex),
+            "dgt" => BuildDateComparisonIfDateTimeColumn(properColumnName, value, ">", ref parameterIndex),
+            "dlt" => BuildDateComparisonIfDateTimeColumn(properColumnName, value, "<", ref parameterIndex),
             "between" => BuildBetweenCondition(properColumnName, value, ref parameterIndex),
             "like" or "match" => BuildLikeCondition(properColumnName, value, ref parameterIndex),
             "startswith" => BuildStartsWithCondition(properColumnName, value, ref parameterIndex),
@@ -90,6 +93,38 @@ public static class InstanceColumnConditionBuilder
 
         var condition = $"s.\"{columnName}\" != {{{paramIndex}}}";
         return (condition, parameters);
+    }
+
+    /// <summary>
+    /// sgt/slt: same SQL as gt/lt but only allowed for string-typed instance columns.
+    /// </summary>
+    private static (string, List<NpgsqlParameter>) BuildLexicographicComparisonIfStringColumn(
+        string columnName, string value, string sqlOperator, ref int parameterIndex)
+    {
+        if (GetColumnType(columnName) != ColumnType.String)
+        {
+            throw new ArgumentException(
+                $"Operator sgt/slt is only valid for text instance columns (e.g. Key, Flow, CurrentState). Column '{columnName}' is not a string column; use gt/lt for numeric JSON or instance integer fields, or dgt/dlt for dates.",
+                nameof(columnName));
+        }
+
+        return BuildComparisonCondition(columnName, value, sqlOperator, ref parameterIndex);
+    }
+
+    /// <summary>
+    /// dgt/dlt: same SQL as gt/lt but only allowed for date/time instance columns.
+    /// </summary>
+    private static (string, List<NpgsqlParameter>) BuildDateComparisonIfDateTimeColumn(
+        string columnName, string value, string sqlOperator, ref int parameterIndex)
+    {
+        if (GetColumnType(columnName) != ColumnType.DateTime)
+        {
+            throw new ArgumentException(
+                $"Operator dgt/dlt is only valid for date/time columns (CreatedAt, ModifiedAt, CompletedAt). Column '{columnName}' is not a date column.",
+                nameof(columnName));
+        }
+
+        return BuildComparisonCondition(columnName, value, sqlOperator, ref parameterIndex);
     }
 
     /// <summary>
@@ -321,12 +356,8 @@ public static class InstanceColumnConditionBuilder
     /// </summary>
     private static NpgsqlParameter CreateDateTimeParameter(string value)
     {
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var dateValue))
-        {
-            return new NpgsqlParameter { Value = dateValue, NpgsqlDbType = NpgsqlDbType.TimestampTz };
-        }
-
-        throw new ArgumentException($"Invalid DateTime value: {value}");
+        var dateValue = FilterTimestampTzValueParser.ParseForTimestampTz(value);
+        return new NpgsqlParameter { Value = dateValue, NpgsqlDbType = NpgsqlDbType.TimestampTz };
     }
 
     /// <summary>

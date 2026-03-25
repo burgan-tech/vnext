@@ -255,12 +255,17 @@ public static class PostgreSqlJsonFilterService
             "ge" => BuildNumericCondition(sanitizedField, value, ">=", jsonColumnName, parameters, ref parameterIndex),
             "lt" => BuildNumericCondition(sanitizedField, value, "<", jsonColumnName, parameters, ref parameterIndex),
             "le" => BuildNumericCondition(sanitizedField, value, "<=", jsonColumnName, parameters, ref parameterIndex),
+            "sgt" => BuildStringComparisonCondition(sanitizedField, value, ">", jsonColumnName, parameters, ref parameterIndex),
+            "slt" => BuildStringComparisonCondition(sanitizedField, value, "<", jsonColumnName, parameters, ref parameterIndex),
+            "dgt" => BuildDateComparisonCondition(sanitizedField, value, ">", jsonColumnName, parameters, ref parameterIndex),
+            "dlt" => BuildDateComparisonCondition(sanitizedField, value, "<", jsonColumnName, parameters, ref parameterIndex),
             "between" => BuildBetweenCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "match" or "like" => BuildLikeCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "startswith" => BuildStartsWithCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "endswith" => BuildEndsWithCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "in" => BuildInCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "nin" => BuildNotInCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
+            "contains" => BuildJsonArrayContainsCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             _ => throw new ArgumentException($"Unsupported operator: {operatorType}")
         };
     }
@@ -363,6 +368,40 @@ public static class PostgreSqlJsonFilterService
             // Use ->> operator for single level field (existing behavior)
             return $"(\"{jsonColumnName}\" ->> '{field}')";
         }
+    }
+
+    private static string BuildJsonbAccessor(string field, string jsonColumnName)
+    {
+        if (IsNestedPath(field))
+        {
+            var parts = field.Split('.');
+            var arrayElements = string.Join(",", parts.Select(p => $"'{p}'"));
+            return $"(\"{jsonColumnName}\" #> ARRAY[{arrayElements}])";
+        }
+
+        return $"(\"{jsonColumnName}\"->'{field}')";
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildJsonArrayContainsCondition(
+        string field, string value, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        var payload = SerializeLegacyStringToSingleElementJsonArray(value);
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = payload, NpgsqlDbType = NpgsqlDbType.Jsonb });
+        var accessor = BuildJsonbAccessor(field, jsonColumnName);
+        var condition = $"{accessor} @> {{{paramIndex}}}::jsonb";
+        return (condition, parameters);
+    }
+
+    private static string SerializeLegacyStringToSingleElementJsonArray(string value)
+    {
+        var jsonOpts = new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        if (bool.TryParse(value, out var b))
+            return JsonSerializer.Serialize(new[] { b }, jsonOpts);
+        if (decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var d))
+            return JsonSerializer.Serialize(new[] { d }, jsonOpts);
+        return JsonSerializer.Serialize(new[] { value }, jsonOpts);
     }
 
     private static (string, List<NpgsqlParameter>) BuildEqualsCondition(
@@ -510,6 +549,32 @@ public static class PostgreSqlJsonFilterService
         // PostgreSQL native numeric comparison
         var condition = $"{accessor}::numeric {sqlOperator} {{{paramIndex}}}";
         
+        return (condition, parameters);
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildStringComparisonCondition(
+        string field, string value, string sqlOperator, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = value, NpgsqlDbType = NpgsqlDbType.Text });
+
+        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+        var condition = $"{accessor} {sqlOperator} {{{paramIndex}}}";
+        return (condition, parameters);
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildDateComparisonCondition(
+        string field, string value, string sqlOperator, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        var dateValue = FilterTimestampTzValueParser.ParseForTimestampTz(value);
+
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = dateValue, NpgsqlDbType = NpgsqlDbType.TimestampTz });
+
+        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+        var condition = $"{accessor}::timestamptz {sqlOperator} {{{paramIndex}}}";
         return (condition, parameters);
     }
 

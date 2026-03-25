@@ -177,6 +177,18 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
                 case "le":
                     condition.Le = ReadValue(ref reader);
                     break;
+                case "sgt":
+                    condition.Sgt = ReadValue(ref reader);
+                    break;
+                case "slt":
+                    condition.Slt = ReadValue(ref reader);
+                    break;
+                case "dgt":
+                    condition.Dgt = ReadValue(ref reader);
+                    break;
+                case "dlt":
+                    condition.Dlt = ReadValue(ref reader);
+                    break;
                 case "between":
                     condition.Between = ReadValueArray(ref reader);
                     break;
@@ -197,6 +209,9 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
                     break;
                 case "nin":
                     condition.NotIn = ReadValueArray(ref reader);
+                    break;
+                case "contains":
+                    condition.Contains = ReadContainsOperand(ref reader);
                     break;
                 case "isnull":
                     condition.IsNull = reader.TokenType == JsonTokenType.Null ? null : reader.GetBoolean();
@@ -232,6 +247,19 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
             JsonTokenType.False => false,
             JsonTokenType.Null => null,
             _ => throw new JsonException($"Unexpected token type: {reader.TokenType}")
+        };
+    }
+
+    /// <summary>
+    /// contains: scalar (string/number/bool) or JSON object for object-in-array containment; JSON array is rejected at SQL build.
+    /// </summary>
+    private static object? ReadContainsOperand(ref Utf8JsonReader reader)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.StartObject or JsonTokenType.StartArray =>
+                JsonDocument.ParseValue(ref reader).RootElement.Clone(),
+            _ => ReadValue(ref reader)
         };
     }
 

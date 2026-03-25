@@ -195,6 +195,22 @@ public class FieldCondition
     [JsonPropertyName("le")]
     public object? Le { get; set; }
 
+    /// <summary>String greater than (lexicographic, JSON text vs text)</summary>
+    [JsonPropertyName("sgt")]
+    public object? Sgt { get; set; }
+
+    /// <summary>String less than (lexicographic)</summary>
+    [JsonPropertyName("slt")]
+    public object? Slt { get; set; }
+
+    /// <summary>Date/time greater than (ISO / invariant parse; timestamptz comparison)</summary>
+    [JsonPropertyName("dgt")]
+    public object? Dgt { get; set; }
+
+    /// <summary>Date/time less than</summary>
+    [JsonPropertyName("dlt")]
+    public object? Dlt { get; set; }
+
     /// <summary>Between two values (array of [min, max])</summary>
     [JsonPropertyName("between")]
     public object[]? Between { get; set; }
@@ -223,6 +239,10 @@ public class FieldCondition
     [JsonPropertyName("nin")]
     public object[]? NotIn { get; set; }
 
+    /// <summary>JSON array contains element, or Instance tags contains tag (single value)</summary>
+    [JsonPropertyName("contains")]
+    public object? Contains { get; set; }
+
     /// <summary>Null check (true = is null, false = is not null)</summary>
     [JsonPropertyName("isNull")]
     public bool? IsNull { get; set; }
@@ -245,6 +265,10 @@ public class FieldCondition
         if (Ge != null) yield return ("ge", Ge);
         if (Lt != null) yield return ("lt", Lt);
         if (Le != null) yield return ("le", Le);
+        if (Sgt != null) yield return ("sgt", Sgt);
+        if (Slt != null) yield return ("slt", Slt);
+        if (Dgt != null) yield return ("dgt", Dgt);
+        if (Dlt != null) yield return ("dlt", Dlt);
         if (Between != null) yield return ("between", Between);
         if (Like != null) yield return ("like", Like);
         if (Match != null) yield return ("match", Match);
@@ -252,6 +276,9 @@ public class FieldCondition
         if (EndsWith != null) yield return ("endswith", EndsWith);
         if (In != null) yield return ("in", In);
         if (NotIn != null) yield return ("nin", NotIn);
+        if (Contains != null && !(Contains is System.Text.Json.JsonElement containJe &&
+                                  containJe.ValueKind == System.Text.Json.JsonValueKind.Null))
+            yield return ("contains", Contains);
         if (IsNull.HasValue) yield return ("isNull", IsNull.Value);
     }
 }

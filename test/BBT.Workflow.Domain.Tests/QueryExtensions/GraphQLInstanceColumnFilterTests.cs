@@ -96,6 +96,47 @@ public class GraphQLInstanceColumnFilterTests
     }
 
     [Fact]
+    public void ParseFilter_WithRootLevelCreatedAtDgt_ShouldParseCorrectly()
+    {
+        var filterJson = @"{""createdAt"":{""dgt"":""2024-01-01""}}";
+
+        var filterNode = GraphQLFilterParser.ParseFilter(filterJson);
+
+        filterNode.ShouldNotBeNull();
+        filterNode.NodeType.ShouldBe(FilterNodeType.Condition);
+        filterNode.Attributes.ShouldNotBeNull();
+        filterNode.Attributes.ShouldContainKey("createdAt");
+        filterNode.Attributes["createdAt"].Dgt.ShouldBe("2024-01-01");
+    }
+
+    [Fact]
+    public void ParseFilter_AttributesMembersContainsObject_ShouldParseAsJsonElement()
+    {
+        var filterJson = """{"attributes":{"members":{"contains":{"type":"member","memberId":"X"}}}}""";
+
+        var filterNode = GraphQLFilterParser.ParseFilter(filterJson);
+
+        filterNode.ShouldNotBeNull();
+        filterNode.Attributes.ShouldNotBeNull();
+        filterNode.Attributes.ShouldContainKey("members");
+        filterNode.Attributes["members"].Contains.ShouldBeOfType<JsonElement>();
+        var je = (JsonElement)filterNode.Attributes["members"].Contains!;
+        je.ValueKind.ShouldBe(JsonValueKind.Object);
+    }
+
+    [Fact]
+    public void ParseFilter_WithRootLevelTagsContainsString_ShouldParseCorrectly()
+    {
+        var filterJson = """{"tags":{"contains":"alpha"}}""";
+
+        var filterNode = GraphQLFilterParser.ParseFilter(filterJson);
+
+        filterNode.ShouldNotBeNull();
+        filterNode.Attributes.ShouldContainKey("tags");
+        filterNode.Attributes["tags"].Contains.ShouldBe("alpha");
+    }
+
+    [Fact]
     public void ParseFilter_WithRootLevelFlow_ShouldParseCorrectly()
     {
         // Arrange
