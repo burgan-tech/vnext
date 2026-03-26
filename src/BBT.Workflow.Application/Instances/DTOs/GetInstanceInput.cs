@@ -63,7 +63,7 @@ public sealed class GetInstanceListInput : IHasDomain
     /// <summary>
     /// Extensions requested for data enrichment
     /// </summary>
-    public string[]? Extension { get; set; }
+    public string[]? Extensions { get; set; }
 
     /// <summary>
     /// Filter to apply to the query (JSON format, e.g. GraphQL-style or legacy)

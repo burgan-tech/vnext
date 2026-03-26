@@ -23,6 +23,12 @@ public sealed class TransitionInput(
     public bool Sync { get; set; } = sync;
 
     /// <summary>
+    /// Extension data to evaluate and include in the sync response. Keys are extension identifiers.
+    /// Evaluated only when <see cref="Sync"/> is true.
+    /// </summary>
+    public string[]? Extensions { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>

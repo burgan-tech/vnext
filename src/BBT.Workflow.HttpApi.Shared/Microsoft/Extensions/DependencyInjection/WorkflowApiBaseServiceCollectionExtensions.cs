@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text.Json.Serialization;
 using BBT.Aether.AspNetCore.ExceptionHandling;
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Domain.Services;
@@ -158,7 +157,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     
     public static IServiceCollection AppMapper(this IServiceCollection services)
     {
-        services.AddAetherAutoMapperMapper(
+        services.AddAetherMapperlyMapper(
         [
             typeof(WorkflowApiBaseServiceCollectionExtensions), // HttpApi.Shared
             typeof(WorkflowDomainModuleServiceCollectionExtensions), // Domain

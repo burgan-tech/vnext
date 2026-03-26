@@ -22,14 +22,12 @@ public class TimerSchedule : ValueObject
         TimerScheduleType scheduleType,
         string? expression,
         DateTime? scheduledDateTime,
-        TimeSpan? duration,
-        CronExpressionBuilder? cronBuilder = null)
+        TimeSpan? duration)
     {
         ScheduleType = scheduleType;
         Expression = expression;
         ScheduledDateTime = scheduledDateTime;
         Duration = duration;
-        CronBuilder = cronBuilder;
         
         ValidateSchedule();
     }
@@ -56,12 +54,6 @@ public class TimerSchedule : ValueObject
     public TimeSpan? Duration { get; private set; }
 
     /// <summary>
-    /// The Cron expression builder for Cron-based schedules.
-    /// </summary>
-    [JsonIgnore]
-    public CronExpressionBuilder? CronBuilder { get; private set; }
-
-    /// <summary>
     /// Creates a timer schedule for a specific DateTime.
     /// </summary>
     /// <param name="dateTime">The specific DateTime when the timer should execute.</param>
@@ -69,39 +61,6 @@ public class TimerSchedule : ValueObject
     public static TimerSchedule FromDateTime(DateTime dateTime)
     {
         return new TimerSchedule(TimerScheduleType.DateTime, null, dateTime, null);
-    }
-
-    /// <summary>
-    /// Creates a timer schedule using a Cron expression string.
-    /// </summary>
-    /// <param name="cronExpression">A valid Cron expression (e.g., "0 9 * * *" for daily at 9 AM).</param>
-    /// <returns>A WorkflowTimerSchedule configured for Cron execution.</returns>
-    public static TimerSchedule FromCronExpression(string cronExpression)
-    {
-        Check.NotNullOrWhiteSpace(cronExpression, nameof(cronExpression));
-        return new TimerSchedule(TimerScheduleType.Cron, cronExpression, null, null);
-    }
-
-    /// <summary>
-    /// Creates a timer schedule using a fluent Cron expression builder.
-    /// </summary>
-    /// <param name="cronBuilder">The fluent Cron expression builder.</param>
-    /// <returns>A WorkflowTimerSchedule configured for Cron execution.</returns>
-    public static TimerSchedule FromCronExpression(CronExpressionBuilder cronBuilder)
-    {
-        ArgumentNullException.ThrowIfNull(cronBuilder, nameof(cronBuilder));
-        return new TimerSchedule(TimerScheduleType.Cron, cronBuilder.ToString(), null, null, cronBuilder);
-    }
-
-    /// <summary>
-    /// Creates a timer schedule using a Dapr expression string (supports Cron and @ prefixed expressions).
-    /// </summary>
-    /// <param name="expression">The Dapr expression (Cron or @ prefixed like "@daily", "@hourly").</param>
-    /// <returns>A WorkflowTimerSchedule configured for the expression.</returns>
-    public static TimerSchedule FromExpression(string expression)
-    {
-        Check.NotNullOrWhiteSpace(expression, nameof(expression));
-        return new TimerSchedule(TimerScheduleType.Cron, expression, null, null);
     }
 
     /// <summary>
@@ -122,37 +81,7 @@ public class TimerSchedule : ValueObject
     {
         return new TimerSchedule(TimerScheduleType.Immediate, null, null, null);
     }
-
-    /// <summary>
-    /// Predefined schedule for yearly execution.
-    /// </summary>
-    public static TimerSchedule Yearly => FromExpression("@yearly");
-
-    /// <summary>
-    /// Predefined schedule for monthly execution.
-    /// </summary>
-    public static TimerSchedule Monthly => FromExpression("@monthly");
-
-    /// <summary>
-    /// Predefined schedule for weekly execution.
-    /// </summary>
-    public static TimerSchedule Weekly => FromExpression("@weekly");
-
-    /// <summary>
-    /// Predefined schedule for daily execution.
-    /// </summary>
-    public static TimerSchedule Daily => FromExpression("@daily");
-
-    /// <summary>
-    /// Predefined schedule for execution at midnight daily.
-    /// </summary>
-    public static TimerSchedule Midnight => FromExpression("@midnight");
-
-    /// <summary>
-    /// Predefined schedule for hourly execution.
-    /// </summary>
-    public static TimerSchedule Hourly => FromExpression("@hourly");
-
+    
     /// <summary>
     /// Converts this WorkflowTimerSchedule to a DaprJobSchedule for job scheduling.
     /// </summary>
@@ -162,27 +91,8 @@ public class TimerSchedule : ValueObject
         return ScheduleType switch
         {
             TimerScheduleType.DateTime => DaprJobSchedule.FromDateTime(ScheduledDateTime!.Value),
-            TimerScheduleType.Cron when CronBuilder != null => DaprJobSchedule.FromCronExpression(CronBuilder),
-            TimerScheduleType.Cron when !string.IsNullOrEmpty(Expression) => DaprJobSchedule.FromExpression(Expression),
-            TimerScheduleType.Duration => DaprJobSchedule.FromDuration(Duration!.Value),
-            TimerScheduleType.Immediate => DaprJobSchedule.FromDateTime(DateTime.UtcNow.AddSeconds(1)),
-            _ => throw new InvalidOperationException($"Unsupported schedule type: {ScheduleType}")
-        };
-    }
-
-    /// <summary>
-    /// Gets the next execution DateTime for this schedule.
-    /// For Cron expressions, this calculates the next occurrence.
-    /// </summary>
-    /// <returns>The next DateTime when this schedule should execute.</returns>
-    public DateTime GetNextExecutionTime()
-    {
-        return ScheduleType switch
-        {
-            TimerScheduleType.DateTime => ScheduledDateTime!.Value,
-            TimerScheduleType.Cron => CalculateNextCronExecution(Expression!),
-            TimerScheduleType.Duration => DateTime.UtcNow.Add(Duration!.Value),
-            TimerScheduleType.Immediate => DateTime.UtcNow.AddSeconds(1),
+            TimerScheduleType.Duration => DaprJobSchedule.FromDateTime(DateTimeOffset.UtcNow.Add(Duration!.Value)),
+            TimerScheduleType.Immediate => DaprJobSchedule.FromDateTime(DateTimeOffset.UtcNow.AddSeconds(2)),
             _ => throw new InvalidOperationException($"Unsupported schedule type: {ScheduleType}")
         };
     }
@@ -199,12 +109,6 @@ public class TimerSchedule : ValueObject
                     throw new ArgumentException("ScheduledDateTime is required for DateTime schedule type.");
                 break;
                 
-            case TimerScheduleType.Cron:
-                if (string.IsNullOrEmpty(Expression))
-                    throw new ArgumentException("Expression is required for Cron schedule type.");
-                // TODO: Add Cron expression validation
-                break;
-                
             case TimerScheduleType.Duration:
                 if (!Duration.HasValue)
                     throw new ArgumentException("Duration is required for Duration schedule type.");
@@ -219,28 +123,6 @@ public class TimerSchedule : ValueObject
             default:
                 throw new ArgumentException($"Unsupported schedule type: {ScheduleType}");
         }
-    }
-
-    /// <summary>
-    /// Calculates the next execution time for a Cron expression.
-    /// This is a simplified implementation - in production, consider using a dedicated Cron library.
-    /// </summary>
-    /// <param name="cronExpression">The Cron expression to evaluate.</param>
-    /// <returns>The next execution DateTime.</returns>
-    private static DateTime CalculateNextCronExecution(string cronExpression)
-    {
-        // TODO: Implement proper Cron expression parsing
-        // For now, return a default value - this should be replaced with a proper Cron library
-        // like Cronos or NCrontab for production use
-        
-        // Simple fallback for common patterns
-        return cronExpression switch
-        {
-            "0 9 * * *" => GetNextDailyTime(9, 0), // Daily at 9 AM
-            "0 0 * * *" => GetNextDailyTime(0, 0), // Daily at midnight
-            "0 */6 * * *" => DateTime.UtcNow.AddHours(6), // Every 6 hours
-            _ => DateTime.UtcNow.AddHours(1) // Default fallback
-        };
     }
 
     /// <summary>
@@ -269,6 +151,5 @@ public class TimerSchedule : ValueObject
         yield return Expression ?? string.Empty;
         yield return ScheduledDateTime?.Ticks ?? 0;
         yield return Duration?.Ticks ?? 0;
-        yield return CronBuilder?.ToString() ?? string.Empty;
     }
 }

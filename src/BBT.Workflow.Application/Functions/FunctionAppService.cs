@@ -9,7 +9,6 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Coordinator;
 
 namespace BBT.Workflow.Functions;
@@ -24,21 +23,26 @@ public sealed class FunctionAppService(
     IScriptContextFactory scriptContextFactory,
     IComponentCacheStore componentCacheStore,
     ICurrentSchema currentSchema,
-    ITaskCoordinator taskCoordinator) : ApplicationService(serviceProvider), IFunctionAppService
+    ITaskCoordinator taskCoordinator,
+    IScriptEngine scriptEngine) : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
-    public async Task<Result<Dictionary<string, dynamic?>>> GetFunctionByFunctionKeyAsync(
+    public async Task<Result<Dictionary<string, dynamic?>>> GetFunctionByKeyAsync(
         string key,
-        string flow,
         string domain,
+        string? version = null,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        currentSchema.Use(flow);
-        Instance? instance = await instanceRepository.FindByIdentifierAsync(key, cancellationToken);
-        return await BuildFunctionResponseAsync(instance, key, flow, domain, headers, queryParameters, cancellationToken);
+        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        {
+            return await componentCacheStore
+                .GetFunctionAsync(domain, key, version, cancellationToken)
+                .BindAsync(function =>
+                    ExecuteFunctionAsync(function, null, null, headers, queryParameters, cancellationToken));
+        }
     }
 
     /// <inheritdoc />
@@ -52,56 +56,66 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
-        return await BuildFunctionResponseAsync(instance, key, flow, domain, headers, queryParameters,
-            cancellationToken);
+        using (currentSchema.Use(flow))
+        {
+            var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
+            if (instance == null)
+                return Result<Dictionary<string, dynamic?>>.Fail(WorkflowErrors.InstanceNotFound(instanceKey));
+
+            return await componentCacheStore
+                .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
+                .BindAsync(workflow =>
+                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, headers, queryParameters, cancellationToken));
+        }
     }
 
     /// <inheritdoc />
-    public async Task<Result<List<InstanceAndDataModel>>> GetDomainFunctionsAsync(
+    public async Task<Result<List<InstanceAndDataModel>>> GetFunctionsAsync(
         string domain,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        var result = await instanceRepository.GetActiveDataListAsync(cancellationToken);
-        return Result<List<InstanceAndDataModel>>.Ok(result);
+        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        {
+            var result = await instanceRepository.GetActiveDataListAsync(cancellationToken);
+            return Result<List<InstanceAndDataModel>>.Ok(result);
+        }
     }
 
     /// <summary>
-    /// Builds the function response using Railway pattern.
-    /// Chain: Load Function → Load Workflow → Execute Tasks → Extract Response
+    /// Resolves the function reference from the workflow and delegates to <see cref="ExecuteFunctionAsync"/>.
+    /// Guards against the function not being registered in the given workflow.
     /// </summary>
-    private Task<Result<Dictionary<string, dynamic?>>> BuildFunctionResponseAsync(
-        Instance? instance,
-        string functionKey,
-        string flow,
+    private Task<Result<Dictionary<string, dynamic?>>> ResolveFunctionAndExecuteAsync(
         string domain,
-        Dictionary<string, string?>? headers = null,
-        Dictionary<string, string?>? queryParameters = null,
-        CancellationToken cancellationToken = default)
+        string key,
+        Instance instance,
+        Definitions.Workflow workflow,
+        Dictionary<string, string?>? headers,
+        Dictionary<string, string?>? queryParameters,
+        CancellationToken cancellationToken)
     {
+        var functionReference = workflow.FindFunction(key);
         return componentCacheStore
-            .GetFunctionAsync(domain, functionKey, string.Empty, cancellationToken)
+            .GetFunctionAsync(domain, key, functionReference?.Version, cancellationToken)
             .BindAsync(function =>
-                componentCacheStore.GetFlowAsync(domain, flow, null, cancellationToken)
-                    .MapAsync(workflow => (function, workflow)))
-            .BindAsync(data => ExecuteFunctionAsync(data.function, data.workflow, instance, headers, queryParameters,
-                cancellationToken));
+                ExecuteFunctionAsync(function, instance, workflow, headers, queryParameters, cancellationToken));
     }
 
     /// <summary>
-    /// Executes the function tasks and extracts the response.
-    /// Uses Railway pattern to propagate task execution errors.
+    /// Builds the script context, executes all function tasks, and extracts the response.
     /// </summary>
     private async Task<Result<Dictionary<string, dynamic?>>> ExecuteFunctionAsync(
         Function function,
-        Definitions.Workflow workflow,
         Instance? instance,
-        Dictionary<string, string?>? headers = null,
-        Dictionary<string, string?>? queryParameters = null,
-        CancellationToken cancellationToken = default)
+        Definitions.Workflow? workflow,
+        Dictionary<string, string?>? headers,
+        Dictionary<string, string?>? queryParameters,
+        CancellationToken cancellationToken)
     {
-        if (workflow.Key != RuntimeSysSchemaInfo.Functions &&function.Scope!=TaskScope.Domain&&
+        if (instance != null &&
+            workflow!.Key != RuntimeSysSchemaInfo.Functions &&
+            !function.Scope.Equals(TaskScope.Domain) &&
             !workflow.Functions.Any(f => f.Key == function.Key))
         {
             return Result<Dictionary<string, dynamic?>>.Fail(
@@ -117,7 +131,6 @@ public sealed class FunctionAppService(
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
 
-        // Execute tasks and propagate errors
         var executeResult = await taskCoordinator.ExecuteAsync(
             function.GetExecuteTasks(),
             null,
@@ -126,16 +139,35 @@ public sealed class FunctionAppService(
             cancellationToken);
 
         if (!executeResult.IsSuccess)
-        {
             return Result<Dictionary<string, dynamic?>>.Fail(executeResult.Error);
-        }
 
-        var response = ExtractFunctionResponse(function, scriptContext);
-        return Result<Dictionary<string, dynamic?>>.Ok(response);
+        return await BuildResponseAsync(function, scriptContext, cancellationToken);
     }
 
     /// <summary>
-    /// Extracts the function response from script context.
+    /// Builds the final response: uses the <c>output</c> script when defined, otherwise falls back to
+    /// legacy single-task extraction from <see cref="ScriptContext.OutputResponse"/>.
+    /// </summary>
+    private async Task<Result<Dictionary<string, dynamic?>>> BuildResponseAsync(
+        Function function,
+        ScriptContext scriptContext,
+        CancellationToken cancellationToken)
+    {
+        if (function.Output != null)
+        {
+            var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
+                function.Output.DecodedCode, cancellationToken: cancellationToken);
+            var scriptResponse = await handler.OutputHandler(scriptContext);
+            return Result<Dictionary<string, dynamic?>>.Ok(
+                new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = scriptResponse.Data });
+        }
+
+        return Result<Dictionary<string, dynamic?>>.Ok(ExtractFunctionResponse(function, scriptContext));
+    }
+
+    /// <summary>
+    /// Legacy single-task output extraction from <see cref="ScriptContext.OutputResponse"/>.
+    /// Unwraps the inner <c>data</c> property when the value is a JSON element wrapper.
     /// </summary>
     private static Dictionary<string, dynamic?> ExtractFunctionResponse(
         Function function,
@@ -143,7 +175,7 @@ public sealed class FunctionAppService(
     {
         var response = new Dictionary<string, dynamic?>();
         var variableKeyFunction = function.Key.ToVariableName();
-        var variableKeyTask = function.Task.Task.Key.ToVariableName();
+        var variableKeyTask = function.Task!.Task.Key.ToVariableName();
 
         if (scriptContext.OutputResponse.TryGetValue(variableKeyTask, out var value))
         {

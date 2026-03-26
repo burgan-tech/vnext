@@ -41,7 +41,8 @@ public static class OrchestrationApiApplicationBuilderExtensions
         app.UseAetherUnitOfWork();
         app.UseWorkflowHttpMetrics();
         app.UseHttpMetrics();
-        app.MapMetrics(); 
+        app.MapMetrics();
+        app.UseHttpBodyLogging();
         app.MapControllers();
         app.UseDaprScheduledJobHandler();
         app.MapAppHealthChecks();

@@ -290,7 +290,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// including its current state, accumulated data, and execution history. This is
     /// essential for making context-aware decisions in mapping implementations.
     /// </remarks>
-    public Instance Instance { get; private set; }
+    public Instance? Instance { get; private set; }
     
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
@@ -308,7 +308,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// enabling mapping implementations to understand the workflow structure,
     /// available transitions, and task configurations for informed decision making.
     /// </remarks>
-    public Definitions.Workflow Workflow { get; private set; }
+    public Definitions.Workflow? Workflow { get; private set; }
 
     /// <summary>
     /// Provides runtime information and services for the current execution context,

@@ -7,9 +7,9 @@
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="AutoMapper" Version="$(AutoMapperPackageVersion)" />
     <PackageReference Include="BBT.Aether.Application" Version="$(AetherPackageVersion)" />
     <PackageReference Include="BBT.Aether.Aspects" Version="$(AetherPackageVersion)" />
+    <PackageReference Include="BBT.Aether.Mapperly" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Dapr.Jobs" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />

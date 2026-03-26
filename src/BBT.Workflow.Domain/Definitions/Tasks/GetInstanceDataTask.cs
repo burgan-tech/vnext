@@ -69,7 +69,14 @@ public sealed class GetInstanceDataTask : WorkflowTask
     {
         if (!instanceId.IsNullOrWhiteSpace())
         {
-            TriggerInstanceId = Guid.TryParse(instanceId,  out var guid) ? guid : null;    
+            if (Guid.TryParse(instanceId, out var guid))
+            {
+                TriggerInstanceId = guid;
+            }
+            else
+            {
+                TriggerKey = instanceId;
+            }
         }
         else
         {

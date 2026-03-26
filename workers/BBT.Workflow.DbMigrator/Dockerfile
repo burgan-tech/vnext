@@ -1,5 +1,5 @@
-# Base image using Alpine (runtime only - console job, no Kestrel)
-FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine3.23 AS base
+# Base image using Alpine (ASP.NET runtime - Worker SDK project, no Kestrel)
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine3.23 AS base
 WORKDIR /app
 
 # Create non-root user for security

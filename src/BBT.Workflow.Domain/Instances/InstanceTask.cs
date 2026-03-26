@@ -27,6 +27,7 @@ public sealed class InstanceTask : Entity<Guid>
         BusinessStatus = BusinessStatus.Unknown;
         Request = new JsonData("");
         Response = new JsonData("");
+        InvocationResult = new JsonData("");
     }
 
     /// <summary>
@@ -75,12 +76,29 @@ public sealed class InstanceTask : Entity<Guid>
     public JsonData Response { get; private set; }
 
     /// <summary>
+    /// Raw invocation result captured after InvokeAsync, before output mapping (ProcessOutput).
+    /// Stores TaskInvocationResult as-is: Body, Data, StatusCode, Headers, Metadata, ErrorMessage.
+    /// Remains empty if the task never reached the invocation step (e.g., infra error before invoke).
+    /// </summary>
+    public JsonData InvocationResult { get; private set; }
+
+    /// <summary>
     /// Sets the request payload that was sent to the task.
     /// </summary>
     /// <param name="request">The request data from InputHandler.</param>
     public void SetRequest(JsonData request)
     {
         Request = request;
+    }
+
+    /// <summary>
+    /// Sets the raw invocation result before output mapping.
+    /// Called after InvokeAsync succeeds, before ProcessOutputAsync transforms the data.
+    /// </summary>
+    /// <param name="invocationResult">The serialized TaskInvocationResult.</param>
+    public void SetInvocationResult(JsonData invocationResult)
+    {
+        InvocationResult = invocationResult;
     }
 
     /// <summary>

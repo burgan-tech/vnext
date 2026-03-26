@@ -149,7 +149,6 @@ services:
     command: [
       "./daprd",
       "--app-id", "vnext-db-migrator",
-      "--app-port", "44200",
       "--resources-path", "./components",
       "--dapr-grpc-port", "44211",
       "--dapr-http-port", "44210",

@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
 using BBT.Aether;
+using BBT.Workflow.Authorization;
+using BBT.Workflow.RepresentationEtag;
 using BBT.Aether.Application.Services;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Guids;
@@ -15,8 +18,10 @@ using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Extentions;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting;
 using Dapr.Jobs.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -40,6 +45,10 @@ public sealed class InstanceCommandAppService(
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
     IWorkflowContext workflowContext,
+    IRepresentationEtagService representationEtagService,
+    ISchemaFieldFilterService schemaFieldFilterService,
+    IInstanceExtensionService instanceExtensionService,
+    IScriptContextFactory scriptContextFactory,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -59,13 +68,17 @@ public sealed class InstanceCommandAppService(
         // Step 2: Check existing instance
         var existingInstanceResult = await CheckExistingInstanceAsync(input, cancellationToken);
         if (existingInstanceResult.HasValue)
+        {
+            if (input.Sync && existingInstanceResult.Value.IsSuccess)
+                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input.Extensions, cancellationToken);
             return existingInstanceResult.Value;
+        }
 
         // Step 3-6: Continue with normal railway flow for NEW instances
         return await PrepareInstanceAsync(workflow, input, cancellationToken)
             .ThenAsync(async data =>
             {
-                await ScheduleWorkflowTimeoutIfConfiguredAsync(data.Workflow, data.Instance, cancellationToken);
+                await ScheduleWorkflowTimeoutIfConfiguredAsync(data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
                 return Result<(Definitions.Workflow Workflow, Instance Instance)>.Ok(data);
             })
             .ThenAsync(data => ExecuteStartTransitionAsync(data, input, cancellationToken))
@@ -117,6 +130,7 @@ public sealed class InstanceCommandAppService(
         return Result<StartInstanceOutput>.Ok(new StartInstanceOutput
         {
             Id = existingInstance.Id,
+            Key = existingInstance.Key,
             Status = existingInstance.Status
         });
     }
@@ -269,20 +283,36 @@ public sealed class InstanceCommandAppService(
             .MapAsync(transitionOutput => new StartInstanceOutput
             {
                 Id = data.Instance.Id,
+                Key = data.Instance.Key,
                 Status = transitionOutput.Status
-            });
+            })
+            .ThenAsync(output => input.Sync
+                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input.Extensions, cancellationToken)
+                : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
 
     /// <summary>
     /// Schedules a workflow timeout job if the workflow has a timeout configuration.
+    /// When extraProperties contains a timeout override (set by SubflowStarter), it takes precedence over the workflow's own timeout.
     /// </summary>
     private async Task ScheduleWorkflowTimeoutIfConfiguredAsync(
         Definitions.Workflow workflow,
         Instance instance,
+        ExtraPropertyDictionary extraProperties,
         CancellationToken cancellationToken)
     {
-        // Check if workflow has timeout configuration
-        if (workflow.Timeout == null)
+        // Check for SubFlow timeout override in ExtraProperties
+        WorkflowTimeout? timeoutOverride = null;
+        if (extraProperties.TryGetValue(DomainConsts.MetaDataKeys.TimeoutOverride, out var overrideJson)
+            && !string.IsNullOrWhiteSpace(overrideJson?.ToString()))
+        {
+            timeoutOverride = JsonSerializer.Deserialize<WorkflowTimeout>(overrideJson!.ToString()!);
+        }
+
+        var effectiveTimeout = timeoutOverride ?? workflow.Timeout;
+
+        // Check if there is any timeout configuration to schedule
+        if (effectiveTimeout == null)
         {
             return;
         }
@@ -303,7 +333,7 @@ public sealed class InstanceCommandAppService(
             };
 
             // Parse ISO 8601 duration string to TimeSpan
-            var timeoutDuration = System.Xml.XmlConvert.ToTimeSpan(workflow.Timeout.Timer.Duration);
+            var timeoutDuration = System.Xml.XmlConvert.ToTimeSpan(effectiveTimeout.Timer.Duration);
 
             // Calculate timeout schedule - workflow timeout should be evaluated from creation time
             var timeoutDateTime = DateTime.UtcNow.Add(timeoutDuration);
@@ -339,7 +369,7 @@ public sealed class InstanceCommandAppService(
                 true,
                 cancellationToken);
 
-            logger.WorkflowTimeoutScheduled(instance.Id, workflow.Timeout.Timer.Duration, timeoutDateTime);
+            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutDateTime);
         }
         catch (Exception ex)
         {
@@ -385,9 +415,18 @@ public sealed class InstanceCommandAppService(
 
         var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
 
+        var workflowDefinition = workflowResult.Value;
+
         return await workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
-            .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion));
+            .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion))
+            .ThenAsync(output =>
+            {
+                if (input.Sync)
+                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, cancellationToken);
+                output.Key = resolvedInstance.Key;
+                return Task.FromResult(Result<TransitionOutput>.Ok(output));
+            });
     }
 
     /// <summary>
@@ -428,6 +467,96 @@ public sealed class InstanceCommandAppService(
             WorkflowInfo.Name,
             WorkflowInfo.Generate(runtimeInfoProvider.Domain, flow, version, output.Id)
         );
+    }
+
+    /// <summary>
+    /// Enriches a sync=true StartInstanceOutput with attributes (schema-filtered), etag, entityEtag, key and extensions.
+    /// The instance is reloaded from the repository to ensure post-execution state is reflected.
+    /// </summary>
+    private Task<Result<StartInstanceOutput>> EnrichSyncOutputAsync(
+        StartInstanceOutput output,
+        Guid instanceId,
+        Definitions.Workflow? workflow,
+        string[]? extensionRequested,
+        CancellationToken cancellationToken)
+        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, cancellationToken);
+
+    /// <summary>
+    /// Enriches a sync=true TransitionOutput with attributes (schema-filtered), etag, entityEtag, key and extensions.
+    /// The instance is reloaded from the repository to ensure post-execution state is reflected.
+    /// </summary>
+    private Task<Result<TransitionOutput>> EnrichSyncOutputAsync(
+        TransitionOutput output,
+        Guid instanceId,
+        Definitions.Workflow? workflow,
+        string[]? extensionRequested,
+        CancellationToken cancellationToken)
+        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, cancellationToken);
+
+    private async Task<Result<TOutput>> EnrichOutputCoreAsync<TOutput>(
+        TOutput output,
+        Guid instanceId,
+        Definitions.Workflow? workflow,
+        string[]? extensionRequested,
+        CancellationToken cancellationToken)
+        where TOutput : class
+    {
+        var freshInstance = await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
+        if (freshInstance is null)
+            return Result<TOutput>.Ok(output);
+
+        var latestData = freshInstance.LatestData;
+        var rawAttributes = latestData?.Data.JsonElement;
+        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, freshInstance, cancellationToken);
+
+        var key = freshInstance.Key;
+        var entityEtag = latestData?.ETag;
+        var attributes = filteredAttributes ?? rawAttributes;
+
+        Dictionary<string, object> extensions = new();
+        if (workflow is not null)
+        {
+            var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+                .WithWorkflow(workflow)
+                .WithInstance(freshInstance)
+                .WithRuntime(runtimeInfoProvider)
+                .WithTransition(string.Empty)
+                .WithBody(latestData?.Data ?? new JsonData("{}"))
+                .BuildAsync(cancellationToken);
+
+            var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
+                extensionRequested,
+                scriptContext,
+                workflow,
+                ExtensionScope.GetInstance,
+                cancellationToken);
+
+            if (!extensionsResult.IsSuccess)
+                logger.ExtensionProcessingFailedNonBlocking(extensionsResult.Error.Code);
+            else
+                extensions = extensionsResult.Value!;
+        }
+
+        if (output is StartInstanceOutput start)
+        {
+            start.Key = key;
+            start.Attributes = attributes;
+            start.EntityEtag = entityEtag;
+            start.Extensions = extensions;
+            // ETag must be generated after all other fields are set (ETag itself is null at generation time)
+            start.ETag = representationEtagService.Generate(start);
+        }
+        else if (output is TransitionOutput transition)
+        {
+            transition.Key = key;
+            transition.Attributes = attributes;
+            transition.EntityEtag = entityEtag;
+            transition.Extensions = extensions;
+            // ETag must be generated after all other fields are set (ETag itself is null at generation time)
+            transition.ETag = representationEtagService.Generate(transition);
+        }
+
+        return Result<TOutput>.Ok(output);
     }
 
     /// <summary>

@@ -1608,4 +1608,19 @@ public static partial class WorkflowLogs
         string requestDomain);
 
     #endregion
+
+    #region Extensions
+
+    /// <summary>
+    /// Logs when extension processing fails but execution continues (non-blocking).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20101,
+        Level = LogLevel.Warning,
+        Message = "Extension processing failed but continuing. Error: {ErrorCode}")]
+    public static partial void ExtensionProcessingFailedNonBlocking(
+        this ILogger logger,
+        string errorCode);
+
+    #endregion
 }

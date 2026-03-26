@@ -16,5 +16,8 @@ public class DomainConsts
         public const string Transition = "parent.transition";
         public const string Sync = "sync";
         public const string Callback = "callback";
+        public const string TimeoutOverride = "subflow.timeout_override";
+        public const string TransitionRoleOverrides = "subflow.transition_role_overrides";
+        public const string StateRoleOverrides = "subflow.state_role_overrides";
     }
 }

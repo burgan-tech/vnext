@@ -273,6 +273,13 @@ switcher.json
 # AI
 ai-docs/
 
+# Claude
+.claude/worktrees/*
+
+#Cursor
+.cursor/plans/*
+.cursor/*.log
+
 appsettings.secrets.json
 deploy/nuget-api-key.txt
 deploy/npm-auth-token.txt

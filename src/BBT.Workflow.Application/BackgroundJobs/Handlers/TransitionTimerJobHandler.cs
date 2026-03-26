@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -31,8 +32,10 @@ public sealed class TransitionTimerJobHandler(
             BackgroundJobActivityHelper.EnrichActivity(activity, args);
             BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
-            var input = new TransitionInput(args.Domain, args.FlowName);
-
+            var input = new TransitionInput(args.Domain, args.FlowName)
+            {
+                Sync = true
+            };
             // Convert TransitionInput to WorkflowExecutionContext
             var executionContext = input.ToExecutionContext(
                 args.InstanceId.ToString(),
@@ -43,7 +46,6 @@ public sealed class TransitionTimerJobHandler(
             executionContext.TriggerType = TriggerType.Scheduled;
             executionContext.Actor = ExecutionActor.System;
             executionContext.IsReentry = true; // Timer transitions are re-entry executions
-
             await workflowExecutionService.ExecuteTransitionAsync(
                 executionContext,
                 cancellationToken

@@ -16,12 +16,6 @@ public enum TimerScheduleType
     DateTime = 1,
     
     /// <summary>
-    /// Schedule execution using a Cron expression or Dapr expression.
-    /// Equivalent to DaprJobSchedule.FromCronExpression() or DaprJobSchedule.FromExpression().
-    /// </summary>
-    Cron = 2,
-    
-    /// <summary>
     /// Schedule execution using a time span/duration from now.
     /// Equivalent to DaprJobSchedule.FromDuration().
     /// </summary>

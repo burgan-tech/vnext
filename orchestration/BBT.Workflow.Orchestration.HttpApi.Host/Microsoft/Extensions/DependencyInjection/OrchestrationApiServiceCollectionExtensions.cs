@@ -1,4 +1,5 @@
 using BBT.Workflow.Caching;
+using BBT.Workflow.Controllers.Instances;
 using BBT.Workflow.HostedServices;
 using BBT.Workflow.Orchestration.Services;
 
@@ -19,6 +20,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         var configuration = services.GetConfiguration();
         
         services
+            .AddFunctionHandlers()
             .AddDomainModule()
             .AddApplicationModule()
             .AddInfrastructureModule(configuration) // Infrastructure manages its own dependencies including URL templates
@@ -38,6 +40,20 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddHeaderService()
             .AddHostedServices()
             .AddAppHealthChecks();
+        return services;
+    }
+
+    private static IServiceCollection AddFunctionHandlers(this IServiceCollection services)
+    {
+        services.AddScoped<IInstanceFunctionHandler, StateFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, ViewFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, DataFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, SchemaFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, ExtensionsFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, AuthorizeFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, AuthorizationMatrixFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, HierarchyFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
         return services;
     }
 

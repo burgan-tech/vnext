@@ -59,6 +59,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
+        services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();

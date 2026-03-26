@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using BBT.Workflow.Definitions;
 
 namespace BBT.Workflow.Instances;
 
@@ -18,7 +19,7 @@ public sealed class ViewInstanceAttributesDto
     /// View type.
     /// </summary>
     [JsonPropertyName("type")]
-    public string? Type { get; set; }
+    public ViewType? Type { get; set; }
 
     /// <summary>
     /// Display mode.

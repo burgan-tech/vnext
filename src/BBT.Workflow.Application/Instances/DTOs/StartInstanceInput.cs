@@ -28,6 +28,12 @@ public sealed class StartInstanceInput(
     public bool StrictIdempotency { get; set; } = false;
 
     /// <summary>
+    /// Extension data to evaluate and include in the sync response. Keys are extension identifiers.
+    /// Evaluated only when <see cref="Sync"/> is true.
+    /// </summary>
+    public string[]? Extensions { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this StartInstanceInput for starting a new workflow instance.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>
@@ -70,14 +76,8 @@ public sealed class CreateInstanceInput: IHasExtraProperties
     public ExtraPropertyDictionary ExtraProperties { get; set; } = new();
 }
 
-public sealed class StartInstanceOutput
+public sealed class StartInstanceOutput : InstanceOutputBase
 {
-    public Guid Id { get; set; }
-
-    /// <summary>
-    /// Instance status (Active, Busy, Completed, etc.)
-    /// </summary>
-    public InstanceStatus? Status { get; set; }
 }
 
 /// <summary>

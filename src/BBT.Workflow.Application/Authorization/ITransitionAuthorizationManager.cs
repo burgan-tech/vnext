@@ -13,30 +13,32 @@ public interface ITransitionAuthorizationManager
     /// <summary>
     /// Evaluates whether the given role is allowed for the transition using transition.Roles.
     /// When instance is present, predefined roles ($InstanceStarter, $PreviousUser) are resolved and matched against current user.
+    /// When role is null, only predefined role grants are evaluated (via ICurrentUser.ActorUserName); regular role grants yield no match.
     /// DENY always wins; if no DENY match, any ALLOW match yields true.
     /// </summary>
     /// <param name="workflow">The workflow definition (for context).</param>
     /// <param name="transition">The transition whose Roles are evaluated.</param>
     /// <param name="instance">Optional instance for resolving $InstanceStarter and $PreviousUser.</param>
-    /// <param name="role">The caller's role to check.</param>
+    /// <param name="role">The caller's role to check. Null is allowed; predefined roles are still evaluated.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>True if the role is allowed for the transition; false otherwise.</returns>
     Task<bool> IsTransitionAllowedForRoleAsync(
         WorkflowDefinition workflow,
         Transition transition,
         Instance? instance,
-        string role,
+        string? role,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Filters a list of transition keys to only those allowed for the given role.
     /// Uses the same evaluation as <see cref="IsTransitionAllowedForRoleAsync"/> per transition.
+    /// When role is null, only predefined role grants ($InstanceStarter, $PreviousUser) are evaluated; transitions with no roles pass through.
     /// </summary>
     /// <param name="workflow">The workflow definition.</param>
     /// <param name="currentState">Current state (used to resolve transition by key via workflow context).</param>
     /// <param name="instance">Optional instance for predefined role resolution.</param>
     /// <param name="transitionKeys">Candidate transition keys to filter.</param>
-    /// <param name="role">The caller's role.</param>
+    /// <param name="role">The caller's role. Null is allowed; predefined roles are still evaluated.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of transition keys that are allowed for the role.</returns>
     Task<IReadOnlyList<string>> FilterAuthorizedTransitionKeysAsync(
@@ -44,16 +46,17 @@ public interface ITransitionAuthorizationManager
         State currentState,
         Instance? instance,
         IReadOnlyList<string> transitionKeys,
-        string role,
+        string? role,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Evaluates whether the given role is allowed for a set of role grants (e.g. function or state queryRoles).
     /// When instance is present, predefined roles ($InstanceStarter, $PreviousUser) are resolved.
+    /// When role is null, only predefined role grants are evaluated.
     /// DENY always wins; if no DENY match, any ALLOW match yields true.
     /// </summary>
     Task<bool> IsRoleAllowedForGrantsAsync(
-        string role,
+        string? role,
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance? instance,
         CancellationToken cancellationToken = default);

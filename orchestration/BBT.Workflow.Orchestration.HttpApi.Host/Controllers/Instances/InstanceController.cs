@@ -45,6 +45,7 @@ public sealed class InstanceController(
         [FromBody] CreateInstanceDto request,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
+        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -55,7 +56,8 @@ public sealed class InstanceController(
                 Key = request?.Key,
                 Tags = request?.Tags,
                 Attributes = request?.Attributes
-            }
+            },
+            Extensions = extensions
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -76,6 +78,7 @@ public sealed class InstanceController(
         [FromBody] CreateSubInstanceDto request,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
+        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -90,7 +93,8 @@ public sealed class InstanceController(
                 Callback = request.Callback,
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
             },
-            StrictIdempotency = true
+            StrictIdempotency = true,
+            Extensions = extensions
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -158,10 +162,14 @@ public sealed class InstanceController(
         [FromRoute] string transitionKey,
         [FromBody] TransitionDataInput? data = null,
         [FromQuery] bool sync = false,
+        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
-        var input = new TransitionInput(domain, workflow, data, sync);
+        var input = new TransitionInput(domain, workflow, data, sync)
+        {
+            Extensions = extensions
+        };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
         {
@@ -284,7 +292,7 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromQuery] string? filter = null,
-        [FromQuery] string[]? extension = null,
+        [FromQuery] string[]? extensions = null,
         [FromQuery][Range(1, 1000)] int page = 1,
         [FromQuery][Range(1, 100)] int pageSize = 10,
         [FromQuery] string? sort = null,
@@ -298,7 +306,7 @@ public sealed class InstanceController(
         {
             Domain = domain,
             Workflow = workflow,
-            Extension = extension,
+            Extensions = extensions,
             Page = page,
             PageSize = pageSize,
             PageUrl = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow),
@@ -354,7 +362,7 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        [FromQuery] string[]? extension = null,
+        [FromQuery] string[]? extensions = null,
         [FromQuery] string? version = null,
         CancellationToken cancellationToken = default)
     {
@@ -365,7 +373,7 @@ public sealed class InstanceController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            Extensions = extension,
+            Extensions = extensions,
             Version = version,
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters

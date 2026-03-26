@@ -70,5 +70,9 @@ public enum StateSubType
     /// State requires human intervention (e.g., approval, manual review)
     /// Enables efficient querying of instances waiting for human action
     /// </summary>
-    Human = 6
+    Human = 6,
+    
+    Cancelled = 7,
+    
+    Timeout = 8
 }

@@ -766,4 +766,4 @@ jobs:
         token: ${{ steps.generate_token.outputs.token }}
         repository: burgan-tech/vnext-helm-charts
         event-type: app-release
-        client-payload: '{"app_version": "${{ github.event.release.tag_name }}"}'
+        client-payload: '{"app_version": "${{ steps.version.outputs.version }}"}'

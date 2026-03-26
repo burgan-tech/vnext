@@ -27,9 +27,17 @@ public sealed class FunctionComponentValidator : IComponentValidator
             }
 
             // Validate required task field
-            if (function.Task == null)
+            if (function.Task == null && !function.OnExecutionTasks.Any())
             {
-                result.AddError("Function task is required.", $"{nameof(Function)}.{nameof(Function.Task)}");
+                result.AddError("Function task or onExecutionTask is required.", $"{nameof(Function)}.{nameof(Function.Task)}");
+            }
+
+            if (function.OnExecutionTasks.Any())
+            {
+                if (function.Output == null)
+                {
+                    result.AddError("Function output is required.", $"{nameof(Function)}.{nameof(Function.Output)}");
+                }
             }
 
             // Validate scope

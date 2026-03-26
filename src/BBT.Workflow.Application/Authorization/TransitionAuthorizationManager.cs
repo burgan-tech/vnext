@@ -18,12 +18,9 @@ public sealed class TransitionAuthorizationManager(
         WorkflowDefinition workflow,
         Transition transition,
         Instance? instance,
-        string role,
+        string? role,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(role))
-            return false;
-
         var roleGrants = transition.Roles;
         if (roleGrants.Count == 0)
             return true; // No roles defined → allow
@@ -40,10 +37,10 @@ public sealed class TransitionAuthorizationManager(
         State currentState,
         Instance? instance,
         IReadOnlyList<string> transitionKeys,
-        string role,
+        string? role,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(role) || transitionKeys.Count == 0)
+        if (transitionKeys.Count == 0)
             return transitionKeys;
 
         var result = new List<string>();
@@ -61,13 +58,11 @@ public sealed class TransitionAuthorizationManager(
 
     /// <inheritdoc />
     public async Task<bool> IsRoleAllowedForGrantsAsync(
-        string role,
+        string? role,
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance? instance,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(role))
-            return false;
         if (roleGrants.Count == 0)
             return true; // No roles defined → allow
         if (instance != null)
@@ -104,14 +99,15 @@ public sealed class TransitionAuthorizationManager(
 
     /// <summary>
     /// Evaluates role grants with resolution of predefined instance roles ($InstanceStarter, $PreviousUser).
+    /// When role is null, only predefined role grants are evaluated (via ICurrentUser.ActorUserName); regular role grants yield no match.
     /// </summary>
     private async Task<bool> EvaluateRolesWithPredefinedAsync(
-        string role,
+        string? role,
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance instance,
         CancellationToken cancellationToken)
     {
-        var normalizedRole = role.Trim();
+        var normalizedRole = role?.Trim() ?? string.Empty;
         var currentActorUserName = currentUser.ActorUserName?.Trim();
 
         string? previousUserCreatedBy = null;
@@ -151,13 +147,14 @@ public sealed class TransitionAuthorizationManager(
 
     /// <summary>
     /// Evaluates role against role grants (static only). DENY always wins; else any ALLOW match → true.
+    /// When role is null, no regular role grants match; only the grant count check applies (empty grants → allow).
     /// Used by transition/function authorization and by schema field-level visibility.
     /// </summary>
-    public static bool EvaluateRolesStatic(string role, IReadOnlyCollection<RoleGrant> roleGrants)
+    public static bool EvaluateRolesStatic(string? role, IReadOnlyCollection<RoleGrant> roleGrants)
     {
         if (roleGrants.Count == 0)
             return true; // No roles defined → allow
-        var normalizedRole = role.Trim();
+        var normalizedRole = role?.Trim() ?? string.Empty;
         foreach (var g in roleGrants)
         {
             if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsDeny)

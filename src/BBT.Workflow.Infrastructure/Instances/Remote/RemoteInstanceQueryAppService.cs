@@ -214,9 +214,9 @@ public sealed class RemoteInstanceQueryAppService(
                 queryParams.Add($"version={Uri.EscapeDataString(input.Version)}");
             }
 
-            if (input.Extension?.Length > 0)
+            if (input.Extensions?.Length > 0)
             {
-                foreach (var ext in input.Extension)
+                foreach (var ext in input.Extensions)
                 {
                     queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
                 }

@@ -46,6 +46,18 @@ activity?.SetTag(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
 
 Implementation: `src/BBT.Workflow.Domain/Logging/TelemetryConstants.cs`
 
+### ActivitySources (task and subflow spans)
+
+Workflow-specific spans use these ActivitySource names. If the host configures OpenTelemetry with explicit sources, register them so these spans are exported:
+
+| Source name | Purpose |
+|------------|---------|
+| `BBT.Workflow.Tasks` | Task execution phases (PrepareInput, Invoke, ProcessOutput). See `TaskExecutionActivityHelper`. |
+| `BBT.Workflow.SubFlow` | SubFlow operations. See `SubFlowActivityHelper`. |
+| `BBT.Workflow.BackgroundJobs` | Background job handlers. See `BackgroundJobActivityHelper`. |
+
+If the host uses a wildcard (e.g. `AddSource("BBT.Workflow.*")`), no per-source registration is needed.
+
 ### ActivityExtensions
 
 Helper methods for activity naming and error status:

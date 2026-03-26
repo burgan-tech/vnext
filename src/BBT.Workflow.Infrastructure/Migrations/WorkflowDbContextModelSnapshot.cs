@@ -19,7 +19,7 @@ namespace BBT.Workflow.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.3")
+                .HasAnnotation("ProductVersion", "10.0.4")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -589,6 +589,24 @@ namespace BBT.Workflow.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.OwnsOne("BBT.Workflow.JsonData", "InvocationResult", b1 =>
+                        {
+                            b1.Property<Guid>("InstanceTaskId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<string>("Json")
+                                .IsRequired()
+                                .HasColumnType("jsonb")
+                                .HasColumnName("InvocationResult");
+
+                            b1.HasKey("InstanceTaskId");
+
+                            b1.ToTable("InstanceTasks");
+
+                            b1.WithOwner()
+                                .HasForeignKey("InstanceTaskId");
+                        });
+
                     b.OwnsOne("BBT.Workflow.JsonData", "Request", b1 =>
                         {
                             b1.Property<Guid>("InstanceTaskId")
@@ -624,6 +642,9 @@ namespace BBT.Workflow.Migrations
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTaskId");
                         });
+
+                    b.Navigation("InvocationResult")
+                        .IsRequired();
 
                     b.Navigation("Request")
                         .IsRequired();

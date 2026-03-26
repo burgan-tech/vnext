@@ -123,7 +123,19 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
 
         return content;
     }
-
+    
+    /// <summary>
+    /// Returns content typed by view type string: for Json, DeepLink, Http, URN attempts JSON parse (on failure returns original string);
+    /// for Html, Markdown or other types returns the content string. Shared logic for instance and remote view content.
+    /// </summary>
+    /// <param name="content">Raw view content (e.g. JSON string or markup).</param>
+    /// <param name="type">View type name (e.g. Json, Html, Markdown).</param>
+    /// <returns>Parsed JSON as <see cref="JsonElement"/> for JSON-structured types when parseable; otherwise the original content string.</returns>
+    public static object GetContentAsTypedFromObject(object? content, ViewType? type)
+    {
+        return GetContentAsTypedFromObject(content, type?.ToString());
+    }
+    
     private void SetKey(string key)
     {
         Key = Check.NotNullOrWhiteSpace(key, nameof(Key), ViewConstants.MaxKeyLength);

@@ -57,7 +57,7 @@ internal sealed class ScriptContextBuilder(
         return this;
     }
 
-    public IScriptContextBuilder WithWorkflow(Definitions.Workflow workflow)
+    public IScriptContextBuilder WithWorkflow(Definitions.Workflow? workflow)
     {
         _workflow = workflow;
         _workflowDomain = null; // Clear async retrieval properties
@@ -182,23 +182,35 @@ internal sealed class ScriptContextBuilder(
 
     public async Task<ScriptContext> BuildAsync(CancellationToken cancellationToken = default)
     {
+        var builder = new ScriptContext.Builder(logger);
         // Resolve workflow if needed
         var workflow = await ResolveWorkflowAsync(cancellationToken);
 
+        if (workflow != null)
+        {
+            builder.SetWorkflow(workflow);
+            // Resolve transition if needed
+            var transition = ResolveTransition(workflow);
+            builder.SetTransition(transition);
+        }
+        else
+        {
+            // If no workflow but transition was set directly, preserve it
+            builder.SetTransition(_transition);
+        }
+
         // Resolve instance if needed
         var instance = await ResolveInstanceAsync(cancellationToken);
-
-        // Resolve transition if needed
-        var transition = ResolveTransition(workflow);
-
+        if (instance != null)
+        {
+            builder.SetInstance(instance);
+        }
+        
         var scriptTransitionRequest = BuildScriptTransitionRequest();
 
         // Build the ScriptContext using the domain builder
-        return new ScriptContext.Builder(logger)
+        return builder
             .SetRuntime(_runtimeInfoProvider!)
-            .SetWorkflow(workflow)
-            .SetInstance(instance)
-            .SetTransition(transition)
             .SetBody(_body)
             .SetHeaders(_headers)
             .SetRouteValues(_routeValues)
@@ -239,7 +251,7 @@ internal sealed class ScriptContextBuilder(
         return headerExpando;
     }
 
-    private async Task<Definitions.Workflow> ResolveWorkflowAsync(CancellationToken cancellationToken)
+    private async Task<Definitions.Workflow?> ResolveWorkflowAsync(CancellationToken cancellationToken)
     {
         if (_workflow != null)
             return _workflow;
@@ -257,10 +269,10 @@ internal sealed class ScriptContextBuilder(
             return result.GetValueOrThrow();
         }
 
-        throw new InvalidOperationException("Workflow must be set either directly or through domain/key parameters.");
+        return null;
     }
 
-    private async Task<Instance> ResolveInstanceAsync(CancellationToken cancellationToken)
+    private async Task<Instance?> ResolveInstanceAsync(CancellationToken cancellationToken)
     {
         if (_instance != null)
             return _instance;
@@ -279,7 +291,7 @@ internal sealed class ScriptContextBuilder(
             return _instance;
         }
 
-        throw new InvalidOperationException("Instance must be set either directly or through instance ID.");
+        return null;
     }
 
     private Transition? ResolveTransition(Definitions.Workflow workflow)

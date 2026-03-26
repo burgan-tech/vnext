@@ -18,12 +18,16 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     [JsonConstructor]
     public Function(
         TaskScope scope,
-        OnExecuteTask task,
+        OnExecuteTask? task,
+        List<OnExecuteTask>? onExecutionTasks = null,
+        ScriptCode? output = null,
         List<RoleGrant>? roles = null
     ) : this()
     {
         Scope = scope;
         Task = task;
+        this.onExecutionTasks = onExecutionTasks ?? [];
+        Output = output;
         this.roles = roles ?? [];
     }
 
@@ -48,7 +52,25 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     public string Version { get; private set; }
 
     public TaskScope Scope { get; private set; }
-    [JsonInclude] public OnExecuteTask Task { get; private set; }
+    [JsonInclude] public OnExecuteTask? Task { get; private set; }
+
+    [JsonInclude] [JsonPropertyName("onExecutionTasks")]
+    private List<OnExecuteTask> onExecutionTasks = [];
+
+    /// <summary>
+    /// Optional list of tasks to execute sequentially. When populated, takes precedence over <see cref="Task"/>.
+    /// Each task's output is available in <c>ScriptContext</c> for subsequent tasks.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<OnExecuteTask> OnExecutionTasks => onExecutionTasks.AsReadOnly();
+
+    /// <summary>
+    /// Optional output mapping script (implements <c>IOutputHandler</c>).
+    /// When present, the script is compiled at runtime and its <c>OutputHandler</c> result
+    /// is used as the function response. When absent, legacy single-task extraction is used.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("output")]
+    public ScriptCode? Output { get; private set; }
 
     [JsonInclude] [JsonPropertyName("roles")]
     private List<RoleGrant> roles = new();
@@ -76,13 +98,9 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         Version = Check.NotNullOrWhiteSpace(version, nameof(Version), WorkflowConstants.MaxVersionLength);
     }
 
-    public List<OnExecuteTask> GetExecuteTasks()
-    {
-       return
-       [
-           Task
-       ];
-    }
+    public List<OnExecuteTask> GetExecuteTasks() =>
+        onExecutionTasks.Count > 0 ? onExecutionTasks : [Task!];
+
     public void SetReference(IReference reference)
     {
         SetKey(reference.Key);

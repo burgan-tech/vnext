@@ -2,19 +2,17 @@
     <PropertyGroup>
 
         <!-- All Prism packages -->
-        <AetherPackageVersion>1.0.18</AetherPackageVersion>
+        <AetherPackageVersion>1.0.20</AetherPackageVersion>
         <!-- Elastic Apm packages -->
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
         <!-- Microsoft packages -->
         <MicrosoftPackageVersion>10.0.*</MicrosoftPackageVersion>
         <!-- EF Core pinned to avoid CS1705 (assembly version mismatch) across projects -->
-        <EfCorePackageVersion>10.0.3.0</EfCorePackageVersion>
+        <EfCorePackageVersion>10.0.4.0</EfCorePackageVersion>
         <!-- HealthChecks packages - currently only support .NET 9.0 -->
         <HealthChecksPackageVersion>9.0.0</HealthChecksPackageVersion>
         <!-- Dapr packages -->
         <DaprPackageVersion>1.16.1</DaprPackageVersion>
-        <!-- AutoMapper packages -->
-        <AutoMapperPackageVersion>16.0.0</AutoMapperPackageVersion>
         <!-- Ulid -->
         <UlidPackageVersion>1.4.1</UlidPackageVersion>
         <!-- JsonSchema.NET -->

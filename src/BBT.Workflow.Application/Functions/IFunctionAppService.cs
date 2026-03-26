@@ -12,11 +12,16 @@ public interface IFunctionAppService : IApplicationService
 {
     /// <summary>
     /// Gets function data by function key.
-    /// </summary>
-    Task<Result<Dictionary<string, dynamic?>>> GetFunctionByFunctionKeyAsync(
+    /// <param name="key">Function Key</param>
+    /// <param name="domain">Domain Name</param>
+    /// <param name="version">Request Version</param>
+    /// <param name="headers">Request Headers</param>
+    /// <param name="queryParameters">Request Query Params</param>
+    /// <param name="cancellationToken">Cancellation Token</param>
+    Task<Result<Dictionary<string, dynamic?>>> GetFunctionByKeyAsync(
         string key,
-        string flow,
         string domain,
+        string? version = null,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         CancellationToken cancellationToken = default);
@@ -24,6 +29,13 @@ public interface IFunctionAppService : IApplicationService
     /// <summary>
     /// Gets function data by instance key or ID.
     /// </summary>
+    /// <param name="key">Function Key</param>
+    /// <param name="flow">Workflow Key</param>
+    /// <param name="domain">Domain Name</param>
+    /// <param name="instance">Instance Identifier</param>
+    /// <param name="headers">Request Headers</param>
+    /// <param name="queryParameters">Request Query Params</param>
+    /// <param name="cancellationToken">Cancellation Token</param>
     Task<Result<Dictionary<string, dynamic?>>> GetFunctionByInstanceAsync(
         string key,
         string flow,
@@ -36,7 +48,9 @@ public interface IFunctionAppService : IApplicationService
     /// <summary>
     /// Gets all active domain functions.
     /// </summary>
-    Task<Result<List<InstanceAndDataModel>>> GetDomainFunctionsAsync(
+    /// <param name="domain">Domain Name</param>
+    /// <param name="cancellationToken">Cancellation Token</param>
+    Task<Result<List<InstanceAndDataModel>>> GetFunctionsAsync(
         string domain,
         CancellationToken cancellationToken = default);
 }

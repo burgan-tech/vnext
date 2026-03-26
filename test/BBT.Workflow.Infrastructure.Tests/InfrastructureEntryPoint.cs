@@ -22,7 +22,7 @@ public class InfrastructureEntryPoint : ModuleEntryPointBase
         services.AddDaprJobsClient();
 
         services.AddInfrastructureModule();
-        services.AddAetherAutoMapperMapper([
+        services.AddAetherMapperlyMapper([
             typeof(WorkflowDomainModuleServiceCollectionExtensions), // Domain
             typeof(WorkflowApplicationModuleServiceCollectionExtensions) // Application
         ]);

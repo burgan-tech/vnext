@@ -213,8 +213,8 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
 
     private static string BuildPath(GetInstancesBinding binding)
     {
-        // Build the path: /api/v1/{domain}/workflows/{workflow}/functions/data
-        var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/functions/data";
+        // Build the path: /api/v1/{domain}/workflows/{workflow}/instances
+        var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances";
 
         var queryParams = new List<string>();
 

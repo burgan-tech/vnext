@@ -23,7 +23,7 @@ public interface IScriptContextBuilder
     /// <summary>
     /// Sets the workflow directly from an existing Workflow instance.
     /// </summary>
-    IScriptContextBuilder WithWorkflow(Definitions.Workflow workflow);
+    IScriptContextBuilder WithWorkflow(Definitions.Workflow? workflow);
     
     /// <summary>
     /// Sets the workflow by retrieving it from cache using a reference input.

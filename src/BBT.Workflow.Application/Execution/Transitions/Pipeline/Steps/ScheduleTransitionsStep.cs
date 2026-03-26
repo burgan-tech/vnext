@@ -129,7 +129,7 @@ public sealed class ScheduleTransitionsStep(
         Transition scheduledTransition,
         TimerSchedule timerSchedule)
     {
-        var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
+        var jobName = $"trans-{context.InstanceId}-{scheduledTransition.Key}";
         var activity = Activity.Current;
         
         var payload = new TransitionTimerPayload

@@ -222,6 +222,14 @@ public static class InstancesModelCreatingExtensions
                     .HasColumnName(nameof(InstanceTask.Response));
             });
 
+            b.OwnsOne(p => p.InvocationResult, d =>
+            {
+                d.Ignore(g => g.JsonElement);
+                d.Property(g => g.Json)
+                    .HasColumnType("jsonb")
+                    .HasColumnName(nameof(InstanceTask.InvocationResult));
+            });
+
             b.HasOne<InstanceTransition>()
                 .WithMany()
                 .HasForeignKey(p => p.TransitionId)

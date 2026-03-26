@@ -28,5 +28,11 @@ public sealed record TaskExecutorContext(
     /// Holds the input handler response for auditing purposes.
     /// </summary>
     public ScriptResponse? InputResponse { get; set; }
+
+    /// <summary>
+    /// Holds the raw invocation result as serialized JSON, captured after InvokeAsync
+    /// and before output mapping (ProcessOutputAsync). Null if invocation never ran.
+    /// </summary>
+    public string? RawInvocationResultJson { get; set; }
 }
 

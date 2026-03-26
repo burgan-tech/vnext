@@ -342,6 +342,11 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
 
         return GetState(resolvedKey);
     }
+    
+    public IReference? FindFunction(string key)
+    {
+        return Functions.FirstOrDefault(s => s.Key == key);
+    }
 
     public State? FindState(string key)
     {

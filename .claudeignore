@@ -1,0 +1,13 @@
+# vNext - Claude Ignore Rules
+
+# Git files
+.git/
+
+# Binary and log files
+*.log
+*.tmp
+*.cache
+
+# Temporary files
+*.bak
+*.orig

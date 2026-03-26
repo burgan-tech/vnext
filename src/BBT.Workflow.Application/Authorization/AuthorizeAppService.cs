@@ -85,10 +85,52 @@ public sealed class AuthorizeAppService(
 
         var wf = workflowResult.Value!;
 
-        // When instance has active subflow, forward authorize to subflow instance (local or remote via gateway)
+        // When instance has active subflow, distinguish parent-owned vs SubFlow-owned requests
         if (instance?.Subflow != null)
         {
             var subflow = instance.Subflow;
+            var parentState = wf.FindState(instance.CurrentState!);
+            var subFlowConfig = parentState?.SubFlow;
+
+            // transitionKey: parent-owned (shared/cancel/updateData/exit) → evaluate locally against parent workflow
+            if (!string.IsNullOrWhiteSpace(transitionKey))
+            {
+                if (IsParentOwnedTransition(wf, transitionKey))
+                {
+                    var parentCallerRoles = GetCallerRoles(role);
+                    var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles, transitionKey, null, instance, false, domain, workflowVersion, cancellationToken);
+                    logger.AuthorizeRequest(domain, workflow, role, parentAllowed);
+                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
+                }
+
+                // SubFlow-owned transition: check override first, then forward
+                if (subFlowConfig?.HasTransitionRoleOverrides == true &&
+                    subFlowConfig.Overrides!.Transitions!.TryGetValue(transitionKey, out var transitionOverride) &&
+                    transitionOverride.Roles is { Count: > 0 })
+                {
+                    var overrideCallerRoles = GetCallerRoles(role);
+                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, transitionOverride.Roles!, instance, cancellationToken);
+                    logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
+                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
+                }
+            }
+            // checkQueryRoles: check state override first, then forward
+            else if (checkQueryRoles)
+            {
+                var subFlowCurrentState = subflow.SubFlowCurrentState;
+                if (subFlowConfig?.HasQueryRoleOverrides == true &&
+                    !string.IsNullOrWhiteSpace(subFlowCurrentState) &&
+                    subFlowConfig.Overrides!.States!.TryGetValue(subFlowCurrentState, out var stateOverride) &&
+                    stateOverride.QueryRoles is { Count: > 0 })
+                {
+                    var overrideCallerRoles = GetCallerRoles(role);
+                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, stateOverride.QueryRoles!, instance, cancellationToken);
+                    logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
+                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
+                }
+            }
+
+            // Forward to SubFlow (functionKey, no-override transition, no-override queryRoles)
             var roleForForward = currentUser.Roles?.Length > 0 ? string.Join(",", currentUser.Roles) : role;
             return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
                 subflow.SubFlowDomain,
@@ -190,6 +232,12 @@ public sealed class AuthorizeAppService(
     {
         runtimeInfoProvider.Check(domain);
 
+        var workflowVersion = NormalizeVersion(version);
+        var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflow, workflowVersion, cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result<AuthorizationMatrixOutput>.Fail(workflowResult.Error);
+        var wf = workflowResult.Value!;
+
         Instance? instance = null;
         var instanceResult = await instanceRepository.FindByIdentifierAsync(instanceId, cancellationToken);
         if (instanceResult is not null)
@@ -198,12 +246,53 @@ public sealed class AuthorizeAppService(
         if (instance?.Subflow != null)
         {
             var subflow = instance.Subflow;
-            return await authorizeGateway.GetAuthorizationMatrixForInstanceAsync(
+            var subFlowMatrixResult = await authorizeGateway.GetAuthorizationMatrixForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,
                 subflow.SubFlowInstanceId.ToString(),
                 version,
                 cancellationToken);
+
+            if (!subFlowMatrixResult.IsSuccess)
+                return subFlowMatrixResult;
+
+            var matrix = subFlowMatrixResult.Value!;
+            var parentState = wf.FindState(instance.CurrentState!);
+            var subFlowConfig = parentState?.SubFlow;
+
+            // Apply transition overrides from parent config (replace mode)
+            if (subFlowConfig?.HasTransitionRoleOverrides == true)
+            {
+                foreach (var t in matrix.Transitions)
+                {
+                    if (subFlowConfig.Overrides!.Transitions!.TryGetValue(t.Key, out var tOverride) &&
+                        tOverride.Roles is { Count: > 0 })
+                        t.Roles = ToRoleGrantDtos(tOverride.Roles!);
+                }
+            }
+
+            // Apply state queryRole overrides from parent config (replace mode)
+            if (subFlowConfig?.HasQueryRoleOverrides == true)
+            {
+                foreach (var s in matrix.States)
+                {
+                    if (subFlowConfig.Overrides!.States!.TryGetValue(s.Key, out var sOverride) &&
+                        sOverride.QueryRoles is { Count: > 0 })
+                        s.QueryRoles = ToRoleGrantDtos(sOverride.QueryRoles!);
+                }
+            }
+
+            // Merge parent-owned transitions (shared, cancel, updateData, exit) not already in SubFlow matrix
+            var existingTransitionKeys = new HashSet<string>(
+                matrix.Transitions.Select(t => t.Key), StringComparer.Ordinal);
+            foreach (var t in wf.SharedTransitions)
+                AddTransition(matrix.Transitions, existingTransitionKeys, t);
+            if (wf.Cancel != null) AddTransition(matrix.Transitions, existingTransitionKeys, wf.Cancel);
+            if (wf.UpdateData != null) AddTransition(matrix.Transitions, existingTransitionKeys, wf.UpdateData);
+            if (wf.Exit != null) AddTransition(matrix.Transitions, existingTransitionKeys, wf.Exit);
+
+            logger.AuthorizationMatrixRequest(domain, workflow);
+            return Result<AuthorizationMatrixOutput>.Ok(matrix);
         }
 
         return await GetAuthorizationMatrixAsync(domain, workflow, version, cancellationToken);
@@ -223,6 +312,16 @@ public sealed class AuthorizeAppService(
                 Roles = ToRoleGrantDtos(t.Roles)
             });
     }
+
+    /// <summary>
+    /// Returns true if the transition key belongs to the parent workflow's own transitions
+    /// (shared, cancel, updateData, exit) that should be evaluated locally regardless of active SubFlow.
+    /// </summary>
+    private static bool IsParentOwnedTransition(Definitions.Workflow wf, string transitionKey) =>
+        wf.SharedTransitions.Any(t => t.Key == transitionKey) ||
+        wf.Cancel?.Key == transitionKey ||
+        wf.UpdateData?.Key == transitionKey ||
+        wf.Exit?.Key == transitionKey;
 
     /// <summary>Maps role grants to DTOs; returns empty list when none (schema consistency).</summary>
     private static List<RoleGrantDto> ToRoleGrantDtos(IReadOnlyCollection<RoleGrant> roles)
@@ -282,7 +381,7 @@ public sealed class AuthorizeAppService(
         CancellationToken cancellationToken)
     {
         if (callerRoles is null || callerRoles.Count == 0)
-            return false;
+            return await EvaluateAuthorizeForSingleRoleAsync(workflow, null, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
 
         foreach (var role in callerRoles)
         {
@@ -297,7 +396,7 @@ public sealed class AuthorizeAppService(
 
     private async Task<bool> EvaluateAuthorizeForSingleRoleAsync(
         Definitions.Workflow workflow,
-        string role,
+        string? role,
         string? transitionKey,
         string? functionKey,
         Instance? instance,
@@ -331,12 +430,34 @@ public sealed class AuthorizeAppService(
     }
 
     /// <summary>
+    /// Evaluates a list of role grants against the caller roles (multi-role: any allowed → allow).
+    /// Used to apply SubFlow override grants locally without forwarding to the SubFlow.
+    /// </summary>
+    private async Task<bool> EvaluateWithGrantsAsync(
+        IReadOnlyList<string>? callerRoles,
+        IReadOnlyCollection<RoleGrant> grants,
+        Instance instance,
+        CancellationToken cancellationToken)
+    {
+        if (callerRoles is null || callerRoles.Count == 0)
+            return false;
+        foreach (var r in callerRoles)
+        {
+            if (string.IsNullOrWhiteSpace(r))
+                continue;
+            if (await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(r, grants, instance, cancellationToken))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Evaluates state-based query roles: instance effective state → state queryRoles or workflow root queryRoles.
     /// Resolves predefined instance roles ($InstanceStarter, $PreviousUser) when instance is present. DENY wins, else ALLOW.
     /// </summary>
     private async Task<bool> EvaluateQueryRolesAsync(
         Definitions.Workflow workflow,
-        string role,
+        string? role,
         Instance? instance,
         CancellationToken cancellationToken)
     {
