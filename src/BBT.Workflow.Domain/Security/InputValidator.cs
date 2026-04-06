@@ -137,5 +137,31 @@ public static class InputValidator
         if (json.Length > MaxFilterLength)
             throw new ArgumentException($"JSON too long: {json.Length} characters. Maximum allowed: {MaxFilterLength}");
     }
+
+    /// <summary>
+    /// Escapes content for PostgreSQL single-quoted string literals (SQL: double each apostrophe).
+    /// </summary>
+    public static string EscapePostgresSingleQuotedString(string value)
+    {
+        return value.Replace("'", "''", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Validates a safe identifier for use as a double-quoted SQL column name (e.g. JSONB column "Data").
+    /// </summary>
+    public static void ValidateSqlJsonColumnIdentifier(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("JSON column name cannot be null or empty.", nameof(name));
+        if (name.Length > 63)
+            throw new ArgumentException("JSON column name exceeds PostgreSQL identifier length.", nameof(name));
+        if (!char.IsLetter(name[0]) && name[0] != '_')
+            throw new ArgumentException($"Invalid JSON column name: {name}", nameof(name));
+        foreach (var c in name)
+        {
+            if (!char.IsLetterOrDigit(c) && c != '_')
+                throw new ArgumentException($"Invalid JSON column name: {name}", nameof(name));
+        }
+    }
 }
 

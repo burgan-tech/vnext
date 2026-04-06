@@ -111,9 +111,6 @@ public static class ServiceScopeFactoryExtensions
     /// </summary>
     /// <typeparam name="T">The type of the result value.</typeparam>
     /// <param name="scopeFactory">The service scope factory.</param>
-    /// <param name="domain">The domain of the workflow.</param>
-    /// <param name="workflowKey">The key of the workflow.</param>
-    /// <param name="workflowVersion">The version of the workflow.</param>
     /// <param name="action">The async operation to execute with the scoped service provider.</param>
     /// <param name="cancellationToken">Cancellation token for the operation.</param>
     /// <returns>A Result containing the operation outcome or workflow loading error.</returns>
@@ -141,6 +138,31 @@ public static class ServiceScopeFactoryExtensions
     ///     cancellationToken);
     /// </code>
     /// </example>
+    /// <summary>
+    /// Executes an async operation in a new DI scope with automatic AmbientServiceProvider restoration.
+    /// Raw version for operations that return any type (not necessarily Result&lt;T&gt;).
+    /// Use this for ConditionalResult&lt;T&gt;, PostCommitResult, or other non-Result return types.
+    /// </summary>
+    public static async Task<T> ExecuteInScopeRawAsync<T>(
+        this IServiceScopeFactory scopeFactory,
+        Func<IServiceProvider, CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default)
+    {
+        var previousAmbient = AmbientServiceProvider.Current;
+        var scope = scopeFactory.CreateAsyncScope();
+        try
+        {
+            var sp = scope.ServiceProvider;
+            AmbientServiceProvider.Current = sp;
+            return await action(sp, cancellationToken);
+        }
+        finally
+        {
+            AmbientServiceProvider.Current = previousAmbient;
+            await scope.DisposeAsync();
+        }
+    }
+
     public static Task<Result<T>> ExecuteWithWorkflowAsync<T>(
         this IServiceScopeFactory scopeFactory,
         string domain,

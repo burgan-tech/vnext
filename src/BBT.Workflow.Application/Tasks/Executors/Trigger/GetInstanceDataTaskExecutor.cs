@@ -123,7 +123,7 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
                     result.Result.Error.Message ?? "GetInstanceData failed");
                 return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                     error: result.Result.Error.Message ?? "GetInstanceData failed",
-                    statusCode: 500,
+                    statusCode: MapErrorToStatusCode(result.Result.Error),
                     taskType: TaskType.ToString()));
             }
 

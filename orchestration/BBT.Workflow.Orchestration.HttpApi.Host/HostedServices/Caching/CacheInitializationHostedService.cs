@@ -19,7 +19,7 @@ public class CacheInitializationHostedService(
             
             await using var scope = scopeFactory.CreateAsyncScope();
             var initializer = scope.ServiceProvider.GetRequiredService<IRuntimeCacheInitializer>();
-            await initializer.InitializeAsync(stoppingToken);
+            await initializer.InitializeAsync(fullLoad: true, stoppingToken);
             
             logger.LogInformation("Cache initialization completed successfully");
         }

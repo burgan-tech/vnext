@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks;
 using Dapr.Client;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -119,13 +120,17 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
     /// <inheritdoc />
     public TaskTraceContext CreateTraceContext(ScriptContext scriptContext)
     {
-        return new TaskTraceContext
-        {
-            InstanceId = scriptContext.Instance.Id,
-            Domain = scriptContext.Workflow.Domain,
-            WorkflowKey = scriptContext.Workflow.Key,
-            WorkflowVersion = scriptContext.Workflow.Version
-        };
+        var instance = scriptContext.Instance;
+        var workflow = scriptContext.Workflow;
+        var domain = !string.IsNullOrWhiteSpace(workflow?.Domain)
+            ? workflow!.Domain
+            : scriptContext.Runtime.Domain;
+
+        return TaskTraceContext.Create(
+            instanceId: instance?.Id ?? Guid.Empty,
+            domain: domain,
+            workflowKey: workflow?.Key ?? string.Empty,
+            workflowVersion: workflow?.Version ?? string.Empty);
     }
 }
 

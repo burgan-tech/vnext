@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Instances;
 
 namespace BBT.Workflow.Gateway;
@@ -34,6 +35,7 @@ public interface IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

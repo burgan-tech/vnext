@@ -26,7 +26,8 @@ public sealed class DataFunctionHandler(
             IfNoneMatch = request.IfNoneMatch,
             Extensions = request.Parameters.Extensions,
             Headers = request.Headers,
-            QueryParameters = request.QueryParameters
+            QueryParameters = request.QueryParameters,
+            Version = request.QueryParameters.GetOrDefault("version"),
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);

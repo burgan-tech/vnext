@@ -24,7 +24,7 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
     }
 
     /// <inheritdoc />
-    public async Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
+    public Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
         string domain,
         string workflow,
         string instanceId,
@@ -33,35 +33,40 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var authorizeAppService = scope.ServiceProvider.GetRequiredService<IAuthorizeAppService>();
-
-        using (currentSchema.Use(workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            return await authorizeAppService.GetAuthorizeResultForInstanceAsync(
-                domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
+
+            using (currentSchema.Use(workflow))
+            {
+                return await authorizeAppService.GetAuthorizeResultForInstanceAsync(
+                    domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, requestContext, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixForInstanceAsync(
+    public Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixForInstanceAsync(
         string domain,
         string workflow,
         string instanceId,
         string? version,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var authorizeAppService = scope.ServiceProvider.GetRequiredService<IAuthorizeAppService>();
-
-        using (currentSchema.Use(workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            return await authorizeAppService.GetAuthorizationMatrixForInstanceAsync(
-                domain, workflow, instanceId, version, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
+
+            using (currentSchema.Use(workflow))
+            {
+                return await authorizeAppService.GetAuthorizationMatrixForInstanceAsync(
+                    domain, workflow, instanceId, version, ct);
+            }
+        }, cancellationToken);
     }
 }

@@ -19,6 +19,12 @@ public interface ICacheSet : IDisposable
     /// Used when initiating cache refresh that should propagate to all pods.
     /// </summary>
     Task LoadAllWithDistributedCacheAsync(object data, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Upserts the provided entities into the existing in-memory snapshot without replacing entries
+    /// that are not present in <paramref name="data"/>. Used for incremental (delta) cache updates.
+    /// </summary>
+    Task MergeAllAsync(object data, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

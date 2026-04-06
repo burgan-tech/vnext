@@ -14,7 +14,13 @@ public sealed class RuntimeService(
     IRuntimeInfoProvider runtimeInfoProvider,
     ILogger<RuntimeService> logger) : IRuntimeService
 {
+    private const int PageSize = 100;
+
     public async Task<IEnumerable<T?>> GetAsync<T>(CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+        => await GetAsync<T>(since: null, cancellationToken);
+
+    public async Task<IEnumerable<T?>> GetAsync<T>(DateTime? since, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
     {
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
@@ -22,10 +28,17 @@ public sealed class RuntimeService(
 
         using (currentSchema.Use(schemaInfo.Schema))
         {
-            var results = await instanceRepository.GetActiveDataListAsync(cancellationToken);
-            
-            var flows = results
-                .Select(item =>
+            var result = new List<T?>();
+            int skip = 0;
+            List<InstanceAndDataModel> page;
+
+            do
+            {
+                page = since.HasValue
+                    ? await instanceRepository.GetActiveDataListSinceAsync(since.Value, skip, PageSize, cancellationToken)
+                    : await instanceRepository.GetActiveDataListPagedAsync(skip, PageSize, cancellationToken);
+
+                foreach (var item in page)
                 {
                     try
                     {
@@ -42,22 +55,23 @@ public sealed class RuntimeService(
                             ));
                         }
 
-                        return flow;
+                        result.Add(flow);
                     }
                     catch (JsonException ex)
                     {
                         logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
-                        return null;
                     }
                     catch (Exception ex)
                     {
                         logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
-                        return null;
                     }
-                })
-                .Where(flow => flow != null)
-                .ToList();
-            return flows;
+                }
+
+                skip += PageSize;
+            }
+            while (page.Count == PageSize);
+
+            return result.Where(f => f != null);
         }
     }
 

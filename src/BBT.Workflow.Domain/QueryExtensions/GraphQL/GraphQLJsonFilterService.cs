@@ -166,10 +166,11 @@ public static class GraphQLJsonFilterService
         if (field.Contains('.'))
         {
             var parts = field.Split('.');
-            var arrayElements = string.Join(",", parts.Select(p => $"'{p.Trim()}'"));
+            var arrayElements = string.Join(",", parts.Select(p =>
+                "'" + InputValidator.EscapePostgresSingleQuotedString(p.Trim()) + "'"));
             return "\"Data\" #>> ARRAY[" + arrayElements + "]";
         }
-        return "\"Data\" ->> '" + field.Trim().Replace("'", "''") + "'";
+        return "\"Data\" ->> '" + InputValidator.EscapePostgresSingleQuotedString(field.Trim()) + "'";
     }
 
     /// <summary>
@@ -191,6 +192,23 @@ public static class GraphQLJsonFilterService
         var instanceWhereClause = instanceClauses.Count > 0 ? string.Join(" AND ", instanceClauses) : string.Empty;
 
         return (jsonWhereClause, instanceWhereClause);
+    }
+
+    /// <summary>
+    /// Builds JSON and Instance WHERE fragments for raw SQL (e.g. aggregations with optional <c>Instances</c> join).
+    /// Instance fragments use alias <c>s</c>; JSON fragments reference the JSON column on <c>InstancesData</c>.
+    /// </summary>
+    public static (string jsonWhereClause, string instanceWhereClause) BuildSeparatedWhereClausesForSql(
+        GraphQLFilterNode? filterNode,
+        string jsonColumnName,
+        List<NpgsqlParameter> parameters,
+        ref int parameterIndex,
+        ILogger? logger = null)
+    {
+        if (filterNode == null || filterNode.NodeType == FilterNodeType.Empty)
+            return (string.Empty, string.Empty);
+
+        return BuildSeparatedWhereClauses(filterNode, jsonColumnName, parameters, ref parameterIndex, logger);
     }
 
     /// <summary>
@@ -588,14 +606,16 @@ public static class GraphQLJsonFilterService
 
     private static string BuildJsonTextAccessor(string field, string jsonColumnName)
     {
+        InputValidator.ValidateSqlJsonColumnIdentifier(jsonColumnName);
         if (IsNestedPath(field))
         {
             var parts = field.Split('.');
-            var arrayElements = string.Join(",", parts.Select(p => $"'{p}'"));
+            var arrayElements = string.Join(",", parts.Select(p =>
+                $"'{InputValidator.EscapePostgresSingleQuotedString(p)}'"));
             return $"(\"{jsonColumnName}\" #>> ARRAY[{arrayElements}])";
         }
-        
-        return $"(\"{jsonColumnName}\" ->> '{field}')";
+
+        return $"(\"{jsonColumnName}\" ->> '{InputValidator.EscapePostgresSingleQuotedString(field)}')";
     }
 
     private static string BuildNestedJsonContainmentPattern(string field, object? value, bool isNumeric, bool isBoolean)

@@ -28,6 +28,15 @@ public interface IDomainCacheContext
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Upserts only the provided (delta) entities into the existing in-memory cache without
+    /// replacing entries absent from <paramref name="deltaData"/>. Used for incremental updates.
+    /// </summary>
+    /// <param name="deltaData">Dictionary mapping entity types to the changed/new entities</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
+    Task MergeAsync(Dictionary<Type, object> deltaData,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the cache set for the specified entity type.
     /// </summary>
     /// <typeparam name="T">The entity type</typeparam>

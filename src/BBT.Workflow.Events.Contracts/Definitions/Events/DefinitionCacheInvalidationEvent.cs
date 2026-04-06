@@ -34,4 +34,11 @@ public class DefinitionCacheInvalidationEvent : IDistributedEvent
     /// When the cache invalidation was requested.
     /// </summary>
     public required DateTime RequestedAt { get; init; }
+
+    /// <summary>
+    /// When <c>true</c>, receiving pods perform a full cache reload (replace all).
+    /// When <c>false</c> (default), only records modified since the last initialization are fetched
+    /// and merged into the existing cache (incremental update).
+    /// </summary>
+    public bool FullLoad { get; init; } = false;
 }

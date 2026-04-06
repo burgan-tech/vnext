@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Authorization.Remote;
 using BBT.Workflow.Instances;
 
@@ -32,10 +33,11 @@ public sealed class RemoteAuthorizeGateway : IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
         return _remoteService.GetAuthorizeResultForInstanceAsync(
-            domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, cancellationToken);
+            domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, requestContext, cancellationToken);
     }
 
     /// <inheritdoc />

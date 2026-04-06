@@ -119,6 +119,23 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     }
 
     /// <summary>
+    /// Maps an <see cref="Error"/> to the equivalent HTTP status code based on its prefix.
+    /// Used to ensure local execution failures carry the same status codes as remote (Dapr) execution.
+    /// </summary>
+    protected static int MapErrorToStatusCode(Error error) => error.Prefix switch
+    {
+        ErrorCodes.Prefixes.Conflict     => 409,
+        ErrorCodes.Prefixes.NotFound     => 404,
+        ErrorCodes.Prefixes.Validation   => 400,
+        ErrorCodes.Prefixes.NotSupported => 400,
+        ErrorCodes.Prefixes.Unauthorized => 401,
+        ErrorCodes.Prefixes.Forbidden    => 403,
+        ErrorCodes.Prefixes.Transient    => 503,
+        ErrorCodes.Prefixes.Dependency   => 502,
+        _                                => 500
+    };
+
+    /// <summary>
     /// Converts task headers (JsonElement?) to Dictionary for local Input objects.
     /// </summary>
     protected static Dictionary<string, string?>? ConvertTaskHeadersToDictionary(JsonElement? taskHeaders)

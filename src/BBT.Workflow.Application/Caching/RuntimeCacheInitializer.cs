@@ -1,6 +1,7 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Caching;
 
@@ -11,52 +12,110 @@ namespace BBT.Workflow.Caching;
 /// </summary>
 public sealed class RuntimeCacheInitializer(
     IServiceScopeFactory scopeFactory,
-    IDomainCacheContext domainCacheContext) : IRuntimeCacheInitializer
+    IDomainCacheContext domainCacheContext,
+    CacheInitializationGate gate,
+    ILogger<RuntimeCacheInitializer> logger) : IRuntimeCacheInitializer
 {
     /// <inheritdoc />
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    public async Task InitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
     {
-        var initialData = await LoadAllEntitiesFromDatabaseAsync(cancellationToken);
-        await domainCacheContext.InitializeAsync(initialData, cancellationToken);
+        if (!gate.TryAcquire())
+        {
+            logger.LogWarning(
+                "Cache initialization already in progress on this pod. Skipping concurrent request. (fullLoad={FullLoad})",
+                fullLoad);
+            return;
+        }
+
+        try
+        {
+            var since = ResolveLoadSince(fullLoad);
+            var capturedAt = DateTime.UtcNow;
+            var data = await LoadAllEntitiesFromDatabaseAsync(since, cancellationToken);
+
+            if (since.HasValue)
+                await domainCacheContext.MergeAsync(data, cancellationToken);
+            else
+                await domainCacheContext.InitializeAsync(data, cancellationToken);
+
+            gate.SetLastInitializedAt(capturedAt);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <inheritdoc />
-    public async Task InitializeWithDistributedCacheAsync(CancellationToken cancellationToken = default)
+    public async Task InitializeWithDistributedCacheAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
     {
-        var initialData = await LoadAllEntitiesFromDatabaseAsync(cancellationToken);
-        await domainCacheContext.InitializeWithDistributedCacheAsync(initialData, cancellationToken);
-    }
-
-    private async Task<Dictionary<Type, object>> LoadAllEntitiesFromDatabaseAsync(CancellationToken cancellationToken)
-    {
-        async Task<IEnumerable<T?>> LoadAsync<T>(CancellationToken ct)
-            where T : class, IDomainEntity, IReferenceSetter
+        if (!gate.TryAcquire())
         {
-            await using var scope = scopeFactory.CreateAsyncScope();
-            var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
-            return await runtimeService.GetAsync<T>(ct);
+            logger.LogWarning(
+                "Cache initialization already in progress on this pod. Skipping concurrent request. (fullLoad={FullLoad})",
+                fullLoad);
+            return;
         }
 
-        // Load all entity types in parallel for better performance
-        var flowsTask = LoadAsync<Definitions.Workflow>(cancellationToken);
-        var tasksTask = LoadAsync<WorkflowTask>(cancellationToken);
-        var functionsTask = LoadAsync<Function>(cancellationToken);
-        var viewsTask = LoadAsync<View>(cancellationToken);
-        var schemasTask = LoadAsync<SchemaDefinition>(cancellationToken);
-        var extensionsTask = LoadAsync<Extension>(cancellationToken);
+        try
+        {
+            var since = ResolveLoadSince(fullLoad);
+            var capturedAt = DateTime.UtcNow;
+            var data = await LoadAllEntitiesFromDatabaseAsync(since, cancellationToken);
 
-        // Wait for all tasks to complete
-        await Task.WhenAll(flowsTask, tasksTask, functionsTask, viewsTask, schemasTask, extensionsTask);
+            if (since.HasValue)
+                await domainCacheContext.MergeAsync(data, cancellationToken);
+            else
+                await domainCacheContext.InitializeWithDistributedCacheAsync(data, cancellationToken);
 
-        // Build and return the initial data dictionary
+            gate.SetLastInitializedAt(capturedAt);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Returns the <c>since</c> timestamp to use for this load:
+    /// <c>null</c> → full load (replace all); non-null → incremental (merge delta).
+    /// </summary>
+    private DateTime? ResolveLoadSince(bool fullLoad)
+    {
+        if (fullLoad)
+            return null;
+
+        return gate.LastInitializedAt;
+    }
+
+    private async Task<Dictionary<Type, object>> LoadAllEntitiesFromDatabaseAsync(
+        DateTime? since,
+        CancellationToken cancellationToken)
+    {
+        // Load entity types sequentially to avoid concurrent DB connection pressure.
+        var flows = await LoadAsync<Definitions.Workflow>(since, cancellationToken);
+        var tasks = await LoadAsync<WorkflowTask>(since, cancellationToken);
+        var functions = await LoadAsync<Function>(since, cancellationToken);
+        var views = await LoadAsync<View>(since, cancellationToken);
+        var schemas = await LoadAsync<SchemaDefinition>(since, cancellationToken);
+        var extensions = await LoadAsync<Extension>(since, cancellationToken);
+
         return new Dictionary<Type, object>
         {
-            { typeof(Definitions.Workflow), flowsTask.Result ?? [] },
-            { typeof(WorkflowTask), tasksTask.Result ?? [] },
-            { typeof(SchemaDefinition), schemasTask.Result ?? [] },
-            { typeof(Function), functionsTask.Result ?? [] },
-            { typeof(View), viewsTask.Result ?? [] },
-            { typeof(Extension), extensionsTask.Result ?? [] }
+            { typeof(Definitions.Workflow), flows },
+            { typeof(WorkflowTask), tasks },
+            { typeof(SchemaDefinition), schemas },
+            { typeof(Function), functions },
+            { typeof(View), views },
+            { typeof(Extension), extensions }
         };
+    }
+
+    private async Task<IEnumerable<T?>> LoadAsync<T>(DateTime? since, CancellationToken ct)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
+        return await runtimeService.GetAsync<T>(since, ct);
     }
 }

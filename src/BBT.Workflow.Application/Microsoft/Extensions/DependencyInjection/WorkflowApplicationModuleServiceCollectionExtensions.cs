@@ -73,6 +73,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Runtime Services
         services.AddScoped<IRuntimeService, RuntimeService>();
         services.AddScoped<IRuntimeCacheInitializer, RuntimeCacheInitializer>();
+        services.AddSingleton<CacheInitializationGate>();
     }
 
     /// <summary>

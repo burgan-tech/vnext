@@ -86,7 +86,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
                     result.Error.Message ?? "StartTrigger failed");
                 return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                     error: result.Error.Message ?? "StartTrigger failed",
-                    statusCode: 500,
+                    statusCode: MapErrorToStatusCode(result.Error),
                     taskType: TaskType.ToString()));
             }
 

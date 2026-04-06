@@ -853,6 +853,49 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(
+        int skip, int take, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        return await (from instance in context.Instances
+                      where instance.Status == InstanceStatus.Active
+                      orderby instance.Id
+                      join data in context.InstancesData on instance.Id equals data.InstanceId
+                      select new InstanceAndDataModel
+                      {
+                          Instance = instance,
+                          InstanceData = data
+                      })
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
+        DateTime since, int skip, int take, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        return await (from instance in context.Instances
+                      where instance.Status == InstanceStatus.Active
+                            && (instance.ModifiedAt ?? instance.CreatedAt) >= since
+                      orderby instance.Id
+                      join data in context.InstancesData on instance.Id equals data.InstanceId
+                      select new InstanceAndDataModel
+                      {
+                          Instance = instance,
+                          InstanceData = data
+                      })
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+    }
+
     /// <inheritdoc />
     public async Task<bool> AnyActiveByKeyAsync(string key, Guid excludeInstanceId,
         CancellationToken cancellationToken = default)

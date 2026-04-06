@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Validators;
@@ -99,6 +100,96 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
         result.IsValid.ShouldBeFalse();
         result.ValidationErrors.ShouldContain(e => 
             e.ErrorMessage!.Contains("must have a rule defined"));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenDynamicExpressoRuleIsWhitespace()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "auto-expresso",
+                            "target": "approved",
+                            "triggerType": "automatic",
+                            "rule": {"location": "dynamicExpresso", "code": "   ", "encoding": "NAT"}
+                        }
+                    ]
+                },
+                {
+                    "key": "approved",
+                    "stateType": "finish",
+                    "labels": [{"label": "Approved", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+        var validator = new WorkflowValidator();
+        var result = validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("Dynamic Expresso", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("non-empty", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenDynamicExpressoRuleIsValid()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "auto-expresso",
+                            "target": "approved",
+                            "triggerType": "automatic",
+                            "rule": {"location": "dynamicExpresso", "code": "context.Instance != null", "encoding": "NAT"}
+                        }
+                    ]
+                },
+                {
+                    "key": "approved",
+                    "stateType": "finish",
+                    "labels": [{"label": "Approved", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+        var validator = new WorkflowValidator();
+        var result = validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e =>
+            e.ErrorMessage!.Contains("Dynamic Expresso", StringComparison.Ordinal));
     }
 
     #endregion

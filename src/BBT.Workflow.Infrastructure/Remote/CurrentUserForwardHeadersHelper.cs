@@ -1,5 +1,3 @@
-using BBT.Workflow.CurrentUser;
-
 namespace BBT.Workflow.Remote;
 
 /// <summary>
@@ -10,7 +8,7 @@ public static class CurrentUserForwardHeadersHelper
 {
     // Content headers belong to HttpContent.Headers, not HttpRequestMessage.Headers.
     // Attempting Remove/Add on request.Headers for these throws InvalidOperationException.
-    private static readonly HashSet<string> _contentHeaders = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> ContentHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Content-Type", "Content-Length", "Content-Encoding", "Content-Language",
         "Content-Location", "Content-Disposition", "Content-Range", "Content-MD5",
@@ -26,7 +24,7 @@ public static class CurrentUserForwardHeadersHelper
         isRestrictedHeader ??= _ => false;
         foreach (var kv in forwardHeaders)
         {
-            if (string.IsNullOrEmpty(kv.Value) || isRestrictedHeader(kv.Key) || _contentHeaders.Contains(kv.Key))
+            if (string.IsNullOrEmpty(kv.Value) || isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
                 continue;
             request.Headers.TryAddWithoutValidation(kv.Key, kv.Value);
         }
@@ -34,7 +32,7 @@ public static class CurrentUserForwardHeadersHelper
         {
             foreach (var kv in inputHeaders)
             {
-                if (isRestrictedHeader(kv.Key) || _contentHeaders.Contains(kv.Key))
+                if (isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
                     continue;
                 request.Headers.Remove(kv.Key);
                 if (!string.IsNullOrEmpty(kv.Value))

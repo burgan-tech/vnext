@@ -9,7 +9,8 @@ namespace BBT.Workflow.Gateway;
 /// <summary>
 /// Local implementation of instance query gateway.
 /// Executes queries locally with proper schema context.
-/// Uses IServiceScopeFactory to create fresh scope for each operation.
+/// Uses ExecuteInScopeAsync/ExecuteInScopeRawAsync to create fresh scope for each operation
+/// and update AmbientServiceProvider.Current, preventing cross-scope UoW interference.
 /// </summary>
 public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
 {
@@ -25,161 +26,176 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
     }
 
     /// <inheritdoc />
-    public async Task<ConditionalResult<GetInstanceOutput>> GetInstanceAsync(
+    public Task<ConditionalResult<GetInstanceOutput>> GetInstanceAsync(
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
         {
-            return await queryService.GetInstanceAsync(input, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
+            {
+                return await queryService.GetInstanceAsync(input, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<ConditionalResult<GetInstanceDataOutput>> GetInstanceDataAsync(
+    public Task<ConditionalResult<GetInstanceDataOutput>> GetInstanceDataAsync(
         GetInstanceDataInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
         {
-            return await queryService.GetInstanceDataAsync(input, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
+            {
+                return await queryService.GetInstanceDataAsync(input, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
+    public Task<Result<InstanceListWithGroupsResponse<GetInstanceOutput>>> GetInstanceListAsync(
         GetInstanceListInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            return await queryService.GetInstanceListAsync(input, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
+            {
+                return await queryService.GetInstanceListAsync(input, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
+    public Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            return await queryService.GetInstanceHistoryAsync(input, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
+            {
+                return await queryService.GetInstanceHistoryAsync(input, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
+    public Task<ConditionalResult<GetInstanceStateOutput>> GetFunctionWithStateAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
         {
-            var stateInput = new GetInstanceStateInput
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
             {
-                Domain = input.Domain,
-                Workflow = input.Workflow,
-                Version = input.Version,
-                Instance = input.Instance,
-                Extensions = input.Extensions,
-                Headers = input.Headers,
-                QueryParams = input.QueryParams,
-                Role = input.Role,
-                IfNoneMatch = input.IfNoneMatch
-            };
-            return await queryService.GetInstanceStateAsync(stateInput, cancellationToken);
-        }
+                var stateInput = new GetInstanceStateInput
+                {
+                    Domain = input.Domain,
+                    Workflow = input.Workflow,
+                    Version = input.Version,
+                    Instance = input.Instance,
+                    Extensions = input.Extensions,
+                    Headers = input.Headers,
+                    QueryParams = input.QueryParams,
+                    Role = input.Role,
+                    IfNoneMatch = input.IfNoneMatch
+                };
+                return await queryService.GetInstanceStateAsync(stateInput, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetViewOutput>> GetFunctionWithViewAsync(
+    public Task<Result<GetViewOutput>> GetFunctionWithViewAsync(
         GetFunctionWithInstanceInput input,
         string? transitionKey,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            var viewInput = new GetViewInput
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
             {
-                Domain = input.Domain,
-                Workflow = input.Workflow,
-                Version = input.Version,
-                Instance = input.Instance,
-                Headers=input.Headers,
-                QueryParameters=input.QueryParams
-            };
-            return await queryService.GetViewAsync(viewInput, transitionKey, cancellationToken);
-        }
+                var viewInput = new GetViewInput
+                {
+                    Domain = input.Domain,
+                    Workflow = input.Workflow,
+                    Version = input.Version,
+                    Instance = input.Instance,
+                    Headers = input.Headers,
+                    QueryParameters = input.QueryParams
+                };
+                return await queryService.GetViewAsync(viewInput, transitionKey, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetSchemaOutput>> GetFunctionWithSchemaAsync(
+    public Task<Result<GetSchemaOutput>> GetFunctionWithSchemaAsync(
         GetFunctionWithInstanceInput input,
         string transitionKey,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            var schemaInput = new GetSchemaInput
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
             {
-                Domain = input.Domain,
-                Workflow = input.Workflow,
-                Version = input.Version,
-                Instance = input.Instance
-            };
-            return await queryService.GetSchemaAsync(schemaInput, transitionKey, cancellationToken);
-        }
+                var schemaInput = new GetSchemaInput
+                {
+                    Domain = input.Domain,
+                    Workflow = input.Workflow,
+                    Version = input.Version,
+                    Instance = input.Instance
+                };
+                return await queryService.GetSchemaAsync(schemaInput, transitionKey, ct);
+            }
+        }, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
+    public Task<Result<GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var queryService = scope.ServiceProvider.GetRequiredService<IInstanceQueryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            var extensionsInput = new GetExtensionsInput
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
             {
-                Domain = input.Domain,
-                Workflow = input.Workflow,
-                Version = input.Version,
-                Instance = input.Instance,
-                Extensions = input.Extensions
-            };
-            return await queryService.GetExtensionsAsync(extensionsInput, cancellationToken);
-        }
+                var extensionsInput = new GetExtensionsInput
+                {
+                    Domain = input.Domain,
+                    Workflow = input.Workflow,
+                    Version = input.Version,
+                    Instance = input.Instance,
+                    Extensions = input.Extensions
+                };
+                return await queryService.GetExtensionsAsync(extensionsInput, ct);
+            }
+        }, cancellationToken);
     }
 }
-

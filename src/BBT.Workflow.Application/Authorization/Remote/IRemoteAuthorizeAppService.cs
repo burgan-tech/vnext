@@ -32,6 +32,7 @@ public interface IRemoteAuthorizeAppService
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

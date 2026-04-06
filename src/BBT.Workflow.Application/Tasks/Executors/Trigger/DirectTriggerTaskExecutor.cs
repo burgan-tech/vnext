@@ -159,7 +159,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                 error: result.Error.Message ?? "DirectTrigger transition failed",
-                statusCode: 500,
+                statusCode: MapErrorToStatusCode(result.Error),
                 taskType: TaskType.ToString()));
         }
 

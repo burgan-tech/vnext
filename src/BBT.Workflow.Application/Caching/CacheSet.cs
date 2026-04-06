@@ -394,6 +394,24 @@ public class CacheSet<T>(
         }
     }
 
+    public async Task MergeAllAsync(object data, CancellationToken cancellationToken = default)
+    {
+        if (data is not IEnumerable<T> entities)
+            throw new ArgumentException($"Invalid data type for {typeof(T).Name}");
+
+        var count = 0;
+        foreach (var entity in entities)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await UpsertLocalAsync(entity, cancellationToken);
+            count++;
+        }
+
+        _logger.LogInformation(
+            "CacheSet<{Type}> merged {Count} item(s) incrementally.",
+            typeof(T).Name, count);
+    }
+
     /// <summary>
     /// Performs cleanup of expired and least-used items based on TTL and capacity.
     /// </summary>

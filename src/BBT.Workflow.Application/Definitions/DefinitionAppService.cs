@@ -183,7 +183,7 @@ public sealed class DefinitionAppService(
             input.Version,
             false
         );
-
+        instance.ModifiedAt = DateTime.UtcNow;
         await instanceRepository.UpdateAsync(instance, true, cancellationToken);
 
         // Cast to cache via CastProcessor
@@ -270,6 +270,7 @@ public sealed class DefinitionAppService(
         }
         else
         {
+            instance.ModifiedAt = DateTime.UtcNow;
             await instanceRepo.UpdateAsync(instance, true, cancellationToken);
         }
 
@@ -352,26 +353,27 @@ public sealed class DefinitionAppService(
     }
 
     /// <inheritdoc />
-    public async Task<Result> ReInitializeAsync(CancellationToken cancellationToken = default)
+    public async Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
     {
         // First, update both in-memory and distributed cache on this initiating pod
-        await runtimeCacheInitializer.InitializeWithDistributedCacheAsync(cancellationToken);
-        
+        await runtimeCacheInitializer.InitializeWithDistributedCacheAsync(fullLoad, cancellationToken);
+
         // Then, publish broadcast event to all pods using Dapr client directly
         var cacheInvalidationEvent = new DefinitionCacheInvalidationEvent
         {
             Domain = runtimeInfoProvider.Domain,
             RequestedBy = "System",
             RequestedAt = DateTime.UtcNow,
-            Environment = configuration["ASPNETCORE_ENVIRONMENT"]!
+            Environment = configuration["ASPNETCORE_ENVIRONMENT"]!,
+            FullLoad = fullLoad
         };
-        
+
         await daprClient.PublishEventAsync(
             pubsubName: configuration["DAPR_PUBSUB_BROADCAST_STORE_NAME"]!,
             topicName: DefinitionCacheInvalidationEvent.TopicName,
             data: cacheInvalidationEvent,
             cancellationToken: cancellationToken);
-        
+
         return Result.Ok();
     }
 }

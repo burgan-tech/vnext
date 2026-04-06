@@ -17,6 +17,14 @@ public interface IRuntimeService
         where T : class, IDomainEntity, IReferenceSetter;
 
     /// <summary>
+    /// Retrieves active entities of the specified type modified at or after <paramref name="since"/>.
+    /// When <paramref name="since"/> is <c>null</c>, all active entities are returned (full load).
+    /// The schema is automatically inferred from the entity type.
+    /// </summary>
+    Task<IEnumerable<T?>> GetAsync<T>(DateTime? since, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
     /// Retrieves a specific entity by key and version.
     /// The schema is automatically inferred from the entity type.
     /// </summary>

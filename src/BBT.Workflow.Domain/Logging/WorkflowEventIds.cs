@@ -46,6 +46,8 @@ public static class WorkflowEventIds
     // Error (10070-10099)
     public static readonly EventId TaskExecutionFailed = new(10071, nameof(TaskExecutionFailed));
     public static readonly EventId SubFlowConfigInvalid = new(10074, nameof(SubFlowConfigInvalid));
+    public static readonly EventId DynamicExpressoConditionInvalidEncoding = new(10076, nameof(DynamicExpressoConditionInvalidEncoding));
+    public static readonly EventId DynamicExpressoConditionEvaluationFailed = new(10077, nameof(DynamicExpressoConditionEvaluationFailed));
 
     #endregion
 

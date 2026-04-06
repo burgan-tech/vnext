@@ -29,34 +29,6 @@ public sealed class AuthorizeAppService(
     ILogger<AuthorizeAppService> logger) : ApplicationService(serviceProvider), IAuthorizeAppService
 {
     /// <inheritdoc />
-    public async Task<Result<AuthorizeOutput>> GetAuthorizeResultAsync(
-        string domain,
-        string workflow,
-        string role,
-        string? transitionKey,
-        string? functionKey,
-        string? version = null,
-        bool checkQueryRoles = false,
-        CancellationToken cancellationToken = default)
-    {
-        var validation = ValidateAuthorizeTargetWorkflow(transitionKey, functionKey, checkQueryRoles);
-        if (validation.HasValue)
-            return validation.Value;
-
-        runtimeInfoProvider.Check(domain);
-        var workflowVersion = NormalizeVersion(version);
-        var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflow, workflowVersion, cancellationToken);
-        if (!workflowResult.IsSuccess)
-            return Result<AuthorizeOutput>.Fail(workflowResult.Error);
-
-        var wf = workflowResult.Value!;
-        var callerRoles = GetCallerRoles(role);
-        var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, null, checkQueryRoles, domain, workflowVersion, cancellationToken);
-        logger.AuthorizeRequest(domain, workflow, role, allowed);
-        return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
-    }
-
-    /// <inheritdoc />
     public async Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
         string domain,
         string workflow,
@@ -66,6 +38,7 @@ public sealed class AuthorizeAppService(
         string? functionKey,
         string? version = null,
         bool checkQueryRoles = false,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
         var validation = ValidateAuthorizeTargetInstance(transitionKey, functionKey, checkQueryRoles);
@@ -98,7 +71,7 @@ public sealed class AuthorizeAppService(
                 if (IsParentOwnedTransition(wf, transitionKey))
                 {
                     var parentCallerRoles = GetCallerRoles(role);
-                    var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles, transitionKey, null, instance, false, domain, workflowVersion, cancellationToken);
+                    var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles, transitionKey, null, instance, false, domain, workflowVersion, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, parentAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
                 }
@@ -109,7 +82,7 @@ public sealed class AuthorizeAppService(
                     transitionOverride.Roles is { Count: > 0 })
                 {
                     var overrideCallerRoles = GetCallerRoles(role);
-                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, transitionOverride.Roles!, instance, cancellationToken);
+                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, transitionOverride.Roles!, instance, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
                 }
@@ -124,7 +97,7 @@ public sealed class AuthorizeAppService(
                     stateOverride.QueryRoles is { Count: > 0 })
                 {
                     var overrideCallerRoles = GetCallerRoles(role);
-                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, stateOverride.QueryRoles!, instance, cancellationToken);
+                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, stateOverride.QueryRoles!, instance, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
                 }
@@ -141,11 +114,12 @@ public sealed class AuthorizeAppService(
                 functionKey,
                 version,
                 checkQueryRoles,
+                requestContext,
                 cancellationToken);
         }
 
         var callerRoles = GetCallerRoles(role);
-        var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
+        var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
@@ -161,9 +135,8 @@ public sealed class AuthorizeAppService(
             return [roleParameter.Trim()];
         return null;
     }
-
-    /// <inheritdoc />
-    public async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixAsync(
+    
+    private async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixAsync(
         string domain,
         string workflow,
         string? version = null,
@@ -338,20 +311,6 @@ public sealed class AuthorizeAppService(
         string.IsNullOrWhiteSpace(version) ? null : version.Trim();
 
     /// <summary>
-    /// Validates workflow-level authorize: exactly one of transitionKey or functionKey; checkQueryRoles true → error.
-    /// </summary>
-    private static Result<AuthorizeOutput>? ValidateAuthorizeTargetWorkflow(string? transitionKey, string? functionKey, bool checkQueryRoles)
-    {
-        if (checkQueryRoles)
-            return Result<AuthorizeOutput>.Fail(WorkflowErrors.AuthorizeQueryRolesRequiresInstance());
-        var hasTransition = !string.IsNullOrWhiteSpace(transitionKey);
-        var hasFunction = !string.IsNullOrWhiteSpace(functionKey);
-        if (hasTransition == hasFunction)
-            return Result<AuthorizeOutput>.Fail(WorkflowErrors.AuthorizeRequiresExactlyOneTarget());
-        return null;
-    }
-
-    /// <summary>
     /// Validates instance-level authorize: exactly one of transitionKey, functionKey, or checkQueryRoles.
     /// </summary>
     private static Result<AuthorizeOutput>? ValidateAuthorizeTargetInstance(string? transitionKey, string? functionKey, bool checkQueryRoles)
@@ -378,16 +337,17 @@ public sealed class AuthorizeAppService(
         bool checkQueryRoles,
         string domain,
         string? workflowVersion,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
         if (callerRoles is null || callerRoles.Count == 0)
-            return await EvaluateAuthorizeForSingleRoleAsync(workflow, null, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
+            return await EvaluateAuthorizeForSingleRoleAsync(workflow, null, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
 
         foreach (var role in callerRoles)
         {
             if (string.IsNullOrWhiteSpace(role))
                 continue;
-            var allowed = await EvaluateAuthorizeForSingleRoleAsync(workflow, role.Trim(), transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, cancellationToken);
+            var allowed = await EvaluateAuthorizeForSingleRoleAsync(workflow, role.Trim(), transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
             if (allowed)
                 return true;
         }
@@ -403,17 +363,18 @@ public sealed class AuthorizeAppService(
         bool checkQueryRoles,
         string domain,
         string? workflowVersion,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
         if (checkQueryRoles)
-            return await EvaluateQueryRolesAsync(workflow, role, instance, cancellationToken);
+            return await EvaluateQueryRolesAsync(workflow, role, instance, requestContext, cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(transitionKey))
         {
             var transition = workflow.FindTransitionInContext(transitionKey);
             if (transition == null)
                 return false;
-            return await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(workflow, transition, instance, role, cancellationToken);
+            return await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(workflow, transition, instance, role, requestContext, cancellationToken);
         }
 
         if (!string.IsNullOrWhiteSpace(functionKey))
@@ -423,7 +384,7 @@ public sealed class AuthorizeAppService(
                 return false;
             if (fnResult.Value!.Roles.Count == 0)
                 return true; // No roles defined on function → allow
-            return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, fnResult.Value!.Roles, instance, cancellationToken);
+            return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, fnResult.Value!.Roles, instance, requestContext, cancellationToken);
         }
 
         return false;
@@ -437,6 +398,7 @@ public sealed class AuthorizeAppService(
         IReadOnlyList<string>? callerRoles,
         IReadOnlyCollection<RoleGrant> grants,
         Instance instance,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
         if (callerRoles is null || callerRoles.Count == 0)
@@ -445,7 +407,7 @@ public sealed class AuthorizeAppService(
         {
             if (string.IsNullOrWhiteSpace(r))
                 continue;
-            if (await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(r, grants, instance, cancellationToken))
+            if (await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(r, grants, instance, requestContext, cancellationToken))
                 return true;
         }
         return false;
@@ -459,6 +421,7 @@ public sealed class AuthorizeAppService(
         Definitions.Workflow workflow,
         string? role,
         Instance? instance,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
         if (instance == null)
@@ -470,6 +433,6 @@ public sealed class AuthorizeAppService(
         var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
         if (queryRoles.Count == 0)
             return true; // No query roles defined → allow
-        return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, queryRoles, instance, cancellationToken);
+        return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, queryRoles, instance, requestContext, cancellationToken);
     }
 }

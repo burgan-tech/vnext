@@ -92,6 +92,19 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
         }
     }
 
+    public async Task MergeAsync(Dictionary<Type, object> deltaData, CancellationToken cancellationToken = default)
+    {
+        foreach (var cacheSet in CacheSets)
+        {
+            var cacheSetType = cacheSet.GetType().GetGenericArguments()[0];
+
+            if (deltaData.TryGetValue(cacheSetType, out var data))
+            {
+                await cacheSet.MergeAllAsync(data, cancellationToken);
+            }
+        }
+    }
+
     public int CleanupAll(
         TimeSpan? ttl = null,
         int? maxItemsPerSet = null,

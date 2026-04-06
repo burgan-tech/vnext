@@ -29,9 +29,10 @@ public sealed class DefinitionController(
     [HttpGet("re-initialize")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> ReInitializeAsync(
+        [FromQuery] bool fullLoad = false,
         CancellationToken cancellationToken = default)
     {
-        var result = await appService.ReInitializeAsync(cancellationToken);
+        var result = await appService.ReInitializeAsync(fullLoad, cancellationToken);
         return FromResult(result);
     }
 } 

@@ -40,6 +40,7 @@ public sealed class RemoteAuthorizeAppService(
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -69,7 +70,7 @@ public sealed class RemoteAuthorizeAppService(
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, requestContext?.Headers);
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
             // 200 and 403 both return AuthorizeOutput body (allowed true/false)

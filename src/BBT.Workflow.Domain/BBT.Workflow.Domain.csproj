@@ -22,4 +22,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Tasks\Scripting\NotificationMapping.csx" LogicalName="BBT.Workflow.Tasks.Scripting.NotificationMapping.csx" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BBT.Workflow.Domain.Tests" />
+  </ItemGroup>
 </Project>

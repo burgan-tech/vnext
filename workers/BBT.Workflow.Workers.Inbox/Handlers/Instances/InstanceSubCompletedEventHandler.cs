@@ -1,7 +1,6 @@
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
-using BBT.Aether.Uow;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -60,16 +59,8 @@ internal sealed class InstanceSubCompletedEventHandler(
 
             await scopeFactory.ExecuteInNewScopeAsync(async sp =>
             {
-                var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 var subflowCompletionService = sp.GetRequiredService<ISubflowCompletionService>();
-
-                await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-                {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
-                }, cancellationToken);
-
                 await subflowCompletionService.CompletionAsync(completedData, cancellationToken);
-                await uow.CommitAsync(cancellationToken);
             });
         }
     }

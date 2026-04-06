@@ -117,8 +117,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddSingleton<IDataSeedService, WorkflowDataSeedService>();
 
-        #region DomainEvents
-
         services.AddAetherDbContext<MessagingDbContext>((_, options) =>
         {
             options.UseNpgsql(configuration.GetConnectionString("Default"),
@@ -129,6 +127,17 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
 
+        return services;
+    }
+
+    /// <summary>
+    /// Registers domain event dispatching, transactional outbox, and inbox infrastructure.
+    /// Requires <see cref="BBT.Aether.Events.IDistributedEventBus"/> and <see cref="BBT.Aether.Events.IEventSerializer"/>
+    /// to be registered (via <c>AddEventBus</c> or <c>AddAetherEventBus</c>).
+    /// Do NOT call from DbMigrator or other minimal hosts.
+    /// </summary>
+    public static IServiceCollection AddDomainEventsInfrastructure(this IServiceCollection services)
+    {
         services.AddAetherDomainEvents<MessagingDbContext>(options =>
         {
             options.DispatchStrategy = DomainEventDispatchStrategy.AlwaysUseOutbox;
@@ -137,8 +146,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         services.AddAetherOutbox<MessagingDbContext>();
         services.AddAetherInbox<MessagingDbContext>();
 
-        #endregion
-        
         return services;
     }
 

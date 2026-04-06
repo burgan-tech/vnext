@@ -25,6 +25,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     {
         IsTransient = true;
         CreatedAt = DateTime.UtcNow;
+        ModifiedAt = DateTime.UtcNow;
         Flow = Check.NotNullOrWhiteSpace(flow, nameof(Flow), WorkflowConstants.MaxKeyLength);
         FlowVersion = Check.NotNullOrWhiteSpace(flowVersion, nameof(FlowVersion), WorkflowConstants.MaxVersionLength);
         Key = Check.Length(key, nameof(Key), InstanceConstants.MaxKeyLength);

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
 using BBT.Workflow.Events.Hooks;
 using Microsoft.Extensions.DependencyInjection;
@@ -199,9 +200,25 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
             return HookExecutionResult.NoHooks;
         }
 
-        // Get all invokers for this event type
-        var invokers = GetInvokersForEventType(eventType);
-        
+        // Get all invokers for this event type.
+        // Wrap in try/catch: if the ambient SP is not set (e.g. during startup or background work
+        // that bypasses ExecuteInScopeAsync), scope-validation may throw when the bus is a
+        // singleton and invokers are scoped. In that case fall back to no-hooks so the event
+        // is still published to the inner bus rather than silently lost.
+        List<IEventHookInvoker> invokers;
+        try
+        {
+            invokers = GetInvokersForEventType(eventType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to resolve hook invokers for {EventType} — skipping hooks and publishing to inner bus",
+                eventType.Name);
+            return HookExecutionResult.NoHooks;
+        }
+
         if (invokers.Count == 0)
         {
             return HookExecutionResult.NoHooks;
@@ -307,9 +324,16 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     /// <summary>
     /// Gets all hook invokers that can handle the specified event type.
     /// </summary>
+    /// <remarks>
+    /// Resolves invokers from <see cref="AmbientServiceProvider.Current"/> when available so that
+    /// scoped hooks are resolved from the correct request scope even when this bus instance is a
+    /// singleton (inheriting the lifetime of the inner <see cref="IDistributedEventBus"/>).
+    /// Falls back to the construction-time <see cref="_serviceProvider"/> when no ambient scope is set.
+    /// </remarks>
     private List<IEventHookInvoker> GetInvokersForEventType(Type eventType)
     {
-        var allInvokers = _serviceProvider.GetServices<IEventHookInvoker>();
+        var sp = AmbientServiceProvider.Current ?? _serviceProvider;
+        var allInvokers = sp.GetServices<IEventHookInvoker>();
         
         return allInvokers
             .Where(invoker => invoker.EventType == eventType)

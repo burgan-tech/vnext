@@ -2,6 +2,7 @@ using BBT.Aether.AspNetCore.Results;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions.Functions;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Routing;
 
 namespace BBT.Workflow.Controllers.Instances;
 
@@ -33,6 +34,13 @@ public sealed class AuthorizeFunctionHandler(
                 "true",
                 StringComparison.OrdinalIgnoreCase);
 
+        var routeValues = request.HttpContext.GetRouteData()?.Values
+            .ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
+        var requestContext = new AuthorizationRequestContext(
+            request.Headers,
+            request.QueryParameters,
+            routeValues);
+
         var result = await authorizeAppService.GetAuthorizeResultForInstanceAsync(
             request.Domain,
             request.Workflow,
@@ -42,6 +50,7 @@ public sealed class AuthorizeFunctionHandler(
             request.Parameters.FunctionKey,
             version,
             checkQueryRoles,
+            requestContext,
             cancellationToken);
 
         if (!result.IsSuccess)

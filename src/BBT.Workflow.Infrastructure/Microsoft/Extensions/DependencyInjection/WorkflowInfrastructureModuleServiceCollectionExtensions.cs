@@ -92,9 +92,6 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<IInstanceTaskRepository, EfCoreInstanceTaskRepository>();
         services.AddScoped<IInstanceJobRepository, EfCoreInstanceJobRepository>();
         
-        // Domain discovery
-        services.AddDomainDiscovery();
-        
         // Remote vnext api
         services.AddVNextApiServices();
         
@@ -117,27 +114,52 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // Schema Migration Orchestration
         services.AddScoped<ISchemaMigrationOrchestrator, SchemaMigrationOrchestrator>();
         
-        // Post-Commit Idempotency Store
+        return services;
+    }
+
+    /// <summary>
+    /// Registers runtime-only infrastructure services that require external dependencies:
+    /// domain discovery (requires <see cref="BBT.Aether.DistributedCache.IDistributedCacheService"/>),
+    /// embedded scripting (requires <see cref="BBT.Workflow.Caching.IComponentCacheStore"/> from Application layer),
+    /// and post-commit idempotency store (requires <see cref="BBT.Aether.DistributedCache.IDistributedCacheService"/>).
+    /// Call this only from hosts that register <c>AddApplicationModule()</c> and <c>AddDistributedCache()</c>.
+    /// Do NOT call from DbMigrator or other minimal hosts.
+    /// </summary>
+    public static IServiceCollection AddInfrastructureRuntimeServices(this IServiceCollection services)
+    {
+        // Domain discovery (needs IDistributedCacheService)
+        services.AddDomainDiscovery();
+
+        // Post-Commit Idempotency Store (needs IDistributedCacheService)
         services.AddSingleton<IPostCommitIdempotencyStore, DistributedCacheIdempotencyStore>();
-        
-        // Event Hooks
-        services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
-        services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
-        services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
-        services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();
-        services.AddEventHook<InstanceFaultedCleanupEvent, InstanceFaultedCleanupEventHook>();
-        
-        // Embedded Script Services
+
+        // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();
         services.ConfigureEmbeddedScripts(opt =>
         {
-            // Script is embedded in BBT.Workflow.Domain assembly
             opt.Add(
                 NotificationScriptProvider.DefaultKey,
                 "BBT.Workflow.Tasks.Scripting.NotificationMapping.csx",
                 typeof(EmbeddedScriptEntry).Assembly);
         });
-        
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers workflow event hooks that execute before domain events are published.
+    /// These hooks depend on application-layer services (<see cref="BBT.Workflow.Instances.IInstanceCancellationService"/>)
+    /// and a configured event bus (<see cref="BBT.Aether.Events.IDistributedEventBus"/>).
+    /// Call this only from hosts that register both <c>AddApplicationModule()</c> and an event bus.
+    /// Do NOT call from DbMigrator or other minimal hosts.
+    /// </summary>
+    public static IServiceCollection AddWorkflowEventHooks(this IServiceCollection services)
+    {
+        services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
+        services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
+        services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
+        services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();
+        services.AddEventHook<InstanceFaultedCleanupEvent, InstanceFaultedCleanupEventHook>();
         return services;
     }
 }

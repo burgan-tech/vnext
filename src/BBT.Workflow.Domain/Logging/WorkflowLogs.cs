@@ -248,6 +248,28 @@ public static partial class WorkflowLogs
         string transitionKeys);
 
     /// <summary>
+    /// Logs when a Dynamic Expresso condition script cannot be decoded.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10076,
+        Level = LogLevel.Warning,
+        Message = "Dynamic Expresso condition script has invalid encoding: {Reason}")]
+    public static partial void DynamicExpressoConditionInvalidEncoding(
+        this ILogger logger,
+        string reason);
+
+    /// <summary>
+    /// Logs when Dynamic Expresso condition evaluation throws.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10077,
+        Level = LogLevel.Error,
+        Message = "Dynamic Expresso condition evaluation failed: {Reason}")]
+    public static partial void DynamicExpressoConditionEvaluationFailed(
+        this ILogger logger,
+        string reason);
+
+    /// <summary>
     /// Logs when attempting to update data on an already completed instance.
     /// </summary>
     [LoggerMessage(

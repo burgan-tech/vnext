@@ -139,7 +139,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     result.Error.Message ?? "SubProcess start failed");
                 return TaskInvocationResult.Failure(
                     error: result.Error.Message ?? "SubProcess start failed",
-                    statusCode: 500,
+                    statusCode: MapErrorToStatusCode(result.Error),
                     taskType: TaskType.ToString(),
                     metadata: new Dictionary<string, object>
                     {

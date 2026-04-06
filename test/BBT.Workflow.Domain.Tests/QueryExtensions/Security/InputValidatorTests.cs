@@ -112,5 +112,31 @@ public class InputValidatorTests
         // Act & Assert
         Should.Throw<ArgumentException>(() => InputValidator.ValidateJsonLength(longJson));
     }
+
+    [Fact]
+    public void ValidateSqlJsonColumnIdentifier_ValidNames_ShouldPass()
+    {
+        Should.NotThrow(() => InputValidator.ValidateSqlJsonColumnIdentifier("Data"));
+        Should.NotThrow(() => InputValidator.ValidateSqlJsonColumnIdentifier("Json"));
+        Should.NotThrow(() => InputValidator.ValidateSqlJsonColumnIdentifier("_v1"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("9bad")]
+    [InlineData("Da-ta")]
+    [InlineData("Data\"; DROP--")]
+    public void ValidateSqlJsonColumnIdentifier_Invalid_ShouldThrow(string name)
+    {
+        Should.Throw<ArgumentException>(() => InputValidator.ValidateSqlJsonColumnIdentifier(name));
+    }
+
+    [Fact]
+    public void EscapePostgresSingleQuotedString_DoublesQuotes()
+    {
+        InputValidator.EscapePostgresSingleQuotedString("a'b").ShouldBe("a''b");
+        InputValidator.EscapePostgresSingleQuotedString("ok").ShouldBe("ok");
+    }
 }
 

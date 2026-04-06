@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether;
+using BBT.Workflow;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
@@ -108,36 +109,76 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                     taskType: TaskType.ToString()));
             }
 
-            // Step 2: Get data for each instance
+            var listResponse = instanceListResult.Value!;
+            var basePath = _urlTemplateBuilder.BuildFunctionListUrl(
+                task.TriggerDomain,
+                task.TriggerFlow,
+                "data");
+
+            var groupItems = TryMaterializeGroupSummaries(listResponse);
+            if (groupItems != null)
+            {
+                // groupBy: items are GroupSummary — do not call GetInstanceData per row
+                var currentPage = task.Page;
+                var pageSize = task.PageSize;
+                var totalEstimate = groupItems.Count;
+                var hasNext = (currentPage * pageSize) < totalEstimate;
+
+                var groupedResponseData = new
+                {
+                    links = new
+                    {
+                        self = $"{basePath}?page={currentPage}&pageSize={pageSize}",
+                        first = $"{basePath}?page=1&pageSize={pageSize}",
+                        next = hasNext
+                            ? $"{basePath}?page={currentPage + 1}&pageSize={pageSize}"
+                            : "",
+                        prev = currentPage > 1
+                            ? $"{basePath}?page={currentPage - 1}&pageSize={pageSize}"
+                            : ""
+                    },
+                    items = groupItems
+                };
+
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                    data: groupedResponseData,
+                    statusCode: 200,
+                    taskType: TaskType.ToString(),
+                    metadata: new Dictionary<string, object>
+                    {
+                        ["Page"] = currentPage,
+                        ["PageSize"] = pageSize,
+                        ["HasNext"] = hasNext,
+                        ["ItemCount"] = groupItems.Count,
+                        ["Grouped"] = true
+                    }));
+            }
+
+            // Step 2: Get data for each instance (flat list)
             // Note: ToPagedList uses Items.Count as totalItems estimate since InstanceListWithGroupsResponse doesn't preserve total count
-            var pagedList = instanceListResult.Value!.ToPagedList(task.PageSize, task.Page, instanceListResult.Value.Items.Count);
+            var pagedList = listResponse.ToPagedList(task.PageSize, task.Page, listResponse.Items.Count);
             var instanceDataResults = await ProcessDataFunctionListAsync(
                 task.TriggerDomain,
                 task.TriggerFlow,
                 pagedList,
                 cancellationToken);
 
-            // Build HATEOAS-like response structure for consistency with remote execution
-            var basePath = _urlTemplateBuilder.BuildFunctionListUrl(
-                task.TriggerDomain, 
-                task.TriggerFlow, 
-                "data");
             var responseData = new
             {
                 links = new
                 {
                     self = $"{basePath}?page={pagedList.CurrentPage}&pageSize={pagedList.PageSize}",
                     first = $"{basePath}?page=1&pageSize={pagedList.PageSize}",
-                    next = pagedList.HasNext 
-                        ? $"{basePath}?page={pagedList.CurrentPage + 1}&pageSize={pagedList.PageSize}" 
+                    next = pagedList.HasNext
+                        ? $"{basePath}?page={pagedList.CurrentPage + 1}&pageSize={pagedList.PageSize}"
                         : "",
-                    prev = pagedList.CurrentPage > 1 
-                        ? $"{basePath}?page={pagedList.CurrentPage - 1}&pageSize={pagedList.PageSize}" 
+                    prev = pagedList.CurrentPage > 1
+                        ? $"{basePath}?page={pagedList.CurrentPage - 1}&pageSize={pagedList.PageSize}"
                         : ""
                 },
                 items = instanceDataResults
             };
-            
+
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
                 data: responseData,
                 statusCode: 200,
@@ -192,6 +233,46 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         }
         
         return results;
+    }
+
+    /// <summary>
+    /// When the list API returns groupBy results, <see cref="InstanceListWithGroupsResponse{T}.Items"/> holds
+    /// <see cref="GroupSummary"/> (or JSON elements after deserialization). Returns null if the payload is not
+    /// a homogeneous group list so the flat instance path can run.
+    /// </summary>
+    private static List<GroupSummary>? TryMaterializeGroupSummaries(
+        InstanceListWithGroupsResponse<GetInstanceOutput> listResponse)
+    {
+        if (listResponse.Items.Count == 0)
+        {
+            return null;
+        }
+
+        var groups = new List<GroupSummary>(listResponse.Items.Count);
+        foreach (var item in listResponse.Items)
+        {
+            switch (item)
+            {
+                case GroupSummary groupSummary:
+                    groups.Add(groupSummary);
+                    break;
+                case JsonElement jsonElement:
+                    var deserialized = JsonSerializer.Deserialize<GroupSummary>(
+                        jsonElement,
+                        JsonSerializerConstants.JsonOptions);
+                    if (deserialized == null)
+                    {
+                        return null;
+                    }
+
+                    groups.Add(deserialized);
+                    break;
+                default:
+                    return null;
+            }
+        }
+
+        return groups;
     }
 
     private async Task<Result<TaskInvocationResult>> ExecuteRemoteAsync(

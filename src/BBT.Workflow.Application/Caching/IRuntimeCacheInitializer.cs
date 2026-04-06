@@ -12,17 +12,26 @@ public interface IRuntimeCacheInitializer
     /// This includes workflows, tasks, functions, views, schemas, and extensions.
     /// Updates only in-memory cache (used by receiving pods).
     /// </summary>
+    /// <param name="fullLoad">
+    /// When <c>true</c>, all records are fetched regardless of previous initialization state (used at startup).
+    /// When <c>false</c> (default), only records modified since the last successful initialization are fetched
+    /// and merged into the existing cache (incremental update).
+    /// </param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A task representing the asynchronous initialization operation</returns>
-    Task InitializeAsync(CancellationToken cancellationToken = default);
+    Task InitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Initializes both in-memory and distributed cache by loading all workflow components from the database.
     /// This includes workflows, tasks, functions, views, schemas, and extensions.
     /// Use this when triggering cache refresh that should propagate to all pods.
     /// </summary>
+    /// <param name="fullLoad">
+    /// When <c>true</c>, all records are fetched (full reload).
+    /// When <c>false</c> (default), only records modified since the last initialization are fetched.
+    /// </param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A task representing the asynchronous initialization operation</returns>
-    Task InitializeWithDistributedCacheAsync(CancellationToken cancellationToken = default);
+    Task InitializeWithDistributedCacheAsync(bool fullLoad = false, CancellationToken cancellationToken = default);
 }
 

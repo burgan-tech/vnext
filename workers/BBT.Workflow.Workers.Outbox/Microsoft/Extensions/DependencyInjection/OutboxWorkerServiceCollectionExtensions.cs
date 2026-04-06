@@ -30,6 +30,9 @@ public static class OutboxWorkerServiceCollectionExtensions
                 options.PrefixEnvironmentToTopic = true;
                 options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
             })
+            .AddWorkflowEventHooks()
+            .AddDomainEventsInfrastructure()
+            .AddInfrastructureRuntimeServices()
             .AddDbContext(configuration)
             .AppMapper()
             .AddTelemetry(configuration)

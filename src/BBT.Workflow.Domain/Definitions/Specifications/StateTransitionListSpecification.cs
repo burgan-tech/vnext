@@ -27,9 +27,9 @@ public sealed class StateTransitionListSpecification : ITransitionSpecification
         // Not applicable for error-boundary-requested transitions (allowed from any state)
         if (context.IsErrorBoundaryTransition)
             return false;
-
+        
         // Not applicable for well-known transitions (Cancel, UpdateData, Exit)
-        if (IsWellKnownTransition(context.TransitionKey))
+        if (IsWellKnownTransition(context))
             return false;
             
         // Not applicable for StartTransition (special case)
@@ -67,11 +67,20 @@ public sealed class StateTransitionListSpecification : ITransitionSpecification
     
     /// <summary>
     /// Determines if a transition key is a well-known transition.
+    /// Checks both static well-known keys and custom keys configured on the workflow's
+    /// well-known transitions (Cancel, UpdateData, Exit).
     /// </summary>
-    private static bool IsWellKnownTransition(string transitionKey)
+    private static bool IsWellKnownTransition(TransitionExecutionContext context)
     {
-        return transitionKey == WellKnownTransitionKeys.Cancel
-            || transitionKey == WellKnownTransitionKeys.UpdateData
-            || transitionKey == WellKnownTransitionKeys.Exit;
+        if (context.TransitionKey == WellKnownTransitionKeys.Cancel
+            || context.TransitionKey == WellKnownTransitionKeys.UpdateData
+            || context.TransitionKey == WellKnownTransitionKeys.Exit)
+        {
+            return true;
+        }
+
+        return context.Workflow.Cancel?.Key == context.TransitionKey
+               || context.Workflow.UpdateData?.Key == context.TransitionKey
+               || context.Workflow.Exit?.Key == context.TransitionKey;
     }
 }

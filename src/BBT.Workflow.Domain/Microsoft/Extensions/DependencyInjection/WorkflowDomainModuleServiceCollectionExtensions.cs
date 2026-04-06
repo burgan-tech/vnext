@@ -3,7 +3,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Rules;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.Scripting;
 using BBT.Workflow.Validation;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -36,7 +35,6 @@ public static class WorkflowDomainModuleServiceCollectionExtensions
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IResultRuleEngine<State>, ResultRuleEngine<State>>();
-        services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
         services.AddSingleton<IJsonSchemaValidator, CachedJsonSchemaValidator>();
         services.AddScoped<IJsonCanonicalizer, JsonCanonicalizer>();
         return services;

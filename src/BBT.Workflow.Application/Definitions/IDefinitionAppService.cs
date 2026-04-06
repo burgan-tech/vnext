@@ -43,5 +43,10 @@ public interface IDefinitionAppService : IApplicationService
     /// Reloads all system components including workflows, tasks, functions, 
     /// views, schemas, and extensions from the runtime system schema.
     /// </remarks>
-    Task<Result> ReInitializeAsync(CancellationToken cancellationToken = default);
+    /// <param name="fullLoad">
+    /// When <c>true</c>, all records are reloaded (full cache rebuild).
+    /// When <c>false</c> (default), only records modified since the last initialization are fetched
+    /// and merged into the existing cache.
+    /// </param>
+    Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default);
 }

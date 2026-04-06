@@ -41,11 +41,10 @@ public static class GraphQLAggregationService
         var parameterIndex = 0;
 
         var (selectClause, _) = BuildAggregationSelectClause(aggregations, jsonColumnName);
-        var whereClause = filterNode != null 
-            ? GraphQLJsonFilterService.BuildWhereClause(filterNode, jsonColumnName, parameters, ref parameterIndex)
-            : string.Empty;
+        var (jsonWhereClause, instanceWhereClause) = GraphQLJsonFilterService.BuildSeparatedWhereClausesForSql(
+            filterNode, jsonColumnName, parameters, ref parameterIndex);
 
-        var sql = BuildAggregationSql(selectClause, whereClause, null, schema);
+        var sql = BuildAggregationSql(selectClause, jsonWhereClause, instanceWhereClause, null, schema);
 
         using var connection = dbContext.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
@@ -109,12 +108,11 @@ public static class GraphQLAggregationService
 
         var (selectClause, groupByClause) = BuildGroupBySelectClause(
             groupByFields, groupBy.Aggregations ?? new AggregationRequest { Count = true }, jsonColumnName);
-        
-        var whereClause = filterNode != null 
-            ? GraphQLJsonFilterService.BuildWhereClause(filterNode, jsonColumnName, parameters, ref parameterIndex)
-            : string.Empty;
 
-        var sql = BuildAggregationSql(selectClause, whereClause, groupByClause, schema);
+        var (jsonWhereClause, instanceWhereClause) = GraphQLJsonFilterService.BuildSeparatedWhereClausesForSql(
+            filterNode, jsonColumnName, parameters, ref parameterIndex);
+
+        var sql = BuildAggregationSql(selectClause, jsonWhereClause, instanceWhereClause, groupByClause, schema);
 
         using var connection = dbContext.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
@@ -224,8 +222,9 @@ public static class GraphQLAggregationService
         // Add group by fields to select
         foreach (var field in groupByFields)
         {
+            var alias = SanitizeAlias(field);
             var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-            selectParts.Add($"{accessor} AS \"{SanitizeAlias(field)}\"");
+            selectParts.Add($"{accessor} AS \"{alias}\"");
             groupByParts.Add(accessor);
         }
 
@@ -274,22 +273,35 @@ public static class GraphQLAggregationService
         return (string.Join(", ", selectParts), string.Join(", ", groupByParts));
     }
 
-    private static string BuildAggregationSql(
+    internal static string BuildAggregationSql(
         string selectClause,
-        string whereClause,
+        string jsonWhereClause,
+        string? instanceWhereClause,
         string? groupByClause,
         string schema)
     {
         var sb = new StringBuilder();
 
         sb.AppendLine($@"SELECT {selectClause}");
-        sb.AppendLine($@"FROM ""{schema}"".""InstancesData""");
-        sb.AppendLine(@"WHERE ""IsLatest"" = true");
 
-        if (!string.IsNullOrEmpty(whereClause))
+        var hasInstanceJoin = !string.IsNullOrEmpty(instanceWhereClause);
+        if (hasInstanceJoin)
         {
-            sb.AppendLine($"AND ({whereClause})");
+            sb.AppendLine($@"FROM ""{schema}"".""InstancesData"" d");
+            sb.AppendLine($@"INNER JOIN ""{schema}"".""Instances"" s ON s.""Id"" = d.""InstanceId""");
+            sb.AppendLine(@"WHERE d.""IsLatest"" = true");
         }
+        else
+        {
+            sb.AppendLine($@"FROM ""{schema}"".""InstancesData""");
+            sb.AppendLine(@"WHERE ""IsLatest"" = true");
+        }
+
+        if (!string.IsNullOrEmpty(jsonWhereClause))
+            sb.AppendLine($"AND ({jsonWhereClause})");
+
+        if (!string.IsNullOrEmpty(instanceWhereClause))
+            sb.AppendLine($"AND ({instanceWhereClause})");
 
         if (!string.IsNullOrEmpty(groupByClause))
         {
@@ -300,22 +312,32 @@ public static class GraphQLAggregationService
         return sb.ToString();
     }
 
-    private static string BuildJsonTextAccessor(string field, string jsonColumnName)
+    /// <summary>
+    /// Builds a JSON text accessor for aggregation SQL. Validates path (same rules as filter fields) and escapes literals.
+    /// </summary>
+    internal static string BuildJsonTextAccessor(string field, string jsonColumnName)
     {
-        // Handle "attributes." prefix if present
-        if (field.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase))
-        {
-            field = field.Substring("attributes.".Length);
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(field);
+        InputValidator.ValidateSqlJsonColumnIdentifier(jsonColumnName);
 
-        if (field.Contains('.'))
+        var path = field.Trim();
+        if (path.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase))
+            path = path.Substring("attributes.".Length).Trim();
+
+        if (string.IsNullOrEmpty(path))
+            throw new ArgumentException("JSON field path cannot be empty.", nameof(field));
+
+        InputValidator.ValidateFieldName(path);
+
+        if (path.Contains('.'))
         {
-            var parts = field.Split('.');
-            var arrayElements = string.Join(",", parts.Select(p => $"'{p}'"));
+            var parts = path.Split('.');
+            var arrayElements = string.Join(",", parts.Select(p =>
+                $"'{InputValidator.EscapePostgresSingleQuotedString(p.Trim())}'"));
             return $"(\"{jsonColumnName}\" #>> ARRAY[{arrayElements}])";
         }
-        
-        return $"(\"{jsonColumnName}\" ->> '{field}')";
+
+        return $"(\"{jsonColumnName}\" ->> '{InputValidator.EscapePostgresSingleQuotedString(path)}')";
     }
 
     private static string SanitizeAlias(string field)
@@ -352,7 +374,7 @@ public static class GraphQLAggregationService
         return sanitized;
     }
 
-    private static string ReplacePlaceholders(string sql, int paramCount)
+    internal static string ReplacePlaceholders(string sql, int paramCount)
     {
         // Replace {0}, {1}, etc. with $1, $2, etc. for Npgsql
         for (int i = 0; i < paramCount; i++)

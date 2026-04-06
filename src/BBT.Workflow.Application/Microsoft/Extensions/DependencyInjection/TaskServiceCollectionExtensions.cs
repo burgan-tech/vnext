@@ -93,8 +93,10 @@ public static class TaskServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddTaskEvaluators(this IServiceCollection services)
     {
-        // Evaluator implementations
-        services.AddScoped<IConditionEvaluator, ScriptConditionEvaluator>();
+        // Condition: Roslyn scripts + Dynamic Expresso (routed by ScriptCode.Location)
+        services.AddScoped<ScriptConditionEvaluator>();
+        services.AddScoped<DynamicExpressoConditionEvaluator>();
+        services.AddScoped<IConditionEvaluator, RoutingConditionEvaluator>();
         services.AddScoped<ITimerEvaluator, ScriptTimerEvaluator>();
 
         // Unified evaluator registry
@@ -198,7 +200,7 @@ public static class TaskServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddScriptingServices(this IServiceCollection services)
     {
-        services.TryAddSingleton<IScriptContextFactory, ScriptContextFactory>();
+        services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
 
         // Evaluator is stateless - singleton for efficiency (caches MetadataReferences only)
         services.TryAddSingleton<IEvaluator, CSharpEvaluator>();

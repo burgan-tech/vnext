@@ -28,13 +28,15 @@ public sealed class LocalInstanceRetryGateway : IInstanceRetryGateway
         RetryInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = _serviceScopeFactory.CreateAsyncScope();
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var retryService = scope.ServiceProvider.GetRequiredService<IInstanceRetryAppService>();
-
-        using (currentSchema.Use(input.Workflow))
+        return await _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
         {
-            return await retryService.RetryAsync(input, cancellationToken);
-        }
+            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
+            var retryService = sp.GetRequiredService<IInstanceRetryAppService>();
+
+            using (currentSchema.Use(input.Workflow))
+            {
+                return await retryService.RetryAsync(input, ct);
+            }
+        }, cancellationToken);
     }
 }

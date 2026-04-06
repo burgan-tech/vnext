@@ -14,6 +14,7 @@
 
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('path');
 const { execSync, spawn } = require('child_process');
@@ -38,6 +39,59 @@ const SERVER_HEADERS_TIMEOUT_MS = parseInt(process.env.SERVER_HEADERS_TIMEOUT_MS
  * The special core runtime package that requires domain replacement for SYS files
  */
 const VNEXT_CORE_RUNTIME_PACKAGE = '@burgan-tech/vnext-core-runtime';
+
+const JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const jobs = new Map();
+
+/**
+ * @typedef {'accepted'|'processing'|'completed'|'failed'} JobStatus
+ * @typedef {{current: number, total: number, currentFile: string, phase: string}} JobProgress
+ * @typedef {{id: string, packageName: string, status: JobStatus, progress: JobProgress|null, results: Object|null, error: string|null, createdAt: string, updatedAt: string}} Job
+ */
+
+/**
+ * Create a new job entry and store it.
+ * @param {string} packageName
+ * @returns {Job}
+ */
+function createJob(packageName) {
+    cleanupExpiredJobs();
+    const id = crypto.randomUUID();
+    const job = {
+        id,
+        packageName,
+        status: 'accepted',
+        progress: null,
+        results: null,
+        error: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+    jobs.set(id, job);
+    return job;
+}
+
+/**
+ * Update mutable fields on an existing job.
+ * @param {Job} job
+ * @param {Partial<Job>} fields
+ */
+function updateJob(job, fields) {
+    Object.assign(job, fields, { updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Remove jobs older than JOB_TTL_MS that are in a terminal state.
+ */
+function cleanupExpiredJobs() {
+    const now = Date.now();
+    for (const [id, job] of jobs) {
+        if ((job.status === 'completed' || job.status === 'failed') &&
+            (now - new Date(job.updatedAt).getTime()) > JOB_TTL_MS) {
+            jobs.delete(id);
+        }
+    }
+}
 
 /**
  * ANSI color codes for console output
@@ -204,7 +258,7 @@ function generateVersion(artifactVersion, packageVersion, domain) {
 
 /**
  * Update version fields in a component object
- * Updates version and flowVersion at root level only
+ * Updates version at root level only
  * 
  * NOTE: data[] items are processed separately by processSysFileData,
  * so we don't process them here to avoid double-processing.
@@ -225,12 +279,6 @@ function updateComponentVersions(component, packageVersion, domain) {
     if (updated.version && typeof updated.version === 'string') {
         const newVersion = generateVersion(updated.version, packageVersion, domain);
         updated.version = newVersion;
-    }
-    
-    // Update flowVersion if present (same logic as version)
-    if (updated.flowVersion && typeof updated.flowVersion === 'string') {
-        const newFlowVersion = generateVersion(updated.flowVersion, packageVersion, domain);
-        updated.flowVersion = newFlowVersion;
     }
     
     // NOTE: data[] items are NOT processed here - they are processed separately
@@ -614,8 +662,9 @@ function logErrorResponse(responseBody, context) {
  * @param {boolean} shouldReplaceDomain - Whether to replace domain fields
  * @param {string} appDomain - Target app domain
  * @param {Object} results - Results object to update
+ * @param {Job} [job] - Optional job for progress tracking
  */
-async function processJsonFile(jsonFilePath, packagePath, componentType, vnextConfig, shouldReplaceDomain, appDomain, results) {
+async function processJsonFile(jsonFilePath, packagePath, componentType, vnextConfig, shouldReplaceDomain, appDomain, results, job) {
             const relativePath = path.relative(packagePath, jsonFilePath);
             const fileName = path.basename(jsonFilePath);
             
@@ -645,6 +694,17 @@ async function processJsonFile(jsonFilePath, packagePath, componentType, vnextCo
         log.error(`Failed to process ${relativePath}: ${e.message}`);
                 results.failed.push(relativePath);
             }
+
+    if (job) {
+        const current = results.success.length + results.failed.length;
+        updateJob(job, {
+            progress: {
+                ...job.progress,
+                current,
+                currentFile: relativePath,
+            },
+        });
+    }
         }
 
 /**
@@ -657,8 +717,9 @@ async function processJsonFile(jsonFilePath, packagePath, componentType, vnextCo
  * @param {boolean} shouldReplaceDomain - Whether to replace domain fields
  * @param {string} appDomain - Target app domain
  * @param {Object} results - Results object to update
+ * @param {Job} [job] - Optional job for progress tracking
  */
-async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results) {
+async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job) {
     log.subsection(`Processing WORKFLOWS (Priority Order)`);
     
     try {
@@ -680,7 +741,7 @@ async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfi
     // Step 1: Process sys-flows.json first (if exists)
     if (sysFlowsFile) {
         log.info(`${colors.bold}Step 1: Loading sys-flows (Flow Definitions)${colors.reset}`);
-        await processJsonFile(sysFlowsFile, packagePath, 'workflows', vnextConfig, shouldReplaceDomain, appDomain, results);
+        await processJsonFile(sysFlowsFile, packagePath, 'workflows', vnextConfig, shouldReplaceDomain, appDomain, results, job);
     } else {
         log.warn('sys-flows.json not found in Workflows directory');
     }
@@ -689,7 +750,7 @@ async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfi
     if (otherFiles.length > 0) {
         log.info(`${colors.bold}Step 2: Loading other workflow files (${otherFiles.length} files)${colors.reset}`);
         for (const jsonFilePath of otherFiles) {
-            await processJsonFile(jsonFilePath, packagePath, 'workflows', vnextConfig, shouldReplaceDomain, appDomain, results);
+            await processJsonFile(jsonFilePath, packagePath, 'workflows', vnextConfig, shouldReplaceDomain, appDomain, results, job);
         }
     }
 }
@@ -703,8 +764,9 @@ async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfi
  * @param {boolean} shouldReplaceDomain - Whether to replace domain fields
  * @param {string} appDomain - Target app domain
  * @param {Object} results - Results object to update
+ * @param {Job} [job] - Optional job for progress tracking
  */
-async function processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results) {
+async function processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job) {
     log.subsection(`Processing ${componentDir.type.toUpperCase()}`);
     
     try {
@@ -721,7 +783,7 @@ async function processComponentDirectory(componentDir, packagePath, vnextConfig,
     
     // Process each JSON file
     for (const jsonFilePath of jsonFiles) {
-        await processJsonFile(jsonFilePath, packagePath, componentDir.type, vnextConfig, shouldReplaceDomain, appDomain, results);
+        await processJsonFile(jsonFilePath, packagePath, componentDir.type, vnextConfig, shouldReplaceDomain, appDomain, results, job);
     }
 }
 
@@ -744,8 +806,9 @@ async function processComponentDirectory(componentDir, packagePath, vnextConfig,
  * @param {string} packageName - Name of the npm package (e.g., "@burgan-tech/vnext-core-runtime")
  * @param {string|null} appDomain - Target app domain for domain replacement (null = no replacement)
  * @param {boolean} isRuntimePackage - Whether this is the runtime package (special ordering)
+ * @param {Job} [job] - Optional job for progress tracking
  */
-async function processPackage(packagePath, packageName, appDomain, isRuntimePackage = false) {
+async function processPackage(packagePath, packageName, appDomain, isRuntimePackage = false, job) {
     // Read vnext.config.json from package
     const vnextConfig = await readVNextConfig(packagePath);
     
@@ -764,6 +827,21 @@ async function processPackage(packagePath, packageName, appDomain, isRuntimePack
     log.subsection('Component Directories');
     componentDirs.forEach(dir => log.detail(`${dir.type}: ${dir.relativePath}`));
     
+    // Pre-count total files for progress tracking
+    let totalFiles = 0;
+    for (const dir of componentDirs) {
+        try {
+            const files = await findJsonFilesRecursively(dir.path);
+            totalFiles += files.length;
+        } catch { /* directory may not exist */ }
+    }
+
+    if (job) {
+        updateJob(job, {
+            progress: { current: 0, total: totalFiles, currentFile: '', phase: 'uploading' },
+        });
+    }
+
     const results = {
         success: [],
         failed: [],
@@ -778,7 +856,7 @@ async function processPackage(packagePath, packageName, appDomain, isRuntimePack
         // Step 1: Process Workflows FIRST (with sys-flows priority)
         const workflowDir = componentDirs.find(d => d.type === 'workflows');
         if (workflowDir) {
-            await processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results);
+            await processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job);
         } else {
             log.warn('Workflows directory not configured, skipping...');
         }
@@ -788,14 +866,14 @@ async function processPackage(packagePath, packageName, appDomain, isRuntimePack
         log.section('Loading Other Components');
         
         for (const componentDir of otherDirs) {
-            await processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results);
+            await processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job);
         }
     } else {
         // Standard package - no special ordering
         log.section('Standard Package - Loading Components');
         
         for (const componentDir of componentDirs) {
-            await processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results);
+            await processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job);
         }
     }
     
@@ -877,13 +955,11 @@ async function handleHealthCheck(req, res) {
 }
 
 /**
- * Handle Runtime Package Publish
+ * Handle Runtime Package Publish (async job pattern)
  * Endpoint: POST /api/package/runtime/publish
  * 
- * This endpoint is specifically for VNEXT_CORE_RUNTIME_PACKAGE.
- * - appDomain is REQUIRED
- * - Uses special ordering (Workflows first, sys-flows first)
- * - Replaces ALL domain fields
+ * Returns 202 Accepted immediately with a jobId.
+ * Processing runs in the background; poll GET /api/package/publish/status/:jobId for progress.
  */
 async function handleRuntimePublish(req, res) {
     try {
@@ -899,71 +975,37 @@ async function handleRuntimePublish(req, res) {
             appDomain
         } = body;
         
-        // appDomain is REQUIRED for runtime package
         if (!appDomain || appDomain.trim() === '') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 error: 'appDomain is required for runtime package publish',
                 message: 'Please provide appDomain parameter (e.g., "core", "my-domain")'
             }));
-        return;
-    }
-    
-        log.section(`API Request: Runtime Package Publish`);
+            return;
+        }
+
+        const job = createJob(VNEXT_CORE_RUNTIME_PACKAGE);
+
+        log.section(`API Request: Runtime Package Publish [job=${job.id}]`);
         log.info(`Package: ${VNEXT_CORE_RUNTIME_PACKAGE}@${version}`);
         log.info(`App Domain: ${appDomain} (REQUIRED)`);
         log.info(`Domain Replacement: ALL domains will be replaced`);
-        
-        // Wait for vnext app to be ready
-        await waitForVNextApp();
-        
-        // Build auth options
-        const authOptions = {
-            token: npmToken,
-            username: npmUsername,
-            password: npmPassword,
-            email: npmEmail
-        };
-        
-        // Download package
-        const packagePath = await downloadPackage(VNEXT_CORE_RUNTIME_PACKAGE, version, npmRegistry, authOptions);
-        
-        // Verify package structure
-        await verifyPackageStructure(packagePath);
-        
-        // Process and publish with isRuntimePackage=true (special ordering)
-        const results = await processPackage(packagePath, VNEXT_CORE_RUNTIME_PACKAGE, appDomain, true);
-        
-        // Determine success status and message based on results
-        let success = true;
-        let message = 'Runtime package processed and published successfully';
-        
-        if (results.success.length === 0 && results.failed.length > 0) {
-            // All packages failed
-            success = false;
-            message = 'Runtime package processing failed. No packages were loaded.';
-        } else if (results.success.length > 0 && results.failed.length > 0) {
-            // Partial success
-            success = false;
-            message = `Runtime package partially processed. ${results.success.length} packages loaded successfully, ${results.failed.length} packages failed to load.`;
-        }
-        
-        // Trigger re-initialization
-        await reInitializeDefinitions();
-        
 
-        res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
+        res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            success: success,
-            message: message,
-            packageName: VNEXT_CORE_RUNTIME_PACKAGE,
-            appDomain: appDomain,
-            results: {
-                successful: results.success,
-                failed: results.failed,
-                skipped: results.skipped
-            }
+            jobId: job.id,
+            statusUrl: `/api/package/publish/status/${job.id}`,
+            message: 'Job accepted. Poll statusUrl for progress.',
         }));
+
+        runPackagePublishJob(job, {
+            packageName: VNEXT_CORE_RUNTIME_PACKAGE,
+            version,
+            npmRegistry,
+            authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
+            appDomain,
+            isRuntimePackage: true,
+        });
         
     } catch (error) {
         log.error(`Error: ${error.message}`);
@@ -979,13 +1021,11 @@ async function handleRuntimePublish(req, res) {
 }
 
 /**
- * Handle Standard Package Publish
+ * Handle Standard Package Publish (async job pattern)
  * Endpoint: POST /api/package/publish
  * 
- * This endpoint is for standard packages (not runtime).
- * - appDomain is OPTIONAL
- * - If appDomain is provided, ALL domain fields will be replaced
- * - No special ordering
+ * Returns 202 Accepted immediately with a jobId.
+ * Processing runs in the background; poll GET /api/package/publish/status/:jobId for progress.
  */
 async function handlePackagePublish(req, res) {
     try {
@@ -1007,59 +1047,27 @@ async function handlePackagePublish(req, res) {
             return;
         }
 
-        log.section(`API Request: Package Publish`);
+        const job = createJob(packageName);
+
+        log.section(`API Request: Package Publish [job=${job.id}]`);
         log.info(`Package: ${packageName}@${version}`);
         log.info(`Domain Replacement: DISABLED`);
-        
-        // Wait for vnext app to be ready
-        await waitForVNextApp();
-        
-        // Build auth options
-        const authOptions = {
-            token: npmToken,
-            username: npmUsername,
-            password: npmPassword,
-            email: npmEmail
-        };
-        
-        // Download package
-        const packagePath = await downloadPackage(packageName, version, npmRegistry, authOptions);
-        
-        // Verify package structure
-        await verifyPackageStructure(packagePath);
-        
-        // Process and publish with isRuntimePackage=false (no special ordering)
-        // Domain replacement is never applied for standard packages
-        const results = await processPackage(packagePath, packageName, null, false);
-        
-        // Determine success status and message based on results
-        let success = true;
-        let message = 'Package processed and published successfully';
-        
-        if (results.success.length === 0 && results.failed.length > 0) {
-            // All packages failed
-            success = false;
-            message = 'Package processing failed. No packages were loaded.';
-        } else if (results.success.length > 0 && results.failed.length > 0) {
-            // Partial success
-            success = false;
-            message = `Package partially processed. ${results.success.length} packages loaded successfully, ${results.failed.length} packages failed to load.`;
-        }
-        
-        // Trigger re-initialization
-        await reInitializeDefinitions();
 
-        res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
+        res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            success: success,
-            message: message,
-            packageName: packageName,
-            results: {
-                successful: results.success,
-                failed: results.failed,
-                skipped: results.skipped
-            }
+            jobId: job.id,
+            statusUrl: `/api/package/publish/status/${job.id}`,
+            message: 'Job accepted. Poll statusUrl for progress.',
         }));
+
+        runPackagePublishJob(job, {
+            packageName,
+            version,
+            npmRegistry,
+            authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
+            appDomain: null,
+            isRuntimePackage: false,
+        });
         
     } catch (error) {
         log.error(`Error: ${error.message}`);
@@ -1071,6 +1079,80 @@ async function handlePackagePublish(req, res) {
             success: false,
             error: error.message
         }));
+    }
+}
+
+/**
+ * Background worker for package publish jobs.
+ * Shared by both standard and runtime publish handlers.
+ *
+ * @param {Job} job
+ * @param {Object} opts
+ */
+async function runPackagePublishJob(job, opts) {
+    const { packageName, version, npmRegistry, authOptions, appDomain, isRuntimePackage } = opts;
+    try {
+        updateJob(job, {
+            status: 'processing',
+            progress: { current: 0, total: 0, currentFile: '', phase: 'waiting-for-vnext' },
+        });
+
+        await waitForVNextApp();
+
+        updateJob(job, {
+            progress: { ...job.progress, phase: 'downloading' },
+        });
+
+        const packagePath = await downloadPackage(packageName, version, npmRegistry, authOptions);
+        await verifyPackageStructure(packagePath);
+
+        updateJob(job, {
+            progress: { ...job.progress, phase: 'uploading' },
+        });
+
+        const results = await processPackage(packagePath, packageName, appDomain, isRuntimePackage, job);
+
+        updateJob(job, {
+            progress: { ...job.progress, phase: 're-initializing' },
+        });
+
+        await reInitializeDefinitions();
+
+        let success = true;
+        let message = 'Package processed and published successfully';
+
+        if (results.success.length === 0 && results.failed.length > 0) {
+            success = false;
+            message = 'Package processing failed. No packages were loaded.';
+        } else if (results.success.length > 0 && results.failed.length > 0) {
+            success = false;
+            message = `Package partially processed. ${results.success.length} loaded, ${results.failed.length} failed.`;
+        }
+
+        updateJob(job, {
+            status: 'completed',
+            results: {
+                success,
+                message,
+                packageName,
+                appDomain,
+                successful: results.success,
+                failed: results.failed,
+                skipped: results.skipped,
+            },
+            progress: { ...job.progress, phase: 'done' },
+        });
+
+        log.success(`Job ${job.id} completed — ${message}`);
+    } catch (error) {
+        log.error(`Job ${job.id} failed: ${error.message}`);
+        if (error.stack) log.error(error.stack);
+
+        updateJob(job, {
+            status: 'failed',
+            error: error.message,
+            progress: job.progress ? { ...job.progress, phase: 'failed' } : null,
+        });
     }
 }
 
@@ -1123,6 +1205,33 @@ async function reInitializeDefinitions() {
 }
 
 /**
+ * Handle job status polling
+ * Endpoint: GET /api/package/publish/status/:jobId
+ */
+async function handleJobStatus(req, res) {
+    const jobId = req.url.replace('/api/package/publish/status/', '');
+    const job = jobs.get(jobId);
+
+    if (!job) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Job not found', jobId }));
+        return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        jobId: job.id,
+        packageName: job.packageName,
+        status: job.status,
+        progress: job.progress,
+        results: job.results,
+        error: job.error,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+    }));
+}
+
+/**
  * Handle API request - Route to appropriate handler
  */
 async function handleRequest(req, res) {
@@ -1140,6 +1249,12 @@ async function handleRequest(req, res) {
     // Health check endpoint
     if (req.method === 'GET' && req.url === '/health') {
         await handleHealthCheck(req, res);
+        return;
+    }
+    
+    // Job status polling endpoint
+    if (req.method === 'GET' && req.url.startsWith('/api/package/publish/status/')) {
+        await handleJobStatus(req, res);
         return;
     }
     
@@ -1165,7 +1280,8 @@ async function handleRequest(req, res) {
         availableEndpoints: [
             'GET /health',
             'POST /api/package/publish',
-            'POST /api/package/runtime/publish'
+            'POST /api/package/runtime/publish',
+            'GET /api/package/publish/status/:jobId'
         ]
     }));
 }
@@ -1210,6 +1326,8 @@ function startServer() {
         log.detail(`  - For any npm package`);
         log.detail(`  - appDomain is OPTIONAL`);
         log.detail(`  - If appDomain provided, replaces all domains`);
+        log.info(`Job Status: GET http://localhost:${PORT}/api/package/publish/status/:jobId`);
+        log.detail(`  - Poll for job progress after publish`);
         log.info(`VNext App URL: ${VNEXT_APP_URL}`);
         log.subsection('Timeout Configuration');
         log.info(`Server Timeout: ${SERVER_TIMEOUT_MS}ms (${SERVER_TIMEOUT_MS / 60000} min)`);
@@ -1222,6 +1340,8 @@ function startServer() {
         log.error(`Server error: ${err.message}`);
         process.exit(1);
     });
+
+    setInterval(cleanupExpiredJobs, 5 * 60 * 1000);
 }
 
 // Main execution logic

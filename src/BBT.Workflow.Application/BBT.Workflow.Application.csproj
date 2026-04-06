@@ -12,6 +12,7 @@
     <PackageReference Include="BBT.Aether.Mapperly" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Dapr.Jobs" Version="$(DaprPackageVersion)" />
+    <PackageReference Include="DynamicExpresso.Core" Version="2.19.3" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Tasks.Abstractions\BBT.Workflow.Tasks.Abstractions.csproj" />
