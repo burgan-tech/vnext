@@ -1,29 +1,39 @@
-using BBT.Workflow.BackgroundJobs.Handlers;
-using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Inbox.HostedServices;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Service collection extensions specific to Worker Inbox
+/// Service collection extensions specific to the Inbox worker.
+/// Composes modular extensions for the event-consuming Inbox host.
 /// </summary>
 public static class InboxWorkerServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds Worker Inbox specific services
+    /// Adds all services required by the Inbox worker host.
     /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddWorkerInboxModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
+
+        // Core domain/application/infrastructure modules
         services
             .AddDomainModule()
             .AddApplicationModule()
             .AddInfrastructureModule(configuration)
-            .AddAspNetCoreModules(configuration)
-            .AddResultResilience(configuration)
-            .AddDaprClients()
+            .AddInfrastructureRuntimeServices()
+            .AddResultResilience(configuration);
+
+        // ASP.NET Core, serialization
+        services
+            .AddWorkflowAspNetCore(configuration)
+            .AddWorkflowMapper();
+
+        // Dapr, event bus (direct Aether event bus -- no hook decorator for inbox),
+        // domain events, event hooks
+        services
+            .AddWorkflowDapr()
             .AddAetherEventBus(options =>
             {
                 options.DefaultSource =
@@ -31,29 +41,31 @@ public static class InboxWorkerServiceCollectionExtensions
                 options.PrefixEnvironmentToTopic = true;
                 options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
             })
-            .AddWorkflowEventHooks()
-            .AddDomainEventsInfrastructure()
-            .AddInfrastructureRuntimeServices()
-            .AddDbContext(configuration)
-            .AppMapper()
-            .AddTelemetry(configuration)
-            .AddDistributedCache(configuration)
-            .AddDistributedLock(configuration)
-            .AddBackgroundJob()
-            .AddRedis()
-            .AddExceptionHandling()
-            .AddRuntimeMiddleware()
-            .AddHeaderService()
-            .AddHostedServices()
-            .AddAppHealthChecks();
-        
-        return services;
-    }
-    
-    private static IServiceCollection AddHostedServices(this IServiceCollection services)
-    {
-        services.AddHostedService<InboxProcessorHostedService>();
-        return services;
-    }
+            .AddWorkflowDomainEvents()
+            .AddWorkflowEventHooks();
 
+        // Database, caching, locking
+        services
+            .AddWorkflowDbContext(configuration)
+            .AddWorkflowDistributedCache(configuration)
+            .AddWorkflowDistributedLock(configuration)
+            .AddRedis();
+
+        // Background jobs, telemetry, exception handling
+        services
+            .AddWorkflowBackgroundJobs()
+            .AddWorkflowTelemetry(configuration)
+            .AddWorkflowExceptionHandling();
+
+        // Runtime middleware, headers, health checks
+        services
+            .AddWorkflowRuntimeMiddleware()
+            .AddWorkflowHeaderService()
+            .AddAppHealthChecks();
+
+        // Inbox-specific
+        services.AddHostedService<InboxProcessorHostedService>();
+
+        return services;
+    }
 }

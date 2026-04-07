@@ -1,259 +1,67 @@
-using System.Net;
-using BBT.Aether.AspNetCore.ExceptionHandling;
-using BBT.Aether.AspNetCore.MultiSchema;
-using BBT.Aether.Domain.Services;
-using BBT.Aether.Events;
-using BBT.Aether.MultiSchema.EntityFrameworkCore.Interceptors;
-using BBT.Workflow;
-using BBT.Workflow.BackgroundJobs.Handlers;
-using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
-using BBT.Workflow.Headers;
-using BBT.Workflow.Monitoring;
-using BBT.Workflow.Runtime;
-using BBT.Workflow.Schemas;
-using Dapr.Jobs.Extensions;
-using Microsoft.AspNetCore.Mvc.Filters;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Base service collection extensions shared across all Workflow APIs
+/// Backward-compatible aliases that delegate to the new modular extension methods.
+/// New code should use the specific module extensions directly
+/// (e.g. <see cref="WorkflowAspNetCoreExtensions.AddWorkflowAspNetCore"/>).
 /// </summary>
 public static class WorkflowApiBaseServiceCollectionExtensions
 {
-    /// <summary>
-    /// Registers the centralized JsonSerializerOptions as a singleton in DI.
-    /// This allows services to inject JsonSerializerOptions for consistent JSON handling.
-    /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
+    /// <inheritdoc cref="WorkflowAspNetCoreExtensions.AddWorkflowJsonSerializer"/>
     public static IServiceCollection AddJsonSerializerOptions(this IServiceCollection services)
-    {
-        services.AddSingleton(JsonSerializerConstants.JsonOptions);
-        return services;
-    }
+        => services.AddWorkflowJsonSerializer();
 
-    /// <summary>
-    /// Adds Dapr client services
-    /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
+    /// <inheritdoc cref="WorkflowDaprExtensions.AddWorkflowDapr"/>
     public static IServiceCollection AddDaprClients(this IServiceCollection services)
-    {
-        services.AddDaprClient();
-        services.AddDaprJobsClient();
-        return services;
-    }
+        => services.AddWorkflowDapr();
 
+    /// <inheritdoc cref="WorkflowAspNetCoreExtensions.AddWorkflowAspNetCore"/>
     public static IServiceCollection AddAspNetCoreModules(this IServiceCollection services, IConfiguration configuration)
-    {
-        services.AddAetherAmbientServiceProvider();
-        services.AddJsonSerializerOptions();
-        services.AddAetherCore(options =>
-        {
-            options.Environment ??= Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
-            options.ApplicationName ??= configuration.GetValue<string?>("ApplicationName") ?? "vNext";
-        });
-        services.AddAetherAspNetCore();
-        
-        services.AddEndpointsApiExplorer();
-        services.AddAetherApiVersioning(apiTitle: "vNext API");
-        services.AddScoped<IWorkflowContext, WorkflowContext>();
+        => services.AddWorkflowAspNetCore(configuration);
 
-        services.AddControllers()
-            .AddJsonOptions(options =>
-            {
-                // Use centralized JSON configuration from JsonSerializerConstants
-                var centralOptions = JsonSerializerConstants.JsonOptions;
-                
-                options.JsonSerializerOptions.WriteIndented = centralOptions.WriteIndented;
-                options.JsonSerializerOptions.PropertyNamingPolicy = centralOptions.PropertyNamingPolicy;
-                options.JsonSerializerOptions.DictionaryKeyPolicy = centralOptions.DictionaryKeyPolicy;
-                options.JsonSerializerOptions.PropertyNameCaseInsensitive = centralOptions.PropertyNameCaseInsensitive;
-                options.JsonSerializerOptions.DefaultIgnoreCondition = centralOptions.DefaultIgnoreCondition;
-                options.JsonSerializerOptions.ReferenceHandler = centralOptions.ReferenceHandler;
-                options.JsonSerializerOptions.MaxDepth = centralOptions.MaxDepth;
-                
-                // Add converters from centralized configuration
-                foreach (var converter in centralOptions.Converters)
-                {
-                    options.JsonSerializerOptions.Converters.Add(converter);
-                }
-            });
-        
-        return services;
-    }
-
+    /// <inheritdoc cref="WorkflowDbContextExtensions.AddWorkflowDbContext"/>
     public static IServiceCollection AddDbContext(this IServiceCollection services, IConfiguration configuration)
-    {
-        services.AddSchemaResolution(options =>
-        {
-            options.HeaderKey = "X-Workflow";
-            options.QueryStringKey = "workflow";
-            options.RouteValueKey = "workflow";
-            options.ThrowIfNotFound = false;
-        });
+        => services.AddWorkflowDbContext(configuration);
 
-        services.AddAetherDbContext<WorkflowDbContext>((sp, options) =>
-        {
-            options.UseNpgsql(configuration.GetConnectionString("Default"),
-                    npgsqlOptions => { npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations"); })
-                .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-
-            options.ReplaceService<IMigrationsSqlGenerator, MultiSchemaNpgsqlMigrationsSqlGenerator>();
-            options.AddInterceptors(
-                sp.GetRequiredService<NpgsqlSchemaConnectionInterceptor>(),
-                sp.GetRequiredService<WorkflowDatabaseInterceptor>(),
-                sp.GetRequiredService<WorkflowTransactionInterceptor>()
-            );
-        });
-
-        services.AddAetherUnitOfWorkMiddleware();
-
-        services.AddSingleton<IDataSeedService, WorkflowDataSeedService>();
-
-        services.AddAetherDbContext<MessagingDbContext>((_, options) =>
-        {
-            options.UseNpgsql(configuration.GetConnectionString("Default"),
-                    npgsqlOptions =>
-                    {
-                        npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations", "sys_queues");
-                    })
-                .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-        });
-
-        return services;
-    }
-
-    /// <summary>
-    /// Registers domain event dispatching, transactional outbox, and inbox infrastructure.
-    /// Requires <see cref="BBT.Aether.Events.IDistributedEventBus"/> and <see cref="BBT.Aether.Events.IEventSerializer"/>
-    /// to be registered (via <c>AddEventBus</c> or <c>AddAetherEventBus</c>).
-    /// Do NOT call from DbMigrator or other minimal hosts.
-    /// </summary>
+    /// <inheritdoc cref="WorkflowEventBusExtensions.AddWorkflowDomainEvents"/>
     public static IServiceCollection AddDomainEventsInfrastructure(this IServiceCollection services)
-    {
-        services.AddAetherDomainEvents<MessagingDbContext>(options =>
-        {
-            options.DispatchStrategy = DomainEventDispatchStrategy.AlwaysUseOutbox;
-        });
+        => services.AddWorkflowDomainEvents();
 
-        services.AddAetherOutbox<MessagingDbContext>();
-        services.AddAetherInbox<MessagingDbContext>();
-
-        return services;
-    }
-
+    /// <inheritdoc cref="WorkflowBackgroundJobExtensions.AddWorkflowBackgroundJobs"/>
     public static IServiceCollection AddBackgroundJob(this IServiceCollection services)
-    {
-        services.AddAetherBackgroundJob<WorkflowDbContext>(options =>
-        {
-            options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
-            options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
-            options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
-        });
-        
-        services.AddDaprJobScheduler();
-        return services;
-    }
-    
+        => services.AddWorkflowBackgroundJobs();
+
+    /// <inheritdoc cref="WorkflowMapperExtensions.AddWorkflowMapper"/>
     public static IServiceCollection AppMapper(this IServiceCollection services)
-    {
-        services.AddAetherMapperlyMapper(
-        [
-            typeof(WorkflowApiBaseServiceCollectionExtensions), // HttpApi.Shared
-            typeof(WorkflowDomainModuleServiceCollectionExtensions), // Domain
-            typeof(WorkflowApplicationModuleServiceCollectionExtensions) // Application
-        ]);
-        return services;
-    }
+        => services.AddWorkflowMapper();
 
+    /// <inheritdoc cref="WorkflowTelemetryExtensions.AddWorkflowTelemetry"/>
     public static IServiceCollection AddTelemetry(this IServiceCollection services, IConfiguration configuration)
-    {
-        services.AddAetherTelemetry(configuration);
-        return services;
-    }
+        => services.AddWorkflowTelemetry(configuration);
 
+    /// <inheritdoc cref="WorkflowCachingExtensions.AddWorkflowDistributedCache"/>
     public static IServiceCollection AddDistributedCache(this IServiceCollection services, IConfiguration configuration)
-    {
-        services.AddDaprDistributedCache(configuration["DAPR_STATE_STORE_NAME"]!);
-        return services;
-    }
+        => services.AddWorkflowDistributedCache(configuration);
 
+    /// <inheritdoc cref="WorkflowCachingExtensions.AddWorkflowDistributedLock"/>
     public static IServiceCollection AddDistributedLock(this IServiceCollection services, IConfiguration configuration)
-    {
-        services.AddDaprDistributedLock(configuration["DAPR_LOCK_STORE_NAME"]!);
-        return services;
-    }
+        => services.AddWorkflowDistributedLock(configuration);
 
+    /// <inheritdoc cref="WorkflowEventBusExtensions.AddWorkflowEventBus"/>
     public static IServiceCollection AddEventBus(this IServiceCollection services, IConfiguration configuration)
-    {
-        services.AddEventBusWithHooks(options =>
-            {
-                options.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                options.PrefixEnvironmentToTopic = true;
-                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            }
-        );
-        return services;
-    }
+        => services.AddWorkflowEventBus(configuration);
 
+    /// <inheritdoc cref="WorkflowExceptionHandlingExtensions.AddWorkflowExceptionHandling"/>
     public static IServiceCollection AddExceptionHandling(this IServiceCollection services)
-    {
-        // Configure Aether's error code to HTTP status code mapping
-        // This is the central place for all error code mappings in the application
-        // Both exception handling and Result pattern use this configuration
-        services.Configure<AetherExceptionHttpStatusCodeOptions>(opt =>
-        {
-            // General errors
-            opt.Map(WorkflowErrorCodes.Locked, HttpStatusCode.Conflict);
-            opt.Map(WorkflowErrorCodes.ValidationErrors, HttpStatusCode.BadRequest);
+        => services.AddWorkflowExceptionHandling();
 
-            // Instance errors
-            opt.Map(WorkflowErrorCodes.NotFoundDomain, HttpStatusCode.BadRequest);
-            opt.Map(WorkflowErrorCodes.ConflictWorkflow, HttpStatusCode.Conflict);
-            opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
-            opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
-            opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);
-            opt.Map(WorkflowErrorCodes.UnauthorizedTransition, HttpStatusCode.Forbidden);
-            opt.Map(WorkflowErrorCodes.AuthorizationRoleDenied, HttpStatusCode.Forbidden);
-            opt.Map(WorkflowErrorCodes.AuthorizeRequiresExactlyOneTarget, HttpStatusCode.BadRequest);
-            opt.Map(WorkflowErrorCodes.AuthorizeQueryRolesRequiresInstance, HttpStatusCode.BadRequest);
-            opt.Map(WorkflowErrorCodes.InvalidState, HttpStatusCode.BadRequest);
-            opt.Map(WorkflowErrorCodes.NotFoundTransition, HttpStatusCode.NotFound);
-            opt.Map(WorkflowErrorCodes.NotFoundInitialState, HttpStatusCode.NotFound);
-            opt.Map(WorkflowErrorCodes.NotFoundWorkflow, HttpStatusCode.NotFound);
-
-            // Execution errors
-            opt.Map(WorkflowErrorCodes.ExecutionStepFailed, HttpStatusCode.BadRequest);
-
-            // Task errors
-            opt.Map(WorkflowErrorCodes.TaskContextCreation, HttpStatusCode.InternalServerError);
-            opt.Map(WorkflowErrorCodes.TaskExecution, HttpStatusCode.InternalServerError);
-        });
-        return services;
-    }
-    
+    /// <inheritdoc cref="WorkflowRuntimeMiddlewareExtensions.AddWorkflowRuntimeMiddleware"/>
     public static IServiceCollection AddRuntimeMiddleware(this IServiceCollection services)
-    {
-        services.AddScoped<WorkflowRuntimeMiddleware>();
-       
-        return services;
-    }
+        => services.AddWorkflowRuntimeMiddleware();
 
+    /// <inheritdoc cref="WorkflowRuntimeMiddlewareExtensions.AddWorkflowHeaderService"/>
     public static IServiceCollection AddHeaderService(this IServiceCollection services)
-    {
-        services.AddScoped<ResponseHeaderFilter>();
-        services.AddScoped<IHeaderService, HttpContextHeaderService>();
-        services
-            .ReplaceSchemaResolver<HeaderSchemaResolutionStrategy, WorkflowHeaderSchemaResolutionStrategy>();
-        
-        return services;
-    }
+        => services.AddWorkflowHeaderService();
 }

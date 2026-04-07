@@ -1,0 +1,58 @@
+using System.ComponentModel.DataAnnotations;
+using BBT.Aether.AspNetCore.Controllers;
+using BBT.Workflow.Monitor.Components;
+using BBT.Workflow.Monitor.Components.DTOs;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
+
+namespace BBT.Workflow.Monitor.Controllers;
+
+/// <summary>
+/// Read-only monitoring endpoints for workflow component definitions.
+/// A single parameterised endpoint serves all component types (flows, tasks, schemas, etc.)
+/// so the client specifies which type it needs via the <c>type</c> query parameter.
+/// </summary>
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}")]
+[ServiceFilter(typeof(ResponseHeaderFilter))]
+public sealed class MonitorComponentController(
+    IMonitorComponentQueryService queryService) : AetherControllerBase
+{
+    /// <summary>
+    /// Returns component definitions for the given domain and component type.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="type">
+    /// Component type. Supported values:
+    /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>.
+    /// </param>
+    /// <param name="key">Optional component key. When provided, returns the specific component.</param>
+    /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
+    /// <response code="200">Component definitions returned successfully</response>
+    /// <response code="400">Unknown component type</response>
+    /// <response code="404">Specific component not found</response>
+    [HttpGet("{domain}/monitor/components")]
+    [ProducesResponseType(typeof(MonitorComponentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComponentsAsync(
+        [FromRoute] string domain,
+        [FromQuery][Required] string type,
+        [FromQuery] string? key = null,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentsInput
+        {
+            Domain = domain,
+            ComponentType = type,
+            Key = key,
+            Version = version
+        };
+
+        var result = await queryService.GetComponentsAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+}

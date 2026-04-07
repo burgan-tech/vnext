@@ -6,43 +6,58 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Service collection extensions specific to Execution API.
-/// The Execution service is now completely independent of Domain.
+/// The Execution service is independent of the workflow Domain/Application stack.
+/// It uses only Aether base layers and execution-specific services.
 /// </summary>
 public static class ExecutionApiServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds Execution API specific services.
+    /// Adds all services required by the Execution API host.
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddExecutionApiModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
+
+        // Aether base layers (no workflow Domain/Application)
         services
             .AddAetherDomain()
             .AddAetherApplication()
-            .AddAetherInfrastructure()
-            .AddAspNetCoreModules(configuration)
-            .AddDaprClients()
+            .AddAetherInfrastructure();
+
+        // ASP.NET Core, serialization, controllers
+        services
+            .AddWorkflowAspNetCore(configuration)
+            .AddWorkflowMapper();
+
+        // Dapr, event bus
+        services
+            .AddWorkflowDapr()
             .AddAetherEventBus(opt =>
             {
                 opt.DefaultSource =
                     $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
                 opt.PrefixEnvironmentToTopic = true;
                 opt.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            })
-            .AppMapper()
-            .AddTelemetry(configuration)
-            .AddDistributedCache(configuration)
-            .AddDistributedLock(configuration)
+            });
+
+        // Caching, telemetry, exception handling
+        services
+            .AddWorkflowDistributedCache(configuration)
+            .AddWorkflowDistributedLock(configuration)
             .AddRedis()
-            .AddExceptionHandling()
+            .AddWorkflowTelemetry(configuration)
+            .AddWorkflowExceptionHandling();
+
+        // Execution-specific
+        services
             .AddExecutionHealthChecks()
             .AddDaprNotification(configuration)
             .AddTaskInvokers(configuration);
-        
+
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
-        
+
         return services;
     }
     

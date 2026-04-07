@@ -275,6 +275,7 @@ ai-docs/
 
 # Claude
 .claude/worktrees/*
+./claude/*.local.json
 
 #Cursor
 .cursor/plans/*

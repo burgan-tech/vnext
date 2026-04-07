@@ -6,43 +6,64 @@ using BBT.Workflow.Orchestration.Services;
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Service collection extensions specific to Orchestration API
+/// Service collection extensions specific to Orchestration API.
+/// Composes modular extensions for the full-stack Orchestration host.
 /// </summary>
 public static class OrchestrationApiServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds Orchestration API specific services
+    /// Adds all services required by the Orchestration API host.
     /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddOrchestrationApiModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
-        
+
+        // Core domain/application/infrastructure modules
         services
-            .AddFunctionHandlers()
             .AddDomainModule()
             .AddApplicationModule()
-            .AddInfrastructureModule(configuration) // Infrastructure manages its own dependencies including URL templates
-            .AddAspNetCoreModules(configuration)
-            .AddResultResilience(configuration)
-            .AddDaprClients()
-            .AddEventBus(configuration)
-            .AddWorkflowEventHooks()
-            .AddDomainEventsInfrastructure()
+            .AddInfrastructureModule(configuration)
             .AddInfrastructureRuntimeServices()
-            .AddDbContext(configuration)
-            .AppMapper()
-            .AddTelemetry(configuration)
-            .AddDistributedCache(configuration) // Can be called before or after InfrastructureModule
-            .AddDistributedLock(configuration)
-            .AddBackgroundJob()
-            .AddRedis()
-            .AddExceptionHandling()
-            .AddRuntimeMiddleware()
-            .AddHeaderService()
-            .AddHostedServices()
+            .AddResultResilience(configuration);
+
+        // ASP.NET Core, serialization, controllers
+        services
+            .AddWorkflowAspNetCore(configuration)
+            .AddWorkflowMapper();
+
+        // Dapr, event bus, domain events, event hooks
+        services
+            .AddWorkflowDapr()
+            .AddWorkflowEventBus(configuration)
+            .AddWorkflowDomainEvents()
+            .AddWorkflowEventHooks();
+
+        // Database, caching, locking
+        services
+            .AddWorkflowDbContext(configuration)
+            .AddWorkflowDistributedCache(configuration)
+            .AddWorkflowDistributedLock(configuration)
+            .AddRedis();
+
+        // Background jobs, telemetry, exception handling
+        services
+            .AddWorkflowBackgroundJobs()
+            .AddWorkflowTelemetry(configuration)
+            .AddWorkflowExceptionHandling();
+
+        // Runtime middleware, headers, health checks
+        services
+            .AddWorkflowRuntimeMiddleware()
+            .AddWorkflowHeaderService()
             .AddAppHealthChecks();
+
+        // Orchestration-specific
+        services
+            .AddFunctionHandlers()
+            .AddOrchestrationHostedServices();
+
         return services;
     }
 
@@ -60,12 +81,11 @@ public static class OrchestrationApiServiceCollectionExtensions
         return services;
     }
 
-    private static IServiceCollection AddHostedServices(this IServiceCollection services)
+    private static IServiceCollection AddOrchestrationHostedServices(this IServiceCollection services)
     {
-        // Add any Orchestration-specific hosted services
-        #if DEBUG
+#if DEBUG
         services.AddHostedService<MultiSchemaMigrationHostedService>();
-        #endif
+#endif
         services.AddHostedService<CacheCleanupHostedService>();
         services.AddHostedService<CacheInitializationHostedService>();
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();

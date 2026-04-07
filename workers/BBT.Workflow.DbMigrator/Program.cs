@@ -29,13 +29,13 @@ builder.Services
         options.ApplicationName ??= configuration.GetValue<string?>("ApplicationName") ?? "vnext-db-migrator";
     })
     .AddAetherAmbientServiceProvider()
-    .AddJsonSerializerOptions()
-    .AddDaprClients()
+    .AddWorkflowJsonSerializer()
+    .AddWorkflowDapr()
     .AddDomainModule()
     .AddInfrastructureModule(configuration)
-    .AddDbContext(configuration)
-    .AddTelemetry(configuration)
-    .AddDistributedLock(configuration)
+    .AddWorkflowDbContext(configuration)
+    .AddWorkflowTelemetry(configuration)
+    .AddWorkflowDistributedLock(configuration)
     .AddRedis()
     .AddSingleton<SchemaMigrationRunner>()
     .AddHostedService<SchemaMigrationHostedService>();
