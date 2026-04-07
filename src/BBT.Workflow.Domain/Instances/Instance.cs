@@ -456,12 +456,12 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
 
         correlation.Completed();
-        
-        // If this is a SubFlow (blocking), set instance to Active
-        if (correlation.SubFlowType.Equals(SubFlowType.SubFlow))
-        {
-            Active();
-        }
+
+        // NOTE: Do NOT call Active() here for SubFlow type.
+        // The parent must remain Busy until ClearBusyOnResumeStep runs in ResumePipelineAsync.
+        // Transitioning to Active here would cause the state endpoint to return Active
+        // during the processing window between correlation completion and pipeline resume,
+        // falsely signaling to clients that the flow is no longer busy.
 
         return correlation;
     }

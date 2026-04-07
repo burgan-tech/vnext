@@ -905,6 +905,32 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void CompleteCorrelation_SubFlow_ShouldRemainBusy()
+    {
+        // Arrange
+        var subInstanceId = Guid.NewGuid();
+        var instance = InstanceFactory.CreateDefault();
+        var correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            instance.Id,
+            "parent-state",
+            subInstanceId,
+            "S", // SubFlow
+            "domain",
+            "flow",
+            null
+        );
+        instance.AddCorrelation(correlation); // sets instance to Busy
+
+        // Act
+        instance.CompleteCorrelation(subInstanceId);
+
+        // Assert — must remain Busy; ClearBusyOnResumeStep will transition to Active
+        Assert.Equal(InstanceStatus.Busy, instance.Status);
+        Assert.True(instance.IsBusy);
+    }
+
+    [Fact]
     public void HasActiveSubFlow_ShouldReturnTrue_WhenActiveSubFlowExists()
     {
         // Arrange
