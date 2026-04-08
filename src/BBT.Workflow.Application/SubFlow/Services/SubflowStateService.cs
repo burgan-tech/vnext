@@ -17,6 +17,9 @@ public sealed class SubflowStateService(
     {
         using (logger.BeginScope(new Dictionary<string, object>
         {
+            [TelemetryConstants.TagNames.Domain] = input.Domain,
+            [TelemetryConstants.TagNames.Flow] = input.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = input.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = input.ParentInstanceId,
             [TelemetryConstants.TagNames.ParentInstanceId] = input.ParentInstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = input.SubInstanceId

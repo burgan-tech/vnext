@@ -24,6 +24,15 @@ public sealed class TransitionJobHandler(
         // Restore trace context from the original request for distributed tracing correlation
         using var activity = BackgroundJobActivityHelper.StartActivityWithTraceContext("TransitionJob.Execute", args);
 
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.InstanceId]    = args.InstanceId,
+            [TelemetryConstants.TagNames.Flow]          = args.Workflow,
+            [TelemetryConstants.TagNames.Domain]          = args.Domain,
+            [TelemetryConstants.TagNames.FlowVersion]          = args.Version,
+            [TelemetryConstants.TagNames.InstanceKey]          = args.InstanceKey ?? "N/A",
+            [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey
+        }))
         try
         {
             BackgroundJobActivityHelper.EnrichActivity(activity, args);

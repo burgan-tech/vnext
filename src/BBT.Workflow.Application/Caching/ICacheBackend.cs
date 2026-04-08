@@ -26,5 +26,14 @@ public interface ICacheBackend<T>
         string key,
         string? version,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads all active versions of an entity for a given domain and key.
+    /// More efficient than calling <see cref="LoadAsync"/> repeatedly when all versions are needed.
+    /// </summary>
+    Task<Result<List<T>>> LoadAllByKeyAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default);
 }
 

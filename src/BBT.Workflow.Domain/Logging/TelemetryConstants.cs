@@ -15,6 +15,7 @@ public static class TelemetryConstants
         public const string Flow = "vnext.flow.key";
         public const string FlowVersion = "vnext.flow.version";
         public const string InstanceId = "vnext.instance.id";
+        public const string InstanceKey = "vnext.instance.key";
         public const string TransitionKey = "vnext.transition.key";
         public const string TriggerType = "vnext.trigger.type";
         public const string HandlerName = "vnext.handler.name";

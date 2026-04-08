@@ -2,9 +2,9 @@ using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -48,7 +48,7 @@ public sealed class FinalizeTransitionStep(
     /// </summary>
     private static Guid GetTransitionRecordId(TransitionExecutionContext context)
     {
-        return context.Items.TryGetValue("TransitionRecordId", out var record) && record is Guid recordId
+        return context.Items.TryGetValue(WellKnownItems.TransitionRecordId, out var record) && record is Guid recordId
             ? recordId
             : Guid.Empty;
     }

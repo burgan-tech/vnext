@@ -43,7 +43,7 @@ public sealed class TransitionRunner(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion, async (sp, cancellationToken) =>
+        return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion, async (sp, ct) =>
         {
             var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
             var core = sp.GetRequiredService<IWorkflowExecutionCore>();
@@ -53,14 +53,14 @@ public sealed class TransitionRunner(
             {
                 await using var uow = await uowManager.BeginAsync(
                     new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                    cancellationToken);
+                    ct);
 
-                var coreResult = await core.ExecuteTransitionCoreAsync(context, cancellationToken);
+                var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
                 if (!coreResult.IsSuccess)
                     return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
                 // Commit is THE boundary
-                await uow.CommitAsync(cancellationToken);
+                await uow.CommitAsync(ct);
 
                 return coreResult;
             }

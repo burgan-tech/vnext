@@ -31,6 +31,27 @@ public sealed class RuntimeCacheBackend<T>(
     /// </param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A Result containing the matched entity or an error</returns>
+    public async Task<Result<List<T>>> LoadAllByKeyAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
+        var runtimeInfoProvider = scope.ServiceProvider.GetRequiredService<IRuntimeInfoProvider>();
+
+        runtimeInfoProvider.Check(domain);
+
+        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
+        var filtered = all
+            .Where(e => e is not null &&
+                        string.Equals(e!.Domain, domain, StringComparison.OrdinalIgnoreCase))
+            .Select(e => e!)
+            .ToList();
+
+        return Result<List<T>>.Ok(filtered);
+    }
+
     public async Task<Result<T>> LoadAsync(
         string domain,
         string key,
@@ -58,12 +79,11 @@ public sealed class RuntimeCacheBackend<T>(
             return Result<T>.Ok(entity);
         }
 
-        // For null/empty, artifact, or partial version → load all and use smart matching
-        var all = await runtimeService.GetAsync<T>(cancellationToken);
+        // For null/empty, artifact, or partial version → key-filtered load + smart matching
+        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
         var filtered = all
             .Where(e => e is not null &&
-                        string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(e.Key, key, StringComparison.OrdinalIgnoreCase))
+                        string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (filtered.Count == 0)

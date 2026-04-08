@@ -25,6 +25,10 @@ public sealed class InstanceCancellationService(
         Guid instanceId,
         CancellationToken cancellationToken = default)
     {
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.InstanceId] = instanceId
+        }))
         try
         {
             var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
@@ -69,6 +73,10 @@ public sealed class InstanceCancellationService(
         IReadOnlyList<string> transitionKeys,
         CancellationToken cancellationToken = default)
     {
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.InstanceId] = instanceId
+        }))
         try
         {
             var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);

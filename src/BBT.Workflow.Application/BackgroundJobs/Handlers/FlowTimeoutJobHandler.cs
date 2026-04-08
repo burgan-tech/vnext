@@ -30,6 +30,13 @@ public sealed class FlowTimeoutJobHandler(
         // Restore trace context from the original request for distributed tracing correlation
         using var activity = BackgroundJobActivityHelper.StartActivityWithTraceContext("TimeoutJob.Execute", args);
 
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.InstanceId] = args.InstanceId,
+            [TelemetryConstants.TagNames.Flow]       = args.FlowName,
+            [TelemetryConstants.TagNames.Domain]       = args.Domain,
+            [TelemetryConstants.TagNames.FlowVersion]       = args.Version
+        }))
         try
         {
             BackgroundJobActivityHelper.EnrichActivity(activity, args);

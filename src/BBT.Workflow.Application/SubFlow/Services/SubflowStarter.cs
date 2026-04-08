@@ -104,7 +104,7 @@ public sealed class SubflowStarter(
         string subFlowTypeCode,
         ScriptResponse? inputMappingResult,
         WorkflowTimeout? timeoutOverride,
-        Definitions.SubFlowOverrides? overrides,
+        SubFlowOverrides? overrides,
         CancellationToken cancellationToken)
     {
         using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
@@ -120,7 +120,11 @@ public sealed class SubflowStarter(
 
         using (logger.BeginScope(new Dictionary<string, object>
         {
+            [TelemetryConstants.TagNames.Domain] = workflow.Domain,
+            [TelemetryConstants.TagNames.Flow] = workflow.Key,
+            [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
             [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
+            [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
             [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId
         }))
         {

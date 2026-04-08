@@ -22,7 +22,7 @@ public sealed class WorkflowExecutionService(
     /// Executes a workflow transition by delegating to TransitionRunner.
     /// The runner manages UoW lifecycle and inline auto chain processing.
     /// </summary>
-    [Log]
+    // [Log]
     [Trace]
     public Task<Result<TransitionOutput>> ExecuteTransitionAsync(
         [Enrich] WorkflowExecutionContext context,

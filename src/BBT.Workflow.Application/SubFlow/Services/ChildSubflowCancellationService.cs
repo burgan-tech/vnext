@@ -30,6 +30,9 @@ public sealed class ChildSubflowCancellationService(
     {
         using (logger.BeginScope(new Dictionary<string, object>
         {
+            [TelemetryConstants.TagNames.Domain] = domain,
+            [TelemetryConstants.TagNames.Flow] = flow,
+            [TelemetryConstants.TagNames.FlowVersion] = version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = instanceId
         }))
         {

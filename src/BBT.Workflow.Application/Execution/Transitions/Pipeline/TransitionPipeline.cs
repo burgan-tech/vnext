@@ -201,46 +201,75 @@ public class TransitionPipeline
 
         var state = CreateInitialState(context);
 
-        try
+        using (_logger.BeginScope(BuildLogScope(context)))
         {
-            while (state.HasMoreSteps())
+            try
             {
-                // Guard: Skip immediate execution requested
-                if (context.SkipImmediateExecution)
-                    return Result.Ok();
-
-                // Execute current step with error boundary handling
-                var stepResult = await ExecuteStepWithBoundaryAsync(
-                    state.CurrentStep, context, cancellationToken);
-
-                if (!stepResult.IsSuccess)
-                    return Result.Fail(stepResult.Error);
-
-                // Determine flow control based on step outcome
-                var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
-
-                // Apply flow control decision
-                if (flowControl.ShouldStop)
-                    break;
-
-                if (flowControl.ShouldReplan)
+                while (state.HasMoreSteps())
                 {
-                    state = CreateInitialState(context);
-                    continue;
+                    // Guard: Skip immediate execution requested
+                    if (context.SkipImmediateExecution)
+                        return Result.Ok();
+
+                    // Execute current step with error boundary handling
+                    var stepResult = await ExecuteStepWithBoundaryAsync(
+                        state.CurrentStep, context, cancellationToken);
+
+                    if (!stepResult.IsSuccess)
+                        return Result.Fail(stepResult.Error);
+
+                    // Determine flow control based on step outcome
+                    var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
+
+                    // Apply flow control decision
+                    if (flowControl.ShouldStop)
+                        break;
+
+                    if (flowControl.ShouldReplan)
+                    {
+                        state = CreateInitialState(context);
+                        continue;
+                    }
+
+                    state = state.MoveNext();
                 }
 
-                state = state.MoveNext();
+                return Result.Ok();
             }
+            catch (Exception ex)
+            {
+                // Unhandled exception - propagate as error
+                _logger.LogError(ex, "Unhandled exception in pipeline execution for workflow {WorkflowKey}",
+                    context.Workflow.Key);
+                return Result.Fail(Error.Failure("PipelineException", ex.Message));
+            }
+        }
+    }
 
-            return Result.Ok();
-        }
-        catch (Exception ex)
+    /// <summary>
+    /// Builds a log scope dictionary for the current transition.
+    /// All log lines emitted within <see cref="RunSingleTransitionAsync"/> will carry these fields automatically.
+    /// </summary>
+    private static Dictionary<string, object> BuildLogScope(TransitionExecutionContext context)
+    {
+        var props = new Dictionary<string, object>
         {
-            // Unhandled exception - propagate as error
-            _logger.LogError(ex, "Unhandled exception in pipeline execution for workflow {WorkflowKey}", 
-                context.Workflow.Key);
-            return Result.Fail(Error.Failure("PipelineException", ex.Message));
+            [TelemetryConstants.TagNames.Domain]    = context.Domain,
+            [TelemetryConstants.TagNames.Flow]    = context.Workflow.Key,
+            [TelemetryConstants.TagNames.FlowVersion]    = context.Workflow.Version,
+            [TelemetryConstants.TagNames.InstanceId]    = context.InstanceId,
+            [TelemetryConstants.TagNames.InstanceKey]    = context.Instance.Key ?? "N/A",
+            [TelemetryConstants.TagNames.StateFrom]     = context.Transition?.From ?? context.Instance.GetCurrentState,
+            [TelemetryConstants.TagNames.StateTo]       = context.Transition?.Target ?? "N/A",
+            [TelemetryConstants.TagNames.TransitionKey] = context.TransitionKey,
+            [TelemetryConstants.TagNames.TriggerType]    = context.Transition?.TriggerType.ToString() ?? "N/A"
+        };
+        if (context.Headers.TryGetValue(TelemetryConstants.HeaderNames.ParentInstanceId, out var raw)
+            && Guid.TryParse(raw, out var parentId))
+        {
+            props[TelemetryConstants.TagNames.ParentInstanceId] = parentId;
         }
+        return props;
     }
 
     /// <summary>

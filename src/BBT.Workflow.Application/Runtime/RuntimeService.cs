@@ -75,6 +75,50 @@ public sealed class RuntimeService(
         }
     }
 
+    public async Task<IEnumerable<T?>> GetAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
+        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
+
+        using (currentSchema.Use(schemaInfo.Schema))
+        {
+            var items = await instanceRepository.GetActiveDataListByKeyAsync(key, cancellationToken);
+            var result = new List<T?>();
+
+            foreach (var item in items)
+            {
+                try
+                {
+                    var flow = item.InstanceData.Data.JsonElement
+                        .Deserialize<T>(JsonSerializerConstants.JsonOptions);
+
+                    if (flow != null)
+                    {
+                        flow.SetReference(new Reference(
+                            item.Instance.Key ?? string.Empty,
+                            runtimeInfoProvider.Domain,
+                            schemaInfo.Name,
+                            item.InstanceData.Version
+                        ));
+                    }
+
+                    result.Add(flow);
+                }
+                catch (JsonException ex)
+                {
+                    logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
+                }
+                catch (Exception ex)
+                {
+                    logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
+                }
+            }
+
+            return result.Where(f => f != null);
+        }
+    }
+
     public async Task<T?> GetAsync<T>(string key, string version,
         CancellationToken cancellationToken = default) where T : class, IDomainEntity, IReferenceSetter
     {

@@ -23,6 +23,9 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     Task<InstanceAndDataModel?> FindActiveDataAsync(string key, string version,
         CancellationToken cancellationToken = default);
+
+    Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
+        CancellationToken cancellationToken = default);
         
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page, 

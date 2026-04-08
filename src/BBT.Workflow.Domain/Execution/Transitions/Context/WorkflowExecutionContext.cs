@@ -28,7 +28,7 @@ public sealed class WorkflowExecutionContext
     public string? WorkflowVersion { get; set; }
     
     /// <summary>Gets or sets the transition key to execute.</summary>
-    [Enrich(Name = "vnext.flow.transition")]
+    [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;
     
     /// <summary>Gets or sets the trigger type for this execution.</summary>

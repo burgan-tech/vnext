@@ -4,6 +4,7 @@ using BBT.Aether.Domain.EntityFrameworkCore.Modeling;
 using BBT.Aether.Domain.Events;
 using BBT.Aether.Events;
 using BBT.Aether.Persistence;
+using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
 
@@ -58,6 +59,12 @@ public class WorkflowDbContext(
     /// Gets or sets the background jobs
     /// </summary>
     public virtual DbSet<BackgroundJobInfo> BackgroundJobs { get; set; }
+
+    protected override void ConfigureConventions(ModelConfigurationBuilder cfg)
+    {
+        cfg.Properties<DateTime>().HaveConversion<UtcDateTimeConverter>();
+        cfg.Properties<DateTime?>().HaveConversion<UtcNullableDateTimeConverter>();
+    }
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

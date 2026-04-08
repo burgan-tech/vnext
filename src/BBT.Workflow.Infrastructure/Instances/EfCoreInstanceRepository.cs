@@ -211,6 +211,23 @@ public sealed class EfCoreInstanceRepository(
             string.Equals(c.InstanceData.Version, bestMatchVersion, StringComparison.OrdinalIgnoreCase));
     }
 
+    public async Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await (from instance in context.Instances
+                      where instance.Status == InstanceStatus.Active && instance.Key == key
+                      join data in context.InstancesData on instance.Id equals data.InstanceId
+                      select new InstanceAndDataModel
+                      {
+                          Instance = instance,
+                          InstanceData = data
+                      })
+            .AsNoTracking()
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
+    }
+
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
         CancellationToken cancellationToken = default)
