@@ -78,7 +78,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone");
+                oldType: "timestamp with time zone");
 
             migrationBuilder.AlterColumn<DateTime>(
                 name: "FinishedAt",
@@ -86,7 +86,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.AlterColumn<DateTime>(
@@ -95,7 +95,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone");
+                oldType: "timestamp with time zone");
 
             migrationBuilder.AlterColumn<DateTime>(
                 name: "FinishedAt",
@@ -103,7 +103,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.AlterColumn<DateTime>(
@@ -112,7 +112,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone");
+                oldType: "timestamp with time zone");
 
             migrationBuilder.AlterColumn<DateTime>(
                 name: "CompletedAt",
@@ -120,7 +120,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.AddColumn<Guid>(
@@ -135,7 +135,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.AlterColumn<DateTime>(
@@ -144,7 +144,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone");
+                oldType: "timestamp with time zone");
 
             migrationBuilder.AlterColumn<DateTime>(
                 name: "CompletedAt",
@@ -152,7 +152,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.AddColumn<string>(
@@ -168,7 +168,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.AlterColumn<string>(
@@ -226,7 +226,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone");
+                oldType: "timestamp with time zone");
 
             migrationBuilder.AlterColumn<DateTime>(
                 name: "StartedAt",
@@ -234,7 +234,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone");
+                oldType: "timestamp with time zone");
 
             migrationBuilder.AlterColumn<DateTime>(
                 name: "FinishedAt",
@@ -242,7 +242,7 @@ namespace BBT.Workflow.Migrations
                 type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
-                oldType: "timestamp without time zone",
+                oldType: "timestamp with time zone",
                 oldNullable: true);
 
             migrationBuilder.CreateTable(
@@ -372,7 +372,7 @@ namespace BBT.Workflow.Migrations
                 name: "StartedAt",
                 schema: "public",
                 table: "InstanceTransitions",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone");
@@ -381,7 +381,7 @@ namespace BBT.Workflow.Migrations
                 name: "FinishedAt",
                 schema: "public",
                 table: "InstanceTransitions",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",
@@ -391,7 +391,7 @@ namespace BBT.Workflow.Migrations
                 name: "StartedAt",
                 schema: "public",
                 table: "InstanceTasks",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone");
@@ -400,7 +400,7 @@ namespace BBT.Workflow.Migrations
                 name: "FinishedAt",
                 schema: "public",
                 table: "InstanceTasks",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",
@@ -410,7 +410,7 @@ namespace BBT.Workflow.Migrations
                 name: "EnteredAt",
                 schema: "public",
                 table: "InstancesData",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone");
@@ -419,7 +419,7 @@ namespace BBT.Workflow.Migrations
                 name: "CompletedAt",
                 schema: "public",
                 table: "InstancesCorrelations",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",
@@ -429,7 +429,7 @@ namespace BBT.Workflow.Migrations
                 name: "ModifiedAt",
                 schema: "public",
                 table: "Instances",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",
@@ -439,7 +439,7 @@ namespace BBT.Workflow.Migrations
                 name: "CreatedAt",
                 schema: "public",
                 table: "Instances",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone");
@@ -448,7 +448,7 @@ namespace BBT.Workflow.Migrations
                 name: "CompletedAt",
                 schema: "public",
                 table: "Instances",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",
@@ -475,7 +475,7 @@ namespace BBT.Workflow.Migrations
                 name: "ModifiedAt",
                 schema: "public",
                 table: "InstanceJobs",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",
@@ -506,7 +506,7 @@ namespace BBT.Workflow.Migrations
                 name: "CreatedAt",
                 schema: "public",
                 table: "InstanceJobs",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone");
@@ -532,7 +532,7 @@ namespace BBT.Workflow.Migrations
                 name: "StartedAt",
                 schema: "public",
                 table: "InstanceActions",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: false,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone");
@@ -541,7 +541,7 @@ namespace BBT.Workflow.Migrations
                 name: "FinishedAt",
                 schema: "public",
                 table: "InstanceActions",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true,
                 oldClrType: typeof(DateTime),
                 oldType: "timestamp with time zone",

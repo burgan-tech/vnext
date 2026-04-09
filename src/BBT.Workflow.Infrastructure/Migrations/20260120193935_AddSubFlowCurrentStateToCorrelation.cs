@@ -14,7 +14,7 @@ namespace BBT.Workflow.Migrations
             migrationBuilder.AddColumn<DateTime>(
                 name: "SubFlowStateChangedAt",
                 table: "InstancesCorrelations",
-                type: "timestamp without time zone",
+                type: "timestamp with time zone",
                 nullable: true);
         }
 

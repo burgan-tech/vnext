@@ -26,11 +26,11 @@ namespace BBT.Workflow.Migrations
                     Flow = table.Column<string>(type: "text", nullable: false),
                     CurrentState = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
                     Status = table.Column<string>(type: "character varying(3)", maxLength: 3, nullable: false),
-                    CompletedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
+                    CompletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     Duration = table.Column<TimeSpan>(type: "interval", nullable: true),
                     Tags = table.Column<List<string>>(type: "text[]", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    ModifiedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ModifiedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     ConcurrencyStamp = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: false)
                 },
                 constraints: table =>
@@ -52,8 +52,8 @@ namespace BBT.Workflow.Migrations
                     ExpressionValue = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
                     IsTriggered = table.Column<bool>(type: "boolean", nullable: false),
                     Payload = table.Column<string>(type: "jsonb", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    ModifiedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true)
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ModifiedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -77,7 +77,7 @@ namespace BBT.Workflow.Migrations
                     ParentState = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     SubFlowInstanceId = table.Column<Guid>(type: "uuid", nullable: false),
                     IsCompleted = table.Column<bool>(type: "boolean", nullable: false),
-                    CompletedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true)
+                    CompletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -106,7 +106,7 @@ namespace BBT.Workflow.Migrations
                     Version = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     ETag = table.Column<string>(type: "character varying(26)", maxLength: 26, nullable: false),
                     Data = table.Column<string>(type: "jsonb", nullable: false),
-                    EnteredAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false)
+                    EnteredAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -130,8 +130,8 @@ namespace BBT.Workflow.Migrations
                     TransitionId = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     FromState = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     ToState = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
-                    StartedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    FinishedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
+                    StartedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    FinishedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     Duration = table.Column<TimeSpan>(type: "interval", nullable: true),
                     Body = table.Column<string>(type: "jsonb", nullable: false),
                     Header = table.Column<string>(type: "jsonb", nullable: false)
@@ -157,8 +157,8 @@ namespace BBT.Workflow.Migrations
                     TransitionId = table.Column<Guid>(type: "uuid", nullable: false),
                     TaskId = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     Status = table.Column<int>(type: "integer", nullable: false),
-                    StartedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    FinishedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
+                    StartedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    FinishedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     Duration = table.Column<TimeSpan>(type: "interval", nullable: true),
                     FaultedTaskId = table.Column<Guid>(type: "uuid", nullable: true),
                     Request = table.Column<string>(type: "jsonb", nullable: false),
@@ -190,8 +190,8 @@ namespace BBT.Workflow.Migrations
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     TaskId = table.Column<Guid>(type: "uuid", nullable: false),
                     Detail = table.Column<string>(type: "jsonb", nullable: false),
-                    StartedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    FinishedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
+                    StartedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    FinishedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     Duration = table.Column<TimeSpan>(type: "interval", nullable: true),
                     Status = table.Column<string>(type: "character varying(70)", maxLength: 70, nullable: false)
                 },
