@@ -35,64 +35,75 @@ public sealed class InstanceSubStateChangedEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        logger.SubFlowStateChangedEventReceived(
-            eventData.SubInstanceId,
-            eventData.ParentInstanceId,
-            eventData.NewState);
-
-        try
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            var input = MapToSubFlowStateChangedInput(eventData);
+            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = eventData.ParentInstanceId,
+            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.ParentInstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+        }))
+        {
+            logger.SubFlowStateChangedEventReceived(
+                eventData.SubInstanceId,
+                eventData.ParentInstanceId,
+                eventData.NewState);
 
-            // Gateway handles local/remote routing based on domain
-            var result = await instanceCommandGateway.UpdateSubFlowStateAsync(input, cancellationToken);
-
-            if (!result.IsSuccess)
+            try
             {
-                var error = result.Error;
-                
-                // Log with structured error details
-                logger.SubFlowStateUpdateFailedWithError(
-                    eventData.SubInstanceId,
-                    eventData.ParentInstanceId,
-                    error.Code ?? "unknown",
-                    error.Message ?? "Unknown error");
+                var input = MapToSubFlowStateChangedInput(eventData);
 
-                // Preserve error context in metadata for diagnostics
-                var metadata = new Dictionary<string, string>
+                // Gateway handles local/remote routing based on domain
+                var result = await instanceCommandGateway.UpdateSubFlowStateAsync(input, cancellationToken);
+
+                if (!result.IsSuccess)
                 {
-                    ["hook_error"] = "SubFlowStateUpdateFailed",
-                    ["error_code"] = error.Code ?? "unknown",
-                    ["error_prefix"] = error.Prefix ?? "unknown",
-                    ["error_message"] = error.Message
-                };
-                
-                if (!string.IsNullOrEmpty(error.Target))
-                {
-                    metadata["error_target"] = error.Target;
+                    var error = result.Error;
+
+                    // Log with structured error details
+                    logger.SubFlowStateUpdateFailedWithError(
+                        eventData.SubInstanceId,
+                        eventData.ParentInstanceId,
+                        error.Code ?? "unknown",
+                        error.Message ?? "Unknown error");
+
+                    // Preserve error context in metadata for diagnostics
+                    var metadata = new Dictionary<string, string>
+                    {
+                        ["hook_error"] = "SubFlowStateUpdateFailed",
+                        ["error_code"] = error.Code ?? "unknown",
+                        ["error_prefix"] = error.Prefix ?? "unknown",
+                        ["error_message"] = error.Message
+                    };
+
+                    if (!string.IsNullOrEmpty(error.Target))
+                    {
+                        metadata["error_target"] = error.Target;
+                    }
+
+                    return EventHookResult.Fail(
+                        new InvalidOperationException($"[{error.Code}] {error.Message}"),
+                        metadata);
                 }
 
-                return EventHookResult.Fail(
-                    new InvalidOperationException($"[{error.Code}] {error.Message}"),
-                    metadata);
+                return EventHookResult.Ok(new Dictionary<string, string>
+                {
+                    ["hook_executed"] = "true",
+                    ["sub_instance_id"] = eventData.SubInstanceId.ToString(),
+                    ["parent_instance_id"] = eventData.ParentInstanceId.ToString(),
+                    ["new_state"] = eventData.NewState
+                });
             }
-
-            return EventHookResult.Ok(new Dictionary<string, string>
+            catch (Exception ex)
             {
-                ["hook_executed"] = "true",
-                ["sub_instance_id"] = eventData.SubInstanceId.ToString(),
-                ["parent_instance_id"] = eventData.ParentInstanceId.ToString(),
-                ["new_state"] = eventData.NewState
-            });
-        }
-        catch (Exception ex)
-        {
-            logger.SubFlowStateUpdateFailed(ex, eventData.SubInstanceId, eventData.ParentInstanceId);
+                logger.SubFlowStateUpdateFailed(ex, eventData.SubInstanceId, eventData.ParentInstanceId);
 
-            return EventHookResult.Fail(ex, new Dictionary<string, string>
-            {
-                ["hook_error"] = "SubFlowStateChangedHookFailed"
-            });
+                return EventHookResult.Fail(ex, new Dictionary<string, string>
+                {
+                    ["hook_error"] = "SubFlowStateChangedHookFailed"
+                });
+            }
         }
     }
 

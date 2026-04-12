@@ -28,6 +28,9 @@ public sealed class ChildSubflowCancellationService(
         string? version,
         CancellationToken cancellationToken = default)
     {
+        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Cancellation/{domain}/{flow}");
+        SubFlowActivityHelper.EnrichWithCancellation(activity, instanceId, domain, flow);
+
         using (logger.BeginScope(new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = domain,
@@ -47,15 +50,18 @@ public sealed class ChildSubflowCancellationService(
                 if (result.IsSuccess)
                 {
                     logger.ChildSubflowCancelSucceeded(instanceId);
+                    SubFlowActivityHelper.SetSuccess(activity);
                     return Result.Ok();
                 }
 
                 logger.ChildSubflowCancelFailed(instanceId);
+                SubFlowActivityHelper.SetError(activity, "Transition failed");
                 return Result.Fail(WorkflowErrors.ChildSubflowCancellationFailed(instanceId, "Transition failed"));
             }
             catch (Exception ex)
             {
                 logger.ChildSubflowCancelError(ex, instanceId);
+                SubFlowActivityHelper.SetError(activity, ex.Message, ex);
                 return Result.Fail(WorkflowErrors.ChildSubflowCancellationFailed(instanceId, ex.Message));
             }
         }

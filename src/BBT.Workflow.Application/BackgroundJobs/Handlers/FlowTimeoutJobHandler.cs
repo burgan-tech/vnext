@@ -1,116 +1,166 @@
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.BackgroundJobs.Handlers;
 
 /// <summary>
 /// Handles workflow timeout jobs that are triggered when workflow instances exceed their configured timeout duration.
-/// This handler is responsible for processing timeout events and transitioning workflow instances to their timeout state.
+/// This handler delegates the full state lifecycle to the TransitionPipeline, which runs OnExit hooks,
+/// cancels scheduled transitions, applies the timeout state, runs OnEntry hooks, evaluates auto-transitions,
+/// and handles workflow completion — mirroring how SubFlow completion resumes the pipeline.
 /// </summary>
 public sealed class FlowTimeoutJobHandler(
     IInstanceRepository instanceRepository,
     IInstanceJobRepository jobRepository,
     IComponentCacheStore componentCacheStore,
     IWorkflowMetrics workflowMetrics,
+    IWorkflowExecutionService workflowExecutionService,
     IRuntimeInfoProvider runtimeInfoProvider,
-    ILogger<FlowTimeoutJobHandler> logger
+    ILogger<FlowTimeoutJobHandler> logger,
+    ICurrentSchema currentSchema
 ) : IBackgroundJobHandler<WorkflowTimeoutPayload>
 {
     public const string HandlerName = "flow.timeout";
 
     public async Task HandleAsync(WorkflowTimeoutPayload args, CancellationToken cancellationToken)
     {
-        // Restore trace context from the original request for distributed tracing correlation
-        using var activity = BackgroundJobActivityHelper.StartActivityWithTraceContext("TimeoutJob.Execute", args);
-
-        using (logger.BeginScope(new Dictionary<string, object>
+        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TimeoutJob.Execute", args);
+        using (currentSchema.Use(args.FlowName))
         {
-            [TelemetryConstants.TagNames.InstanceId] = args.InstanceId,
-            [TelemetryConstants.TagNames.Flow]       = args.FlowName,
-            [TelemetryConstants.TagNames.Domain]       = args.Domain,
-            [TelemetryConstants.TagNames.FlowVersion]       = args.Version
-        }))
-        try
-        {
-            BackgroundJobActivityHelper.EnrichActivity(activity, args);
-
-            var workflowResult = await componentCacheStore.GetFlowAsync(args.Domain, args.FlowName,
-                args.Version, cancellationToken);
-
-            if (!workflowResult.IsSuccess)
-            {
-                logger.WorkflowNotFoundWarning(args.FlowName, workflowResult.Error.Code);
-                activity?.SetStatus(ActivityStatusCode.Error, "Workflow not found");
-                return;
-            }
-
-            var workflow = workflowResult.Value!;
-
-            var instance =
-                await instanceRepository.FindAsync(p => p.Id == args.InstanceId, true,
-                    cancellationToken);
-            if (instance == null)
-            {
-                logger.InstanceNotFound(args.InstanceId, args.FlowName);
-                activity?.SetStatus(ActivityStatusCode.Error, "Instance not found");
-                return;
-            }
-
-            if (!instance.IsCompleted)
-            {
-                // Record current status before timeout
-                var currentStatus = instance.Status.Code;
-
-                if (workflow.Timeout is null)
+            using (logger.BeginScope(new Dictionary<string, object>
+                   {
+                       [TelemetryConstants.TagNames.InstanceId] = args.InstanceId,
+                       [TelemetryConstants.TagNames.Flow] = args.FlowName,
+                       [TelemetryConstants.TagNames.Domain] = args.Domain,
+                       [TelemetryConstants.TagNames.FlowVersion] = args.Version,
+                       [TelemetryConstants.TagNames.TransitionKey] = WellKnownTransitionKeys.Timeout,
+                       [TelemetryConstants.TagNames.JobName] = args.JobName
+                   }))
+                try
                 {
-                    logger.TimeoutConfigMissing(instance.Flow);
-                    activity?.SetStatus(ActivityStatusCode.Error, "Timeout config missing");
-                    return;
-                }
+                    BackgroundJobActivityHelper.EnrichActivity(activity, args);
+                    BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, WellKnownTransitionKeys.Timeout);
 
-                // Resolve timeout target state through workflow aggregate (handles $self and other well-known keys)
-                var timeoutTargetState = workflow.GetState(workflow.Timeout!.Target, instance.GetCurrentState);
-                
-                if (!timeoutTargetState.IsSuccess)
+                    var workflowResult = await componentCacheStore.GetFlowAsync(args.Domain, args.FlowName,
+                        args.Version, cancellationToken);
+
+                    if (!workflowResult.IsSuccess)
+                    {
+                        logger.WorkflowNotFoundWarning(args.FlowName, workflowResult.Error.Code);
+                        activity?.SetStatus(ActivityStatusCode.Error, "Workflow not found");
+                        return;
+                    }
+
+                    var workflow = workflowResult.Value!;
+
+                    var instance =
+                        await instanceRepository.FindAsync(p => p.Id == args.InstanceId, true,
+                            cancellationToken);
+                    if (instance == null)
+                    {
+                        logger.InstanceNotFound(args.InstanceId, args.FlowName);
+                        activity?.SetStatus(ActivityStatusCode.Error, "Instance not found");
+                        return;
+                    }
+
+                    if (instance.IsCompleted)
+                    {
+                        activity?.SetStatus(ActivityStatusCode.Ok);
+                        return;
+                    }
+
+                    if (workflow.Timeout is null)
+                    {
+                        logger.TimeoutConfigMissing(instance.Flow);
+                        activity?.SetStatus(ActivityStatusCode.Error, "Timeout config missing");
+                        return;
+                    }
+
+                    // Record current status before timeout for metrics
+                    var currentStatus = instance.Status.Code;
+
+                    // Delegate the full state lifecycle to the TransitionPipeline.
+                    // Resumes from SetBusy (19) so that SetBusy + CreateTransitionRecord both run
+                    // before the timeout-specific steps begin. The pipeline then:
+                    //   - Sets instance to Busy (SetBusy)
+                    //   - Creates an InstanceTransition record with key "$timeout" (CreateTransitionRecord)
+                    //   - Sets context.Target to the timeout target state (ApplyTimeoutState)
+                    //   - Cancels scheduled transitions of the current state (CancelScheduledJobs)
+                    //   - Runs OnExit tasks of the current state
+                    //   - Applies the state change (ChangeState)
+                    //   - Runs OnEntry tasks of the timeout target state
+                    //   - Schedules new transitions / evaluates auto-transitions
+                    //   - Calls instance.Complete() if the target state is a Finish state
+                    var input = new WorkflowExecutionContext
+                    {
+                        Domain = workflow.Domain,
+                        WorkflowKey = workflow.Key,
+                        WorkflowVersion = workflow.Version,
+                        InstanceId = args.InstanceId.ToString(),
+                        TransitionKey = WellKnownTransitionKeys.Timeout,
+                        TriggerType = TriggerType.Manual,
+                        Mode = ExecMode.Resume,
+                        Headers = new Dictionary<string, string?>(),
+                        Actor = ExecutionActor.System,
+                        RequestedAt = DateTimeOffset.UtcNow,
+                        Execution = new ExecutionInfo
+                        {
+                            ExecutionChainId = Guid.NewGuid().ToString("N"),
+                            ChainDepth = 0,
+                            ResumeFrom = LifecycleOrder.SetBusy,
+                            IsTimeoutTransition = true
+                        }
+                    };
+
+                    var pipelineResult =
+                        await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
+
+                    if (!pipelineResult.IsSuccess)
+                    {
+                        logger.LogError("Timeout pipeline failed for instance {InstanceId}: {Error}",
+                            args.InstanceId, pipelineResult.Error.Message);
+                        activity?.SetStatus(ActivityStatusCode.Error, pipelineResult.Error.Message);
+                        return;
+                    }
+
+                    // Re-read instance to get updated Duration for metrics (set by HandleFinishStep if Finish state)
+                    var updatedInstance =
+                        await instanceRepository.FindAsync(p => p.Id == args.InstanceId, true, cancellationToken);
+                    var durationSeconds = updatedInstance?.Duration?.TotalSeconds;
+
+                    workflowMetrics.RecordInstanceTimedOut(instance.Flow, runtimeInfoProvider.Domain, currentStatus,
+                        durationSeconds);
+
+                    activity?.SetStatus(ActivityStatusCode.Ok);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    logger.LogError("Timeout target state '{Target}' not found in workflow '{Workflow}'", 
-                        workflow.Timeout.Target, workflow.Key);
-                    activity?.SetStatus(ActivityStatusCode.Error, "Timeout target state not found");
-                    return;
+                    activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
+                    logger.JobCancelled(args.JobName, "timeout", args.InstanceId);
                 }
-                    
-                instance.ChangeState(timeoutTargetState.Value!);
-                instance.Complete(runtimeInfoProvider.Domain); // This calculates the Duration
-
-                // Record timeout metrics with duration - this will also decrement the current status gauge
-                var durationSeconds = instance.Duration?.TotalSeconds;
-                workflowMetrics.RecordInstanceTimedOut(instance.Flow, runtimeInfoProvider.Domain, currentStatus,
-                    durationSeconds);
-                await instanceRepository.UpdateAsync(instance, true, cancellationToken);
-                await jobRepository.MarkAsProcessedAsync(args.JobName, cancellationToken);
-
-                activity?.SetStatus(ActivityStatusCode.Ok);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
-            logger.JobCancelled(args.JobName, "timeout", args.InstanceId);
-            throw; // Re-throw cancellation exceptions
-        }
-        catch (Exception e)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-            activity?.AddTag("error.type", e.GetType().Name);
-            logger.JobFailed(e, args.JobName, args.InstanceId);
-            throw;
+                catch (Exception e)
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+                    activity?.AddTag("error.type", e.GetType().Name);
+                    logger.JobFailed(e, args.JobName, args.InstanceId);
+                }
+                finally
+                {
+                    await jobRepository.MarkAsProcessedAsync(args.InstanceId, args.JobName, CancellationToken.None);
+                }
         }
     }
 }

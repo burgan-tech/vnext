@@ -117,12 +117,12 @@ public sealed class ResolveAvailableStep(
             return false;
         }
 
-        // Target state has automatic or scheduled transitions - stay Busy
+        // Target state has automatic transitions - stay Busy
         // (This should already be caught by NextTransition check, but defensive)
         if (!context.Target.HasOnlyManualOrEventTransitions)
         {
             logger.LogDebug(
-                "Instance {InstanceId} target state {TargetState} has auto/scheduled transitions, staying Busy",
+                "Instance {InstanceId} target state {TargetState} has auto transitions, staying Busy",
                 context.InstanceId,
                 context.Target.Key);
             return false;

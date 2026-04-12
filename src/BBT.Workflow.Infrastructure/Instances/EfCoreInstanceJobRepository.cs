@@ -18,18 +18,29 @@ public sealed class EfCoreInstanceJobRepository(
             .ToListAsync(cancellationToken);
     }
 
-    public async Task MarkAsProcessedAsync(string jobName, CancellationToken cancellationToken = default)
+    public async Task MarkAsProcessedAsync(Guid instanceId, string jobName,
+        CancellationToken cancellationToken = default)
     {
         var job = await (await GetDbSetAsync()).FirstOrDefaultAsync(p =>
-            p.JobName == jobName, cancellationToken);
-        job!.MarkAsProcessed();
-        await SaveChangesAsync(cancellationToken);
+            p.InstanceId == instanceId &&
+            p.JobName == jobName && p.IsActive == true, cancellationToken);
+        if (job != null)
+        {
+            job.MarkAsProcessed();
+            await SaveChangesAsync(cancellationToken);
+        }
     }
 
-    public async Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId, CancellationToken cancellationToken = default)
+    public async Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId,
+        CancellationToken cancellationToken = default)
     {
         return await (await GetDbSetAsync())
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.JobId == jobId, cancellationToken);
     }
+
+    public async Task<bool> AnyActiveByJobNameAsync(Guid instanceId, string jobName,
+        CancellationToken cancellationToken = default)
+        => await (await GetQueryableAsync())
+            .AnyAsync(j => j.InstanceId == instanceId && j.JobName == jobName && j.IsActive == true, cancellationToken);
 }

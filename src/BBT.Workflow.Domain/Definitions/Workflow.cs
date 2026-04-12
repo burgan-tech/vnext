@@ -374,6 +374,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     }
 
     /// <summary>
+    /// Resolves a well-known transition key to the configured transition key.
+    /// Used when only the resolved key string is needed (e.g. audit records),
+    /// without looking up the actual <see cref="Transition"/> object.
+    /// </summary>
+    public string ResolveTransitionKey(string key) => ResolveWellKnownKey(key);
+
+    /// <summary>
     /// Resolves well-known transition keys to their configured transition keys.
     /// </summary>
     /// <param name="requestedKey">The requested transition key</param>
@@ -406,6 +413,15 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                 throw new ExitNotConfiguredForWorkflowException(Key);
 
             return Exit.Key;
+        }
+
+        if (string.Equals(requestedKey, WellKnownTransitionKeys.Timeout, StringComparison.OrdinalIgnoreCase))
+        {
+            // If this flow does not have timeout configuration, "timeout" is not supported
+            if (Timeout is null)
+                throw new TimeoutNotConfiguredForWorkflowException(Key);
+
+            return Timeout.Key;
         }
 
         return requestedKey;

@@ -43,7 +43,8 @@ public static class WorkflowErrorCodes
     public const string ExitNotConfiguredForWorkflow = "Instance:100026";
     public const string InstanceNotFaulted = "Instance:100027";
     public const string NoIncompleteTransitionFound = "Instance:100028";
-    
+    public const string TimeoutConfigMissing = "Instance:100029";
+
     #endregion
     
     #region Transition Errors (100xxx)

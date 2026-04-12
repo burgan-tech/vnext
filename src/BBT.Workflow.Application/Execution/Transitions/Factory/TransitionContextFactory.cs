@@ -135,6 +135,9 @@ public sealed class TransitionContextFactory(
         if (input.Execution?.IsSubFlowResume == true)
             executionContext.Directives.MarkAsSubFlowResume();
 
+        if (input.Execution?.IsTimeoutTransition == true)
+            executionContext.Directives.MarkAsTimeoutTransition();
+
         return executionContext;
     }
 

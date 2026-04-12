@@ -50,6 +50,11 @@ public sealed class PipelineDirectives
     public bool IsSubFlowResume { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this execution is triggered by a workflow timeout.
+    /// </summary>
+    public bool IsTimeoutTransition { get; private set; }
+
+    /// <summary>
     /// Gets the error transition key to be triggered by error boundary.
     /// </summary>
     private string? _errorTransitionKey;
@@ -110,6 +115,11 @@ public sealed class PipelineDirectives
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
+
+    /// <summary>
+    /// Marks this execution as a workflow timeout transition.
+    /// </summary>
+    public void MarkAsTimeoutTransition() => IsTimeoutTransition = true;
 
     /// <summary>
     /// Sets the error transition key to be triggered by error boundary.

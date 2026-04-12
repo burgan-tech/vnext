@@ -30,16 +30,12 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 return await queryService.GetInstanceAsync(input, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -47,16 +43,12 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceDataInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Version, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 return await queryService.GetInstanceDataAsync(input, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -64,16 +56,12 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceListInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 return await queryService.GetInstanceListAsync(input, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -81,16 +69,12 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 return await queryService.GetInstanceHistoryAsync(input, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -98,13 +82,10 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 var stateInput = new GetInstanceStateInput
                 {
                     Domain = input.Domain,
@@ -118,8 +99,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     IfNoneMatch = input.IfNoneMatch
                 };
                 return await queryService.GetInstanceStateAsync(stateInput, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -128,13 +108,10 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         string? transitionKey,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 var viewInput = new GetViewInput
                 {
                     Domain = input.Domain,
@@ -145,8 +122,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     QueryParameters = input.QueryParams
                 };
                 return await queryService.GetViewAsync(viewInput, transitionKey, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -155,13 +131,10 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         string transitionKey,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
                 var schemaInput = new GetSchemaInput
                 {
                     Domain = input.Domain,
@@ -170,8 +143,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Instance = input.Instance
                 };
                 return await queryService.GetSchemaAsync(schemaInput, transitionKey, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -179,13 +151,11 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
-        {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
-            var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
-
-            using (currentSchema.Use(input.Workflow))
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
             {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+
                 var extensionsInput = new GetExtensionsInput
                 {
                     Domain = input.Domain,
@@ -195,7 +165,6 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Extensions = input.Extensions
                 };
                 return await queryService.GetExtensionsAsync(extensionsInput, ct);
-            }
-        }, cancellationToken);
+            }, cancellationToken);
     }
 }

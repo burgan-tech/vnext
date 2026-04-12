@@ -289,6 +289,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
+            Version =  FlowVersion,
             CompletedAt = CompletedAt.Value
         });
 
@@ -332,6 +333,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
+            Version =   FlowVersion,
             FaultedAt = CompletedAt.Value
         });
     }
@@ -367,6 +369,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
+            Version =   FlowVersion,
             CanceledState = GetCurrentState,
             CanceledAt = CompletedAt.Value,
             Duration = Duration

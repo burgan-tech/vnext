@@ -24,11 +24,24 @@ public sealed class ChangeStateStep(
     [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
-    {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ChangeStateStep)}");
+     {
+                      Activity.Current?.SetDisplayName($"[{Order}] {nameof(ChangeStateStep)}");
 
-        // Skip for SubFlow resume - state already changed
-        if (context.Directives.IsSubFlowResume || context.Transition == null)
+        // Skip for SubFlow resume - state cleared/managed by ClearBusyOnResumeStep
+        if (context.Directives.IsSubFlowResume)
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
+        // Timeout: target state was pre-resolved in ApplyTimeoutStateStep; apply it here
+        // so that CancelScheduledJobs (39) and OnExit (40) ran against the correct current state first
+        if (context.Directives.IsTimeoutTransition)
+        {
+            return await ApplyTimeoutStateChangeAsync(context, cancellationToken);
+        }
+
+        // Skip if no transition (other non-timeout resume scenarios)
+        if (context.Transition == null)
         {
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
@@ -42,6 +55,39 @@ public sealed class ChangeStateStep(
             .OnSuccess(_ => LogStateChange(context))
             .OnSuccess(_ => AddTelemetryEvent(context))
             .MapAsync(_ => StepOutcome.Continue());
+    }
+
+    /// <summary>
+    /// Applies the timeout state change using the target state pre-resolved by ApplyTimeoutStateStep.
+    /// Mirrors the normal PerformStateChangeAsync + UpdateTargetStateInContext flow.
+    /// </summary>
+    private async Task<Result<StepOutcome>> ApplyTimeoutStateChangeAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.Target == null)
+        {
+            return Result<StepOutcome>.Fail(WorkflowErrors.TimeoutConfigMissing(context.Workflow.Key));
+        }
+
+        var fromState = context.Instance.GetCurrentState;
+
+        context.Instance.ChangeState(context.Target);
+        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+
+        // Sync context to reflect the applied state (mirrors UpdateTargetStateInContext)
+        context.Current = context.Target;
+
+        RecordStateEntryMetric(context);
+
+        Activity.Current?.AddEvent(new ActivityEvent("state.changed",
+            tags: new ActivityTagsCollection
+            {
+                { TelemetryConstants.TagNames.StateFrom, fromState },
+                { TelemetryConstants.TagNames.StateTo, context.Target.Key }
+            }));
+
+        return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 
     /// <summary>

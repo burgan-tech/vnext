@@ -37,6 +37,32 @@ public static partial class WorkflowLogs
         string jobName);
 
     /// <summary>
+    /// Logs when an instance is set to Busy before an async transition job is enqueued.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10094,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} set to Busy before async transition {TransitionKey} is processed")]
+    public static partial void InstanceSetBusyForAsyncTransition(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when an active job already exists for the same instance and transition key,
+    /// causing the request to be rejected with 409 Conflict.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10095,
+        Level = LogLevel.Warning,
+        Message = "Transition job {JobName} already active for instance {InstanceId} transition {TransitionKey}, returning 409 conflict")]
+    public static partial void TransitionJobAlreadyQueued(
+        this ILogger logger,
+        string jobName,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when a cancel transition is detected.
     /// </summary>
     [LoggerMessage(

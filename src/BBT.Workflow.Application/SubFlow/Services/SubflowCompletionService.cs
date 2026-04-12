@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Guids;
+using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
@@ -17,6 +18,7 @@ namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowCompletionService" />
 public sealed class SubflowCompletionService(
+    IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
     IScriptEngine scriptEngine,
@@ -65,49 +67,98 @@ public sealed class SubflowCompletionService(
 
             try
             {
-                // Get parent instance
-                var parentInstance = await instanceRepository.FindAsync(
-                    completedInput.InstanceId, true, cancellationToken);
-
-                if (parentInstance == null)
+                Instance? parentInstance;
+                Definitions.Workflow? parentWorkflow;
+                
+                await using (var correlationUow = await uowManager.BeginAsync(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                    cancellationToken))
                 {
-                    logger.InstanceNotFound(
+                    parentInstance = await instanceRepository.FindAsync(
+                        completedInput.InstanceId, true, cancellationToken);
+
+                    if (parentInstance == null)
+                    {
+                        logger.InstanceNotFound(completedInput.InstanceId, completedInput.Flow);
+                        activity?.SetTag("vnext.subflow.result", "parent_not_found");
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
+                    if (correlation == null)
+                    {
+                        logger.SubFlowCorrelationNotFound(completedInput.SubInstanceId);
+                        activity?.SetTag("vnext.subflow.result", "correlation_not_found");
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    // Complete correlation and persist changes
+                    await CompleteAndPersistCorrelationAsync(
+                        parentInstance,
+                        completedInput.SubInstanceId,
                         completedInput.InstanceId,
-                        completedInput.Flow);
-                    activity?.SetTag("vnext.subflow.result", "parent_not_found");
-                    return;
-                }
+                        cancellationToken);
 
-                var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
-                if (correlation == null)
-                {
-                    logger.SubFlowCorrelationNotFound(completedInput.SubInstanceId);
-                    activity?.SetTag("vnext.subflow.result", "correlation_not_found");
-                    return;
-                }
+                    // If this is a SubProcess (non-blocking), commit and return
+                    if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
+                    {
+                        activity?.SetTag("vnext.subflow.type", "subprocess");
+                        SubFlowActivityHelper.SetSuccess(activity);
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
 
-                // Complete correlation and persist changes
-                await CompleteAndPersistCorrelationAsync(
+                    activity?.SetTag("vnext.subflow.type", "subflow");
+
+                    // Load parent workflow definition for output mapping
+                    var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
+                        completedInput.Domain,
+                        completedInput.Flow,
+                        completedInput.Version,
+                        cancellationToken);
+
+                    if (!parentWorkflowResult.IsSuccess)
+                    {
+                        logger.LogWarning("Failed to get parent workflow {Flow} for SubFlow completion: {ErrorCode}",
+                            completedInput.Flow, parentWorkflowResult.Error.Code);
+                        // Commit correlation completion even if workflow load fails; skip pipeline resume
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    parentWorkflow = parentWorkflowResult.Value!;
+
+                    // Apply output mapping if configured (still within Phase 1 UoW)
+                    var parentStateResult = parentWorkflow.GetState(correlation.ParentState);
+                    if (parentStateResult.IsSuccess && parentStateResult.Value!.SubFlow?.Mapping != null)
+                    {
+                        logger.SubFlowOutputMappingStarted(parentInstance.Id);
+
+                        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+                            .WithWorkflow(parentWorkflow)
+                            .WithInstance(parentInstance)
+                            .WithRuntime(runtimeInfoProvider)
+                            .WithBody(completedInput.InstanceData?.Deserialize<Dictionary<string, object>>() ??
+                                      new Dictionary<string, object>())
+                            .BuildAsync(cancellationToken);
+
+                        await ProcessSubFlowOutputMappingAsync(
+                            parentInstance,
+                            parentStateResult.Value!,
+                            scriptContext,
+                            cancellationToken);
+                    }
+                    
+                    await correlationUow.CommitAsync(cancellationToken);
+                }
+                
+                logger.SubFlowPipelineResumed(parentInstance.Id);
+                await ResumePipelineAsync(
                     parentInstance,
+                    parentWorkflow!,
                     completedInput.SubInstanceId,
-                    completedInput.InstanceId,
-                    cancellationToken);
-
-                // If this is a SubProcess (non-blocking), just return after marking correlation as completed
-                if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
-                {
-                    activity?.SetTag("vnext.subflow.type", "subprocess");
-                    SubFlowActivityHelper.SetSuccess(activity);
-                    return;
-                }
-
-                activity?.SetTag("vnext.subflow.type", "subflow");
-
-                // Process parent workflow continuation for SubFlow (blocking)
-                await ProcessParentWorkflowContinuationAsync(
-                    correlation,
-                    completedInput,
-                    parentInstance,
                     cancellationToken);
 
                 SubFlowActivityHelper.SetSuccess(activity);
@@ -126,85 +177,8 @@ public sealed class SubflowCompletionService(
     }
 
     /// <summary>
-    /// Processes the parent workflow continuation after SubFlow completion.
-    /// This includes output mapping and resuming automatic/scheduled transitions.
-    /// </summary>
-    /// <param name="correlation">The SubFlow correlation</param>
-    /// <param name="completedInput">The completed SubFlow data</param>
-    /// <param name="parentInstance">The parent instance</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    private async Task ProcessParentWorkflowContinuationAsync(
-        InstanceCorrelation correlation,
-        FlowCompletedInput completedInput,
-        Instance parentInstance,
-        CancellationToken cancellationToken)
-    {
-        logger.SubFlowParentContinuationStarted(
-            parentInstance.Id,
-            parentInstance.GetCurrentState);
-
-        // Get parent workflow definition using data from completedInput
-        var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
-            completedInput.Domain,
-            completedInput.Flow,
-            completedInput.Version,
-            cancellationToken);
-
-        if (!parentWorkflowResult.IsSuccess)
-        {
-            logger.LogWarning("Failed to get parent workflow {Flow} for SubFlow completion: {ErrorCode}",
-                completedInput.Flow, parentWorkflowResult.Error.Code);
-            return;
-        }
-
-        var parentWorkflow = parentWorkflowResult.Value!;
-
-        // Get the state where SubFlow was initiated using Result Pattern
-        var parentStateResult = parentWorkflow.GetState(correlation.ParentState);
-        if (!parentStateResult.IsSuccess)
-        {
-            // Log error using WorkflowErrors - state not found
-            return;
-        }
-
-        var parentState = parentStateResult.Value!;
-
-        // Create script context for output mapping with completed SubFlow data
-        var scriptContextBuilder = scriptContextFactory.NewBuilder(instanceRepository)
-            .WithWorkflow(parentWorkflow)
-            .WithInstance(parentInstance)
-            .WithRuntime(runtimeInfoProvider)
-            .WithBody(completedInput.InstanceData?.Deserialize<Dictionary<string, object>>() ??
-                      new Dictionary<string, object>());
-
-        if (parentState.SubFlow?.Mapping != null)
-        {
-            logger.SubFlowOutputMappingStarted(parentInstance.Id);
-
-            await ProcessSubFlowOutputMappingAsync(
-                parentInstance,
-                parentState,
-                await scriptContextBuilder.BuildAsync(cancellationToken),
-                cancellationToken);
-        }
-
-        // Resume automatic transitions and scheduled processes that were paused for SubFlow
-        logger.SubFlowPipelineResumed(parentInstance.Id);
-
-        await ResumePipelineAsync(
-            parentInstance,
-            parentWorkflow,
-            completedInput.SubInstanceId,
-            cancellationToken);
-    }
-
-    /// <summary>
     /// Processes SubFlow output mapping by executing the mapping script and merging results into parent instance data.
     /// </summary>
-    /// <param name="parentInstance">The parent workflow instance</param>
-    /// <param name="parentState">The parent state containing SubFlow configuration</param>
-    /// <param name="scriptContext"></param>
-    /// <param name="cancellationToken">Cancellation token</param>
     private async Task ProcessSubFlowOutputMappingAsync(
         Instance parentInstance,
         State parentState,
@@ -258,12 +232,9 @@ public sealed class SubflowCompletionService(
 
     /// <summary>
     /// Resumes automatic transitions and scheduled processes for the parent workflow after SubFlow completion.
-    /// This continues the workflow execution that was paused while waiting for SubFlow completion.
+    /// Runs after Phase 1 (correlation + mapping) is committed. TransitionRunner creates its own scope+UoW.
+    /// On failure, reverts the correlation in a new UoW so the operation can be retried.
     /// </summary>
-    /// <param name="parentInstance">The parent workflow instance</param>
-    /// <param name="parentWorkflow">The parent workflow definition</param>
-    /// <param name="subInstanceId">The SubFlow instance identifier for rollback</param>
-    /// <param name="cancellationToken">Cancellation token</param>
     private async Task ResumePipelineAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
@@ -294,7 +265,7 @@ public sealed class SubflowCompletionService(
             };
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
-
+            
             if (!result.IsSuccess)
             {
                 // Check if this is an auto-transition condition not met
@@ -322,8 +293,10 @@ public sealed class SubflowCompletionService(
                 subInstanceId,
                 parentInstance.Id);
 
-            // Revert the correlation to allow retry
-            await RevertAndPersistCorrelationAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            // Phase 1 is already committed; revert correlation in its own UoW so the
+            // operation can be retried. parentInstance is detached (Phase 1 DbContext
+            // disposed), but its in-memory state is correct for the revert call.
+            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
             throw;
         }
     }
@@ -332,10 +305,6 @@ public sealed class SubflowCompletionService(
     /// Completes the SubFlow correlation and persists the changes to the repository.
     /// Also resets the parent's EffectiveState back to its own CurrentState.
     /// </summary>
-    /// <param name="parentInstance">The parent workflow instance</param>
-    /// <param name="subInstanceId">The SubFlow instance identifier</param>
-    /// <param name="parentInstanceId">The parent instance identifier for logging</param>
-    /// <param name="cancellationToken">Cancellation token</param>
     private async Task CompleteAndPersistCorrelationAsync(
         Instance parentInstance,
         Guid subInstanceId,
@@ -354,14 +323,37 @@ public sealed class SubflowCompletionService(
 
         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
     }
-    
+
+    /// <summary>
+    /// Reverts the SubFlow correlation in its own RequiresNew UoW and commits.
+    /// Used when Phase 1 (correlation completion) succeeded but Phase 2 (pipeline resume) failed,
+    /// so the correlation can be retried.
+    /// </summary>
+    private async Task RevertCorrelationInNewUowAsync(
+        Instance parentInstance,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var revertUow = await uowManager.BeginAsync(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                cancellationToken);
+
+            await RevertAndPersistCorrelationAsync(parentInstance, subInstanceId, parentInstanceId, cancellationToken);
+            await revertUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception revertEx)
+        {
+            // Log but don't throw — the original exception from ResumePipelineAsync takes priority
+            logger.SubFlowCompletionFailed(revertEx, subInstanceId, parentInstanceId);
+        }
+    }
+
     /// <summary>
     /// Reverts the SubFlow correlation and persists the changes to the repository.
     /// </summary>
-    /// <param name="parentInstance">The parent workflow instance</param>
-    /// <param name="subInstanceId">The SubFlow instance identifier</param>
-    /// <param name="parentInstanceId">The parent instance identifier for logging</param>
-    /// <param name="cancellationToken">Cancellation token</param>
     private async Task RevertAndPersistCorrelationAsync(
         Instance parentInstance,
         Guid subInstanceId,

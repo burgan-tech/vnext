@@ -1,4 +1,3 @@
-using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
@@ -40,40 +39,52 @@ internal sealed class InstanceSubStateChangedEventHandler(
             return;
         }
 
-        logger.SubFlowStateChangedEventReceived(
-            eventData.SubInstanceId,
-            eventData.ParentInstanceId,
-            eventData.NewState);
-
-        using (currentSchema.Use(eventData.Flow))
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            var input = new SubFlowStateChangedInput
-            {
-                ParentInstanceId = eventData.ParentInstanceId,
-                SubInstanceId = eventData.SubInstanceId,
-                Domain = eventData.Domain,
-                Flow = eventData.Flow,
-                Version = eventData.Version,
-                NewState = eventData.NewState,
-                PreviousState = eventData.PreviousState,
-                NewStateType = (StateType)eventData.NewStateType,
-                NewStateSubType = (StateSubType)eventData.NewStateSubType,
-                ChangedAt = eventData.ChangedAt
-            };
+            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = eventData.ParentInstanceId,
+            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.ParentInstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+        }))
+        {
+            logger.SubFlowStateChangedEventReceived(
+                eventData.SubInstanceId,
+                eventData.ParentInstanceId,
+                eventData.NewState);
 
-            await scopeFactory.ExecuteInNewScopeAsync(async sp =>
+            using (currentSchema.Use(eventData.Flow))
             {
-                var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                var subflowStateService = sp.GetRequiredService<ISubflowStateService>();
-
-                await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+                var input = new SubFlowStateChangedInput
                 {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
-                }, cancellationToken);
+                    ParentInstanceId = eventData.ParentInstanceId,
+                    SubInstanceId = eventData.SubInstanceId,
+                    Domain = eventData.Domain,
+                    Flow = eventData.Flow,
+                    Version = eventData.Version,
+                    NewState = eventData.NewState,
+                    PreviousState = eventData.PreviousState,
+                    NewStateType = (StateType)eventData.NewStateType,
+                    NewStateSubType = (StateSubType)eventData.NewStateSubType,
+                    ChangedAt = eventData.ChangedAt
+                };
 
-                await subflowStateService.UpdateParentStateAsync(input, cancellationToken);
-                await uow.CommitAsync(cancellationToken);
-            });
+                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
+                    async (sp, ct) =>
+                    {
+                        var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+                        var subflowStateService = sp.GetRequiredService<ISubflowStateService>();
+
+                        await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+                        {
+                            Scope = UnitOfWorkScopeOption.RequiresNew
+                        }, ct);
+
+                        await subflowStateService.UpdateParentStateAsync(input, ct);
+                        await uow.CommitAsync(ct);
+                    }, cancellationToken);
+            }
         }
     }
 }

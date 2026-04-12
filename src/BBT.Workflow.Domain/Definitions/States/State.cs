@@ -195,12 +195,12 @@ public sealed class State : IHasKey
     public IEnumerable<Transition> ScheduledTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Scheduled);
 
     /// <summary>
-    /// Returns true if the state has only manual/event transitions or no transitions at all.
+    /// Returns true if the state has only manual/event/scheduled transitions or no transitions at all.
     /// Used to determine if instance should become Available after transition.
     /// </summary>
     public bool HasOnlyManualOrEventTransitions => 
         !Transitions.Any() || 
-        Transitions.Any(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event);
+        Transitions.Any(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event || t.TriggerType == TriggerType.Scheduled);
 
     public IReadOnlyList<string> TransitionKeys() => Transitions.Select(t => t.Key).ToList();
 

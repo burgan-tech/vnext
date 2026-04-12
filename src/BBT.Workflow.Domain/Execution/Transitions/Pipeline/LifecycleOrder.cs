@@ -54,6 +54,12 @@ public static class LifecycleOrder
     public const int OnExit = 40;
     
     /// <summary>
+    /// Order for applying the timeout target state.
+    /// Runs before CancelScheduledJobs so context.Target is set when OnExit and subsequent steps execute.
+    /// </summary>
+    public const int ApplyTimeoutState = CancelScheduledJobs - 1;
+
+    /// <summary>
     /// Order for changing the instance state.
     /// This is the core state transition operation.
     /// </summary>

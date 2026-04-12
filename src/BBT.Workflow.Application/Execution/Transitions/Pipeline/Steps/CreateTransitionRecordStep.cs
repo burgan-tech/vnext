@@ -54,14 +54,18 @@ public sealed class CreateTransitionRecordStep(
 
     /// <summary>
     /// Gets the transition key from context items or uses the default transition key.
+    /// Well-known virtual keys (e.g. "$timeout") are resolved to their configured key values
+    /// so the audit record stores the meaningful key instead of the virtual placeholder.
     /// </summary>
     private static string GetTransitionKey(TransitionExecutionContext context)
     {
-        return context.Items.TryGetValue("NextTransitionKey", out var v) &&
+        var rawKey = context.Items.TryGetValue("NextTransitionKey", out var v) &&
                v is string next &&
                !string.IsNullOrEmpty(next)
             ? next
             : context.TransitionKey;
+
+        return context.Workflow.ResolveTransitionKey(rawKey);
     }
 
     /// <summary>

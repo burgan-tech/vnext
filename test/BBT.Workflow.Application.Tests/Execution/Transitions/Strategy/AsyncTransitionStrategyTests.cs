@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.BackgroundJobs.Handlers;
@@ -27,6 +28,8 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IBackgroundJobService> _mockBackgroundJobService;
     private readonly Mock<ITransitionContextFactory> _mockContextFactory;
     private readonly Mock<IInstanceJobRepository> _mockJobRepository;
+    private readonly Mock<IInstanceRepository> _mockInstanceRepository;
+    private readonly Mock<IDistributedLockService> _mockDistributedLockRepository;
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger;
     private readonly AsyncTransitionStrategy _strategy;
 
@@ -35,12 +38,16 @@ public class AsyncTransitionStrategyTests
         _mockBackgroundJobService = new Mock<IBackgroundJobService>();
         _mockContextFactory = new Mock<ITransitionContextFactory>();
         _mockJobRepository = new Mock<IInstanceJobRepository>();
+        _mockInstanceRepository = new Mock<IInstanceRepository>();
+        _mockDistributedLockRepository = new Mock<IDistributedLockService>();
         _mockLogger = new Mock<ILogger<AsyncTransitionStrategy>>();
 
         _strategy = new AsyncTransitionStrategy(
             _mockBackgroundJobService.Object,
             _mockContextFactory.Object,
             _mockJobRepository.Object,
+            _mockInstanceRepository.Object,
+            _mockDistributedLockRepository.Object,
             _mockLogger.Object);
     }
 

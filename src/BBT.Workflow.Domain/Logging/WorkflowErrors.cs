@@ -226,6 +226,20 @@ public static class WorkflowErrors
 
     #endregion
 
+    #region Timeout Errors
+
+    /// <summary>
+    /// Workflow timeout configuration is missing.
+    /// </summary>
+    /// <param name="workflowKey">The key of the workflow with missing timeout config.</param>
+    public static Error TimeoutConfigMissing(string workflowKey)
+        => Error.Validation(
+            WorkflowErrorCodes.TimeoutConfigMissing,
+            $"Timeout configuration is missing for workflow '{workflowKey}'",
+            target: workflowKey);
+
+    #endregion
+
     #region Configuration Errors
 
     /// <summary>
@@ -289,6 +303,19 @@ public static class WorkflowErrors
         => Error.Conflict(
             WorkflowErrorCodes.ConflictWorkflow,
             "Failed to acquire lock for instance",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// A background job for this transition is already active.
+    /// Returned when sync=false is requested but an active job with the same
+    /// instance and transition key already exists in the queue.
+    /// </summary>
+    /// <param name="instanceId">The instance being processed.</param>
+    /// <param name="transitionKey">The transition key that is already queued.</param>
+    public static Error TransitionJobAlreadyActive(Guid instanceId, string transitionKey)
+        => Error.Conflict(
+            WorkflowErrorCodes.TransitionLocked,
+            $"Transition '{transitionKey}' is already being processed for instance",
             target: instanceId.ToString());
 
     #endregion

@@ -50,13 +50,14 @@ public sealed class PostCommitExecutor(
 
         using (logger.BeginScope(new Dictionary<string, object>
                {
-                   [TelemetryConstants.TagNames.Domain]          = context.Domain,
-                   [TelemetryConstants.TagNames.Flow]          = context.Workflow.Key,
-                   [TelemetryConstants.TagNames.FlowVersion]          = context.Workflow.Version,
-                   [TelemetryConstants.TagNames.InstanceId]    = context.InstanceId,
-                   [TelemetryConstants.TagNames.InstanceKey]    = context.Instance.Key ?? "N/A",
-                   [TelemetryConstants.TagNames.StateFrom]     = context.Transition?.From ?? context.Instance.GetCurrentState,
-                   [TelemetryConstants.TagNames.StateTo]       = context.Transition?.Target ?? "N/A",
+                   [TelemetryConstants.TagNames.Domain] = context.Domain,
+                   [TelemetryConstants.TagNames.Flow] = context.Workflow.Key,
+                   [TelemetryConstants.TagNames.FlowVersion] = context.Workflow.Version,
+                   [TelemetryConstants.TagNames.InstanceId] = context.InstanceId,
+                   [TelemetryConstants.TagNames.InstanceKey] = context.Instance.Key ?? "N/A",
+                   [TelemetryConstants.TagNames.StateFrom] =
+                       context.Transition?.From ?? context.Instance.GetCurrentState,
+                   [TelemetryConstants.TagNames.StateTo] = context.Transition?.Target ?? "N/A",
                    [TelemetryConstants.TagNames.TransitionKey] = context.TransitionKey,
                    [TelemetryConstants.TagNames.TriggerType] = context.Transition?.TriggerType.ToString() ?? "N/A"
                }))

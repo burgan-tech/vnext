@@ -69,6 +69,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, SetBusyStep>();
         services.AddScoped<ITransitionStep, CreateTransitionRecordStep>();
         services.AddScoped<ITransitionStep, RunOnExecuteTasksStep>();
+        services.AddScoped<ITransitionStep, ApplyTimeoutStateStep>();
         services.AddScoped<ITransitionStep, CancelScheduledJobsStep>();
         services.AddScoped<ITransitionStep, RunOnExitTasksStep>();
         services.AddScoped<ITransitionStep, ChangeStateStep>();

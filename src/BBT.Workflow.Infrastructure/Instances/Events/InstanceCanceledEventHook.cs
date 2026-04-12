@@ -38,26 +38,35 @@ public sealed class InstanceCanceledEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        logger.InstanceCanceledEventReceived(eventData.InstanceId, eventData.Flow);
-
-        try
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            await ProcessLocalAsync(eventData, cancellationToken);
-
-            return EventHookResult.Ok(new Dictionary<string, string>
-            {
-                ["hook_executed"] = "true",
-                ["instance_id"] = eventData.InstanceId.ToString()
-            });
-        }
-        catch (Exception ex)
+            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+        }))
         {
-            logger.InstanceCanceledProcessingFailed(ex, eventData.InstanceId);
+            logger.InstanceCanceledEventReceived(eventData.InstanceId, eventData.Flow);
 
-            return EventHookResult.Fail(ex, new Dictionary<string, string>
+            try
             {
-                ["hook_error"] = "InstanceCancellationHookFailed"
-            });
+                await ProcessLocalAsync(eventData, cancellationToken);
+
+                return EventHookResult.Ok(new Dictionary<string, string>
+                {
+                    ["hook_executed"] = "true",
+                    ["instance_id"] = eventData.InstanceId.ToString()
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.InstanceCanceledProcessingFailed(ex, eventData.InstanceId);
+
+                return EventHookResult.Fail(ex, new Dictionary<string, string>
+                {
+                    ["hook_error"] = "InstanceCancellationHookFailed"
+                });
+            }
         }
     }
 
@@ -69,7 +78,7 @@ public sealed class InstanceCanceledEventHook(
     /// <param name="cancellationToken">Cancellation token.</param>
     private async Task ProcessLocalAsync(InstanceCanceledEvent eventData, CancellationToken cancellationToken)
     {
-        await scopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
+        await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version, async (sp, ct) =>
         {
             var currentSchema = sp.GetRequiredService<ICurrentSchema>();
             var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
@@ -83,9 +92,7 @@ public sealed class InstanceCanceledEventHook(
                 }, ct);
 
                 await cancellationService.ProcessCancellationAsync(eventData.InstanceId, ct);
-                await uow.SaveChangesAsync(ct);
                 await uow.CommitAsync(ct);
-                return Result.Ok();
             }
         }, cancellationToken);
     }

@@ -43,28 +43,28 @@ public sealed class TransitionRunner(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion, async (sp, ct) =>
-        {
-            var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-            var core = sp.GetRequiredService<IWorkflowExecutionCore>();
-            var currentUser = sp.GetRequiredService<ICurrentUser>();
-
-            using (currentUser.ChangeFromHeaders(context.Headers))
+        return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion,
+            async (sp, ct) =>
             {
-                await using var uow = await uowManager.BeginAsync(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                    ct);
+                var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+                var core = sp.GetRequiredService<IWorkflowExecutionCore>();
+                var currentUser = sp.GetRequiredService<ICurrentUser>();
 
-                var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
-                if (!coreResult.IsSuccess)
-                    return Result<TransitionCoreOutput>.Fail(coreResult.Error);
+                using (currentUser.ChangeFromHeaders(context.Headers))
+                {
+                    await using var uow = await uowManager.BeginAsync(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                        ct);
 
-                // Commit is THE boundary
-                await uow.CommitAsync(ct);
+                    var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
+                    if (!coreResult.IsSuccess)
+                        return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                return coreResult;
-            }
-        }, cancellationToken);
+                    // Commit is THE boundary
+                    await uow.CommitAsync(ct);
+
+                    return coreResult;
+                }
+            }, cancellationToken);
     }
 }
-

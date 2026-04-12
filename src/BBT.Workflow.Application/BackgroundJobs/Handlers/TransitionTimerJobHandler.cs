@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -18,6 +18,7 @@ namespace BBT.Workflow.BackgroundJobs.Handlers;
 public sealed class TransitionTimerJobHandler(
     IWorkflowExecutionService workflowExecutionService,
     IInstanceJobRepository jobRepository,
+    ICurrentSchema currentSchema,
     ILogger<TransitionTimerJobHandler> logger) : IBackgroundJobHandler<TransitionTimerPayload>
 {
     public const string HandlerName = "flow.transition.schedule";
@@ -25,57 +26,61 @@ public sealed class TransitionTimerJobHandler(
     public async Task HandleAsync(TransitionTimerPayload args, CancellationToken cancellationToken)
     {
         // Restore trace context from the original request for distributed tracing correlation
-        using var activity = BackgroundJobActivityHelper.StartActivityWithTraceContext("TransitionTimerJob.Execute", args);
-
-        using (logger.BeginScope(new Dictionary<string, object>
+        using var activity =
+            BackgroundJobActivityHelper.StartActivityAsChildWithLink("TransitionTimerJob.Execute", args);
+        using (currentSchema.Use(args.FlowName))
         {
-            [TelemetryConstants.TagNames.InstanceId]    = args.InstanceId,
-            [TelemetryConstants.TagNames.Flow]          = args.FlowName,
-            [TelemetryConstants.TagNames.FlowVersion]          = args.Version,
-            [TelemetryConstants.TagNames.Domain]          = args.Domain,
-            [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey
-        }))
-        try
-        {
-            BackgroundJobActivityHelper.EnrichActivity(activity, args);
-            BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
+            using (logger.BeginScope(new Dictionary<string, object>
+                   {
+                       [TelemetryConstants.TagNames.InstanceId] = args.InstanceId,
+                       [TelemetryConstants.TagNames.Flow] = args.FlowName,
+                       [TelemetryConstants.TagNames.FlowVersion] = args.Version,
+                       [TelemetryConstants.TagNames.Domain] = args.Domain,
+                       [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey,
+                       [TelemetryConstants.TagNames.JobName] = args.JobName
+                   }))
+                try
+                {
+                    BackgroundJobActivityHelper.EnrichActivity(activity, args);
+                    BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
-            var input = new TransitionInput(args.Domain, args.FlowName)
-            {
-                Sync = true
-            };
-            // Convert TransitionInput to WorkflowExecutionContext
-            var executionContext = input.ToExecutionContext(
-                args.InstanceId.ToString(),
-                args.Version,
-                args.TransitionKey);
+                    var input = new TransitionInput(args.Domain, args.FlowName)
+                    {
+                        Sync = true
+                    };
+                    // Convert TransitionInput to WorkflowExecutionContext
+                    var executionContext = input.ToExecutionContext(
+                        args.InstanceId.ToString(),
+                        args.Version,
+                        args.TransitionKey);
 
-            // Override trigger type to Scheduled for timer-based transitions
-            executionContext.TriggerType = TriggerType.Scheduled;
-            executionContext.Actor = ExecutionActor.System;
-            executionContext.IsReentry = true; // Timer transitions are re-entry executions
-            await workflowExecutionService.ExecuteTransitionAsync(
-                executionContext,
-                cancellationToken
-            );
+                    // Override trigger type to Scheduled for timer-based transitions
+                    executionContext.TriggerType = TriggerType.Scheduled;
+                    executionContext.Actor = ExecutionActor.System;
+                    executionContext.IsReentry = true; // Timer transitions are re-entry executions
+                    await workflowExecutionService.ExecuteTransitionAsync(
+                        executionContext,
+                        cancellationToken
+                    );
 
-            await jobRepository.MarkAsProcessedAsync(args.JobName, cancellationToken);
-
-            activity?.SetStatus(ActivityStatusCode.Ok);
-            logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
-            logger.JobCancelled(args.JobName, args.TransitionKey, args.InstanceId);
-            throw; // Re-throw cancellation exceptions
-        }
-        catch (Exception e)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-            activity?.AddTag("error.type", e.GetType().Name);
-            logger.JobFailed(e, args.JobName, args.InstanceId);
-            throw;
+                    activity?.SetStatus(ActivityStatusCode.Ok);
+                    logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
+                    logger.JobCancelled(args.JobName, args.TransitionKey, args.InstanceId);
+                }
+                catch (Exception e)
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+                    activity?.AddTag("error.type", e.GetType().Name);
+                    logger.JobFailed(e, args.JobName, args.InstanceId);
+                }
+                finally
+                {
+                    await jobRepository.MarkAsProcessedAsync(args.InstanceId, args.JobName, CancellationToken.None);
+                }
         }
     }
 }

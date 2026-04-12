@@ -34,6 +34,11 @@ public class InstanceFaultedCleanupEvent : IDistributedEvent
     public required string Flow { get; init; }
     
     /// <summary>
+    /// The workflow version of the faulted instance
+    /// </summary>
+    public required string Version { get; init; }
+    
+    /// <summary>
     /// When the instance faulted
     /// </summary>
     public required DateTime FaultedAt { get; init; }
