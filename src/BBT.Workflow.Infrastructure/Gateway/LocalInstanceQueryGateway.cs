@@ -1,4 +1,3 @@
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.DTOs;
@@ -43,7 +42,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceDataInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Version, input.Version,
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
