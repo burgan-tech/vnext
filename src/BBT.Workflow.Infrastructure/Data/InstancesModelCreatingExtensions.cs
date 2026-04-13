@@ -44,6 +44,11 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(p => p.EffectiveState)
                 .HasDatabaseName("IX_Instances_EffectiveState");
 
+            // Partial index for active instance timeline queries (GetActiveDataListSinceAsync)
+            b.HasIndex(p => new { p.ModifiedAt, p.Id })
+                .HasDatabaseName("IX_Instances_Active_ModifiedAt")
+                .HasFilter("\"Status\" = 'A'");
+
             b.Property(p => p.Status)
                 .IsRequired()
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
@@ -195,6 +200,17 @@ public static class InstancesModelCreatingExtensions
                 .WithMany()
                 .HasForeignKey(p => p.InstanceId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Partial index for incomplete transitions — hot path in every transition pipeline call
+            b.HasIndex(p => new { p.InstanceId, p.StartedAt })
+                .IsDescending(false, true)
+                .HasDatabaseName("IX_InstanceTransitions_Active")
+                .HasFilter("\"FinishedAt\" IS NULL");
+
+            // Partial index for completed manual transitions (GetLastCompletedManualTransitionAsync)
+            b.HasIndex(p => new { p.InstanceId, p.TriggerType, p.FinishedAt })
+                .HasDatabaseName("IX_InstanceTransitions_Manual_Completed")
+                .HasFilter("\"FinishedAt\" IS NOT NULL");
         });
 
         builder.Entity<InstanceTask>(b =>
@@ -239,6 +255,11 @@ public static class InstancesModelCreatingExtensions
                 .WithMany()
                 .HasForeignKey(p => p.FaultedTaskId)
                 .OnDelete(DeleteBehavior.NoAction);
+
+            // Composite index covering all status-based task queries
+            // (GetCompletedTaskIdsAsync, GetTaskIdsByStatusAsync, GetSuccessfulTaskIdsAsync, GetByTransitionIdAsync)
+            b.HasIndex(p => new { p.TransitionId, p.Status, p.BusinessStatus })
+                .HasDatabaseName("IX_InstanceTasks_TransitionId_Status_BusinessStatus");
         });
 
         builder.Entity<InstanceAction>(b =>
@@ -286,6 +307,13 @@ public static class InstancesModelCreatingExtensions
 
             b.HasIndex(i => i.JobId)
                 .IsUnique();
+
+            // Partial composite index for active job lookups
+            // (GetListActiveAsync, MarkAsProcessedAsync, AnyActiveByJobNameAsync)
+            // Note: IX_InstanceJobs_InstanceId was intentionally removed (migration 20250916)
+            b.HasIndex(p => new { p.InstanceId, p.JobName })
+                .HasDatabaseName("IX_InstanceJobs_Active")
+                .HasFilter("\"IsActive\" = true");
         });
     }
 }

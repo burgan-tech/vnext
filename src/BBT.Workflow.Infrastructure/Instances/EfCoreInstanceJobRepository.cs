@@ -21,14 +21,12 @@ public sealed class EfCoreInstanceJobRepository(
     public async Task MarkAsProcessedAsync(Guid instanceId, string jobName,
         CancellationToken cancellationToken = default)
     {
-        var job = await (await GetDbSetAsync()).FirstOrDefaultAsync(p =>
-            p.InstanceId == instanceId &&
-            p.JobName == jobName && p.IsActive == true, cancellationToken);
-        if (job != null)
-        {
-            job.MarkAsProcessed();
-            await SaveChangesAsync(cancellationToken);
-        }
+        await (await GetDbSetAsync())
+            .Where(p => p.InstanceId == instanceId && p.JobName == jobName && p.IsActive == true)
+            .ExecuteUpdateAsync(sp => sp
+                .SetProperty(p => p.IsActive, false)
+                .SetProperty(p => p.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
     }
 
     public async Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId,
