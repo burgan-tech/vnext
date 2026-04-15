@@ -21,15 +21,13 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline.Steps;
 /// </summary>
 public class ResolveAvailableStepTests
 {
-    private readonly IInstanceRepository _mockInstanceRepository;
     private readonly ILogger<ResolveAvailableStep> _mockLogger;
     private readonly ResolveAvailableStep _step;
 
     public ResolveAvailableStepTests()
     {
-        _mockInstanceRepository = Substitute.For<IInstanceRepository>();
         _mockLogger = Substitute.For<ILogger<ResolveAvailableStep>>();
-        _step = new ResolveAvailableStep(_mockInstanceRepository, _mockLogger);
+        _step = new ResolveAvailableStep(_mockLogger);
     }
 
     [Fact]
@@ -40,7 +38,7 @@ public class ResolveAvailableStepTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenAllConditionsMet_ShouldSetToActive()
+    public async Task ExecuteAsync_WhenAllConditionsMet_ShouldDeferActiveStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
@@ -51,12 +49,12 @@ public class ResolveAvailableStepTests
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        context.Instance.IsActive.ShouldBeTrue();
-        await _mockInstanceRepository.Received(1).UpdateAsync(context.Instance, true, CancellationToken.None);
+        context.Instance.IsBusy.ShouldBeTrue(); // Instance stays Busy — not updated directly
+        context.Directives.ResolvedStatus.ShouldBe(InstanceStatus.Active); // Deferred to directives
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenInstanceNotBusy_ShouldSkipAndNotUpdate()
+    public async Task ExecuteAsync_WhenInstanceNotBusy_ShouldSkipAndNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
@@ -67,11 +65,11 @@ public class ResolveAvailableStepTests
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenInstanceIsCompleted_ShouldSkipAndNotUpdate()
+    public async Task ExecuteAsync_WhenInstanceIsCompleted_ShouldSkipAndNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
@@ -82,11 +80,11 @@ public class ResolveAvailableStepTests
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenNextTransitionRequested_ShouldStayBusy()
+    public async Task ExecuteAsync_WhenNextTransitionRequested_ShouldNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
@@ -99,11 +97,11 @@ public class ResolveAvailableStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenTerminalReached_ShouldStayBusy()
+    public async Task ExecuteAsync_WhenTerminalReached_ShouldNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
@@ -116,11 +114,11 @@ public class ResolveAvailableStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenTargetIsFinishState_ShouldStayBusy()
+    public async Task ExecuteAsync_WhenTargetIsFinishState_ShouldNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContextWithFinishState();
@@ -132,11 +130,11 @@ public class ResolveAvailableStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenTargetHasAutoTransitions_ShouldStayBusy()
+    public async Task ExecuteAsync_WhenTargetHasAutoTransitions_ShouldNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: false);
@@ -148,11 +146,11 @@ public class ResolveAvailableStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenTargetIsNull_ShouldSkipAndNotUpdate()
+    public async Task ExecuteAsync_WhenTargetIsNull_ShouldSkipAndNotDeferStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
@@ -165,11 +163,11 @@ public class ResolveAvailableStepTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.DidNotReceive().UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenTargetHasNoTransitions_ShouldSetToActive()
+    public async Task ExecuteAsync_WhenTargetHasNoTransitions_ShouldDeferActiveStatus()
     {
         // Arrange - state with no transitions should be Available
         var context = CreateTransitionExecutionContextWithNoTransitions();
@@ -180,8 +178,8 @@ public class ResolveAvailableStepTests
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        context.Instance.IsActive.ShouldBeTrue();
-        await _mockInstanceRepository.Received(1).UpdateAsync(context.Instance, true, CancellationToken.None);
+        context.Instance.IsBusy.ShouldBeTrue(); // Instance stays Busy — not updated directly
+        context.Directives.ResolvedStatus.ShouldBe(InstanceStatus.Active); // Deferred to directives
     }
 
     [Fact]

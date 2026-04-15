@@ -1030,6 +1030,19 @@ public static partial class WorkflowLogs
         Exception exception,
         Guid instanceId);
 
+    /// <summary>
+    /// Logs when a single job deletion fails during instance cancellation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40103,
+        Level = LogLevel.Error,
+        Message = "Failed to delete job {JobId} during cancellation for instance {InstanceId}")]
+    public static partial void InstanceJobDeletionFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid jobId,
+        Guid instanceId);
+
     #endregion
 
     #region Instance Completion Cleanup

@@ -14,15 +14,14 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// 2. Skips status update if target state is Busy SubType (ChangeState will handle it)
 /// 3. Implements idempotency - only updates DB if status actually changes
 /// </summary>
-public sealed class ClearBusyOnResumeStep(
-    IInstanceRepository instanceRepository) : ITransitionStep
+public sealed class ClearBusyOnResumeStep() : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.ClearBusyOnResumeStep;
 
     /// <inheritdoc />
     [Trace]
-    public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
+    public Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(ClearBusyOnResumeStep)}");
@@ -30,21 +29,21 @@ public sealed class ClearBusyOnResumeStep(
         // Only process this step if resuming from SubFlow completion
         if (!context.Directives.IsSubFlowResume)
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
         }
 
-        // Railway chain: Resolve target state first, then conditionally clear busy
-        return await Result.Ok(context)
-            .Bind(UpdateTargetStateInContext)  // 1. Resolve target state first
-            .BindAsync(ctx => ClearBusyIfNeededAsync(ctx, cancellationToken))  // 2. Conditional clear
-            .Map(_ => StepOutcome.Continue());
+        // Resolve target state first, then conditionally defer status
+        var stateResult = UpdateTargetStateInContext(context);
+        if (!stateResult.IsSuccess)
+            return Task.FromResult(Result<StepOutcome>.Fail(stateResult.Error));
+
+        ClearBusyIfNeeded(context);
+        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
     }
 
     /// <summary>
     /// Updates target state in context by resolving the current state from workflow definition.
     /// </summary>
-    /// <param name="context">Transition execution context</param>
-    /// <returns>Result containing the context with resolved target state</returns>
     private static Result<TransitionExecutionContext> UpdateTargetStateInContext(TransitionExecutionContext context)
     {
         return context.Workflow.GetState(context.Instance.GetCurrentState)
@@ -56,34 +55,20 @@ public sealed class ClearBusyOnResumeStep(
     }
 
     /// <summary>
-    /// Conditionally clears busy status and updates repository.
-    /// Implements two optimizations:
-    /// 1. Skip if target state SubType is Busy (ChangeState will handle it)
-    /// 2. Skip if instance is already Active (idempotency)
+    /// Conditionally defers the Active status update via PipelineDirectives.
+    /// Skips if target state SubType is Busy (ChangeState will handle it).
+    /// Skips if instance is already Active or Completed (idempotency).
     /// </summary>
-    /// <param name="context">Transition execution context with resolved target state</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Result containing the context</returns>
-    private async Task<Result<TransitionExecutionContext>> ClearBusyIfNeededAsync(
-        TransitionExecutionContext context, 
-        CancellationToken cancellationToken)
+    private static void ClearBusyIfNeeded(TransitionExecutionContext context)
     {
-        var targetState = context.Target;
-        
-        // Optimization 1: If target state is Busy subtype, ChangeState will handle status
-        // No need to set Active here (would be immediately overridden to Busy anyway)
-        if (targetState?.SubType == StateSubType.Busy)
-        {
-            return Result<TransitionExecutionContext>.Ok(context);
-        }
-        
-        // Optimization 2: Idempotency - only update if status actually needs to change
+        // If target state is Busy subtype, ChangeState will handle status
+        if (context.Target?.SubType == StateSubType.Busy)
+            return;
+
+        // Defer status update to after post-commit jobs complete
         if (context.Instance is { IsActive: false, IsCompleted: false })
         {
-            context.Instance.Active();
-            await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+            context.Directives.SetResolvedStatus(InstanceStatus.Active);
         }
-        
-        return Result<TransitionExecutionContext>.Ok(context);
     }
 }

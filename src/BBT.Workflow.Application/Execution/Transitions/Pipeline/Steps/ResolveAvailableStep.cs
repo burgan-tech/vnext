@@ -10,14 +10,15 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 
 /// <summary>
 /// Pipeline step that resolves the Available (Active) status at the end of transition processing.
-/// Sets instance to Active when all conditions are met:
+/// Defers the actual status update to PipelineDirectives.ResolvedStatus so that the status
+/// is only applied after all post-commit jobs complete (in TransitionPipeline).
+/// Conditions for deferring Active status:
 /// - Auto transition chain is not continuing (NextTransition is null)
 /// - Not a terminal state (SubFlow entry point for parent)
 /// - Target state is not a Finish state
 /// - Target state has only manual/event transitions or no transitions
 /// </summary>
 public sealed class ResolveAvailableStep(
-    IInstanceRepository instanceRepository,
     ILogger<ResolveAvailableStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -37,15 +38,13 @@ public sealed class ResolveAvailableStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Set instance to Active and persist
-        return await Result.Ok(context)
-            .Tap(ctx => ctx.Instance.Active())
-            .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
-            .Tap(ctx => logger.LogDebug(
-                "Instance {InstanceId} set to Available after transition to state {TargetState}",
-                ctx.InstanceId,
-                ctx.Target?.Key ?? "unknown"))
-            .Map(_ => StepOutcome.Continue());
+        // Defer status update to after post-commit jobs complete
+        context.Directives.SetResolvedStatus(InstanceStatus.Active);
+        logger.LogDebug(
+            "Instance {InstanceId} deferred Available status after transition to state {TargetState}",
+            context.InstanceId,
+            context.Target?.Key ?? "unknown");
+        return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 
     /// <summary>

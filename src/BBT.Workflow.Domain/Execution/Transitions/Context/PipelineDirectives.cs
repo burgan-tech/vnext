@@ -1,4 +1,5 @@
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Instances;
 
 namespace BBT.Workflow.Execution;
 
@@ -138,6 +139,33 @@ public sealed class PipelineDirectives
         var key = _errorTransitionKey;
         _errorTransitionKey = null;
         return key;
+    }
+
+    /// <summary>
+    /// Gets the deferred instance status to be applied after all pipeline work
+    /// (including post-commit jobs) completes.
+    /// When set, the actual status update is deferred until the pipeline
+    /// returns control to the caller.
+    /// </summary>
+    public InstanceStatus? ResolvedStatus { get; private set; }
+
+    /// <summary>
+    /// Sets the deferred resolved status.
+    /// The status will be applied after post-commit jobs complete.
+    /// </summary>
+    /// <param name="status">The status to defer.</param>
+    public void SetResolvedStatus(InstanceStatus status) => ResolvedStatus = status;
+
+    /// <summary>
+    /// Consumes and clears the resolved status.
+    /// Called by the pipeline after post-commit jobs complete.
+    /// </summary>
+    /// <returns>The deferred status, or null if none was set.</returns>
+    public InstanceStatus? ConsumeResolvedStatus()
+    {
+        var s = ResolvedStatus;
+        ResolvedStatus = null;
+        return s;
     }
 
     /// <summary>

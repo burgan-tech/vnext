@@ -177,12 +177,15 @@ public class TransitionPipeline
                 }
             }
 
-            // 6) Check for next transition in sync dispatch chain
+            // 6) Apply deferred resolved status after all work is done
+            await ApplyResolvedStatusAsync(context, cancellationToken);
+
+            // 7) Check for next transition in sync dispatch chain
             var nextTransition = context.Directives.ConsumeNextTransition();
             if (nextTransition is null)
                 return Result<TransitionExecutionContext>.Ok(context);
 
-            // 7) Create new WorkflowExecutionContext for next transition
+            // 8) Create new WorkflowExecutionContext for next transition
             currentWorkflowContext = CreateNextWorkflowContext(context, nextTransition);
             pipelineFaulted = false; // Reset for next iteration
         }
@@ -528,6 +531,58 @@ public class TransitionPipeline
         {
             _logger.LogError(
                 "Failed to acquire lock for marking instance {InstanceId} as faulted",
+                context.InstanceId);
+        }
+    }
+
+    /// <summary>
+    /// Applies the deferred resolved status to the instance after all pipeline work
+    /// (including post-commit jobs) has completed.
+    /// Re-acquires the distributed lock to ensure consistent state update.
+    /// Guards against applying Active when:
+    /// - Auto chain is continuing (NextTransition is set)
+    /// - Instance has reached a terminal status (Completed/Faulted)
+    /// - Target state SubType is Busy (ChangeState already set Busy)
+    /// </summary>
+    private async Task ApplyResolvedStatusAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var resolvedStatus = context.Directives.ConsumeResolvedStatus();
+        if (resolvedStatus is null)
+            return;
+
+        // Auto chain is continuing — instance should stay Busy
+        if (context.Directives.NextTransition is not null)
+            return;
+
+        // Terminal status reached (Completed/Faulted/Passive) — don't override
+        if (context.Instance.IsCompleted)
+            return;
+
+        // Target state SubType is Busy — ChangeState already set Busy
+        if (context.Target?.SubType == StateSubType.Busy)
+            return;
+
+        // All guards passed — re-acquire lock and apply the resolved status
+        var lockAcquired = await _distributedLockService.ExecuteWithLockAsync(
+            context.LockKey,
+            async () =>
+            {
+                context.Instance.Active();
+                await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+
+                _logger.LogDebug(
+                    "Instance {InstanceId} resolved to Active after post-commit completion",
+                    context.InstanceId);
+            },
+            DefaultLockLeaseSeconds,
+            cancellationToken);
+
+        if (!lockAcquired)
+        {
+            _logger.LogWarning(
+                "Failed to acquire lock for applying resolved status on instance {InstanceId}",
                 context.InstanceId);
         }
     }

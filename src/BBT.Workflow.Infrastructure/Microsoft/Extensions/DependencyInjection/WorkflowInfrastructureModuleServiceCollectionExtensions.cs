@@ -1,5 +1,4 @@
 using BBT.Aether.MultiSchema;
-using BBT.Aether.MultiSchema.EntityFrameworkCore.Interceptors;
 using BBT.Workflow.Data;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
@@ -79,7 +78,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         }
         
         // DbContext
-        services.AddSingleton<NpgsqlSchemaConnectionInterceptor>();
+        services.AddSingleton<SchemaAwareModelCacheKeyFactory>();
         services.AddScoped<IMultiSchemaMigrator<WorkflowDbContext>, MultiSchemaMigrator<WorkflowDbContext>>();
         
         // Security - Schema Validation

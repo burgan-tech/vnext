@@ -767,3 +767,78 @@ jobs:
         repository: burgan-tech/vnext-helm-charts
         event-type: app-release
         client-payload: '{"app_version": "${{ steps.version.outputs.version }}"}'
+
+  publish-nuget:
+    runs-on: ubuntu-latest
+    needs: build-and-publish
+
+    env:
+      NUGET_VERSION: ${{ needs.build-and-publish.outputs.version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          9.0.x
+          10.0.x
+
+    - name: Restore solution
+      run: dotnet restore ./BBT.Workflow.slnx --verbosity normal
+
+    # Pack order follows the dependency chain:
+    # Events.Contracts (leaf) → Modules.Scripting (leaf) → Domain → Tasks.Abstractions
+    - name: Pack BBT.Workflow.Events.Contracts
+      run: |
+        dotnet pack src/BBT.Workflow.Events.Contracts/BBT.Workflow.Events.Contracts.csproj \
+          --configuration Release \
+          --no-restore \
+          -p:Version=${{ env.NUGET_VERSION }} \
+          --output ./nuget-artifacts
+
+    - name: Pack BBT.Workflow.Modules.Scripting
+      run: |
+        dotnet pack modules/BBT.Workflow.Modules.Scripting/BBT.Workflow.Modules.Scripting.csproj \
+          --configuration Release \
+          --no-restore \
+          -p:Version=${{ env.NUGET_VERSION }} \
+          --output ./nuget-artifacts
+
+    - name: Pack BBT.Workflow.Domain
+      run: |
+        dotnet pack src/BBT.Workflow.Domain/BBT.Workflow.Domain.csproj \
+          --configuration Release \
+          --no-restore \
+          -p:Version=${{ env.NUGET_VERSION }} \
+          --output ./nuget-artifacts
+
+    - name: Pack BBT.Workflow.Tasks.Abstractions
+      run: |
+        dotnet pack src/BBT.Workflow.Tasks.Abstractions/BBT.Workflow.Tasks.Abstractions.csproj \
+          --configuration Release \
+          --no-restore \
+          -p:Version=${{ env.NUGET_VERSION }} \
+          --output ./nuget-artifacts
+
+    - name: Push all packages to NuGet.org
+      run: |
+        dotnet nuget push ./nuget-artifacts/*.nupkg \
+          --api-key ${{ secrets.NUGET_API_KEY }} \
+          --source https://api.nuget.org/v3/index.json \
+          --skip-duplicate
+
+    - name: Notify NuGet publish status
+      run: |
+        echo "## 📦 NuGet Packages Published" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version**: \`${{ env.NUGET_VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Package | NuGet |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| BBT.Workflow.Events.Contracts | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Events.Contracts) |" >> $GITHUB_STEP_SUMMARY
+        echo "| BBT.Workflow.Modules.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Modules.Scripting) |" >> $GITHUB_STEP_SUMMARY
+        echo "| BBT.Workflow.Domain | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Domain) |" >> $GITHUB_STEP_SUMMARY
+        echo "| BBT.Workflow.Tasks.Abstractions | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Tasks.Abstractions) |" >> $GITHUB_STEP_SUMMARY

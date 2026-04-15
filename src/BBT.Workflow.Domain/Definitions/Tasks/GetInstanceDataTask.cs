@@ -63,6 +63,14 @@ public sealed class GetInstanceDataTask : WorkflowTask
     /// </summary>
     public int TimeoutSeconds { get; private set; } = 30;
 
+    /// <summary>
+    /// HTTP status codes that are treated as successful even when they are error codes (e.g. 403, 404).
+    /// Supports exact codes ("403") and alias patterns ("4xx", "40x", "5xx", "50x").
+    /// When a response status code matches any entry, the task is considered successful
+    /// and the ErrorBoundary is not triggered.
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; private set; }
+
     public string? Identifier => TriggerInstanceId.HasValue ? TriggerInstanceId.Value.ToString() : TriggerKey;
 
     public void SetInstance(string? instanceId)
@@ -158,6 +166,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
     internal void SetHeadersInternal(JsonElement? headers) => Headers = headers;
     internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
+    internal void SetAcceptedStatusCodesInternal(IReadOnlyList<string>? codes) => AcceptedStatusCodes = codes;
 
     protected override void Configure(JsonElement config)
     {
@@ -201,6 +210,17 @@ public sealed class GetInstanceDataTask : WorkflowTask
 
         if (config.TryGetProperty("timeoutSeconds", out var timeoutSeconds))
             TimeoutSeconds = timeoutSeconds.GetInt32();
+
+        if (config.TryGetProperty("acceptedStatusCodes", out var acceptedCodesElement) &&
+            acceptedCodesElement.ValueKind == JsonValueKind.Array)
+        {
+            var codes = acceptedCodesElement.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!)
+                .ToList();
+            AcceptedStatusCodes = codes.Count > 0 ? codes : null;
+        }
     }
 
     public static GetInstanceDataTask Create(JsonElement config)
@@ -233,6 +253,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         cloned.ValidateSSL = ValidateSSL;
         cloned.Headers = Headers;
         cloned.TimeoutSeconds = TimeoutSeconds;
+        cloned.AcceptedStatusCodes = AcceptedStatusCodes;
 
         return cloned;
     }
@@ -253,6 +274,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         SetValidateSSLInternal(source.ValidateSSL);
         SetHeadersInternal(source.Headers);
         SetTimeoutSecondsInternal(source.TimeoutSeconds);
+        SetAcceptedStatusCodesInternal(source.AcceptedStatusCodes);
     }
 
     /// <summary>
@@ -270,6 +292,7 @@ public sealed class GetInstanceDataTask : WorkflowTask
         ValidateSSL = true;
         Headers = null;
         TimeoutSeconds = 30;
+        AcceptedStatusCodes = null;
     }
 
     /// <summary>

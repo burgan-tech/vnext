@@ -3,7 +3,6 @@ using BBT.Aether.AspNetCore.ExceptionHandling;
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Domain.Services;
 using BBT.Aether.Events;
-using BBT.Aether.MultiSchema.EntityFrameworkCore.Interceptors;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
@@ -16,6 +15,7 @@ using Dapr.Jobs.Extensions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 
@@ -106,8 +106,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 
             options.ReplaceService<IMigrationsSqlGenerator, MultiSchemaNpgsqlMigrationsSqlGenerator>();
+
+            // SchemaAwareModelCacheKeyFactory replaces SET search_path approach:
+            // a separate compiled model is cached per schema, table names are fully qualified,
+            // no session-level directive is ever sent — PgBouncer transaction-mode safe.
+            options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
+
             options.AddInterceptors(
-                sp.GetRequiredService<NpgsqlSchemaConnectionInterceptor>(),
                 sp.GetRequiredService<WorkflowDatabaseInterceptor>(),
                 sp.GetRequiredService<WorkflowTransactionInterceptor>()
             );

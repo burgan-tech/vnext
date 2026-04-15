@@ -1,3 +1,4 @@
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Threading;
 using BBT.Workflow.Data;
 using Microsoft.EntityFrameworkCore;
@@ -28,17 +29,25 @@ public static class DatabaseCreationApplicationBuilderExtensions
         AsyncHelper.RunSync(async () =>
         {
             await using var scope = host.Services.CreateAsyncScope();
-            
-            // Handle WorkflowDbContext
-            var workflowDbContext = scope.ServiceProvider.GetRequiredService<WorkflowDbContext>();
-            if (workflowDbContext.Database.IsRelational())
+
+            // WorkflowDbContext requires ICurrentSchema to be set before the model is built
+            // (SchemaAwareModelCacheKeyFactory reads CurrentSchemaName from the context).
+            // In Development, we set a temporary "public" schema so EnsureCreatedAsync can
+            // resolve the context without a schema-resolution middleware in place.
+            var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+            using (currentSchema.Use("public"))
             {
-                // EnsureCreatedAsync creates the database if it doesn't exist.
-                // It does NOT apply migrations if the database already exists.
-                // If the database does not exist, it creates it with the current model schema 
-                // (effectively bypassing migrations for the initial creation).
-                // Note: EnsureCreatedAsync returns true if the database was created, false if it already existed.
-                await workflowDbContext.Database.EnsureCreatedAsync();
+                // Handle WorkflowDbContext
+                var workflowDbContext = scope.ServiceProvider.GetRequiredService<WorkflowDbContext>();
+                if (workflowDbContext.Database.IsRelational())
+                {
+                    // EnsureCreatedAsync creates the database if it doesn't exist.
+                    // It does NOT apply migrations if the database already exists.
+                    // If the database does not exist, it creates it with the current model schema
+                    // (effectively bypassing migrations for the initial creation).
+                    // Note: EnsureCreatedAsync returns true if the database was created, false if it already existed.
+                    await workflowDbContext.Database.EnsureCreatedAsync();
+                }
             }
 
             // Handle MessagingDbContext

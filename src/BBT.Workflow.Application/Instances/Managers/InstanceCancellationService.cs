@@ -49,9 +49,16 @@ public sealed class InstanceCancellationService(
             // Process all jobs in parallel for better performance
             var processingTasks = jobs.Select(async job =>
             {
-                await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
-                job.MarkAsProcessed();
-                await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+                try
+                {
+                    await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
+                    job.MarkAsProcessed();
+                    await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    logger.InstanceJobDeletionFailed(ex, job.JobId, instanceId);
+                }
             });
 
             await Task.WhenAll(processingTasks);
@@ -102,9 +109,16 @@ public sealed class InstanceCancellationService(
             // Process filtered jobs in parallel
             var processingTasks = jobsToCancel.Select(async job =>
             {
-                await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
-                job.MarkAsProcessed();
-                await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+                try
+                {
+                    await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
+                    job.MarkAsProcessed();
+                    await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    logger.InstanceJobDeletionFailed(ex, job.JobId, instanceId);
+                }
             });
 
             await Task.WhenAll(processingTasks);

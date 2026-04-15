@@ -206,7 +206,10 @@ public sealed class InstanceExtensionService(
 
         var tasks = executableExtensions.Select(ext => ext.Task);
 
-        // Execute tasks with fail-fast behavior
+        // Execute tasks with fail-fast behavior.
+        // Note: if a task has AcceptedStatusCodes and the response status code matches,
+        // TaskExecutorBase overrides IsSuccess to true so the result arrives here as successful —
+        // the extension continues normally without interruption.
         var executeResult = await taskCoordinator.ExecuteAsync(
             tasks,
             null,

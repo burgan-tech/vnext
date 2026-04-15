@@ -596,6 +596,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         _workflowMetrics.FinishTaskExecution(taskTypeStr, workflowKey);
 
         // 11. Handle business failure
+        // response.IsSuccess is already overridden by AcceptedStatusCodes in TaskExecutorBase,
+        // so a matching accepted code will arrive here as IsSuccess = true and fall through to step 12.
         if (!response.IsSuccess)
         {
             var executionError = _errorFactory.CreateFromResponse(

@@ -133,7 +133,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         stopwatch.Stop();
 
         // 7. CreateResponse
-        return CreateSuccessResponse(invokeResult.Value!, outputResult.Value, stopwatch.ElapsedMilliseconds);
+        return CreateSuccessResponse(task, invokeResult.Value!, outputResult.Value, stopwatch.ElapsedMilliseconds);
     }
 
     /// <summary>
@@ -220,24 +220,46 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
     /// <summary>
     /// Creates a success response from invocation result.
+    /// When the task defines <c>AcceptedStatusCodes</c> and the response status code matches,
+    /// <c>IsSuccess</c> is overridden to <c>true</c> regardless of the HTTP error status.
     /// </summary>
     protected virtual Result<StandardTaskResponse> CreateSuccessResponse(
+        WorkflowTask task,
         TaskInvocationResult invocationResult,
         object? outputData,
         long executionDurationMs)
     {
+        var acceptedCodes = GetAcceptedStatusCodes(task);
+        var effectiveIsSuccess = invocationResult.IsSuccess
+            || acceptedCodes.IsAcceptedStatusCode(invocationResult.StatusCode);
+
         return Result<StandardTaskResponse>.Ok(new StandardTaskResponse
         {
-            IsSuccess = invocationResult.IsSuccess,
+            IsSuccess = effectiveIsSuccess,
             Data = outputData,
             StatusCode = invocationResult.StatusCode,
             Headers = invocationResult.Headers,
             Metadata = invocationResult.Metadata,
             ExecutionDurationMs = executionDurationMs,
             TaskType = TaskType.ToString(),
-            ErrorMessage = invocationResult.ErrorMessage
+            ErrorMessage = effectiveIsSuccess ? null : invocationResult.ErrorMessage
         });
     }
+
+    /// <summary>
+    /// Extracts the <c>AcceptedStatusCodes</c> list from the task if it supports it.
+    /// </summary>
+    private static IReadOnlyList<string>? GetAcceptedStatusCodes(WorkflowTask task) => task switch
+    {
+        HttpTask http => http.AcceptedStatusCodes,
+        DaprServiceTask daprService => daprService.AcceptedStatusCodes,
+        DirectTriggerTask directTrigger => directTrigger.AcceptedStatusCodes,
+        GetInstancesTask getInstances => getInstances.AcceptedStatusCodes,
+        GetInstanceDataTask getInstanceData => getInstanceData.AcceptedStatusCodes,
+        StartTask startTask => startTask.AcceptedStatusCodes,
+        SubProcessTask subProcess => subProcess.AcceptedStatusCodes,
+        _ => null
+    };
 
     /// <summary>
     /// Creates an error response.

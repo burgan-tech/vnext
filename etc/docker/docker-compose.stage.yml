@@ -299,23 +299,6 @@ services:
     networks:
       - bbt-development
 
-  mockoon:
-    image: mockoon/cli:${MOCKOON_VERSION:-latest}
-    container_name: migration-mockoon
-    command: ["--data", "/data/migration-api.json", "--port", "3001", "--hostname", "0.0.0.0"]
-    ports:
-      - "3001:3001"
-    volumes:
-      - ./config/mockoon:/data
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - bbt-development
-
 networks:
   bbt-development:
     external: true
