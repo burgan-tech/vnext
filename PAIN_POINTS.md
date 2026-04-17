@@ -1,54 +1,71 @@
-# vNext Platform Pain Points
+# vNext Platform: Teknik Borç ve Mimari Değerlendirme
 
-This document outlines the identified pain points, technical debt, and areas for improvement in the vNext Platform repository.
+Bu belge, vNext Platform deposundaki tespit edilen "pain point"leri, teknik borçları ve iyileştirme önerilerini detaylandırmaktadır.
 
-## 1. Developer Experience (DX)
+## 1. Geliştirici Deneyimi (DX)
 
-### .NET 10 & PostSharp Setup Hurdles
-*   **Targeting Pack Dependency**: New developers must run a manual setup script (`setup-netstandard-ref.sh`) to install `NETStandard.Library.Ref 2.1.0`. This is a non-standard requirement for .NET development and can cause build failures in environments where scripts cannot be easily run.
-*   **PostSharp Build Overhead**: The use of PostSharp for AOP (Aspect-Oriented Programming) adds significant time to the build process and requires specific IDE configurations for full support.
+### .NET 10 & PostSharp Kurulum Zorlukları
+*   **Targeting Pack Bağımlılığı**: Yeni geliştiricilerin PostSharp uyumluluğu için manuel bir kurulum betiği (`setup-netstandard-ref.sh`) çalıştırması gerekmektedir. Bu, standart .NET geliştirme akışının dışındadır ve otomatize edilmemiş ortamlarda (CI/CD, yeni bilgisayar kurulumu) hata kaynağıdır.
+*   **PostSharp Derleme Yükü**: AOP (Aspect-Oriented Programming) için PostSharp kullanımı derleme sürelerini uzatmakta ve IDE tarafında özel yapılandırmalar gerektirmektedir.
 
-### Local Development Complexity
-*   **Heavy Infrastructure Dependency**: Running the system locally requires Docker for PostgreSQL, Redis, Dapr, and Jaeger. While recommended, it creates a high barrier to entry for simple code changes.
-*   **Dapr Dependency**: The tight coupling with Dapr for service-to-service communication makes it difficult to run or debug individual services in isolation without a full sidecar environment.
+### Yerel Geliştirme Karmaşıklığı
+*   **Ağır Altyapı Bağımlılığı**: Sistemin yerel çalışması PostgreSQL, Redis, Dapr ve Jaeger gibi birçok bileşene Docker üzerinden ihtiyaç duyar. Bu durum, basit bir kod değişikliğini test etmeyi bile zorlaştırmaktadır.
+*   **Dapr Bağımlılığı**: Servisler arası iletişimdeki sıkı Dapr bağımlılığı, sidecar olmadan servislerin izole şekilde hata ayıklanmasını (debug) zorlaştırır.
 
-### Project Proliferation
-*   **Granular Project Structure**: The solution contains a large number of projects (20+). While this supports Clean Architecture, it increases cognitive load for navigation and results in slower IDE performance and longer restore/build cycles.
+### Proje Sayısı (Granularity)
+*   **Aşırı Bölünmüş Yapı**: Çözümde 20'den fazla proje bulunmaktadır. Clean Architecture desteklense de, bu durum navigasyon zorluğu, yavaş IDE performansı ve uzun derleme sürelerine neden olmaktadır.
 
-## 2. Security & Reliability
+## 2. Güvenlik ve Güvenilirlik
 
-### EF1002 SQL Injection Risks
-*   **Raw SQL Usage**: Multiple locations in `EfCoreInstanceRepository.cs` and `MultiSchemaMigrator.cs` use `FromSqlRaw` with string interpolation for schema names, table names, and ORDER BY clauses.
-*   **Validator Reliance**: Although `ISchemaValidator` is used to mitigate risks, the pattern itself triggers security warnings (EF1002) and requires constant vigilance during audits. A more structured approach to dynamic schema/table selection would be safer.
+### SQL Injection Riskleri (EF1002)
+*   **Raw SQL Kullanımı**: `EfCoreInstanceRepository.cs` ve `MultiSchemaMigrator.cs` içerisinde şema adları, tablo adları ve ORDER BY cümleleri için `FromSqlRaw` ve string interpolation kullanılmaktadır.
+*   **Validator Bağımlılığı**: `ISchemaValidator` bu riskleri azaltsa da, desenin kendisi güvenlik uyarılarını (EF1002) tetiklemekte ve denetimlerde sürekli risk teşkil etmektedir. Dinamik tablo/şema seçimi için daha yapısal bir yaklaşım (örneğin Interceptor'lar üzerinden) daha güvenli olacaktır.
 
-### Time-Dependent Logic Testing
-*   **Direct `DateTime.UtcNow` Usage**: The codebase frequently uses `DateTime.UtcNow` directly instead of a clock abstraction (e.g., `ISystemClock` or `TimeProvider`). This makes testing time-sensitive features (like timers or ETag expiration) fragile and dependent on `Thread.Sleep`.
+### Zaman Bağımlı Mantık Testleri
+*   **Doğrudan `DateTime.UtcNow` Kullanımı**: Kod içerisinde bir saat soyutlaması (`ISystemClock` veya `TimeProvider`) yerine doğrudan `DateTime.UtcNow` kullanılmaktadır. Bu durum, zaman aşımı (timeout) veya ETag geçerliliği gibi özelliklerin test edilmesini zorlaştırmakta ve testlerde `Thread.Sleep` kullanımına yol açmaktadır.
 
-### Secret Management
-*   **Vault Integration**: While HashiCorp Vault is supported, it is disabled by default in configuration. Local development relies on cleartext connection strings in `appsettings.json`.
+### AmbientServiceProvider Kullanımı (Service Location Anti-Pattern)
+*   **Gizli Bağımlılıklar**: Kodun birçok yerinde `AmbientServiceProvider.Current` üzerinden servis çözümlenmektedir. Bu, bağımlılıkların constructor üzerinden açıkça görülmesini engeller, birim test (unit test) yazmayı zorlaştırır ve çalışma zamanında (runtime) "null reference" hatalarına davetiye çıkarır.
 
-## 3. Architecture & Maintainability
+## 3. Mimari ve Sürdürülebilirlik
 
-### Multi-Schema Scale Concerns
-*   **Schema Management**: Each workflow "flow" gets its own PostgreSQL schema. At scale (thousands of flows), this can lead to:
-    *   Significant overhead in database migrations.
-    *   Connection pooling issues if not managed carefully by the Aether SDK.
-    *   Increased complexity in cross-flow analytics.
+### Multi-Schema Ölçeklenebilirlik Sorunları
+*   **Şema Yönetimi**: Her iş akışı (flow) için ayrı bir PostgreSQL şeması oluşturulmaktadır. Binlerce akış olan bir sistemde bu durum; veritabanı migration sürelerinin uzamasına, connection pool sorunlarına ve cross-flow analizlerin zorlaşmasına neden olabilir.
 
-### Event Handling Boilerplate
-*   **Dual-Processing Pattern**: Every domain event requires both an `IEventPublishHook` (synchronous/local) and an `IEventHandler` (asynchronous/distributed). This "dual-write" mitigation adds significant boilerplate and increases the chance of developers forgetting one of the components.
+### Event Handling "Dual-Processing" Karmaşası
+*   **Boilerplate Yükü**: Her domain event için hem `IEventPublishHook` (senkron) hem de `IEventHandler` (asenkron) yazılması gerekmektedir. Bu durum geliştirme maliyetini artırmakta ve birinin unutulması durumunda veri tutarsızlıklarına yol açabilmektedir.
 
-### Dynamic Filter Complexity
-*   **`GraphQLJsonFilterService`**: Building native PostgreSQL JSONB queries from GraphQL-style JSON is powerful but highly complex. The current implementation relies on string building and manual parameter indexing, which is difficult to maintain and extend.
+### HookedDistributedEventBus Fallback Mantığı
+*   **Tutarsızlık Riski**: `HookedDistributedEventBus` içerisindeki mantıkta; eğer hook'lar başarılı olursa event publish edilmemekte, başarısız olursa fallback olarak publish edilmektedir. Bu mantık, event'in ulaşıp ulaşmadığı konusunda kafa karışıklığı yaratabilir ve "at-least-once" delivery garantilerini bozabilir.
 
-### Service Discovery & Routing
-*   **Static Configuration**: Many service URLs are hardcoded in `appsettings.json`. While `IDomainDiscoveryResolver` exists, it is disabled by default, leading to a "brittle" configuration in multi-environment setups.
+### TaskExecutionEngine Karmaşıklığı
+*   **Aşırı Sorumluluk**: `TaskExecutionEngine`; retry, hata yönetimi (boundary), metrikler ve persistence gibi çok fazla sorumluluğu tek bir sınıfta barındırmaktadır. Bu durum sınıfın bakımını ve test edilmesini zorlaştırmaktadır.
 
-## 4. Quality Assurance
+## 4. Kalite Güvencesi (QA)
 
-### Brittle Tests
-*   **`Thread.Sleep` in Unit Tests**: Several tests (e.g., `CacheItemTests.cs`, `InstanceTaskTests.cs`) use `Thread.Sleep` to wait for asynchronous operations or expiration. This makes the test suite slower and prone to intermittent "flaky" failures in CI/CD environments with varying performance.
+### Kırılgan Testler
+*   **`Thread.Sleep` Kullanımı**: `CacheItemTests.cs` ve `InstanceTaskTests.cs` gibi testlerde asenkron süreçleri beklemek için `Thread.Sleep` kullanılmaktadır. Bu, testleri yavaşlatır ve CI/CD ortamlarında performans dalgalanmaları nedeniyle rastgele başarısızlıklara (flaky tests) sebep olur.
 
-### Integration Test Environment
-*   **Resource Intensity**: Tests rely on `Testcontainers` (PostgreSQL/Redis), which requires a Docker-enabled environment. This increases the resources required for running the full test suite and complicates CI pipeline configuration.
-*   **Environmental Fragility**: As seen during analysis, tests using Testcontainers can fail with `DockerApiException` (InternalServerError) if the host Docker environment has specific overlay mount issues or permission constraints. This makes the test suite "fragile" across different developer machines and CI agents.
+### Entegrasyon Testi Ortamı
+*   **Docker Bağımlılığı**: `Testcontainers` kullanımı, Docker olmayan veya kısıtlı Docker erişimi olan ortamlarda testlerin çalışmasını engellemektedir (Örneğin: `DockerApiException: InternalServerError` hataları).
+
+---
+
+## Öneriler (Recommendations)
+
+### 1. Mimari İyileştirmeler
+*   **TimeProvider Soyutlaması**: .NET 8+ ile gelen `TimeProvider` soyutlamasına geçilmelidir. Bu sayede testlerde zaman "fake" edilebilir ve `Thread.Sleep` kullanımına gerek kalmaz.
+*   **AmbientServiceProvider'dan Kaçınma**: Servisler constructor injection ile alınmalıdır. Scope yönetimi gereken yerlerde `IServiceScopeFactory` açıkça kullanılmalıdır.
+*   **Event Handling Sadeleştirme**: Senkron ve asenkron handler'lar arasındaki fark netleştirilmeli, mümkünse Aether SDK seviyesinde bir "outbox" mekanizması ile bu ikili yapı otomatikleştirilmelidir.
+
+### 2. Güvenlik ve Veritabanı
+*   **Dinamik Şema Yönetimi**: SQL string birleştirmek yerine, EF Core `IModelCacheKeyFactory` ve Interceptor'lar kullanarak şema değişimi daha güvenli hale getirilmelidir. EF1002 uyarıları sıfıra indirilmelidir.
+*   **Schema Per Flow Yerine Row-Level Security (RLS)**: Çok fazla flow olan senaryolarda, binlerce şema yerine PostgreSQL RLS (Row-Level Security) veya `TenantId` bazlı veri ayrımı değerlendirilmelidir.
+
+### 3. Geliştirici Deneyimi (DX)
+*   **Kurulumun Otomatize Edilmesi**: PostSharp bağımlılığı ya minimize edilmeli ya da kurulum süreci bir `NuGet` paketi veya `Directory.Build.targets` içerisinde tamamen otomatik hale getirilmelidir.
+*   **Dapr-Free Local Mode**: Servislerin Dapr sidecar'ı olmadan (Mock servisler ile) çalışabilmesini sağlayan bir "Standalone" mod eklenmelidir.
+
+### 4. Test Stratejisi
+*   **`Thread.Sleep` Yerine `TaskCompletionSource` veya `Poll`**: Testlerde bir durumun oluşmasını beklemek için `Thread.Sleep` yerine polly tabanlı beklemeler veya `TaskCompletionSource` gibi sinyal mekanizmaları kullanılmalıdır.
+*   **In-Memory Database Opsiyonu**: Entegrasyon testlerinin bir kısmı (şema gerektirmeyenler) `Testcontainers` yerine SQLite In-Memory veya EF Core In-Memory ile çalıştırılarak hızlandırılmalı ve Docker bağımlılığı azaltılmalıdır.
