@@ -47,4 +47,12 @@ public interface IRuntimeService
     /// <returns>All active entities matching the given key</returns>
     Task<IEnumerable<T?>> GetAsync<T>(string key, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
+    /// Returns the distributed cache keys for all active entities of the specified type without
+    /// loading the entity data. Used by broadcast-receiving pods to warm their in-memory cache
+    /// from the distributed cache without a full DB scan.
+    /// </summary>
+    Task<IEnumerable<string>> GetActiveCacheKeysAsync<T>(CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter;
 }

@@ -295,7 +295,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
 
         if (!binding.ValidateSSL)
         {
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
                 TaskType, taskKey);
         }

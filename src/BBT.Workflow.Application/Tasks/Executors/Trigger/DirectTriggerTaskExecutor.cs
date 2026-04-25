@@ -69,7 +69,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Logger.TaskInstanceResolutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 instanceIdResult.Error.Message ?? "Unknown error");
             return Result<TaskInvocationResult>.Fail(instanceIdResult.Error);
         }
@@ -116,7 +116,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Logger.TaskLocalExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id.ToString(),
+                context.ScriptContext?.Instance?.Id.ToString() ?? string.Empty,
                 instanceIdResult.Error.Message ?? "DirectTrigger instance resolution failed");
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
@@ -154,7 +154,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Logger.TaskLocalExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id.ToString(),
+                context.ScriptContext?.Instance?.Id.ToString() ?? string.Empty,
                 result.Error.Message ?? "DirectTrigger transition failed");
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
@@ -261,7 +261,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Logger.TaskEnvelopeCreationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 envelopeResult.Error.Message ?? "Failed to create envelope");
             return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
         }
@@ -279,7 +279,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 enrichResult.Error.Message ?? "Failed to resolve endpoint");
             return Result<TaskInvocationResult>.Fail(enrichResult.Error);
         }
@@ -297,7 +297,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 

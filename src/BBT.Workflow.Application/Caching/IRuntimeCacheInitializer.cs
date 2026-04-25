@@ -33,5 +33,15 @@ public interface IRuntimeCacheInitializer
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A task representing the asynchronous initialization operation</returns>
     Task InitializeWithDistributedCacheAsync(bool fullLoad = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Warms the local in-memory cache by reading from the distributed cache for all active entity
+    /// keys discovered via a lightweight DB metadata query (no <c>InstanceData.Data</c> loaded).
+    /// On a distributed cache miss, falls back to a per-key DB query and populates in-memory only.
+    /// No write-back to distributed cache is performed.
+    /// Intended for broadcast-receiving pods; the initiating pod should call
+    /// <see cref="InitializeWithDistributedCacheAsync"/> instead.
+    /// </summary>
+    Task InitializeFromDistributedCacheAsync(CancellationToken cancellationToken = default);
 }
 

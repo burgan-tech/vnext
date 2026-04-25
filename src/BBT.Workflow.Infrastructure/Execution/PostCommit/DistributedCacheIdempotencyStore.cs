@@ -1,6 +1,7 @@
 using BBT.Aether.DistributedCache;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
+using BBT.Workflow.Caching;
 using BBT.Workflow.Execution.PostCommit;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +17,7 @@ public sealed class DistributedCacheIdempotencyStore(
     IDistributedLockService lockService,
     ILogger<DistributedCacheIdempotencyStore> logger) : IPostCommitIdempotencyStore
 {
+    private const string ComponentType = "idempotency";
     private const string KeyPrefix = "postcommit:idempotency:";
     private const string LockKeyPrefix = "postcommit:idempotency:lock:";
     private const string StatusPending = "pending";
@@ -39,27 +41,29 @@ public sealed class DistributedCacheIdempotencyStore(
         var cacheKey = GetCacheKey(key);
         var lockKey = GetLockKey(key);
 
-        // Track result from within the lock
         var shouldExecute = false;
         string? existingStatus = null;
 
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationGet, cacheKey, ComponentType);
+
         try
         {
-            // Atomic check-and-set with distributed lock (first executor wins)
             var lockAcquired = await lockService.ExecuteWithLockAsync(
                 lockKey,
                 async () =>
                 {
-                    // Check if already processed
                     var existing = await cache.GetAsync<string>(cacheKey, cancellationToken);
                     if (existing is not null)
                     {
+                        CacheActivityHelper.SetCacheHit(activity, true);
                         existingStatus = existing;
                         shouldExecute = false;
                         return;
                     }
 
-                    // Set as pending (first executor wins)
+                    CacheActivityHelper.SetCacheHit(activity, false);
+
                     await cache.SetAsync(
                         cacheKey,
                         StatusPending,
@@ -76,7 +80,6 @@ public sealed class DistributedCacheIdempotencyStore(
 
             if (!lockAcquired)
             {
-                // Lock not acquired - another instance is processing, treat as duplicate
                 logger.LogDebug("Idempotency lock not acquired for key {Key}, skipping", key);
                 return Result<bool>.Ok(false);
             }
@@ -95,6 +98,7 @@ public sealed class DistributedCacheIdempotencyStore(
         }
         catch (Exception ex)
         {
+            CacheActivityHelper.SetError(activity, ex);
             logger.LogError(ex, "Failed to check/set idempotency key {Key}", key);
             return Result<bool>.Fail(Error.Failure(
                 "IDEMPOTENCY_STORE_ERROR",
@@ -106,6 +110,9 @@ public sealed class DistributedCacheIdempotencyStore(
     public async Task MarkCompletedAsync(string key, CancellationToken cancellationToken)
     {
         var cacheKey = GetCacheKey(key);
+
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationSet, cacheKey, ComponentType);
 
         try
         {
@@ -122,7 +129,7 @@ public sealed class DistributedCacheIdempotencyStore(
         }
         catch (Exception ex)
         {
-            // Log but don't fail - job already completed successfully
+            CacheActivityHelper.SetError(activity, ex);
             logger.LogWarning(ex, "Failed to mark idempotency key {Key} as completed", key);
         }
     }
@@ -131,6 +138,9 @@ public sealed class DistributedCacheIdempotencyStore(
     public async Task MarkFailedAsync(string key, string errorCode, string? errorMessage, CancellationToken cancellationToken)
     {
         var cacheKey = GetCacheKey(key);
+
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationSet, cacheKey, ComponentType);
 
         try
         {
@@ -148,7 +158,7 @@ public sealed class DistributedCacheIdempotencyStore(
         }
         catch (Exception ex)
         {
-            // Log but don't fail - error already handled
+            CacheActivityHelper.SetError(activity, ex);
             logger.LogWarning(ex, "Failed to mark idempotency key {Key} as failed", key);
         }
     }

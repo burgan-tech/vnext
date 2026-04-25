@@ -76,6 +76,29 @@ public sealed class RuntimeCacheInitializer(
         }
     }
 
+    /// <inheritdoc />
+    public async Task InitializeFromDistributedCacheAsync(CancellationToken cancellationToken = default)
+    {
+        if (!gate.TryAcquire())
+        {
+            logger.LogWarning(
+                "Cache initialization already in progress on this pod. Skipping concurrent request.");
+            return;
+        }
+
+        try
+        {
+            var capturedAt = DateTime.UtcNow;
+            var cacheKeysByType = await LoadAllEntityCacheKeysAsync(cancellationToken);
+            await domainCacheContext.LoadFromDistributedCacheAsync(cacheKeysByType, cancellationToken);
+            gate.SetLastInitializedAt(capturedAt);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     /// <summary>
     /// Returns the <c>since</c> timestamp to use for this load:
     /// <c>null</c> → full load (replace all); non-null → incremental (merge delta).
@@ -117,5 +140,34 @@ public sealed class RuntimeCacheInitializer(
         await using var scope = scopeFactory.CreateAsyncScope();
         var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
         return await runtimeService.GetAsync<T>(since, ct);
+    }
+
+    private async Task<Dictionary<Type, IEnumerable<string>>> LoadAllEntityCacheKeysAsync(CancellationToken cancellationToken)
+    {
+        // Load sequentially to avoid concurrent DB connection pressure.
+        var flows      = await LoadCacheKeysAsync<Definitions.Workflow>(cancellationToken);
+        var tasks      = await LoadCacheKeysAsync<WorkflowTask>(cancellationToken);
+        var functions  = await LoadCacheKeysAsync<Function>(cancellationToken);
+        var views      = await LoadCacheKeysAsync<View>(cancellationToken);
+        var schemas    = await LoadCacheKeysAsync<SchemaDefinition>(cancellationToken);
+        var extensions = await LoadCacheKeysAsync<Extension>(cancellationToken);
+
+        return new Dictionary<Type, IEnumerable<string>>
+        {
+            { typeof(Definitions.Workflow), flows },
+            { typeof(WorkflowTask), tasks },
+            { typeof(SchemaDefinition), schemas },
+            { typeof(Function), functions },
+            { typeof(View), views },
+            { typeof(Extension), extensions }
+        };
+    }
+
+    private async Task<IEnumerable<string>> LoadCacheKeysAsync<T>(CancellationToken ct)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
+        return await runtimeService.GetActiveCacheKeysAsync<T>(ct);
     }
 }

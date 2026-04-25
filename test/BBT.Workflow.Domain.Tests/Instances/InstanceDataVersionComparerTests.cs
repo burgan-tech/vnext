@@ -685,6 +685,123 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region Package Version Only Matching Tests
+
+    [Fact]
+    public void MatchesPackage_ShouldMatchPackageVersionPart()
+    {
+        // Arrange & Act & Assert
+        Assert.True(InstanceDataVersionComparer.MatchesPackage("1.0.0-pkg.00.01.417+onboarding", "00.01.417"));
+        Assert.True(InstanceDataVersionComparer.MatchesPackage("1.0.0-pkg.1.17.0+account", "1.17.0"));
+    }
+
+    [Fact]
+    public void MatchesPackage_ShouldNormalizeLeadingZeros()
+    {
+        Assert.True(InstanceDataVersionComparer.MatchesPackage("1.0.0-pkg.00.01.417+onboarding", "0.1.417"));
+        Assert.True(InstanceDataVersionComparer.MatchesPackage("1.0.0-pkg.0.1.417+onboarding", "00.01.417"));
+    }
+
+    [Fact]
+    public void MatchesPackage_ShouldReturnFalse_WhenNoPackageVersion()
+    {
+        Assert.False(InstanceDataVersionComparer.MatchesPackage("1.0.0", "1.0.0"));
+        Assert.False(InstanceDataVersionComparer.MatchesPackage("1.0.0+metadata", "1.0.0"));
+    }
+
+    [Fact]
+    public void MatchesPackage_ShouldReturnFalse_WhenPackageVersionDoesNotMatch()
+    {
+        Assert.False(InstanceDataVersionComparer.MatchesPackage("1.0.0-pkg.1.17.0+account", "2.0.0"));
+        Assert.False(InstanceDataVersionComparer.MatchesPackage("1.0.0-pkg.00.01.417+onboarding", "00.02.417"));
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldMatchByPackageVersion_WhenNoArtifactMatch()
+    {
+        // Arrange - DB'deki versiyonlar
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.00.01.417+onboarding",
+            "1.0.0-pkg.00.01.418+onboarding",
+            "2.0.0-pkg.00.02.100+account"
+        };
+
+        // Act - İstekteki versiyon sadece package version kısmı
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "00.01.417");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.00.01.417+onboarding", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldReturnHighestVersion_WhenMultiplePackageMatches()
+    {
+        // Arrange - Farklı artifact versiyonları aynı package version ile
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.00.01.417+onboarding",
+            "2.0.0-pkg.00.01.417+account"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "00.01.417");
+
+        // Assert - En yüksek versiyon dönmeli
+        Assert.Equal("2.0.0-pkg.00.01.417+account", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldPreferArtifactMatch_OverPackageMatch()
+    {
+        // Arrange - "1.0.0" hem artifact hem de başka bir versiyonun package'ı olabilir
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.1.17.0+account",
+            "2.0.0-pkg.1.0.0+other"
+        };
+
+        // Act - "1.0.0" artifact version olarak match bulmalı
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        // Assert - Artifact match öncelikli olmalı
+        Assert.Equal("1.0.0-pkg.1.17.0+account", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldMatchPackageVersion_WithLeadingZerosNormalized()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.00.01.417+onboarding"
+        };
+
+        // Act - Leading zero farkı olan aynı versiyon
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "0.1.417");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.00.01.417+onboarding", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldReturnNull_WhenNoPackageMatch()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.00.01.417+onboarding"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "99.99.999");
+
+        // Assert
+        Assert.Null(result);
+    }
+
+    #endregion
+
     private InstanceData CreateInstanceData(string version)
     {
         var instance = InstanceFactory.CreateDefault();

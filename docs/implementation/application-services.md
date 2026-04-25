@@ -107,6 +107,7 @@ Notes:
 - Supports ETag-based conditional reads.
 - Uses optimized GraphQL-style filtering with optional grouping/aggregations.
 - Extension processing is fail-fast (errors are propagated).
+- `GetInstanceHistoryAsync` returns the full list of state transitions (`InstanceTransitionDto`) for the instance — not the instance data versions. Each entry includes `transitionId`, `fromState`, `toState`, `startedAt`, `finishedAt`, `durationSeconds`, `triggerType`, `body`, `header`, and audit fields (`createdAt`, `createdBy`, `createdByBehalfOf`). Transitions are ordered by `startedAt` ascending. The endpoint accepts no `extensions` or `version` query parameters.
 
 ### 4. FunctionAppService
 

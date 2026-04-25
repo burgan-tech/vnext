@@ -399,7 +399,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
         if (!binding.ValidateSSL)
         {
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
                 TaskType, taskKey);
         }

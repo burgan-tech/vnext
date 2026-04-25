@@ -135,7 +135,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                 Logger.TaskLocalExecutionFailed(
                     task.Key,
                     TaskType.ToString(),
-                    context.ScriptContext.Instance.Id.ToString(),
+                    context.ScriptContext?.Instance?.Id.ToString() ?? string.Empty,
                     result.Error.Message ?? "SubProcess start failed");
                 return TaskInvocationResult.Failure(
                     error: result.Error.Message ?? "SubProcess start failed",
@@ -169,7 +169,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Logger.TaskLocalExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id.ToString(),
+                context.ScriptContext?.Instance?.Id.ToString() ?? string.Empty,
                 ex.Message);
 
             return TaskInvocationResult.Failure(
@@ -201,7 +201,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Logger.TaskEnvelopeCreationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 envelopeResult.Error.Message ?? "Failed to create envelope");
             return TaskInvocationResult.Failure(
                 error: envelopeResult.Error.Message ?? "Failed to create envelope",
@@ -227,7 +227,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 enrichResult.Error.Message ?? "Failed to resolve endpoint");
             return TaskInvocationResult.Failure(
                 error: enrichResult.Error.Message ?? "Failed to resolve endpoint",
@@ -253,7 +253,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Remote SubProcess execution failed");
             return TaskInvocationResult.Failure(
                 error: result.Error.Message ?? "Remote SubProcess execution failed",
@@ -384,8 +384,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             {
                 var correlation = InstanceCorrelation.Create(
                     correlationId,
-                    context.ScriptContext.Instance.Id,
-                    context.ScriptContext.Instance.GetCurrentState,
+                    context.ScriptContext?.Instance?.Id ?? Guid.Empty,
+                    context.ScriptContext?.Instance?.GetCurrentState ?? string.Empty,
                     subFlowInstanceId,
                     SubFlowType.SubProcess.Code,
                     task.TriggerDomain,

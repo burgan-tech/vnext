@@ -76,6 +76,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             runtimeInfoProvider: _runtimeInfoProvider,
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
+            instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
@@ -87,6 +88,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: _representationEtagService,
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

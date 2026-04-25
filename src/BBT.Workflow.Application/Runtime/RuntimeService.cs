@@ -119,6 +119,21 @@ public sealed class RuntimeService(
         }
     }
 
+    public async Task<IEnumerable<string>> GetActiveCacheKeysAsync<T>(CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
+        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
+
+        using (currentSchema.Use(schemaInfo.Schema))
+        {
+            var keys = await instanceRepository.GetActiveInstanceKeysAsync(cancellationToken);
+            return keys
+                .Select(k => $"{schemaInfo.Name}:{runtimeInfoProvider.Domain}:{k.Key}:{k.Version}")
+                .ToList();
+        }
+    }
+
     public async Task<T?> GetAsync<T>(string key, string version,
         CancellationToken cancellationToken = default) where T : class, IDomainEntity, IReferenceSetter
     {

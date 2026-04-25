@@ -262,23 +262,6 @@ public sealed class RemoteInstanceQueryAppService(
 
             var relativePath = InstanceUrlTemplates.InstanceHistory(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
-            var queryParams = new List<string>();
-            if (!string.IsNullOrEmpty(input.Version))
-            {
-                queryParams.Add($"version={Uri.EscapeDataString(input.Version)}");
-            }
-
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"{nameof(input.Extensions).ToLowerInvariant()}={Uri.EscapeDataString(ext)}");
-                }
-            }
-
-            if (queryParams.Count > 0)
-                relativePath += "?" + string.Join("&", queryParams);
-
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
             var forwardHeaders = currentUser.ToForwardHeaders();

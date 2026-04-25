@@ -35,6 +35,12 @@ public static class LifecycleOrder
     public const int CreateTransition = 20;
     
     /// <summary>
+    /// Order for executing resource lock operations (Acquire / Release / Extend).
+    /// Runs after the transition record is created and before OnExecute tasks.
+    /// </summary>
+    public const int ResourceLock = 25;
+
+    /// <summary>
     /// Order for executing transition's OnExecute tasks.
     /// These tasks run before the state change occurs.
     /// </summary>

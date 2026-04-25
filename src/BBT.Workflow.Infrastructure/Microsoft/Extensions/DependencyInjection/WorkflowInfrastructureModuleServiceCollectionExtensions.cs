@@ -1,6 +1,8 @@
 using BBT.Aether.MultiSchema;
+using BBT.Workflow.Caching;
 using BBT.Workflow.Data;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Infrastructure.Caching;
 using BBT.Workflow.Infrastructure.DataSink;
 using BBT.Workflow.Infrastructure.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.HostedServices;
@@ -131,6 +133,10 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Post-Commit Idempotency Store (needs IDistributedCacheService)
         services.AddSingleton<IPostCommitIdempotencyStore, DistributedCacheIdempotencyStore>();
+
+        // Two-tier cache: Redis-backed component version index (vidx:* keys).
+        // Resolves "latest" / partial version requests against Redis instead of the DB.
+        services.AddSingleton<IComponentVersionIndex, RedisComponentVersionIndex>();
 
         // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();

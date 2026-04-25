@@ -49,7 +49,8 @@ public sealed class SchemaDefinition : IDomainEntity, ISchemaReference, IReferen
     /// </summary>
     public JsonElement Schema { get; private set; }
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Schemas;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Schemas;
+    public string ComponentKey => ComponentTypeKey;
 
     private void SetKey(string key)
     {

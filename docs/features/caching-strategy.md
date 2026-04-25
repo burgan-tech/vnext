@@ -9,24 +9,31 @@ The BBT Workflow Engine uses a multi-level caching strategy for workflow definit
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                Application Layer                        │
-│  ┌───────────────────────────────────────────────────┐ │
-│  │              ComponentCacheStore                  │ │
-│  └───────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │              ComponentCacheStore                   │  │
+│  └───────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
                            │
 ┌─────────────────────────────────────────────────────────┐
 │              Domain Cache Context                       │
-│  ┌───────────────────────────────────────────────────┐ │
-│  │ CacheSet<T> (Workflows, Tasks, Schemas, ...)       │ │
-│  └───────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ CacheSet<T> (Workflows, Tasks, Schemas, ...)      │  │
+│  └───────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
                            │
 ┌─────────────────────────────────────────────────────────┐
 │              Multi-Level Cache System                   │
-│  ┌─────────────────┐  ┌──────────────────────────────┐ │
-│  │ Local Snapshot  │  │ Distributed Cache (Aether)   │ │
-│  │ (In-Memory)     │  │                              │ │
-│  └─────────────────┘  └──────────────────────────────┘ │
+│  ┌──────────────┐ ┌──────────────┐ ┌────────────────┐  │
+│  │ Local        │ │ vidx Cache   │ │ Distributed    │  │
+│  │ Snapshot     │ │ (Short-TTL   │ │ Cache (Aether) │  │
+│  │ (In-Memory)  │ │  In-Memory)  │ │                │  │
+│  └──────────────┘ └──────────────┘ └────────────────┘  │
+│                          │                              │
+│                   ┌──────────────┐                      │
+│                   │ Redis vidx   │                      │
+│                   │ (Version     │                      │
+│                   │  Index)      │                      │
+│                   └──────────────┘                      │
 └─────────────────────────────────────────────────────────┘
                            │
 ┌─────────────────────────────────────────────────────────┐
@@ -464,6 +471,166 @@ public int Cleanup(TimeSpan? ttl = null, int? maxItems = null, CancellationToken
     return removedCount;
 }
 ```
+
+## Redis Version Index (vidx)
+
+The Redis version index is a lightweight secondary index that tracks which versions exist for each component. It enables "latest" and partial version resolution across pods without DB scans.
+
+### Key Format
+
+```
+vidx:{componentKey}:{domain}:{key}  →  ["1.0.0-pkg.1.17.0+account", "1.1.0-pkg.1.18.0+account"]
+```
+
+### When vidx Gets Populated
+
+vidx is **demand-driven** — it is never populated during startup. It only gets written via `CacheSet.SetAsync`, which calls `versionIndex.AddVersionAsync`. This happens in three scenarios:
+
+| Scenario | Trigger | Flow |
+|----------|---------|------|
+| **Publish** | A new component version is deployed | `DefinitionAppService.PublishAsync` → `SetAsync` → `AddVersionAsync` |
+| **GetAsync DB fallback** | in-memory miss + distributed cache miss | `GetAsync` → DB load → `SetAsync` → `AddVersionAsync` |
+| **GetLatest/ByVersion DB fallback** | Both local snapshot and vidx are empty | `backend.LoadAllByKeyAsync` → `SetAsync` per entity → `AddVersionAsync` |
+
+### When vidx Gets Read
+
+vidx is consulted during version resolution in two methods:
+
+- **`GetLatestByNameAsync`**: Always checks vidx to see if another pod published a newer version
+- **`GetByVersionAsync`** (partial/artifact path): Checks vidx for smart version matching
+
+Full-version lookups (`IsFullVersion` = contains `-pkg.`) skip vidx entirely and go directly to exact-key lookup.
+
+### vidx Short-TTL Local Cache (`_vidxCache`)
+
+To avoid redundant Redis roundtrips during execution bursts, vidx query results are cached locally in a `ConcurrentDictionary` with a **10-second TTL**. This is especially important because:
+
+1. **Startup does not populate vidx** — `LoadAllAsync` only fills the in-memory snapshot, so vidx remains empty until the first `SetAsync` call
+2. **Normal execution queries latest/null** — a single transition hop triggers 3-5+ component lookups, each of which would query Redis vidx without this cache
+3. **Cross-pod freshness is handled by Dapr** — `ComponentPublishedEvent` proactively warms the local snapshot, making vidx consultation a secondary safety net
+
+```csharp
+private readonly ConcurrentDictionary<string, (SortedSet<string>? Versions, DateTime FetchedAt)> _vidxCache = new();
+private static readonly TimeSpan VidxCacheTtl = TimeSpan.FromSeconds(10);
+```
+
+**Cache invalidation**: `SetAsync` and `InvalidateAsync` both call `_vidxCache.TryRemove(...)` after modifying the Redis vidx, ensuring local mutations are immediately visible.
+
+**Null caching**: Both null and non-null results are cached. When vidx is empty (common after startup), caching null prevents repeated Redis roundtrips. The local snapshot still provides the correct version via `ChooseHigher`, and when both sources are empty, the DB fallback populates vidx via `SetAsync`.
+
+### How Version Resolution Works
+
+```
+GetLatestByNameAsync / GetByVersionAsync(partial)
+  │
+  ├─ 1. Local snapshot index → localLatest / localBest
+  ├─ 2. GetCachedVersionsAsync → vidx result (from cache or Redis)
+  │     └─ indexLatest / indexBest
+  ├─ 3. ChooseHigher(index, local) → authoritative version
+  │
+  ├─ IF authoritative is not empty:
+  │     ├─ Fast path: snapshot has it → return from memory
+  │     └─ Slow path: GetAsync(resolvedKey) → distributed cache → DB fallback
+  │
+  └─ IF authoritative is empty (both sources empty):
+        └─ DB fallback: backend.LoadAllByKeyAsync → SetAsync (populates vidx + snapshot)
+```
+
+## Cross-Pod Cache Synchronization
+
+### Publish Notification (Dapr Pub/Sub)
+
+When a component is published, cross-pod synchronization happens via Dapr:
+
+```
+Publishing Pod                          Other Pods
+─────────────                          ──────────
+DB persist                             
+  ↓                                    
+SetAsync                               
+  ├─ Snapshot upsert                   
+  ├─ Redis body cache SET              
+  └─ Redis vidx AddVersionAsync        
+  ↓                                    
+PublishComponentPublishedEventAsync     
+  └─ Dapr broadcast ─────────────────→ POST /component-published
+      (vnext-pubsub-broadcast)           ├─ Environment check
+      topic: definition.component.       ├─ Domain check (workers)
+             published                   └─ WarmComponentAsync
+                                              └─ LoadFromDistributedCacheAsync
+                                                   └─ Redis body GET → Snapshot upsert
+```
+
+**Key points:**
+- The publishing pod writes to: in-memory snapshot + Redis body cache + Redis vidx
+- Other pods receive a Dapr notification and warm their local snapshot from the Redis body cache
+- vidx is not directly read during warm-up — the snapshot is populated with the exact version from the notification
+- If Dapr notification fails, vidx serves as a safety net: the next `GetLatestByNameAsync` will discover the new version via Redis vidx
+
+### Re-Initialize (Bulk Sync)
+
+Triggered manually via `GET /definitions/re-initialize` or via `DefinitionCacheInvalidationEvent`:
+
+```
+Trigger Pod                             All Pods
+───────────                             ────────
+POST /re-initialize                     
+  └─ Dapr broadcast ─────────────────→ POST /utilities/cache/invalidate
+      topic: definition.cache.            └─ InitializeFromDistributedCacheAsync
+             invalidate                        ├─ LoadAllEntityCacheKeysAsync (DB: keys only)
+                                               └─ LoadFromDistributedCacheAsync (parallel)
+                                                    └─ Per key: Redis GET → Snapshot upsert
+                                                         (DB fallback on Redis miss)
+```
+
+## Startup vs Runtime Data Flow
+
+### What Gets Populated at Startup
+
+| Layer | `InitializeAsync` (startup) | `InitializeWithDistributedCacheAsync` | `InitializeFromDistributedCacheAsync` |
+|-------|:-:|:-:|:-:|
+| In-Memory Snapshot | Yes | Yes | Yes |
+| Redis Body Cache | No | Yes | No |
+| Redis vidx | No | No | No |
+| vidx Local Cache | No | No | No |
+
+The default startup path (`CacheInitializationHostedService`) calls `InitializeAsync(fullLoad: true)`, which **only** populates the in-memory snapshot from the database. Redis body cache and vidx remain empty until demand.
+
+### Runtime Read Flow (Steady State)
+
+For the most common case — `GetByVersionAsync` with `version=null` (latest):
+
+```
+GetByVersionAsync(domain, key, null)
+  └─ IsRequestingLatest → true
+       └─ GetLatestByNameAsync
+            ├─ snap.Index → localLatest = "1.0.0-pkg..."  (from startup LoadAllAsync)
+            ├─ GetCachedVersionsAsync
+            │     └─ _vidxCache HIT (null, cached) → skip Redis
+            ├─ ChooseHigher(null, localLatest) = localLatest
+            └─ snap.Entries.TryGetValue → HIT → return from memory
+                 (0 Redis calls, 0 DB calls)
+```
+
+### Runtime Write Flow (Publish)
+
+```
+SetAsync(entity)
+  ├─ 1. SnapshotUpsert (in-memory, immediate)
+  ├─ 2. distributedCache.SetAsync (Redis body cache)
+  ├─ 3. versionIndex.AddVersionAsync (Redis vidx)
+  └─ 4. _vidxCache.TryRemove (invalidate local vidx cache)
+```
+
+### When Distributed Cache (Redis Body) Is Read
+
+The Redis body cache is **not** read during normal steady-state operation when the in-memory snapshot is warm. It is only read in these scenarios:
+
+| Scenario | Method | Trigger |
+|----------|--------|---------|
+| **Cold miss** | `GetAsync` | Component not in snapshot (e.g., never loaded, evicted by cleanup) |
+| **Warm-up after publish** | `LoadSingleKeyAsync` | Dapr `ComponentPublishedEvent` notification |
+| **Bulk re-initialize** | `LoadFromDistributedCacheAsync` | `DefinitionCacheInvalidationEvent` or manual trigger |
 
 ## Monitoring and Diagnostics
 

@@ -29,7 +29,7 @@ public sealed class InstanceListWithGroupsResponse<T>
     public static InstanceListWithGroupsResponse<T> FromPagedList(HateoasPagedList<T> pagedList, List<GroupSummary>? groups = null)
     {
         // If groups are provided, populate items with groups; otherwise use paged list items
-        if (groups != null && groups.Count > 0)
+        if (groups is { Count: > 0 })
         {
             return new InstanceListWithGroupsResponse<T>
             {

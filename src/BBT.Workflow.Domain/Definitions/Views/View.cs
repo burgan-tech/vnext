@@ -75,7 +75,8 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// </summary>
     public LanguageLabel[]? Labels { get; private set; } = [];
     
-    public string ComponentKey => RuntimeSysSchemaInfo.Views;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Views;
+    public string ComponentKey => ComponentTypeKey;
 
     public static string GenerateCacheKey(
         string domain,

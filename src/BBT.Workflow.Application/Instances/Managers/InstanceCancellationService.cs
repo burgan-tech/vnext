@@ -46,8 +46,7 @@ public sealed class InstanceCancellationService(
                 return Result.Ok();
             }
 
-            // Process all jobs in parallel for better performance
-            var processingTasks = jobs.Select(async job =>
+            foreach (var job in jobs)
             {
                 try
                 {
@@ -59,9 +58,7 @@ public sealed class InstanceCancellationService(
                 {
                     logger.InstanceJobDeletionFailed(ex, job.JobId, instanceId);
                 }
-            });
-
-            await Task.WhenAll(processingTasks);
+            }
 
             logger.InstanceCanceledJobsProcessed(instanceId, jobs.Count);
 
@@ -106,8 +103,7 @@ public sealed class InstanceCancellationService(
                 return Result.Ok();
             }
 
-            // Process filtered jobs in parallel
-            var processingTasks = jobsToCancel.Select(async job =>
+            foreach (var job in jobsToCancel)
             {
                 try
                 {
@@ -119,9 +115,7 @@ public sealed class InstanceCancellationService(
                 {
                     logger.InstanceJobDeletionFailed(ex, job.JobId, instanceId);
                 }
-            });
-
-            await Task.WhenAll(processingTasks);
+            }
 
             logger.StateTransitionsJobsCanceled(
                 jobsToCancel.Count,

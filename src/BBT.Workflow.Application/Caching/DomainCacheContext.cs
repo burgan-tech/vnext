@@ -1,11 +1,15 @@
 using BBT.Aether.DistributedCache;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Caching;
 
 public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
 {
+    private readonly CacheWarmupOptions _warmupOptions;
+
     public ICacheSet<Definitions.Workflow> Workflows { get; }
     public ICacheSet<WorkflowTask> Tasks { get; }
     public ICacheSet<SchemaDefinition> Schemas { get; }
@@ -21,37 +25,53 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
         ICacheBackend<Function> functionBackend,
         ICacheBackend<View> viewBackend,
         ICacheBackend<Extension> extensionBackend,
-        ILoggerFactory loggerFactory)
+        IComponentVersionIndex versionIndex,
+        ILoggerFactory loggerFactory,
+        IOptions<CacheWarmupOptions>? warmupOptions = null)
     {
+        _warmupOptions = warmupOptions?.Value ?? new CacheWarmupOptions();
+
         Workflows = new CacheSet<Definitions.Workflow>(
             distributedCache,
             workflowBackend,
-            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>());
+            versionIndex,
+            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>(),
+            warmupOptions);
 
         Tasks = new CacheSet<WorkflowTask>(
             distributedCache,
             taskBackend,
-            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>());
+            versionIndex,
+            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>(),
+            warmupOptions);
 
         Schemas = new CacheSet<SchemaDefinition>(
             distributedCache,
             schemaBackend,
-            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>());
+            versionIndex,
+            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>(),
+            warmupOptions);
 
         Functions = new CacheSet<Function>(
             distributedCache,
             functionBackend,
-            loggerFactory.CreateLogger<CacheSet<Function>>());
+            versionIndex,
+            loggerFactory.CreateLogger<CacheSet<Function>>(),
+            warmupOptions);
 
         Views = new CacheSet<View>(
             distributedCache,
             viewBackend,
-            loggerFactory.CreateLogger<CacheSet<View>>());
+            versionIndex,
+            loggerFactory.CreateLogger<CacheSet<View>>(),
+            warmupOptions);
 
         Extensions = new CacheSet<Extension>(
             distributedCache,
             extensionBackend,
-            loggerFactory.CreateLogger<CacheSet<Extension>>());
+            versionIndex,
+            loggerFactory.CreateLogger<CacheSet<Extension>>(),
+            warmupOptions);
 
         CacheSets =
         [
@@ -90,6 +110,51 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
                 await cacheSet.LoadAllWithDistributedCacheAsync(data, cancellationToken);
             }
         }
+    }
+
+    public Task LoadFromDistributedCacheAsync(Dictionary<Type, IEnumerable<string>> cacheKeysByType, CancellationToken cancellationToken = default)
+    {
+        var options = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Max(1, _warmupOptions.MaxConcurrencyAcrossCacheSets)
+        };
+
+        // CacheSets are independent (separate _snapshot fields) → safe to warm in parallel.
+        return Parallel.ForEachAsync(CacheSets, options, async (cacheSet, ct) =>
+        {
+            if (cacheKeysByType.TryGetValue(cacheSet.EntityType, out var keys))
+                await cacheSet.LoadFromDistributedCacheAsync(keys, ct).ConfigureAwait(false);
+        });
+    }
+
+    public Task WarmComponentAsync(
+        string componentType,
+        string domain,
+        string key,
+        string version,
+        CancellationToken cancellationToken = default)
+    {
+        ICacheSet? targetSet = componentType switch
+        {
+            RuntimeSysSchemaInfo.Flows => Workflows,
+            RuntimeSysSchemaInfo.Tasks => Tasks,
+            RuntimeSysSchemaInfo.Schemas => Schemas,
+            RuntimeSysSchemaInfo.Functions => Functions,
+            RuntimeSysSchemaInfo.Views => Views,
+            RuntimeSysSchemaInfo.Extensions => Extensions,
+            _ => null
+        };
+
+        if (targetSet is null)
+            return Task.CompletedTask;
+
+        // Mirror the cache-key format produced by CacheSet.CreateCacheKey
+        // ("{ComponentTypeKey}:{domain}:{key}:{version}") so the snapshot upsert key
+        // collides with the one written by the publishing pod.
+        var cacheKey = $"{componentType}:{domain}:{key}:{version}";
+
+        return targetSet.LoadFromDistributedCacheAsync(new[] { cacheKey }, cancellationToken);
     }
 
     public async Task MergeAsync(Dictionary<Type, object> deltaData, CancellationToken cancellationToken = default)

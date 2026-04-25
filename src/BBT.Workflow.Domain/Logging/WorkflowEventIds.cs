@@ -89,6 +89,7 @@ public static class WorkflowEventIds
     public static readonly EventId JobCancelled = new(40048, nameof(JobCancelled));
     public static readonly EventId SubFlowTransitionsQueryFailed = new(40049, nameof(SubFlowTransitionsQueryFailed));
     public static readonly EventId ChildSubflowCancelFailed = new(40050, nameof(ChildSubflowCancelFailed));
+    public static readonly EventId TransitionValidationFailed = new(40051, nameof(TransitionValidationFailed));
 
     // Error (40070-40099)
     public static readonly EventId SubFlowCompletionFailed = new(40073, nameof(SubFlowCompletionFailed));

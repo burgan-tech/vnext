@@ -68,7 +68,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, null,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();

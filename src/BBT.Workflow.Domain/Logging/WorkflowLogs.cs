@@ -929,6 +929,21 @@ public static partial class WorkflowLogs
         string errorCode);
 
     /// <summary>
+    /// Logs when a transition request fails pre-dispatch validation (schema or policy).
+    /// Emitted by the AppService guard so both sync=true and sync=false callers see
+    /// the same 400 Bad Request behaviour for invalid payloads.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40051,
+        Level = LogLevel.Warning,
+        Message = "Transition validation failed for instance {InstanceId} on transition {TransitionKey}: {ErrorCode}")]
+    public static partial void TransitionValidationFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string errorCode);
+
+    /// <summary>
     /// Logs when workflow timeout is scheduled.
     /// </summary>
     [LoggerMessage(
@@ -952,6 +967,31 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Exception exception,
         Guid instanceId);
+
+    /// <summary>
+    /// Logs when timeout mapping script fails and static timer duration is used as fallback.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40100,
+        Level = LogLevel.Warning,
+        Message = "Timeout mapping failed for instance {InstanceId}, falling back to static duration {Duration}. Error: {ErrorMessage}")]
+    public static partial void TimeoutMappingFallback(
+        this ILogger logger,
+        Guid instanceId,
+        string duration,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when timeout mapping script executes successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40101,
+        Level = LogLevel.Information,
+        Message = "Timeout mapping resolved for instance {InstanceId}, schedule type: {ScheduleType}")]
+    public static partial void TimeoutMappingResolved(
+        this ILogger logger,
+        Guid instanceId,
+        string scheduleType);
 
     /// <summary>
     /// Logs when workflow definition is not found.
@@ -1406,6 +1446,85 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         int jobCount);
+
+    #endregion
+
+    #region Resource Lock
+
+    /// <summary>
+    /// Logs when a distributed resource lock is successfully acquired.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10100,
+        Level = LogLevel.Information,
+        Message = "Resource lock acquired: Key={ResourceKey}, Owner={Owner}, TTL={TtlSeconds}s")]
+    public static partial void ResourceLockAcquired(
+        this ILogger logger,
+        string resourceKey,
+        string owner,
+        int ttlSeconds);
+
+    /// <summary>
+    /// Logs when a resource lock acquisition fails because the resource is already locked.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10101,
+        Level = LogLevel.Warning,
+        Message = "Resource lock conflict: Key={ResourceKey}, Owner={Owner}. Resource is already locked")]
+    public static partial void ResourceLockAcquireConflict(
+        this ILogger logger,
+        string resourceKey,
+        string owner);
+
+    /// <summary>
+    /// Logs when a distributed resource lock is successfully released.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10103,
+        Level = LogLevel.Information,
+        Message = "Resource lock released: Key={ResourceKey}, Owner={Owner}")]
+    public static partial void ResourceLockReleased(
+        this ILogger logger,
+        string resourceKey,
+        string owner);
+
+    /// <summary>
+    /// Logs when a resource lock release fails (lock not held by this owner).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10104,
+        Level = LogLevel.Warning,
+        Message = "Resource lock release failed: Key={ResourceKey}, Owner={Owner}, Status={Status}")]
+    public static partial void ResourceLockReleaseFailed(
+        this ILogger logger,
+        string resourceKey,
+        string owner,
+        string status);
+
+    /// <summary>
+    /// Logs when a distributed resource lock TTL is successfully extended.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10106,
+        Level = LogLevel.Information,
+        Message = "Resource lock extended: Key={ResourceKey}, Owner={Owner}, TTL={TtlSeconds}s")]
+    public static partial void ResourceLockExtended(
+        this ILogger logger,
+        string resourceKey,
+        string owner,
+        int ttlSeconds);
+
+    /// <summary>
+    /// Logs when a resource lock extension fails (lock not held by this owner).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10107,
+        Level = LogLevel.Warning,
+        Message = "Resource lock extend failed: Key={ResourceKey}, Owner={Owner}")]
+    public static partial void ResourceLockExtendFailed(
+        this ILogger logger,
+        string resourceKey,
+        string owner);
 
     #endregion
 

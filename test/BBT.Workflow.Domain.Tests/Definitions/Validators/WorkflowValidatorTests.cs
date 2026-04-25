@@ -194,6 +194,148 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region Timeout Mapping Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenTimeoutHasMappingAndStaticTimer()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "timeout": {
+                "key": "$timeout",
+                "target": "timed-out",
+                "versionStrategy": "None",
+                "timer": {"reset": "false", "duration": "PT1H"},
+                "mapping": {"location": "inline", "code": "dHJ1ZQ=="}
+            },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "timed-out",
+                    "stateType": "finish",
+                    "labels": [{"label": "Timed Out", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var timeoutErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("timeout mapping", StringComparison.OrdinalIgnoreCase) ||
+                        e.ErrorMessage!.Contains("static timer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        timeoutErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenTimeoutHasStaticTimerOnly()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "timeout": {
+                "key": "$timeout",
+                "target": "timed-out",
+                "versionStrategy": "None",
+                "timer": {"reset": "false", "duration": "PT30M"}
+            },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "timed-out",
+                    "stateType": "finish",
+                    "labels": [{"label": "Timed Out", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var timeoutErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("timeout", StringComparison.OrdinalIgnoreCase) &&
+                        e.ErrorMessage!.Contains("timer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        timeoutErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenTimeoutHasMappingButNoTimer()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "timeout": {
+                "key": "$timeout",
+                "target": "timed-out",
+                "versionStrategy": "None",
+                "mapping": {"location": "inline", "code": "dHJ1ZQ=="}
+            },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "timed-out",
+                    "stateType": "finish",
+                    "labels": [{"label": "Timed Out", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("static timer configuration is also required as fallback",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private WorkflowDefinition CreateWorkflowWithDefaultAutoTransition()

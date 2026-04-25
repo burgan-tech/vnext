@@ -21,6 +21,7 @@ namespace BBT.Workflow.Orchestration.Controllers.Utilities;
 public sealed class UtilityController(
     IDefinitionAppService definitionAppService,
     IRuntimeCacheInitializer runtimeCacheInitializer,
+    IDomainCacheContext domainCacheContext,
     IRuntimeInfoProvider runtimeInfoProvider,
     IOptions<RuntimeOptions> runtimeOptions,
     IDomainDiscoveryResolver domainDiscoveryResolver,
@@ -116,8 +117,8 @@ public sealed class UtilityController(
                 eventData.Domain,
                 eventData.RequestedBy);
 
-            // Update only in-memory cache (distributed cache already updated by initiating pod)
-            await runtimeCacheInitializer.InitializeAsync(eventData.FullLoad, cancellationToken);
+            // Warm in-memory cache from distributed cache; no full DB scan on receiving pods
+            await runtimeCacheInitializer.InitializeFromDistributedCacheAsync(cancellationToken);
 
             logger.DefinitionCacheInvalidationSucceeded(podInstance);
 
@@ -126,6 +127,57 @@ public sealed class UtilityController(
         catch (Exception ex)
         {
             logger.DefinitionCacheInvalidationFailed(podInstance, ex.ToString());
+            return Ok();
+        }
+    }
+
+    /// <summary>
+    /// Handles granular per-component publish events. Each pod warms its local snapshot for
+    /// the affected component (snapshot &lt;- Redis body cache, with single-version DB fallback)
+    /// without performing a full cache reload. Complements the Redis version index by keeping
+    /// the snapshot hot so subsequent reads avoid the extra Redis hop.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("utilities/cache/component-published")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ComponentPublishedAsync(
+        [FromBody] ComponentPublishedEvent eventData,
+        CancellationToken cancellationToken = default)
+    {
+        var podInstance = Environment.GetEnvironmentVariable("HOSTNAME")
+            ?? Environment.GetEnvironmentVariable("POD_NAME")
+            ?? Environment.MachineName;
+        var hostEnvironment = configuration["ASPNETCORE_ENVIRONMENT"];
+
+        try
+        {
+            if (!string.Equals(eventData.Environment, hostEnvironment, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogDebug(
+                    "ComponentPublishedEvent ignored - environment mismatch. Pod={PodInstance} EventEnv={EventEnv} HostEnv={HostEnv}",
+                    podInstance, eventData.Environment, hostEnvironment);
+                return Ok();
+            }
+
+            logger.LogInformation(
+                "ComponentPublishedEvent received. Pod={PodInstance} ComponentType={ComponentType} Domain={Domain} Key={Key} Version={Version}",
+                podInstance, eventData.ComponentType, eventData.Domain, eventData.Key, eventData.Version);
+
+            await domainCacheContext.WarmComponentAsync(
+                eventData.ComponentType,
+                eventData.Domain,
+                eventData.Key,
+                eventData.Version,
+                cancellationToken);
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "ComponentPublishedEvent handling failed. Pod={PodInstance} ComponentType={ComponentType} Domain={Domain} Key={Key} Version={Version}",
+                podInstance, eventData.ComponentType, eventData.Domain, eventData.Key, eventData.Version);
             return Ok();
         }
     }

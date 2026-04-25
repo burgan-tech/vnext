@@ -192,7 +192,20 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddDistributedLock(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddDaprDistributedLock(configuration["DAPR_LOCK_STORE_NAME"]!);
+        var lockStoreName = configuration["DAPR_LOCK_STORE_NAME"]!;
+        services.AddDaprDistributedLock(lockStoreName);
+        services.AddResourceLock(lockStoreName);
+        return services;
+    }
+
+    public static IServiceCollection AddResourceLock(this IServiceCollection services, string lockStoreName)
+    {
+        services.AddScoped<BBT.Workflow.Execution.IResourceLockService>(sp =>
+            new BBT.Workflow.Infrastructure.Execution.ResourceLock.DaprResourceLockService(
+                sp.GetRequiredService<Dapr.Client.DaprClient>(),
+                lockStoreName,
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<
+                    BBT.Workflow.Infrastructure.Execution.ResourceLock.DaprResourceLockService>>()));
         return services;
     }
 
@@ -237,6 +250,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
             // Execution errors
             opt.Map(WorkflowErrorCodes.ExecutionStepFailed, HttpStatusCode.BadRequest);
+            opt.Map(WorkflowErrorCodes.ResourceLockConflict, HttpStatusCode.Conflict);
+            opt.Map(WorkflowErrorCodes.ResourceLockReleaseFailed, HttpStatusCode.InternalServerError);
 
             // Task errors
             opt.Map(WorkflowErrorCodes.TaskContextCreation, HttpStatusCode.InternalServerError);

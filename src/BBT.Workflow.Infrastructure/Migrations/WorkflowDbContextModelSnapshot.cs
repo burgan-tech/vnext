@@ -121,7 +121,7 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("Status", "HandledTime")
                         .HasDatabaseName("IX_BackgroundJobs_Processing");
 
-                    b.ToTable("BackgroundJobs", (string)null);
+                    b.ToTable("BackgroundJobs", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.Instance", b =>
@@ -182,6 +182,11 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<DateTime>("LastTouchedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("timestamp with time zone")
+                        .HasComputedColumnSql("COALESCE(\"ModifiedAt\", \"CreatedAt\")", true);
+
                     b.Property<DateTime?>("ModifiedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ModifiedAt");
@@ -210,7 +215,16 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("EffectiveState")
                         .HasDatabaseName("IX_Instances_EffectiveState");
 
-                    b.ToTable("Instances", (string)null);
+                    b.HasIndex("LastTouchedAt", "Id")
+                        .HasDatabaseName("IX_Instances_Active_LastTouched_Id")
+                        .HasFilter("\"Status\" = 'A'");
+
+                    b.HasIndex(new[] { "Key" }, "IX_Instances_Active_Key")
+                        .HasFilter("\"Status\" = 'A'");
+
+                    b.HasIndex(new[] { "Key" }, "IX_Instances_Key");
+
+                    b.ToTable("Instances", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceAction", b =>
@@ -239,7 +253,7 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("TaskId");
 
-                    b.ToTable("InstanceActions", (string)null);
+                    b.ToTable("InstanceActions", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceCorrelation", b =>
@@ -298,10 +312,17 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("InstanceId");
 
-                    b.HasIndex("ParentInstanceId", "IsCompleted", "SubFlowType")
-                        .HasDatabaseName("IX_InstancesCorrelations_Performance");
+                    b.HasIndex("ParentInstanceId")
+                        .HasDatabaseName("IX_InstancesCorrelations_ActiveBlockingSubFlow")
+                        .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
 
-                    b.ToTable("InstancesCorrelations", (string)null);
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("ParentInstanceId"), new[] { "SubFlowType", "SubFlowInstanceId", "SubFlowDomain", "SubFlowName", "SubFlowVersion", "SubFlowCurrentState", "SubFlowStateChangedAt", "ParentState" });
+
+                    b.HasIndex("SubFlowInstanceId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_InstancesCorrelations_SubFlowInstanceId");
+
+                    b.ToTable("InstancesCorrelations", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceData", b =>
@@ -354,11 +375,13 @@ namespace BBT.Workflow.Migrations
                         .HasDatabaseName("UX_InstancesData_Instance_IsLatest")
                         .HasFilter("\"IsLatest\" = true");
 
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("InstanceId"), new[] { "Version", "VersionNo", "HistorySequence", "ETag", "DataHash", "EnteredAt" });
+
                     b.HasIndex("InstanceId", "VersionNo")
                         .IsUnique()
                         .HasDatabaseName("UX_InstancesData_Instance_VersionNo");
 
-                    b.ToTable("InstancesData", (string)null);
+                    b.ToTable("InstancesData", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceJob", b =>
@@ -403,7 +426,7 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("JobId")
                         .IsUnique();
 
-                    b.ToTable("InstanceJobs", (string)null);
+                    b.ToTable("InstanceJobs", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceTask", b =>
@@ -441,9 +464,12 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("FaultedTaskId");
 
-                    b.HasIndex("TransitionId");
+                    b.HasIndex("TransitionId", "Status")
+                        .HasDatabaseName("IX_InstanceTasks_Transition_Status_Covering");
 
-                    b.ToTable("InstanceTasks", (string)null);
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("TransitionId", "Status"), new[] { "TaskId", "BusinessStatus", "StartedAt" });
+
+                    b.ToTable("InstanceTasks", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceTransition", b =>
@@ -498,9 +524,15 @@ namespace BBT.Workflow.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("InstanceId");
+                    b.HasIndex("InstanceId", "FinishedAt")
+                        .HasDatabaseName("IX_InstanceTransitions_CompletedManual")
+                        .HasFilter("\"FinishedAt\" IS NOT NULL AND \"TriggerType\" = 0");
 
-                    b.ToTable("InstanceTransitions", (string)null);
+                    b.HasIndex("InstanceId", "StartedAt")
+                        .HasDatabaseName("IX_InstanceTransitions_Incomplete")
+                        .HasFilter("\"FinishedAt\" IS NULL");
+
+                    b.ToTable("InstanceTransitions", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceAction", b =>
@@ -523,7 +555,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceActionId");
 
-                            b1.ToTable("InstanceActions");
+                            b1.ToTable("InstanceActions", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceActionId");
@@ -566,7 +598,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceDataId");
 
-                            b1.ToTable("InstancesData");
+                            b1.ToTable("InstancesData", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceDataId");
@@ -601,7 +633,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTaskId");
 
-                            b1.ToTable("InstanceTasks");
+                            b1.ToTable("InstanceTasks", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTaskId");
@@ -619,7 +651,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTaskId");
 
-                            b1.ToTable("InstanceTasks");
+                            b1.ToTable("InstanceTasks", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTaskId");
@@ -637,7 +669,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTaskId");
 
-                            b1.ToTable("InstanceTasks");
+                            b1.ToTable("InstanceTasks", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTaskId");
@@ -673,7 +705,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTransitionId");
 
-                            b1.ToTable("InstanceTransitions");
+                            b1.ToTable("InstanceTransitions", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTransitionId");
@@ -691,7 +723,7 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceTransitionId");
 
-                            b1.ToTable("InstanceTransitions");
+                            b1.ToTable("InstanceTransitions", "public");
 
                             b1.WithOwner()
                                 .HasForeignKey("InstanceTransitionId");

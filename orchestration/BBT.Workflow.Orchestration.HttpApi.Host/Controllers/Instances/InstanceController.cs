@@ -1,10 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
-using BBT.Aether.AspNetCore.Pagination;
 using BBT.Aether.AspNetCore.Results;
-using BBT.Aether.Results;
-using BBT.Workflow.Definitions;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
@@ -23,9 +20,7 @@ public sealed class InstanceController(
     IInstanceRetryAppService retryAppService,
     IHttpContextAccessor httpContextAccessor,
     ISubflowCompletionService subflowCompletionService,
-    ISubflowStateService subflowStateService,
-    IPaginationLinkGenerator linkGenerator,
-    IUrlTemplateBuilder urlTemplateBuilder) : AetherControllerBase
+    ISubflowStateService subflowStateService) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -309,7 +304,6 @@ public sealed class InstanceController(
             Extensions = extensions,
             Page = page,
             PageSize = pageSize,
-            PageUrl = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow),
             Filter = filter,
             Sort = orderBy ?? sort,
             Version = version,
@@ -318,42 +312,6 @@ public sealed class InstanceController(
         };
 
         var response = await queryAppService.GetInstanceListAsync(input, cancellationToken);
-        if (response.IsSuccess)
-        {
-            var route = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow);
-
-            // Check if items contain GroupSummary objects (groupBy case) or GetInstanceOutput objects (normal case)
-            var firstItem = response.Value!.Items.FirstOrDefault();
-            var isGroupByResponse = firstItem is GroupSummary;
-
-            if (isGroupByResponse)
-            {
-                // For groupBy responses, create a simple paged list structure for HATEOAS links
-                var groupSummaries = response.Value!.Items.Cast<GroupSummary>().ToList();
-                var tempPagedList = new HateoasPagedList<GroupSummary>(
-                    groupSummaries,
-                    input.Page,
-                    input.PageSize,
-                    groupSummaries.Count == input.PageSize);
-
-                var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, groupSummaries, route);
-                response.Value!.Links = hateoasResult.Links;
-            }
-            else
-            {
-                // Normal case: items are GetInstanceOutput objects
-                var instanceOutputs = response.Value!.Items.Cast<GetInstanceOutput>().ToList();
-                var tempPagedList = new HateoasPagedList<GetInstanceOutput>(
-                    instanceOutputs,
-                    input.Page,
-                    input.PageSize,
-                    instanceOutputs.Count == input.PageSize);
-
-                var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, instanceOutputs, route);
-                response.Value!.Links = hateoasResult.Links;
-            }
-        }
-
         return response.ToActionResult(HttpContext);
     }
 
@@ -362,8 +320,6 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        [FromQuery] string[]? extensions = null,
-        [FromQuery] string? version = null,
         CancellationToken cancellationToken = default)
     {
         var requestContext = HttpContext.GetRequestBindingContext();
@@ -373,8 +329,6 @@ public sealed class InstanceController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            Extensions = extensions,
-            Version = version,
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters
         };

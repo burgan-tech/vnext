@@ -5,6 +5,7 @@ using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Dapr.Jobs.Models;
@@ -27,6 +28,7 @@ public sealed class AsyncTransitionStrategy(
     IInstanceJobRepository jobRepository,
     IInstanceRepository instanceRepository,
     IDistributedLockService distributedLockService,
+    ITransitionValidationService validationService,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     /// <summary>
@@ -38,8 +40,16 @@ public sealed class AsyncTransitionStrategy(
     /// <inheritdoc />
     /// <summary>
     /// Executes transition asynchronously by enqueuing a background job.
-    /// Railway chain: Create Context → Set Busy → Enqueue Job → Return Context
+    /// Railway chain: Create Context → Validate (schema + policy) → Set Busy → Enqueue Job → Return Context
     /// </summary>
+    /// <remarks>
+    /// Validation must run BEFORE lock acquisition and job enqueue so that callers
+    /// receive 400 Bad Request for invalid payloads instead of accepting the request,
+    /// flipping the instance to Busy, and discovering the schema violation later in
+    /// the background job (which would leave the instance in a Faulted state).
+    /// This also guarantees correct behavior when callers bypass the AppService
+    /// pre-validation guard and invoke the workflow execution service directly.
+    /// </remarks>
     [Trace]
     public Task<Result<TransitionExecutionContext>> ExecuteAsync(
         WorkflowExecutionContext context,
@@ -47,7 +57,23 @@ public sealed class AsyncTransitionStrategy(
     {
         var activity = Activity.Current;
         return ctxFactory.CreateAsync(context, cancellationToken)
+            .BindAsync(ctx => ValidateAsync(ctx, cancellationToken))
             .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, activity, cancellationToken));
+    }
+
+    /// <summary>
+    /// Validates the transition context (schema + state-machine policy) before
+    /// any side effects (Busy flip, lock acquisition, job enqueue).
+    /// Mirrors the guard in <c>TransitionPipeline.RunAsync</c> for the sync path.
+    /// </summary>
+    private async Task<Result<TransitionExecutionContext>> ValidateAsync(
+        TransitionExecutionContext ctx,
+        CancellationToken cancellationToken)
+    {
+        var validationResult = await validationService.ValidateAsync(ctx, cancellationToken);
+        return validationResult.IsSuccess
+            ? Result<TransitionExecutionContext>.Ok(ctx)
+            : Result<TransitionExecutionContext>.Fail(validationResult.Error);
     }
 
     /// <summary>

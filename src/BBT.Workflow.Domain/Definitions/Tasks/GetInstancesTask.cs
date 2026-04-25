@@ -108,6 +108,11 @@ public sealed class GetInstancesTask : WorkflowTask
     {
         Filter = filter;
     }
+    
+    public void SetFilter(object? filter)
+    {
+        Filter = JsonSerializer.Serialize(filter);
+    }
 
     public void SetUseDapr(bool useDapr)
     {

@@ -10,6 +10,7 @@ using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Strategies;
+using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -30,6 +31,7 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IInstanceJobRepository> _mockJobRepository;
     private readonly Mock<IInstanceRepository> _mockInstanceRepository;
     private readonly Mock<IDistributedLockService> _mockDistributedLockRepository;
+    private readonly Mock<ITransitionValidationService> _mockValidationService;
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger;
     private readonly AsyncTransitionStrategy _strategy;
 
@@ -40,7 +42,14 @@ public class AsyncTransitionStrategyTests
         _mockJobRepository = new Mock<IInstanceJobRepository>();
         _mockInstanceRepository = new Mock<IInstanceRepository>();
         _mockDistributedLockRepository = new Mock<IDistributedLockService>();
+        _mockValidationService = new Mock<ITransitionValidationService>();
         _mockLogger = new Mock<ILogger<AsyncTransitionStrategy>>();
+
+        // Default: validation passes — individual tests override this when they need to
+        // exercise the schema/policy rejection path.
+        _mockValidationService
+            .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
 
         _strategy = new AsyncTransitionStrategy(
             _mockBackgroundJobService.Object,
@@ -48,6 +57,7 @@ public class AsyncTransitionStrategyTests
             _mockJobRepository.Object,
             _mockInstanceRepository.Object,
             _mockDistributedLockRepository.Object,
+            _mockValidationService.Object,
             _mockLogger.Object);
     }
 
@@ -368,6 +378,73 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(It.IsAny<InstanceJob>());
+
+        // Default lock service behavior — execute the inner action and report acquisition success.
+        // Without this, ExecuteWithLockAsync returns false by default and the strategy short-circuits
+        // to InstanceLockConflict before any enqueue happens (which masked real signal in earlier runs).
+        _mockDistributedLockRepository
+            .Setup(x => x.ExecuteWithLockAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<Task>>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task>, int, CancellationToken>(async (_, action, _, _) =>
+            {
+                await action();
+                return true;
+            });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSchemaValidationFails_ShouldReturnFailureWithoutEnqueue()
+    {
+        // Arrange — context creation succeeds but the validation service rejects the payload
+        // (mirrors the sync pipeline's schema-violation behaviour for the async path).
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var validationError = Error.Validation(
+            "schema.invalid",
+            "Field 'amount' is required");
+
+        _mockValidationService
+            .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(validationError));
+
+        // Act
+        var result = await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        // Assert — request must be rejected with the validation error and NO side effects:
+        // no Busy flip, no lock attempt, no Dapr enqueue, no job record.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.ShouldBe(validationError);
+
+        _mockBackgroundJobService.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<string>(),
+                It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockDistributedLockRepository.Verify(
+            x => x.ExecuteWithLockAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<Task>>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     private WorkflowExecutionContext CreateWorkflowExecutionContext()

@@ -25,6 +25,14 @@ public interface ICacheSet : IDisposable
     /// that are not present in <paramref name="data"/>. Used for incremental (delta) cache updates.
     /// </summary>
     Task MergeAllAsync(object data, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Warms the local in-memory cache from the distributed cache for the given cache keys.
+    /// For each key: reads from distributed cache; if present upserts locally (no write-back).
+    /// On a distributed cache miss falls back to a per-key DB query and upserts locally.
+    /// Used by broadcast-receiving pods to avoid a full DB scan.
+    /// </summary>
+    Task LoadFromDistributedCacheAsync(IEnumerable<string> cacheKeys, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

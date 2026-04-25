@@ -44,10 +44,32 @@ const JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const jobs = new Map();
 
 /**
- * @typedef {'accepted'|'processing'|'completed'|'failed'} JobStatus
+ * @typedef {'accepted'|'processing'|'completed'|'failed'|'cancelled'} JobStatus
  * @typedef {{current: number, total: number, currentFile: string, phase: string}} JobProgress
- * @typedef {{id: string, packageName: string, status: JobStatus, progress: JobProgress|null, results: Object|null, error: string|null, createdAt: string, updatedAt: string}} Job
+ * @typedef {{id: string, packageName: string, status: JobStatus, progress: JobProgress|null, results: Object|null, error: string|null, cancelRequested: boolean, cancelledAt: string|null, createdAt: string, updatedAt: string}} Job
  */
+
+/**
+ * Error thrown when a job detects that cancellation has been requested.
+ * Caught by runPackagePublishJob to transition the job into the 'cancelled' state.
+ */
+class JobCancelledError extends Error {
+    constructor(jobId) {
+        super(`Job ${jobId} was cancelled`);
+        this.name = 'JobCancelledError';
+    }
+}
+
+/**
+ * Throw a JobCancelledError if the job has been flagged for cancellation.
+ * Used as a cooperative cancel checkpoint between work units.
+ * @param {Job} [job]
+ */
+function throwIfCancelled(job) {
+    if (job && job.cancelRequested) {
+        throw new JobCancelledError(job.id);
+    }
+}
 
 /**
  * Create a new job entry and store it.
@@ -64,6 +86,8 @@ function createJob(packageName) {
         progress: null,
         results: null,
         error: null,
+        cancelRequested: false,
+        cancelledAt: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
@@ -86,7 +110,7 @@ function updateJob(job, fields) {
 function cleanupExpiredJobs() {
     const now = Date.now();
     for (const [id, job] of jobs) {
-        if ((job.status === 'completed' || job.status === 'failed') &&
+        if ((job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') &&
             (now - new Date(job.updatedAt).getTime()) > JOB_TTL_MS) {
             jobs.delete(id);
         }
@@ -665,6 +689,8 @@ function logErrorResponse(responseBody, context) {
  * @param {Job} [job] - Optional job for progress tracking
  */
 async function processJsonFile(jsonFilePath, packagePath, componentType, vnextConfig, shouldReplaceDomain, appDomain, results, job) {
+    throwIfCancelled(job);
+
             const relativePath = path.relative(packagePath, jsonFilePath);
             const fileName = path.basename(jsonFilePath);
             
@@ -720,6 +746,7 @@ async function processJsonFile(jsonFilePath, packagePath, componentType, vnextCo
  * @param {Job} [job] - Optional job for progress tracking
  */
 async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job) {
+    throwIfCancelled(job);
     log.subsection(`Processing WORKFLOWS (Priority Order)`);
     
     try {
@@ -750,6 +777,7 @@ async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfi
     if (otherFiles.length > 0) {
         log.info(`${colors.bold}Step 2: Loading other workflow files (${otherFiles.length} files)${colors.reset}`);
         for (const jsonFilePath of otherFiles) {
+            throwIfCancelled(job);
             await processJsonFile(jsonFilePath, packagePath, 'workflows', vnextConfig, shouldReplaceDomain, appDomain, results, job);
         }
     }
@@ -767,6 +795,7 @@ async function processWorkflowsWithOrdering(workflowDir, packagePath, vnextConfi
  * @param {Job} [job] - Optional job for progress tracking
  */
 async function processComponentDirectory(componentDir, packagePath, vnextConfig, shouldReplaceDomain, appDomain, results, job) {
+    throwIfCancelled(job);
     log.subsection(`Processing ${componentDir.type.toUpperCase()}`);
     
     try {
@@ -783,6 +812,7 @@ async function processComponentDirectory(componentDir, packagePath, vnextConfig,
     
     // Process each JSON file
     for (const jsonFilePath of jsonFiles) {
+        throwIfCancelled(job);
         await processJsonFile(jsonFilePath, packagePath, componentDir.type, vnextConfig, shouldReplaceDomain, appDomain, results, job);
     }
 }
@@ -972,7 +1002,8 @@ async function handleRuntimePublish(req, res) {
             npmUsername,
             npmPassword,
             npmEmail,
-            appDomain
+            appDomain,
+            reInitialize = false
         } = body;
         
         if (!appDomain || appDomain.trim() === '') {
@@ -990,6 +1021,7 @@ async function handleRuntimePublish(req, res) {
         log.info(`Package: ${VNEXT_CORE_RUNTIME_PACKAGE}@${version}`);
         log.info(`App Domain: ${appDomain} (REQUIRED)`);
         log.info(`Domain Replacement: ALL domains will be replaced`);
+        log.info(`Re-initialize after publish: ${reInitialize === true ? 'ENABLED' : 'DISABLED'}`);
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1005,6 +1037,7 @@ async function handleRuntimePublish(req, res) {
             authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
             appDomain,
             isRuntimePackage: true,
+            reInitialize: reInitialize === true,
         });
         
     } catch (error) {
@@ -1038,7 +1071,8 @@ async function handlePackagePublish(req, res) {
             npmToken,
             npmUsername,
             npmPassword,
-            npmEmail
+            npmEmail,
+            reInitialize = false
         } = body;
 
         if (!packageName) {
@@ -1052,6 +1086,7 @@ async function handlePackagePublish(req, res) {
         log.section(`API Request: Package Publish [job=${job.id}]`);
         log.info(`Package: ${packageName}@${version}`);
         log.info(`Domain Replacement: DISABLED`);
+        log.info(`Re-initialize after publish: ${reInitialize === true ? 'ENABLED' : 'DISABLED'}`);
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1067,6 +1102,7 @@ async function handlePackagePublish(req, res) {
             authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
             appDomain: null,
             isRuntimePackage: false,
+            reInitialize: reInitialize === true,
         });
         
     } catch (error) {
@@ -1090,33 +1126,43 @@ async function handlePackagePublish(req, res) {
  * @param {Object} opts
  */
 async function runPackagePublishJob(job, opts) {
-    const { packageName, version, npmRegistry, authOptions, appDomain, isRuntimePackage } = opts;
+    const { packageName, version, npmRegistry, authOptions, appDomain, isRuntimePackage, reInitialize = false } = opts;
+    let results = null;
     try {
         updateJob(job, {
             status: 'processing',
             progress: { current: 0, total: 0, currentFile: '', phase: 'waiting-for-vnext' },
         });
 
+        throwIfCancelled(job);
         await waitForVNextApp();
+        throwIfCancelled(job);
 
         updateJob(job, {
             progress: { ...job.progress, phase: 'downloading' },
         });
 
         const packagePath = await downloadPackage(packageName, version, npmRegistry, authOptions);
+        throwIfCancelled(job);
         await verifyPackageStructure(packagePath);
+        throwIfCancelled(job);
 
         updateJob(job, {
             progress: { ...job.progress, phase: 'uploading' },
         });
 
-        const results = await processPackage(packagePath, packageName, appDomain, isRuntimePackage, job);
+        results = await processPackage(packagePath, packageName, appDomain, isRuntimePackage, job);
+        throwIfCancelled(job);
 
-        updateJob(job, {
-            progress: { ...job.progress, phase: 're-initializing' },
-        });
+        if (reInitialize) {
+            updateJob(job, {
+                progress: { ...job.progress, phase: 're-initializing' },
+            });
 
-        await reInitializeDefinitions();
+            await reInitializeDefinitions();
+        } else {
+            log.info('Re-initialize step skipped (reInitialize=false)');
+        }
 
         let success = true;
         let message = 'Package processed and published successfully';
@@ -1145,6 +1191,30 @@ async function runPackagePublishJob(job, opts) {
 
         log.success(`Job ${job.id} completed — ${message}`);
     } catch (error) {
+        if (error instanceof JobCancelledError) {
+            log.warn(`Job ${job.id} cancelled by user`);
+            updateJob(job, {
+                status: 'cancelled',
+                cancelledAt: new Date().toISOString(),
+                progress: job.progress ? { ...job.progress, phase: 'cancelled' } : null,
+                results: results ? {
+                    success: false,
+                    message: 'Job cancelled by user. Partial uploads were left in place.',
+                    packageName,
+                    appDomain,
+                    successful: results.success,
+                    failed: results.failed,
+                    skipped: results.skipped,
+                } : {
+                    success: false,
+                    message: 'Job cancelled by user before any uploads occurred.',
+                    packageName,
+                    appDomain,
+                },
+            });
+            return;
+        }
+
         log.error(`Job ${job.id} failed: ${error.message}`);
         if (error.stack) log.error(error.stack);
 
@@ -1226,8 +1296,62 @@ async function handleJobStatus(req, res) {
         progress: job.progress,
         results: job.results,
         error: job.error,
+        cancelRequested: job.cancelRequested,
+        cancelledAt: job.cancelledAt,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
+    }));
+}
+
+/**
+ * Handle job cancel request
+ * Endpoint: POST /api/package/publish/cancel/:jobId
+ *
+ * Sets a cooperative cancel flag on the job. The background worker checks this
+ * flag at well-defined checkpoints (between files, between stages) and stops
+ * gracefully. The currently in-flight upload (if any) is allowed to finish;
+ * partial uploads are NOT rolled back and reInitializeDefinitions() is skipped.
+ */
+async function handleJobCancel(req, res) {
+    const jobId = req.url.replace('/api/package/publish/cancel/', '');
+    const job = jobs.get(jobId);
+
+    if (!job) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Job not found', jobId }));
+        return;
+    }
+
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: 'Job is already in a terminal state and cannot be cancelled',
+            jobId: job.id,
+            status: job.status,
+        }));
+        return;
+    }
+
+    if (job.cancelRequested) {
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            jobId: job.id,
+            status: job.status,
+            cancelRequested: true,
+            message: 'Cancel was already requested. Poll status endpoint to confirm completion.',
+        }));
+        return;
+    }
+
+    updateJob(job, { cancelRequested: true });
+    log.warn(`Cancel requested for job ${job.id}`);
+
+    res.writeHead(202, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        jobId: job.id,
+        status: job.status,
+        cancelRequested: true,
+        message: 'Cancel signal sent. Job will stop at next checkpoint. Poll status endpoint to confirm.',
     }));
 }
 
@@ -1260,6 +1384,12 @@ async function handleRequest(req, res) {
     
     // Route POST requests
     if (req.method === 'POST') {
+        // Cancel a running publish job
+        if (req.url.startsWith('/api/package/publish/cancel/')) {
+            await handleJobCancel(req, res);
+            return;
+        }
+
         // Runtime package publish endpoint
         if (req.url === '/api/package/runtime/publish') {
             await handleRuntimePublish(req, res);
@@ -1281,7 +1411,8 @@ async function handleRequest(req, res) {
             'GET /health',
             'POST /api/package/publish',
             'POST /api/package/runtime/publish',
-            'GET /api/package/publish/status/:jobId'
+            'GET /api/package/publish/status/:jobId',
+            'POST /api/package/publish/cancel/:jobId'
         ]
     }));
 }
@@ -1328,6 +1459,9 @@ function startServer() {
         log.detail(`  - If appDomain provided, replaces all domains`);
         log.info(`Job Status: GET http://localhost:${PORT}/api/package/publish/status/:jobId`);
         log.detail(`  - Poll for job progress after publish`);
+        log.info(`Cancel Job: POST http://localhost:${PORT}/api/package/publish/cancel/:jobId`);
+        log.detail(`  - Cooperative cancel; job stops at next checkpoint`);
+        log.detail(`  - Partial uploads are NOT rolled back; reInitialize is skipped`);
         log.info(`VNext App URL: ${VNEXT_APP_URL}`);
         log.subsection('Timeout Configuration');
         log.info(`Server Timeout: ${SERVER_TIMEOUT_MS}ms (${SERVER_TIMEOUT_MS / 60000} min)`);

@@ -85,6 +85,7 @@ public sealed class Transition : IHasKey
     [JsonInclude] public Reference? Schema { get; private set; }
     [JsonInclude] public List<string> AvailableIn { get; private set; }
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
+    [JsonInclude] public ResourceLockDefinition? ResourceLock { get; private set; }
 
     [JsonInclude]
     [JsonPropertyName("labels")]

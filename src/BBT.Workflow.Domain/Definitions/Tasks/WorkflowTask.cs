@@ -69,7 +69,8 @@ public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSe
     /// </summary>
     public JsonElement Config { get; private set; }
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Tasks;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Tasks;
+    public string ComponentKey => ComponentTypeKey;
 
     private void SetKey(string key)
     {

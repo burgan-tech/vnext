@@ -82,8 +82,6 @@ public sealed class GetInstanceListInput : IHasDomain
     [Range(1, 100)]
     public int PageSize { get; set; } = 10;
 
-    public string PageUrl { get; set; } = string.Empty;
-
     /// <summary>
     /// OrderBy JSON for sorting. Single: {"field":"createdAt","direction":"desc"}.
     /// Multiple: {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}.
@@ -133,17 +131,6 @@ public sealed class GetInstanceHistoryInput : IHasDomain
 
     [Required]
     public string Instance { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Extensions requested for data enrichment
-    /// </summary>
-    public string[]? Extensions { get; set; }
-
-    /// <summary>
-    /// Optional instance data version. When null or empty, latest data is used.
-    /// When set, instance data is resolved to that version (semantic/partial match supported).
-    /// </summary>
-    public string? Version { get; set; }
 
     /// <summary>
     /// HTTP headers from the request for script context binding

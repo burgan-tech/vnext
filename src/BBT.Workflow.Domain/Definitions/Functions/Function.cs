@@ -81,7 +81,8 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     [JsonIgnore]
     public IReadOnlyCollection<RoleGrant> Roles => roles.AsReadOnly();
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Functions;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Functions;
+    public string ComponentKey => ComponentTypeKey;
 
     private void SetKey(string key)
     {

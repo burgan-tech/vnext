@@ -34,8 +34,19 @@ public sealed class GetInstancesTaskExecutorTests
         return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
     }
 
+    private static GetInstancesTaskExecutor CreateExecutor(
+        IInstanceQueryGateway gateway,
+        IRuntimeInfoProvider runtime)
+        => new(
+            Substitute.For<IScriptEngine>(),
+            runtime,
+            Substitute.For<IRemoteInvokerService>(),
+            gateway,
+            Substitute.For<IDomainDiscoveryResolver>(),
+            NullLogger<GetInstancesTaskExecutor>.Instance);
+
     [Fact]
-    public async Task ExecuteAsync_WhenListReturnsGroups_SkipsGetInstanceData_AndReturnsGroupedMetadata()
+    public async Task ExecuteAsync_WhenListReturnsGroups_ReturnsGroupedMetadata_AndPassesThroughResponse()
     {
         var task = WorkflowTaskFactory.CreateGetInstancesTask(
             domain: "test-domain",
@@ -54,18 +65,7 @@ public sealed class GetInstancesTaskExecutorTests
         var runtime = Substitute.For<IRuntimeInfoProvider>();
         runtime.Domain.Returns("test-domain");
 
-        var urlBuilder = Substitute.For<IUrlTemplateBuilder>();
-        urlBuilder.BuildFunctionListUrl("test-domain", "test-flow", "data")
-            .Returns("/api/test-domain/workflows/test-flow/functions/data");
-
-        var executor = new GetInstancesTaskExecutor(
-            Substitute.For<IScriptEngine>(),
-            runtime,
-            Substitute.For<IRemoteInvokerService>(),
-            gateway,
-            Substitute.For<IDomainDiscoveryResolver>(),
-            urlBuilder,
-            NullLogger<GetInstancesTaskExecutor>.Instance);
+        var executor = CreateExecutor(gateway, runtime);
 
         var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);
 
@@ -85,7 +85,7 @@ public sealed class GetInstancesTaskExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenListReturnsInstances_CallsGetInstanceDataPerItem()
+    public async Task ExecuteAsync_WhenListReturnsInstances_ReturnsResponseAsIs_WithoutGroupedFlag()
     {
         var task = WorkflowTaskFactory.CreateGetInstancesTask(domain: "test-domain", flow: "test-flow");
 
@@ -96,77 +96,19 @@ public sealed class GetInstancesTaskExecutorTests
         var gateway = Substitute.For<IInstanceQueryGateway>();
         gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok(listResponse));
-        gateway.GetInstanceDataAsync(
-                Arg.Is<GetInstanceDataInput>(i => i.Instance == "inst-1"),
-                Arg.Any<CancellationToken>())
-            .Returns(ConditionalResult<GetInstanceDataOutput>.Success(new GetInstanceDataOutput()));
 
         var runtime = Substitute.For<IRuntimeInfoProvider>();
         runtime.Domain.Returns("test-domain");
 
-        var urlBuilder = Substitute.For<IUrlTemplateBuilder>();
-        urlBuilder.BuildFunctionListUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
-            .Returns("/fn/data");
-
-        var executor = new GetInstancesTaskExecutor(
-            Substitute.For<IScriptEngine>(),
-            runtime,
-            Substitute.For<IRemoteInvokerService>(),
-            gateway,
-            Substitute.For<IDomainDiscoveryResolver>(),
-            urlBuilder,
-            NullLogger<GetInstancesTaskExecutor>.Instance);
+        var executor = CreateExecutor(gateway, runtime);
 
         var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        await gateway.Received(1)
-            .GetInstanceDataAsync(
-                Arg.Is<GetInstanceDataInput>(i => i.Instance == "inst-1"),
-                Arg.Any<CancellationToken>());
-        result.Value!.Metadata!.ContainsKey("Grouped").ShouldBeFalse();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenItemsAreJsonElements_DeserializesAsGroupSummaries()
-    {
-        var task = WorkflowTaskFactory.CreateGetInstancesTask(domain: "test-domain", flow: "test-flow");
-
-        var listResponse = new InstanceListWithGroupsResponse<GetInstanceOutput>
-        {
-            Items =
-            [
-                JsonSerializer.SerializeToElement(
-                    new GroupSummary { Name = "a", Count = 5 },
-                    JsonSerializerConstants.JsonOptions)
-            ]
-        };
-
-        var gateway = Substitute.For<IInstanceQueryGateway>();
-        gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>())
-            .Returns(Result.Ok(listResponse));
-
-        var runtime = Substitute.For<IRuntimeInfoProvider>();
-        runtime.Domain.Returns("test-domain");
-
-        var urlBuilder = Substitute.For<IUrlTemplateBuilder>();
-        urlBuilder.BuildFunctionListUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
-            .Returns("/fn/data");
-
-        var executor = new GetInstancesTaskExecutor(
-            Substitute.For<IScriptEngine>(),
-            runtime,
-            Substitute.For<IRemoteInvokerService>(),
-            gateway,
-            Substitute.For<IDomainDiscoveryResolver>(),
-            urlBuilder,
-            NullLogger<GetInstancesTaskExecutor>.Instance);
-
-        var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
+        // The executor no longer fans out to GetInstanceDataAsync; it returns the list response as-is.
         await gateway.DidNotReceive()
             .GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>());
-        result.Value!.Metadata!["Grouped"].ShouldBe(true);
+        result.Value!.Metadata!.ContainsKey("Grouped").ShouldBeFalse();
+        result.Value!.Metadata!["ItemCount"].ShouldBe(1);
     }
 }

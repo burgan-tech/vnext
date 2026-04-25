@@ -80,6 +80,13 @@ public class WorkflowValidator
                     $"The 'target' value in the timeout does not match any state '{workflow.Timeout.Target}'.",
                     [$"{nameof(Workflow)}.{nameof(WorkflowTimeout)}.{nameof(WorkflowTimeout.Target)}"]));
             }
+
+            if (workflow.Timeout.Mapping != null && workflow.Timeout.Timer == null)
+            {
+                result.AddError(new ValidationResult(
+                    "When timeout mapping is defined, static timer configuration is also required as fallback.",
+                    [$"{nameof(Workflow)}.{nameof(WorkflowTimeout)}.{nameof(WorkflowTimeout.Timer)}"]));
+            }
         }
     }
 

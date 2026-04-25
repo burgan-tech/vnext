@@ -82,7 +82,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
                 Logger.TaskLocalExecutionFailed(
                     task.Key,
                     TaskType.ToString(),
-                    context.ScriptContext.Instance.Id.ToString(),
+                    context.ScriptContext?.Instance?.Id.ToString() ?? string.Empty,
                     result.Error.Message ?? "StartTrigger failed");
                 return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                     error: result.Error.Message ?? "StartTrigger failed",
@@ -104,7 +104,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             Logger.TaskLocalExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id.ToString(),
+                context.ScriptContext?.Instance?.Id.ToString() ?? string.Empty,
                 ex.Message);
 
             return Result<TaskInvocationResult>.Fail(
@@ -129,7 +129,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             Logger.TaskEnvelopeCreationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 envelopeResult.Error.Message ?? "Failed to create envelope");
             return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
         }
@@ -147,7 +147,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 enrichResult.Error.Message ?? "Failed to resolve endpoint");
             return Result<TaskInvocationResult>.Fail(enrichResult.Error);
         }
@@ -165,7 +165,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 

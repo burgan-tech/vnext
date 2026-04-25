@@ -51,7 +51,7 @@ public sealed class DefinitionAppService(
                     return migrationResult;
             }
             
-            var instance = await instanceRepository.FindByIdentifierAsync(input.Key, cancellationToken)
+            var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken)
                            ?? Instance.Create(GuidGenerator.Create(), input.Flow, input.FlowVersion, input.Key);
 
             instance.AddTags(input.Tags.ToArray());
@@ -139,6 +139,8 @@ public sealed class DefinitionAppService(
             cancellationToken
         );
 
+        await PublishComponentPublishedEventAsync(input.Domain, input.Flow, input.Key, input.Version, cancellationToken);
+
         if (input.Data?.Any() == true)
         {
             var seedDataResult = await HandleAdditionalDataVersionsAsync(input, cancellationToken);
@@ -194,6 +196,8 @@ public sealed class DefinitionAppService(
             cancellationToken
         );
 
+        await PublishComponentPublishedEventAsync(input.Domain, input.Flow, input.Key, input.Version, cancellationToken);
+
         if (input.Data?.Any() == true)
         {
             var additionalDataResult = await HandleAdditionalDataVersionsAsync(input, cancellationToken);
@@ -241,7 +245,7 @@ public sealed class DefinitionAppService(
         PublishDataInput dataItem,
         CancellationToken cancellationToken)
     {
-        var instance = await instanceRepo.FindByIdentifierAsync(dataItem.Key, cancellationToken)
+        var instance = await instanceRepo.FindByIdentifierWithFullDataAsync(dataItem.Key, cancellationToken)
                        ?? Instance.Create(GuidGenerator.Create(), input.Key, input.FlowVersion, dataItem.Key);
 
         if (instance.FindData(dataItem.Version) != null)
@@ -281,7 +285,49 @@ public sealed class DefinitionAppService(
             cancellationToken
         );
 
+        await PublishComponentPublishedEventAsync(input.Domain, input.Key, dataItem.Key, dataItem.Version, cancellationToken);
+
         return Result.Ok();
+    }
+
+    /// <summary>
+    /// Best-effort granular broadcast that lets every pod warm its local snapshot for the
+    /// just-published component. Failures are logged and swallowed so a publish is never
+    /// blocked by pubsub issues - the Redis version index keeps consumers correct in that case.
+    /// </summary>
+    private async Task PublishComponentPublishedEventAsync(
+        string domain,
+        string componentType,
+        string key,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var evt = new ComponentPublishedEvent
+            {
+                Domain = domain,
+                Environment = configuration["ASPNETCORE_ENVIRONMENT"]!,
+                ComponentType = componentType,
+                Key = key,
+                Version = version,
+                PublishedBy = "System",
+                PublishedAt = DateTime.UtcNow
+            };
+
+            await daprClient.PublishEventAsync(
+                pubsubName: configuration["DAPR_PUBSUB_BROADCAST_STORE_NAME"]!,
+                topicName: ComponentPublishedEvent.TopicName,
+                data: evt,
+                cancellationToken: cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "ComponentPublishedEvent broadcast failed for {ComponentType} {Domain}/{Key}@{Version}",
+                componentType, domain, key, version);
+        }
     }
 
     /// <summary>
@@ -326,7 +372,7 @@ public sealed class DefinitionAppService(
 
         using (currentSchema.Use(input.Flow))
         {
-            var instance = await instanceRepository.FindByIdentifierAsync(input.Key, cancellationToken);
+            var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken);
             if (instance == null)
             {
                 return Result.Fail(WorkflowErrors.InstanceNotFound(input.Key));
@@ -355,9 +401,6 @@ public sealed class DefinitionAppService(
     /// <inheritdoc />
     public async Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
     {
-        // First, update both in-memory and distributed cache on this initiating pod
-        await runtimeCacheInitializer.InitializeWithDistributedCacheAsync(fullLoad, cancellationToken);
-
         // Then, publish broadcast event to all pods using Dapr client directly
         var cacheInvalidationEvent = new DefinitionCacheInvalidationEvent
         {

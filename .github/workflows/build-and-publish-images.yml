@@ -6,6 +6,25 @@ on:
       - 'release-v*'
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Base version (e.g. 0.0.50). Required when prerelease_type is not none.'
+        required: false
+        type: string
+      prerelease_type:
+        description: 'Prerelease channel'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - alpha
+          - beta
+          - rc
+      prerelease_number:
+        description: 'Prerelease number (e.g. 1 -> v0.0.50-alpha.1)'
+        required: false
+        default: '1'
+        type: string
       force_publish:
         description: 'Force publish images even if they exist'
         required: false
@@ -13,13 +32,13 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+  packages: read
   actions: read
-  # Note: packages:read permission for cross-org access requires PAT token
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
   EXECUTION_IMAGE_NAME: ${{ github.repository }}/execution
   ORCHESTRATOR_IMAGE_NAME: ${{ github.repository }}/orchestrator
   INIT_IMAGE_NAME: ${{ github.repository }}/init
@@ -28,351 +47,492 @@ env:
   DBMIGRATOR_IMAGE_NAME: ${{ github.repository }}/db-migrator
 
 jobs:
-  build-and-publish:
+  prepare:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+      packages: read
     outputs:
       version: ${{ steps.version.outputs.version }}
-      execution_image: ${{ steps.meta-execution.outputs.tags }}
-      orchestrator_image: ${{ steps.meta-orchestrator.outputs.tags }}
-      init_image: ${{ steps.meta-init.outputs.tags }}
-      inbox_image: ${{ steps.meta-inbox.outputs.tags }}
-      outbox_image: ${{ steps.meta-outbox.outputs.tags }}
-      dbmigrator_image: ${{ steps.meta-dbmigrator.outputs.tags }}
-    
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
-    # Option 1: GitHub App Token (Recommended)
-    - name: Generate GitHub App Token
-      id: generate_token
-      uses: actions/create-github-app-token@v1
-      with:
-        app-id: ${{ secrets.APP_ID }}
-        private-key: ${{ secrets.APP_PRIVATE_KEY }}
-    
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetch all history for version calculation
-        token: ${{ steps.generate_token.outputs.token }}
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: |
-          9.0.x
-          10.0.x
-    
-    - name: Calculate version from branch name
-      id: version
-      run: |
-        # Extract version from branch name (e.g., release-v1.0 -> 1.0)
-        BRANCH_NAME="${{ github.ref_name }}"
-        
-        if [[ "$BRANCH_NAME" =~ ^release-v([0-9]+\.[0-9]+)$ ]]; then
-          BASE_VERSION="${BASH_REMATCH[1]}"
-          echo "Base version from branch: $BASE_VERSION"
-          
-          # Find the next available patch version
-          PATCH=0
-          while true; do
-            VERSION="${BASE_VERSION}.${PATCH}"
-            TAG="v${VERSION}"
-            
-            # Check if this tag already exists
-            if git tag -l "$TAG" | grep -q "^$TAG$"; then
-              echo "Version $VERSION already exists, trying next patch version..."
-              PATCH=$((PATCH + 1))
-            else
-              echo "Found available version: $VERSION"
-              break
-            fi
-            
-            # Safety check to prevent infinite loop
-            if [ $PATCH -gt 100 ]; then
-              echo "Error: Could not find available patch version after 100 attempts"
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: |
+            vnext
+            vnext-helm-charts
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
+
+      - name: Calculate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE_TYPE: ${{ inputs.prerelease_type }}
+          INPUT_PRERELEASE_NUMBER: ${{ inputs.prerelease_number }}
+          INPUT_FORCE_PUBLISH: ${{ inputs.force_publish }}
+        run: |
+          BRANCH_NAME="${{ github.ref_name }}"
+          IS_PRERELEASE="false"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$INPUT_PRERELEASE_TYPE" && "$INPUT_PRERELEASE_TYPE" != "none" ]]; then
+            echo "Prerelease workflow_dispatch detected (type=$INPUT_PRERELEASE_TYPE)"
+
+            if [ -z "$INPUT_VERSION" ]; then
+              echo "Error: 'version' input is required when prerelease_type is not 'none'"
               exit 1
             fi
-          done
-        else
-          # Fallback to version from common.props
-          echo "Branch name doesn't match release-vX.Y pattern, using version from common.props"
-          VERSION=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
-          
-          if [ -z "$VERSION" ]; then
-            echo "Error: Could not determine version"
+
+            if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Error: 'version' must match X.Y.Z (got: $INPUT_VERSION)"
+              exit 1
+            fi
+
+            if [[ ! "$INPUT_PRERELEASE_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "Error: 'prerelease_number' must be a non-negative integer (got: $INPUT_PRERELEASE_NUMBER)"
+              exit 1
+            fi
+
+            VERSION="${INPUT_VERSION}-${INPUT_PRERELEASE_TYPE}.${INPUT_PRERELEASE_NUMBER}"
+            TAG="v${VERSION}"
+            IS_PRERELEASE="true"
+
+            if git tag -l "$TAG" | grep -q "^$TAG$"; then
+              if [[ "$INPUT_FORCE_PUBLISH" == "true" ]]; then
+                echo "Warning: Tag $TAG already exists but force_publish=true, continuing"
+              else
+                echo "Error: Tag $TAG already exists. Bump prerelease_number or set force_publish=true."
+                exit 1
+              fi
+            fi
+
+            echo "Resolved prerelease version: $VERSION"
+          elif [[ "$BRANCH_NAME" =~ ^release-v([0-9]+\.[0-9]+)$ ]]; then
+            BASE_VERSION="${BASH_REMATCH[1]}"
+            echo "Base version from branch: $BASE_VERSION"
+
+            PATCH=0
+            while true; do
+              VERSION="${BASE_VERSION}.${PATCH}"
+              TAG="v${VERSION}"
+
+              if git tag -l "$TAG" | grep -q "^$TAG$"; then
+                echo "Version $VERSION already exists, trying next patch version..."
+                PATCH=$((PATCH + 1))
+              else
+                echo "Found available version: $VERSION"
+                break
+              fi
+
+              if [ $PATCH -gt 100 ]; then
+                echo "Error: Could not find available patch version after 100 attempts"
+                exit 1
+              fi
+            done
+          else
+            echo "Branch name doesn't match release-vX.Y pattern, using version from common.props"
+            VERSION=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
+
+            if [ -z "$VERSION" ]; then
+              echo "Error: Could not determine version"
+              exit 1
+            fi
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION (prerelease=$IS_PRERELEASE)"
+
+      - name: Update version in common.props and commit
+        if: steps.version.outputs.is_prerelease != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
+          echo "Updated common.props with version $VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if ! git diff --quiet; then
+            git add common.props
+            git commit -m "chore: bump version to $VERSION [skip ci]"
+            git push origin ${{ github.ref_name }}
+            echo "Committed and pushed common.props update"
+          else
+            echo "No changes in common.props"
+          fi
+
+  build-sign-scan:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: execution
+            image: execution
+            image_name_env: EXECUTION_IMAGE_NAME
+            dockerfile: ./execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile
+            with_version_arg: true
+          - key: orchestrator
+            image: orchestrator
+            image_name_env: ORCHESTRATOR_IMAGE_NAME
+            dockerfile: ./orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile
+            with_version_arg: true
+          - key: init
+            image: init
+            image_name_env: INIT_IMAGE_NAME
+            dockerfile: ./init/VNext.Init.Host/Dockerfile
+            with_version_arg: false
+          - key: inbox
+            image: inbox
+            image_name_env: INBOX_IMAGE_NAME
+            dockerfile: ./workers/BBT.Workflow.Workers.Inbox/Dockerfile
+            with_version_arg: true
+          - key: outbox
+            image: outbox
+            image_name_env: OUTBOX_IMAGE_NAME
+            dockerfile: ./workers/BBT.Workflow.Workers.Outbox/Dockerfile
+            with_version_arg: true
+          - key: db-migrator
+            image: db-migrator
+            image_name_env: DBMIGRATOR_IMAGE_NAME
+            dockerfile: ./workers/BBT.Workflow.DbMigrator/Dockerfile
+            with_version_arg: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_prerelease != 'true' }}
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image (with VERSION build-arg)
+        id: push_with_version
+        if: matrix.with_version_arg
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+
+      - name: Build and push Docker image
+        id: push_without_version
+        if: ${{ !matrix.with_version_arg }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resolve image digest
+        id: digest
+        run: |
+          DIGEST="${{ steps.push_with_version.outputs.digest || steps.push_without_version.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "Error: Could not resolve image digest"
             exit 1
           fi
-        fi
-        
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Using version: $VERSION"
-    
-    - name: Update version in common.props
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
-        echo "Updated common.props with version $VERSION"
-    
-    - name: Configure NuGet Sources
-      run: |
-        # Verify NuGet configuration
-        echo "Using NuGet.org as the package source"
-        
-        # List configured sources for verification
-        echo "Configured NuGet sources:"
-        dotnet nuget list source
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata for Execution image
-      id: meta-execution
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}
-        tags: |
-          type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-    
-    - name: Extract metadata for Orchestrator image
-      id: meta-orchestrator
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}
-        tags: |
-          type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-    
-    - name: Extract metadata for Init image
-      id: meta-init
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}
-        tags: |
-          type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-    
-    - name: Extract metadata for Inbox image
-      id: meta-inbox
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}
-        tags: |
-          type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-    
-    - name: Extract metadata for Outbox image
-      id: meta-outbox
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}
-        tags: |
-          type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "Resolved digest: $DIGEST"
 
-    - name: Extract metadata for DbMigrator image
-      id: meta-dbmigrator
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}
-        tags: |
-          type=raw,value=${{ steps.version.outputs.version }}
-          type=raw,value=latest
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
 
-    - name: Build solution
-      run: |
-        echo "Restoring dependencies..."
-        # Restore using default NuGet.org source
-        dotnet restore ./BBT.Workflow.slnx --verbosity normal
-        
-        echo "Building solution..."
-        dotnet build ./BBT.Workflow.slnx \
-          --configuration Release \
-          --no-restore \
-          -p:Version=${{ steps.version.outputs.version }}
-        
-        echo "Skipping unit tests as requested..."
-    
-    - name: Build and push Execution Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-execution.outputs.tags }}
-        labels: ${{ steps.meta-execution.outputs.labels }}
-        build-args: |
-          VERSION=${{ steps.version.outputs.version }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Build and push Orchestrator Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-orchestrator.outputs.tags }}
-        labels: ${{ steps.meta-orchestrator.outputs.labels }}
-        build-args: |
-          VERSION=${{ steps.version.outputs.version }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Build and push Init Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./init/VNext.Init.Host/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-init.outputs.tags }}
-        labels: ${{ steps.meta-init.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Build and push Inbox Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./workers/BBT.Workflow.Workers.Inbox/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-inbox.outputs.tags }}
-        labels: ${{ steps.meta-inbox.outputs.labels }}
-        build-args: |
-          VERSION=${{ steps.version.outputs.version }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Build and push Outbox Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./workers/BBT.Workflow.Workers.Outbox/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-outbox.outputs.tags }}
-        labels: ${{ steps.meta-outbox.outputs.labels }}
-        build-args: |
-          VERSION=${{ steps.version.outputs.version }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Sign image by digest (immutable reference)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_REF}@${DIGEST}"
 
-    - name: Build and push DbMigrator Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./workers/BBT.Workflow.DbMigrator/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-dbmigrator.outputs.tags }}
-        labels: ${{ steps.meta-dbmigrator.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Create Git tag
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        TAG="v${VERSION}"
-        
-        # Configure git
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Create and push tag
-        git tag -a "$TAG" -m "Release $TAG - Docker images published"
-        git push origin "$TAG"
-    
-    - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ steps.version.outputs.version }}
-        release_name: Release v${{ steps.version.outputs.version }}
-        body: |
-          ## BBT Workflow v${{ steps.version.outputs.version }}
-          
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          format: spdx-json
+          output-file: ${{ matrix.key }}-sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.key }}-${{ needs.prepare.outputs.version }}
+          path: ${{ matrix.key }}-sbom.spdx.json
+          retention-days: 90
+
+      - name: Security scan
+        uses: anchore/scan-action@v3
+        id: scan
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          fail-build: false
+          output-format: sarif
+
+      - name: Upload SARIF results
+        if: always() && steps.scan.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: ${{ matrix.key }}
+
+      - name: Write digest file
+        run: |
+          mkdir -p digests
+          echo "${{ steps.digest.outputs.digest }}" > digests/${{ matrix.key }}.digest
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.key }}
+          path: digests/${{ matrix.key }}.digest
+          retention-days: 90
+
+  release:
+    needs: [prepare, build-sign-scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: |
+            vnext
+            vnext-helm-charts
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
+
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Export digests as env
+        id: digests
+        run: |
+          EXEC_DIGEST=$(cat digests/execution.digest)
+          ORCH_DIGEST=$(cat digests/orchestrator.digest)
+          INIT_DIGEST=$(cat digests/init.digest)
+          INBOX_DIGEST=$(cat digests/inbox.digest)
+          OUTBOX_DIGEST=$(cat digests/outbox.digest)
+          DBMIG_DIGEST=$(cat digests/db-migrator.digest)
+
+          echo "exec_digest=$EXEC_DIGEST" >> $GITHUB_OUTPUT
+          echo "orch_digest=$ORCH_DIGEST" >> $GITHUB_OUTPUT
+          echo "init_digest=$INIT_DIGEST" >> $GITHUB_OUTPUT
+          echo "inbox_digest=$INBOX_DIGEST" >> $GITHUB_OUTPUT
+          echo "outbox_digest=$OUTBOX_DIGEST" >> $GITHUB_OUTPUT
+          echo "dbmig_digest=$DBMIG_DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Create Git tag
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping tag creation"
+          else
+            git tag -a "$TAG" -m "Release $TAG - Docker images published"
+            git push origin "$TAG"
+          fi
+
+      - name: Generate changelog
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          REGISTRY="${{ env.REGISTRY }}"
+          REPO="${{ github.repository }}"
+          WORKFLOW_REF="https://github.com/${REPO}/.github/workflows/build-and-publish-images.yml@.*"
+
+          EXEC_DIGEST="${{ steps.digests.outputs.exec_digest }}"
+          ORCH_DIGEST="${{ steps.digests.outputs.orch_digest }}"
+          INIT_DIGEST="${{ steps.digests.outputs.init_digest }}"
+          INBOX_DIGEST="${{ steps.digests.outputs.inbox_digest }}"
+          OUTBOX_DIGEST="${{ steps.digests.outputs.outbox_digest }}"
+          DBMIG_DIGEST="${{ steps.digests.outputs.dbmig_digest }}"
+
+          cat > changelog.md <<EOF
+          ## BBT Workflow v${VERSION}
+
           ### 🐳 Published Docker Images
-          
-          #### Execution Service
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          ```
-          
-          #### Orchestrator Service  
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          ```
-          
-          #### Init Service
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          ```
-          
-          #### Inbox Worker
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          ```
-          
-          #### Outbox Worker
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          ```
-          
-          #### DbMigrator (run-once job)
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-          ```
-          
+
+          #### Immutable digests (preferred for trust)
+
+          Tags can move; these digests cannot. Signatures and provenance refer to these references.
+
+          - \`${REGISTRY}/${REPO}/execution@${EXEC_DIGEST}\`
+          - \`${REGISTRY}/${REPO}/orchestrator@${ORCH_DIGEST}\`
+          - \`${REGISTRY}/${REPO}/init@${INIT_DIGEST}\`
+          - \`${REGISTRY}/${REPO}/inbox@${INBOX_DIGEST}\`
+          - \`${REGISTRY}/${REPO}/outbox@${OUTBOX_DIGEST}\`
+          - \`${REGISTRY}/${REPO}/db-migrator@${DBMIG_DIGEST}\`
+
+          #### Tags (mutable, convenience)
+
+          \`\`\`bash
+          docker pull ${REGISTRY}/${REPO}/execution:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/orchestrator:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/init:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/inbox:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/outbox:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/db-migrator:${VERSION}
+          \`\`\`
+
+          ### 🔐 Supply Chain
+
+          - **OCI provenance & SBOM**: pushed with the image (BuildKit \`provenance: mode=max\`, \`sbom: true\`).
+          - **GitHub build provenance**: artifact attestation for this workflow run (identity, repo, workflow ref).
+          - **Cosign signature**: each image signed by digest with keyless OIDC.
+
+          #### Verify Cosign signature (digest)
+
+          \`\`\`bash
+          # Execution
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/execution@${EXEC_DIGEST}
+
+          # Orchestrator
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/orchestrator@${ORCH_DIGEST}
+
+          # Init
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/init@${INIT_DIGEST}
+
+          # Inbox
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/inbox@${INBOX_DIGEST}
+
+          # Outbox
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/outbox@${OUTBOX_DIGEST}
+
+          # DbMigrator
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/db-migrator@${DBMIG_DIGEST}
+          \`\`\`
+
+          #### Verify GitHub build provenance attestation
+
+          \`\`\`bash
+          gh attestation verify oci://${REGISTRY}/${REPO}/execution@${EXEC_DIGEST}    --repo ${REPO}
+          gh attestation verify oci://${REGISTRY}/${REPO}/orchestrator@${ORCH_DIGEST}  --repo ${REPO}
+          gh attestation verify oci://${REGISTRY}/${REPO}/init@${INIT_DIGEST}          --repo ${REPO}
+          gh attestation verify oci://${REGISTRY}/${REPO}/inbox@${INBOX_DIGEST}        --repo ${REPO}
+          gh attestation verify oci://${REGISTRY}/${REPO}/outbox@${OUTBOX_DIGEST}      --repo ${REPO}
+          gh attestation verify oci://${REGISTRY}/${REPO}/db-migrator@${DBMIG_DIGEST}  --repo ${REPO}
+          \`\`\`
+
           ### 🚀 Quick Start
-          
+
           **Using Docker Compose:**
-          ```yaml
+
+          \`\`\`yaml
           version: '3.8'
           services:
             execution:
-              image: ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+              image: ${REGISTRY}/${REPO}/execution:${VERSION}
               ports:
                 - "5001:5000"
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
-          
             orchestrator:
-              image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+              image: ${REGISTRY}/${REPO}/orchestrator:${VERSION}
               ports:
                 - "5002:5000"
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
               depends_on:
                 - execution
-          
             init:
-              image: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-               ports:
+              image: ${REGISTRY}/${REPO}/init:${VERSION}
+              ports:
                 - "3005:3000"
               environment:
                 - VNEXT_APP_URL=http://vnext-app:4201
@@ -380,465 +540,204 @@ jobs:
                 - DEFAULT_REGISTRY=https://registry.npmjs.org/
               depends_on:
                 - orchestrator
-          
             inbox:
-              image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+              image: ${REGISTRY}/${REPO}/inbox:${VERSION}
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
               depends_on:
                 - orchestrator
-          
             outbox:
-              image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+              image: ${REGISTRY}/${REPO}/outbox:${VERSION}
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
               depends_on:
                 - orchestrator
-          ```
-          
-          **Using Kubernetes:**
-          ```bash
-          # Create namespace
-          kubectl create namespace bbt-workflow
-          
-          # Deploy execution service
-          kubectl create deployment execution \
-            --image=${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
-            --namespace=bbt-workflow
-          
-          # Deploy orchestrator service
-          kubectl create deployment orchestrator \
-            --image=${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
-            --namespace=bbt-workflow
-          
-          # Deploy init service
-          kubectl create deployment init \
-            --image=${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
-            --namespace=bbt-workflow
-          
-          # Deploy inbox worker
-          kubectl create deployment inbox \
-            --image=${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
-            --namespace=bbt-workflow
-          
-          # Deploy outbox worker
-          kubectl create deployment outbox \
-            --image=${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }} \
-            --namespace=bbt-workflow
-          ```
-          
-          ### 🔧 Configuration
-          
-          Both services support configuration through:
-          - Environment variables
-          - appsettings.json files
-          - Command line arguments
-          - Azure Key Vault (if configured)
-          
-          ### 📋 Changes
-          
-          See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes.
-          
+          \`\`\`
+
           ### 🏷️ Available Tags
-          
-          - `v${{ steps.version.outputs.version }}` - This release
-          - `latest` - Latest stable release
-          - `${{ github.ref_name }}` - Branch-specific build
-          - `${{ github.ref_name }}-${{ github.sha }}` - Commit-specific build
-          
+
+          - \`v${VERSION}\` - This release
+          - \`latest\` - Latest stable release
+          - \`${{ github.ref_name }}\` - Branch-specific build
+
           ---
-          *🤖 Built from branch: `${{ github.ref_name }}`*  
-          *📝 Commit: ${{ github.sha }}*  
-          *⏰ Build time: ${{ github.run_number }}*
-        draft: false
-        prerelease: false
-    
-    - name: Generate SBOM for Execution image
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        format: spdx-json
-        output-file: execution-sbom.spdx.json
-    
-    - name: Generate SBOM for Orchestrator image
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        format: spdx-json
-        output-file: orchestrator-sbom.spdx.json
-    
-    - name: Generate SBOM for Init image
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        format: spdx-json
-        output-file: init-sbom.spdx.json
-    
-    - name: Generate SBOM for Inbox image
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        format: spdx-json
-        output-file: inbox-sbom.spdx.json
-    
-    - name: Generate SBOM for Outbox image
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        format: spdx-json
-        output-file: outbox-sbom.spdx.json
+          *🤖 Built from branch: \`${{ github.ref_name }}\`*
+          *📝 Commit: ${{ github.sha }}*
+          *⏰ Build run: ${{ github.run_number }}*
+          EOF
 
-    - name: Generate SBOM for DbMigrator image
-      uses: anchore/sbom-action@v0
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        format: spdx-json
-        output-file: dbmigrator-sbom.spdx.json
-    
-    - name: Upload SBOMs as artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: sbom-reports-${{ steps.version.outputs.version }}
-        path: |
-          execution-sbom.spdx.json
-          orchestrator-sbom.spdx.json
-          init-sbom.spdx.json
-          inbox-sbom.spdx.json
-          outbox-sbom.spdx.json
-          dbmigrator-sbom.spdx.json
-        retention-days: 90
-    
-    - name: Security scan - Execution image
-      uses: anchore/scan-action@v3
-      id: scan-execution
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        fail-build: false
-        output-format: sarif
-    
-    - name: Security scan - Orchestrator image
-      uses: anchore/scan-action@v3
-      id: scan-orchestrator
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        fail-build: false
-        output-format: sarif
-    
-    - name: Security scan - Init image
-      uses: anchore/scan-action@v3
-      id: scan-init
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        fail-build: false
-        output-format: sarif
-    
-    - name: Security scan - Inbox image
-      uses: anchore/scan-action@v3
-      id: scan-inbox
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        fail-build: false
-        output-format: sarif
-    
-    - name: Security scan - Outbox image
-      uses: anchore/scan-action@v3
-      id: scan-outbox
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        fail-build: false
-        output-format: sarif
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: Release v${{ needs.prepare.outputs.version }}
+          body_path: changelog.md
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Security scan - DbMigrator image
-      uses: anchore/scan-action@v3
-      id: scan-dbmigrator
-      with:
-        image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}
-        fail-build: false
-        output-format: sarif
-    
-    - name: Check if SARIF files exist
-      if: always()
-      id: check-sarif
-      run: |
-        echo "Checking for SARIF files..."
-        FOUND_FILES=""
-        
-        if [ -n "${{ steps.scan-execution.outputs.sarif }}" ] && [ -f "${{ steps.scan-execution.outputs.sarif }}" ]; then
-          echo "Found execution SARIF: ${{ steps.scan-execution.outputs.sarif }}"
-          FOUND_FILES="${{ steps.scan-execution.outputs.sarif }}"
-        fi
-        
-        if [ -n "${{ steps.scan-orchestrator.outputs.sarif }}" ] && [ -f "${{ steps.scan-orchestrator.outputs.sarif }}" ]; then
-          echo "Found orchestrator SARIF: ${{ steps.scan-orchestrator.outputs.sarif }}"
-          if [ -n "$FOUND_FILES" ]; then
-            FOUND_FILES="$FOUND_FILES,${{ steps.scan-orchestrator.outputs.sarif }}"
-          else
-            FOUND_FILES="${{ steps.scan-orchestrator.outputs.sarif }}"
-          fi
-        fi
-        
-        if [ -n "${{ steps.scan-init.outputs.sarif }}" ] && [ -f "${{ steps.scan-init.outputs.sarif }}" ]; then
-          echo "Found init SARIF: ${{ steps.scan-init.outputs.sarif }}"
-          if [ -n "$FOUND_FILES" ]; then
-            FOUND_FILES="$FOUND_FILES,${{ steps.scan-init.outputs.sarif }}"
-          else
-            FOUND_FILES="${{ steps.scan-init.outputs.sarif }}"
-          fi
-        fi
-        
-        if [ -n "${{ steps.scan-inbox.outputs.sarif }}" ] && [ -f "${{ steps.scan-inbox.outputs.sarif }}" ]; then
-          echo "Found inbox SARIF: ${{ steps.scan-inbox.outputs.sarif }}"
-          if [ -n "$FOUND_FILES" ]; then
-            FOUND_FILES="$FOUND_FILES,${{ steps.scan-inbox.outputs.sarif }}"
-          else
-            FOUND_FILES="${{ steps.scan-inbox.outputs.sarif }}"
-          fi
-        fi
-        
-        if [ -n "${{ steps.scan-outbox.outputs.sarif }}" ] && [ -f "${{ steps.scan-outbox.outputs.sarif }}" ]; then
-          echo "Found outbox SARIF: ${{ steps.scan-outbox.outputs.sarif }}"
-          if [ -n "$FOUND_FILES" ]; then
-            FOUND_FILES="$FOUND_FILES,${{ steps.scan-outbox.outputs.sarif }}"
-          else
-            FOUND_FILES="${{ steps.scan-outbox.outputs.sarif }}"
-          fi
-        fi
-        
-        if [ -n "${{ steps.scan-dbmigrator.outputs.sarif }}" ] && [ -f "${{ steps.scan-dbmigrator.outputs.sarif }}" ]; then
-          echo "Found dbmigrator SARIF: ${{ steps.scan-dbmigrator.outputs.sarif }}"
-          if [ -n "$FOUND_FILES" ]; then
-            FOUND_FILES="$FOUND_FILES,${{ steps.scan-dbmigrator.outputs.sarif }}"
-          else
-            FOUND_FILES="${{ steps.scan-dbmigrator.outputs.sarif }}"
-          fi
-        fi
-        
-        if [ -n "$FOUND_FILES" ]; then
-          echo "has_sarif=true" >> $GITHUB_OUTPUT
-          echo "sarif_files=$FOUND_FILES" >> $GITHUB_OUTPUT
-          echo "Will attempt to upload SARIF files: $FOUND_FILES"
-        else
-          echo "has_sarif=false" >> $GITHUB_OUTPUT
-          echo "No SARIF files found - this is normal if no critical vulnerabilities were detected"
-        fi
+  trigger-helm:
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    if: needs.prepare.outputs.is_prerelease != 'true'
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: |
+            vnext
+            vnext-helm-charts
 
-    - name: Upload security scan results
-      uses: github/codeql-action/upload-sarif@v3
-      if: always() && steps.check-sarif.outputs.has_sarif == 'true'
-      continue-on-error: true
-      with:
-        sarif_file: ${{ steps.check-sarif.outputs.sarif_files }}
-      env:
-        # Only upload if Advanced Security is available
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Security scan summary
-      if: always()
-      run: |
-        echo "=== Security Scan Summary ==="
-        if [ "${{ steps.check-sarif.outputs.has_sarif }}" == "true" ]; then
-          echo "✅ SARIF files were generated and upload was attempted"
-          echo "📁 Files: ${{ steps.check-sarif.outputs.sarif_files }}"
-        else
-          echo "ℹ️  No SARIF files generated - this typically means no critical vulnerabilities were found"
-        fi
-        
-        echo ""
-        echo "Note: SARIF upload to GitHub Security tab requires:"
-        echo "- GitHub Advanced Security to be enabled (paid feature for private repos)"
-        echo "- Critical vulnerabilities to be found by the scanner"
-        echo ""
-        echo "The security scans still ran successfully and results are available in the workflow logs above."
-    
-    - name: Update Docker Compose files with new version
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        
-        # Update docker-compose files with new version
-        if [ -f "./etc/docker/docker-compose.yml" ]; then
-          sed -i "s|image: .*execution.*|image: ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
-          sed -i "s|image: .*orchestrator.*|image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
-          sed -i "s|image: .*inbox.*|image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
-          sed -i "s|image: .*outbox.*|image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
-          sed -i "s|image: .*db-migrator.*|image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.yml
-          echo "Updated docker-compose.yml with version $VERSION"
-        fi
-        
-        if [ -f "./etc/docker/docker-compose.stage.yml" ]; then
-          sed -i "s|image: .*execution.*|image: ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
-          sed -i "s|image: .*orchestrator.*|image: ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
-          sed -i "s|image: .*inbox.*|image: ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
-          sed -i "s|image: .*outbox.*|image: ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
-          sed -i "s|image: .*db-migrator.*|image: ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${VERSION}|g" ./etc/docker/docker-compose.stage.yml
-          echo "Updated docker-compose.stage.yml with version $VERSION"
-        fi
-    
-    - name: Commit and push version updates
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        
-        # Configure git with bot credentials
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Check if there are changes to commit
-        if ! git diff --quiet; then
-          git add common.props
-          git add etc/docker/docker-compose*.yml || true
-          git commit -m "chore: bump version to $VERSION [skip ci]"
-          
-          # Push with the token that has bypass permissions
-          git push origin ${{ github.ref_name }}
-          echo "Committed and pushed version updates"
-        else
-          echo "No changes to commit"
-        fi
-    
-    - name: Notify deployment status
-      run: |
-        echo "## 🐳 Docker Images Published Successfully" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📦 Image Information" >> $GITHUB_STEP_SUMMARY
-        echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Registry**: ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🏗️ Published Images" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Execution Service:**" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Orchestrator Service:**" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Init Service:**" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Inbox Worker:**" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Outbox Worker:**" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**DbMigrator (run-once job):**" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🎯 Next Steps" >> $GITHUB_STEP_SUMMARY
-        echo "1. 🐳 Images are available in GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
-        echo "2. 🏷️ Git tag v${{ steps.version.outputs.version }} has been created" >> $GITHUB_STEP_SUMMARY
-        echo "3. 📋 GitHub release has been published with deployment instructions" >> $GITHUB_STEP_SUMMARY
-        echo "4. 🔒 Security scans and SBOMs have been generated" >> $GITHUB_STEP_SUMMARY
-        echo "5. 📝 Docker Compose files have been updated with new version" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🚀 Quick Deploy Commands" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Pull images:**" >> $GITHUB_STEP_SUMMARY
-        echo '```bash' >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.EXECUTION_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.ORCHESTRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.INIT_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.INBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.OUTBOX_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.DBMIGRATOR_IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Start services:**" >> $GITHUB_STEP_SUMMARY
-        echo '```bash' >> $GITHUB_STEP_SUMMARY
-        echo "cd etc/docker && docker-compose up -d" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Trigger Helm Chart Release
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+          repository: burgan-tech/vnext-helm-charts
+          event-type: app-release
+          client-payload: '{"app_version": "${{ needs.prepare.outputs.version }}"}'
 
-    - name: Trigger Helm Chart Release
-      uses: peter-evans/repository-dispatch@v3
-      with:
-        token: ${{ steps.generate_token.outputs.token }}
-        repository: burgan-tech/vnext-helm-charts
-        event-type: app-release
-        client-payload: '{"app_version": "${{ steps.version.outputs.version }}"}'
+  notify:
+    needs: [prepare, build-sign-scan, release]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download digest artifacts
+        if: needs.build-sign-scan.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Write deployment summary
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          REGISTRY="${{ env.REGISTRY }}"
+          REPO="${{ github.repository }}"
+
+          EXEC_DIGEST=$(cat digests/execution.digest 2>/dev/null || echo "n/a")
+          ORCH_DIGEST=$(cat digests/orchestrator.digest 2>/dev/null || echo "n/a")
+          INIT_DIGEST=$(cat digests/init.digest 2>/dev/null || echo "n/a")
+          INBOX_DIGEST=$(cat digests/inbox.digest 2>/dev/null || echo "n/a")
+          OUTBOX_DIGEST=$(cat digests/outbox.digest 2>/dev/null || echo "n/a")
+          DBMIG_DIGEST=$(cat digests/db-migrator.digest 2>/dev/null || echo "n/a")
+
+          {
+            echo "## 🐳 Docker Images Published"
+            echo ""
+            echo "### 📦 Release Info"
+            echo "- **Version**: ${VERSION}"
+            echo "- **Branch**: ${{ github.ref_name }}"
+            echo "- **Commit**: ${{ github.sha }}"
+            echo "- **Registry**: ${REGISTRY}"
+            echo ""
+            echo "### 🔐 Immutable Image Digests (cosign-signed)"
+            echo ""
+            echo "| Image | Digest |"
+            echo "|-------|--------|"
+            echo "| execution    | \`${EXEC_DIGEST}\`  |"
+            echo "| orchestrator | \`${ORCH_DIGEST}\`  |"
+            echo "| init         | \`${INIT_DIGEST}\`  |"
+            echo "| inbox        | \`${INBOX_DIGEST}\` |"
+            echo "| outbox       | \`${OUTBOX_DIGEST}\`|"
+            echo "| db-migrator  | \`${DBMIG_DIGEST}\` |"
+            echo ""
+            echo "### 🏷️ Mutable Tags"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${REGISTRY}/${REPO}/execution:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO}/orchestrator:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO}/init:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO}/inbox:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO}/outbox:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO}/db-migrator:${VERSION}"
+            echo '```'
+            echo ""
+            echo "### 🎯 Next Steps"
+            echo "1. 🐳 Images are available in GitHub Container Registry"
+            echo "2. 🏷️ Git tag v${VERSION} has been created"
+            echo "3. 📋 GitHub release published with cosign verify commands"
+            echo "4. 🔒 Cosign signatures, SBOMs and provenance attestations generated"
+          } >> $GITHUB_STEP_SUMMARY
 
   publish-nuget:
     runs-on: ubuntu-latest
-    needs: build-and-publish
+    needs: prepare
+    permissions:
+      contents: read
 
     env:
-      NUGET_VERSION: ${{ needs.build-and-publish.outputs.version }}
+      NUGET_VERSION: ${{ needs.prepare.outputs.version }}
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: |
-          9.0.x
-          10.0.x
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
-    - name: Restore solution
-      run: dotnet restore ./BBT.Workflow.slnx --verbosity normal
+      - name: Restore solution
+        run: dotnet restore ./BBT.Workflow.slnx --verbosity normal
 
-    # Pack order follows the dependency chain:
-    # Events.Contracts (leaf) → Modules.Scripting (leaf) → Domain → Tasks.Abstractions
-    - name: Pack BBT.Workflow.Events.Contracts
-      run: |
-        dotnet pack src/BBT.Workflow.Events.Contracts/BBT.Workflow.Events.Contracts.csproj \
-          --configuration Release \
-          --no-restore \
-          -p:Version=${{ env.NUGET_VERSION }} \
-          --output ./nuget-artifacts
+      # Pack order follows the dependency chain:
+      # Events.Contracts (leaf) → Modules.Scripting (leaf) → Domain → Tasks.Abstractions
+      - name: Pack BBT.Workflow.Events.Contracts
+        run: |
+          dotnet pack src/BBT.Workflow.Events.Contracts/BBT.Workflow.Events.Contracts.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:Version=${{ env.NUGET_VERSION }} \
+            --output ./nuget-artifacts
 
-    - name: Pack BBT.Workflow.Modules.Scripting
-      run: |
-        dotnet pack modules/BBT.Workflow.Modules.Scripting/BBT.Workflow.Modules.Scripting.csproj \
-          --configuration Release \
-          --no-restore \
-          -p:Version=${{ env.NUGET_VERSION }} \
-          --output ./nuget-artifacts
+      - name: Pack BBT.Workflow.Modules.Scripting
+        run: |
+          dotnet pack modules/BBT.Workflow.Modules.Scripting/BBT.Workflow.Modules.Scripting.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:Version=${{ env.NUGET_VERSION }} \
+            --output ./nuget-artifacts
 
-    - name: Pack BBT.Workflow.Domain
-      run: |
-        dotnet pack src/BBT.Workflow.Domain/BBT.Workflow.Domain.csproj \
-          --configuration Release \
-          --no-restore \
-          -p:Version=${{ env.NUGET_VERSION }} \
-          --output ./nuget-artifacts
+      - name: Pack BBT.Workflow.Domain
+        run: |
+          dotnet pack src/BBT.Workflow.Domain/BBT.Workflow.Domain.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:Version=${{ env.NUGET_VERSION }} \
+            --output ./nuget-artifacts
 
-    - name: Pack BBT.Workflow.Tasks.Abstractions
-      run: |
-        dotnet pack src/BBT.Workflow.Tasks.Abstractions/BBT.Workflow.Tasks.Abstractions.csproj \
-          --configuration Release \
-          --no-restore \
-          -p:Version=${{ env.NUGET_VERSION }} \
-          --output ./nuget-artifacts
+      - name: Pack BBT.Workflow.Tasks.Abstractions
+        run: |
+          dotnet pack src/BBT.Workflow.Tasks.Abstractions/BBT.Workflow.Tasks.Abstractions.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:Version=${{ env.NUGET_VERSION }} \
+            --output ./nuget-artifacts
 
-    - name: Push all packages to NuGet.org
-      run: |
-        dotnet nuget push ./nuget-artifacts/*.nupkg \
-          --api-key ${{ secrets.NUGET_API_KEY }} \
-          --source https://api.nuget.org/v3/index.json \
-          --skip-duplicate
+      - name: Push all packages to NuGet.org
+        run: |
+          dotnet nuget push ./nuget-artifacts/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
 
-    - name: Notify NuGet publish status
-      run: |
-        echo "## 📦 NuGet Packages Published" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Version**: \`${{ env.NUGET_VERSION }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Package | NuGet |" >> $GITHUB_STEP_SUMMARY
-        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| BBT.Workflow.Events.Contracts | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Events.Contracts) |" >> $GITHUB_STEP_SUMMARY
-        echo "| BBT.Workflow.Modules.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Modules.Scripting) |" >> $GITHUB_STEP_SUMMARY
-        echo "| BBT.Workflow.Domain | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Domain) |" >> $GITHUB_STEP_SUMMARY
-        echo "| BBT.Workflow.Tasks.Abstractions | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Tasks.Abstractions) |" >> $GITHUB_STEP_SUMMARY
+      - name: Notify NuGet publish status
+        run: |
+          echo "## 📦 NuGet Packages Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: \`${{ env.NUGET_VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | NuGet |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| BBT.Workflow.Events.Contracts | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Events.Contracts) |" >> $GITHUB_STEP_SUMMARY
+          echo "| BBT.Workflow.Modules.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Modules.Scripting) |" >> $GITHUB_STEP_SUMMARY
+          echo "| BBT.Workflow.Domain | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Domain) |" >> $GITHUB_STEP_SUMMARY
+          echo "| BBT.Workflow.Tasks.Abstractions | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Tasks.Abstractions) |" >> $GITHUB_STEP_SUMMARY

@@ -96,7 +96,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public string SemanticVersion =>
         Version.Contains('+') ? Regex.Match(Version, @"^([^+]+)").Groups[1].Value : Version;
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Flows;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Flows;
+    public string ComponentKey => ComponentTypeKey;
     
     /// <summary>
     /// When the workflow starts, a timer counts down.

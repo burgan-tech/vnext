@@ -37,11 +37,38 @@ public interface IDomainCacheContext
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Warms each local in-memory cache set from the distributed cache using the provided keys.
+    /// On a distributed cache miss for a key, falls back to a per-key DB query.
+    /// No write-back to distributed cache is performed.
+    /// Used by broadcast-receiving pods to avoid a full DB scan.
+    /// </summary>
+    Task LoadFromDistributedCacheAsync(Dictionary<Type, IEnumerable<string>> cacheKeysByType,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the cache set for the specified entity type.
     /// </summary>
     /// <typeparam name="T">The entity type</typeparam>
     /// <returns>The cache set for the entity type</returns>
     ICacheSet<T> Set<T>() where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
+    /// Warms the local snapshot for a single (componentType, domain, key, version) triple
+    /// from the distributed cache. Falls back to a single-version DB load on Redis miss.
+    /// Used by the granular ComponentPublishedEvent handler so receiving pods stay hot
+    /// without a full <see cref="LoadFromDistributedCacheAsync"/> sweep.
+    /// </summary>
+    /// <param name="componentType">RuntimeSysSchemaInfo discriminator (e.g. "sys-flows").</param>
+    /// <param name="domain">Domain identifier.</param>
+    /// <param name="key">Component logical key.</param>
+    /// <param name="version">Concrete version that was just published.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task WarmComponentAsync(
+        string componentType,
+        string domain,
+        string key,
+        string version,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Performs cleanup on all cache sets, removing expired and least-used items.

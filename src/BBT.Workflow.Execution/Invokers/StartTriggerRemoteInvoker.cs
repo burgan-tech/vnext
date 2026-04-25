@@ -330,7 +330,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
 
         if (!binding.ValidateSSL)
         {
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
                 TaskType, taskKey);
         }

@@ -182,7 +182,7 @@ public sealed class HttpTaskInvoker(
 
         if (!binding.ValidateSSL)
         {
-            logger.LogWarning("SSL certificate validation is disabled for HTTP task {TaskKey} - URL: {Url}",
+            logger.LogDebug("SSL certificate validation is disabled for HTTP task {TaskKey} - URL: {Url}",
                 taskKey, binding.Url);
         }
 

@@ -68,6 +68,11 @@ public static class WorkflowErrorCodes
     #region Execution Errors (200xxx)
     
     public const string ExecutionStepFailed = "Execution:200002";
+    public const string ResourceLockConflict = "Execution:200010";
+    public const string ResourceLockKeyEmpty = "Execution:200011";
+    public const string ResourceLockKeyResolutionFailed = "Execution:200012";
+    public const string ResourceLockInvalidAction = "Execution:200013";
+    public const string ResourceLockReleaseFailed = "Execution:200014";
     
     #endregion
     

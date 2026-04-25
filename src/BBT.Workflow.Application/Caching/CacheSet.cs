@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using BBT.Aether.DistributedCache;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Caching;
 
@@ -15,16 +17,31 @@ namespace BBT.Workflow.Caching;
 public class CacheSet<T>(
     IDistributedCacheService distributedCache,
     ICacheBackend<T> backend,
-    ILogger<CacheSet<T>> logger)
+    IComponentVersionIndex versionIndex,
+    ILogger<CacheSet<T>> logger,
+    IOptions<CacheWarmupOptions>? warmupOptions = null)
     : ICacheSet<T>
     where T : class, IDomainEntity, IReferenceSetter
 {
     private readonly ILogger _logger = logger;
+    private readonly CacheWarmupOptions _warmupOptions = warmupOptions?.Value ?? new CacheWarmupOptions();
+
+    // Logical component-type discriminator (e.g. "sys-flows", "sys-tasks") sourced from
+    // the entity's static abstract ComponentTypeKey. Used as the prefix for both the body
+    // cache key (CreateCacheKey) and the Redis version index key (vidx:{ComponentKeyName}:...)
+    // so the two systems stay aligned across pods.
+    private static readonly string ComponentKeyName = T.ComponentTypeKey;
 
     // Immutable snapshot holding all local cache state
     private CacheSnapshot<T> _snapshot = new(
         ImmutableDictionary<string, CacheItem<T>>.Empty,
         ImmutableDictionary<string, SortedSet<string>>.Empty);
+
+    // Short-TTL local cache for Redis version index (vidx) results.
+    // Prevents redundant Redis roundtrips during execution; cross-pod freshness
+    // is guaranteed by the Dapr ComponentPublishedEvent warm-up path.
+    private readonly ConcurrentDictionary<string, (SortedSet<string>? Versions, DateTime FetchedAt)> _vidxCache = new();
+    private static readonly TimeSpan VidxCacheTtl = TimeSpan.FromSeconds(60);
 
     // Default cache configuration
     private static readonly TimeSpan DefaultItemTtl = TimeSpan.FromHours(12);
@@ -47,22 +64,27 @@ public class CacheSet<T>(
         }
 
         // 2) Distributed cache - network errors will throw (expected per Railway Pattern)
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationGet, cacheKey, ComponentKeyName);
+
         try
         {
             var fromDistributed = await distributedCache.GetAsync<T>(cacheKey, cancellationToken);
             if (fromDistributed is not null)
             {
+                CacheActivityHelper.SetCacheHit(activity, true);
                 EnsureReferenceIsSet(fromDistributed, cacheKey);
-                // Asynchronously update local cache
                 _ = UpsertLocalAsync(fromDistributed, cancellationToken);
                 return Result<T>.Ok(fromDistributed);
             }
         }
         catch (Exception ex)
         {
+            CacheActivityHelper.SetError(activity, ex);
             _logger.LogError(ex, "Error reading from distributed cache for {CacheKey}", cacheKey);
-            // Continue to backend fallback
         }
+
+        CacheActivityHelper.SetCacheHit(activity, false);
 
         // 3) Database backend fallback
         var parsed = TryParseCacheKey(cacheKey);
@@ -82,7 +104,7 @@ public class CacheSet<T>(
 
         var fromDb = fromDbResult.Value!;
         EnsureReferenceIsSet(fromDb, cacheKey);
-        _ = SetAsync(fromDb, cancellationToken); // Async write to both local and distributed
+        _ = SetAsync(fromDb, cancellationToken);
 
         return Result<T>.Ok(fromDb);
     }
@@ -100,14 +122,31 @@ public class CacheSet<T>(
         SnapshotUpsert(cacheKey, entity);
 
         // 2) Write to distributed cache - network errors will throw (expected per Railway Pattern)
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationSet, cacheKey, ComponentKeyName);
+
         try
         {
             await distributedCache.SetAsync(cacheKey, entity, cancellationToken: cancellationToken);
         }
         catch (Exception ex)
         {
+            CacheActivityHelper.SetError(activity, ex);
             _logger.LogError(ex, "Error writing to distributed cache for {CacheKey}", cacheKey);
-            // Local cache is already updated, distributed cache failure is logged but not blocking
+        }
+
+        // 3) Update version index in Redis (best-effort, errors are swallowed by the impl).
+        // Allows partial/"latest" lookups on other pods to resolve via Redis without a DB scan.
+        if (!string.IsNullOrEmpty(entity.Domain) && !string.IsNullOrEmpty(entity.Key) && !string.IsNullOrEmpty(entity.Version))
+        {
+            _ = versionIndex.AddVersionAsync(
+                ComponentKeyName,
+                entity.Domain,
+                entity.Key,
+                entity.Version,
+                cancellationToken);
+
+            _vidxCache.TryRemove(CreateIndexKey(entity.Domain, entity.Key), out _);
         }
 
         return Result.Ok();
@@ -178,29 +217,41 @@ public class CacheSet<T>(
         var snap = _snapshot;
         var indexKey = CreateIndexKey(domain, name);
 
-        string? latestVersion = null;
+        string? localLatest = null;
 
         if (snap.Index.TryGetValue(indexKey, out var versions) && versions.Count > 0)
         {
-            latestVersion = versions
+            localLatest = versions
                 .OrderByDescending(v => v, new SemVersionComparer())
                 .FirstOrDefault();
         }
 
-        // If we have a latest version from the index, find it in the snapshot
-        if (!string.IsNullOrEmpty(latestVersion))
+        // Consult the Redis version index so a publish on another pod becomes visible
+        // without waiting for ReInitialize. Results are locally cached for a short TTL
+        // to avoid redundant Redis roundtrips during a single execution burst.
+        var redisVersions = await GetCachedVersionsAsync(domain, name, cancellationToken);
+
+        var indexLatest = redisVersions is { Count: > 0 }
+            ? InstanceDataVersionComparer.FindBestMatch(redisVersions, null)
+            : null;
+
+        var authoritativeLatest = ChooseHigher(indexLatest, localLatest);
+
+        if (!string.IsNullOrEmpty(authoritativeLatest))
         {
-            foreach (var entry in snap.Entries.Values)
+            // Fast path: the authoritative version is already in the local snapshot.
+            // Direct O(1) dictionary lookup using the canonical cache-key format.
+            if (string.Equals(authoritativeLatest, localLatest, StringComparison.OrdinalIgnoreCase) &&
+                snap.Entries.TryGetValue(CreateCacheKey(domain, name, authoritativeLatest), out var entry))
             {
-                var entity = entry.Value;
-                if (string.Equals(entity.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(entity.Key, name, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(entity.Version, latestVersion, StringComparison.OrdinalIgnoreCase))
-                {
-                    entry.UpdateAccess();
-                    return Result<T>.Ok(entity);
-                }
+                entry.UpdateAccess();
+                return Result<T>.Ok(entry.Value);
             }
+
+            // Resolved via Redis index (or local entry missing) - load body via the
+            // standard cacheKey path (snapshot -> Redis body -> single-version DB).
+            var resolvedKey = CreateCacheKey(domain, name, authoritativeLatest);
+            return await GetAsync(resolvedKey, cancellationToken);
         }
 
         // Not in snapshot: load ALL versions for this key from backend
@@ -247,35 +298,43 @@ public class CacheSet<T>(
         // 2) If full version → try exact match first from local snapshot
         if (InstanceDataVersionComparer.IsFullVersion(version))
         {
-            var cacheKey = $"{typeof(T).Name}:{domain}:{key}:{version}";
+            var cacheKey = CreateCacheKey(domain, key, version);
             return await GetAsync(cacheKey, cancellationToken);
         }
 
-        // 3) For artifact or partial version → use smart matching
+        // 3) For artifact or partial version → use smart matching.
+        // Consult the Redis vidx (with short-TTL local cache) alongside the local
+        // snapshot so a fresh publish on another pod is visible.
         var snap = _snapshot;
         var indexKey = CreateIndexKey(domain, key);
 
-        // Get all versions from index
+        string? localBest = null;
         if (snap.Index.TryGetValue(indexKey, out var versions) && versions.Count > 0)
         {
-            // Use InstanceDataVersionComparer.FindBestMatch to find the best matching version
-            var bestMatch = InstanceDataVersionComparer.FindBestMatch(versions, version);
+            localBest = InstanceDataVersionComparer.FindBestMatch(versions, version);
+        }
 
-            if (!string.IsNullOrEmpty(bestMatch))
+        var redisVersions = await GetCachedVersionsAsync(domain, key, cancellationToken);
+
+        var indexBest = redisVersions is { Count: > 0 }
+            ? InstanceDataVersionComparer.FindBestMatch(redisVersions, version)
+            : null;
+
+        var authoritative = ChooseHigher(indexBest, localBest);
+
+        if (!string.IsNullOrEmpty(authoritative))
+        {
+            // Fast path: snapshot already has the authoritative version.
+            // Direct O(1) dictionary lookup using the canonical cache-key format.
+            if (string.Equals(authoritative, localBest, StringComparison.OrdinalIgnoreCase) &&
+                snap.Entries.TryGetValue(CreateCacheKey(domain, key, authoritative), out var entry))
             {
-                // Find the entity with the best matching version in snapshot
-                foreach (var entry in snap.Entries.Values)
-                {
-                    var entity = entry.Value;
-                    if (string.Equals(entity.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(entity.Key, key, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(entity.Version, bestMatch, StringComparison.OrdinalIgnoreCase))
-                    {
-                        entry.UpdateAccess();
-                        return Result<T>.Ok(entity);
-                    }
-                }
+                entry.UpdateAccess();
+                return Result<T>.Ok(entry.Value);
             }
+
+            var resolvedKey = CreateCacheKey(domain, key, authoritative);
+            return await GetAsync(resolvedKey, cancellationToken);
         }
 
         // 4) Not in snapshot: load ALL versions for key from backend, cache them all, then smart match
@@ -315,14 +374,31 @@ public class CacheSet<T>(
         SnapshotRemove(cacheKey);
 
         // Remove from distributed cache - network errors will throw (expected per Railway Pattern)
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationRemove, cacheKey, ComponentKeyName);
+
         try
         {
             await distributedCache.RemoveAsync(cacheKey, cancellationToken);
         }
         catch (Exception ex)
         {
+            CacheActivityHelper.SetError(activity, ex);
             _logger.LogError(ex, "Error removing from distributed cache for {CacheKey}", cacheKey);
-            // Local cache is already removed, distributed cache failure is logged but not blocking
+        }
+
+        // Drop the version from the Redis index so other pods don't resolve to a missing body.
+        var parsed = TryParseCacheKey(cacheKey);
+        if (parsed is not null && !string.IsNullOrEmpty(parsed.Value.Version))
+        {
+            _ = versionIndex.RemoveVersionAsync(
+                ComponentKeyName,
+                parsed.Value.Domain,
+                parsed.Value.Key,
+                parsed.Value.Version!,
+                cancellationToken);
+
+            _vidxCache.TryRemove(CreateIndexKey(parsed.Value.Domain, parsed.Value.Key), out _);
         }
 
         return Result.Ok();
@@ -519,6 +595,102 @@ public class CacheSet<T>(
         return removedCount;
     }
 
+    public async Task LoadFromDistributedCacheAsync(IEnumerable<string> cacheKeys, CancellationToken cancellationToken = default)
+    {
+        var keys = cacheKeys as IReadOnlyCollection<string> ?? cacheKeys.ToArray();
+        if (keys.Count == 0) return;
+
+        // Single-key fast path (e.g. WarmComponentAsync after a publish broadcast):
+        // skip Parallel.ForEachAsync overhead and use the per-key SnapshotUpsert directly.
+        if (keys.Count == 1)
+        {
+            await LoadSingleKeyAsync(keys.First(), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationWarmup, componentType: ComponentKeyName);
+        CacheActivityHelper.SetItemCount(activity, keys.Count);
+
+        var collected = new ConcurrentBag<(string CacheKey, T Entity)>();
+
+        var options = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Max(1, _warmupOptions.MaxConcurrencyPerCacheSet)
+        };
+
+        await Parallel.ForEachAsync(keys, options, async (cacheKey, ct) =>
+        {
+            try
+            {
+                var entity = await distributedCache.GetAsync<T>(cacheKey, ct).ConfigureAwait(false);
+                if (entity is not null)
+                {
+                    EnsureReferenceIsSet(entity, cacheKey);
+                    collected.Add((cacheKey, entity));
+                    return;
+                }
+
+                var parsed = TryParseCacheKey(cacheKey);
+                if (parsed is null) return;
+
+                var result = await backend.LoadAsync(parsed.Value.Domain, parsed.Value.Key, parsed.Value.Version, ct)
+                    .ConfigureAwait(false);
+                if (result is { IsSuccess: true, Value: not null })
+                    collected.Add((CreateCacheKey(result.Value), result.Value));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to warm in-memory cache for key {CacheKey}", cacheKey);
+            }
+        }).ConfigureAwait(false);
+
+        if (!collected.IsEmpty)
+            SnapshotUpsertBatch(collected.ToArray());
+    }
+
+    private async Task LoadSingleKeyAsync(string cacheKey, CancellationToken cancellationToken)
+    {
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationWarmup, cacheKey, ComponentKeyName);
+
+        try
+        {
+            var entity = await distributedCache.GetAsync<T>(cacheKey, cancellationToken).ConfigureAwait(false);
+            if (entity is not null)
+            {
+                CacheActivityHelper.SetCacheHit(activity, true);
+                EnsureReferenceIsSet(entity, cacheKey);
+                SnapshotUpsert(cacheKey, entity);
+                return;
+            }
+
+            CacheActivityHelper.SetCacheHit(activity, false);
+
+            var parsed = TryParseCacheKey(cacheKey);
+            if (parsed is null) return;
+
+            var result = await backend.LoadAsync(parsed.Value.Domain, parsed.Value.Key, parsed.Value.Version, cancellationToken)
+                .ConfigureAwait(false);
+            if (result is { IsSuccess: true, Value: not null })
+                SnapshotUpsert(CreateCacheKey(result.Value), result.Value);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            CacheActivityHelper.SetError(activity, ex);
+            _logger.LogWarning(ex, "Failed to warm in-memory cache for key {CacheKey}", cacheKey);
+        }
+    }
+
     public void Dispose()
     {
         // Snapshot only contains managed objects, no cleanup needed
@@ -549,6 +721,40 @@ public class CacheSet<T>(
             var original = Interlocked.CompareExchange(ref _snapshot, newSnapshot, current);
             if (ReferenceEquals(original, current))
                 break; // CAS succeeded
+        }
+    }
+
+    /// <summary>
+    /// Bulk upsert that rebuilds the snapshot once per CAS attempt (vs. once per item).
+    /// Used by warm-up paths so live readers observe a single atomic swap regardless of N.
+    /// Concurrent writers (e.g. publish path) on the same snapshot will trigger a CAS retry.
+    /// </summary>
+    private void SnapshotUpsertBatch(IReadOnlyCollection<(string CacheKey, T Entity)> items)
+    {
+        if (items.Count == 0) return;
+
+        while (true)
+        {
+            var current = _snapshot;
+
+            var entries = current.Entries.ToDictionary(k => k.Key, v => v.Value);
+            var index = current.Index.ToDictionary(
+                k => k.Key,
+                v => new SortedSet<string>(v.Value));
+
+            foreach (var (cacheKey, entity) in items)
+            {
+                entries[cacheKey] = new CacheItem<T>(entity);
+                UpdateIndex(index, entity);
+            }
+
+            var newSnapshot = new CacheSnapshot<T>(
+                entries.ToImmutableDictionary(),
+                index.ToImmutableDictionary(kvp => kvp.Key, kvp => new SortedSet<string>(kvp.Value)));
+
+            var original = Interlocked.CompareExchange(ref _snapshot, newSnapshot, current);
+            if (ReferenceEquals(original, current))
+                break;
         }
     }
 
@@ -599,8 +805,55 @@ public class CacheSet<T>(
     // Key / index / reference helpers
     // ----------------
 
+    /// <summary>
+    /// Returns cached vidx results when fresh enough, otherwise fetches from Redis
+    /// and stores the result for <see cref="VidxCacheTtl"/>.
+    /// Null/empty results are also cached to avoid redundant Redis roundtrips when the
+    /// index has not been populated yet (e.g. after startup). The local in-memory snapshot
+    /// still provides the correct "latest" via <c>ChooseHigher</c>, and when both sources
+    /// are empty the caller falls back to the DB which then populates the index via
+    /// <see cref="SetAsync"/> (which also invalidates this cache).
+    /// </summary>
+    private async Task<SortedSet<string>?> GetCachedVersionsAsync(
+        string domain, string key, CancellationToken cancellationToken)
+    {
+        var vidxKey = CreateIndexKey(domain, key);
+
+        if (_vidxCache.TryGetValue(vidxKey, out var cached) &&
+            (DateTime.UtcNow - cached.FetchedAt) < VidxCacheTtl)
+        {
+            return cached.Versions;
+        }
+
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationVersionIndex, vidxKey, ComponentKeyName);
+
+        var versions = await versionIndex.GetVersionsAsync(
+            ComponentKeyName, domain, key, cancellationToken);
+
+        CacheActivityHelper.SetCacheHit(activity, versions is { Count: > 0 });
+
+        _vidxCache[vidxKey] = (versions, DateTime.UtcNow);
+        return versions;
+    }
+
     private static string CreateCacheKey(T entity)
-        => $"{(typeof(T) as IDomainEntity)?.ComponentKey}:{entity.Domain}:{entity.Key}:{entity.Version}";
+        => CreateCacheKey(entity.Domain, entity.Key, entity.Version);
+
+    private static string CreateCacheKey(string domain, string key, string? version)
+        => $"{ComponentKeyName}:{domain}:{key}:{version}";
+
+    /// <summary>
+    /// Picks the SemVer-higher of two candidate versions. Either may be null/empty.
+    /// Used to reconcile a local-snapshot resolution with the cross-pod Redis vidx
+    /// resolution so the freshest known version always wins.
+    /// </summary>
+    private static string? ChooseHigher(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a)) return b;
+        if (string.IsNullOrEmpty(b)) return a;
+        return new SemVersionComparer().Compare(a, b) >= 0 ? a : b;
+    }
 
     private static string CreateIndexKey(string domain, string name)
         => $"{domain}:{name}";

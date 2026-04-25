@@ -129,11 +129,56 @@ public sealed class InstanceMetadataDto
 }
 
 /// <summary>
-/// Output for instance history (all data transitions)
+/// Output for instance history (all state transitions)
 /// </summary>
 public sealed class GetInstanceHistoryOutput
 {
-    public List<GetInstanceOutput> Transitions { get; set; } = [];
+    public List<InstanceTransitionDto> Transitions { get; set; } = [];
+}
+
+/// <summary>
+/// DTO representing a single state transition for instance history responses.
+/// </summary>
+public sealed class InstanceTransitionDto
+{
+    /// <summary>Unique transition identifier.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>Transition definition key (e.g. "approve", "reject").</summary>
+    public string TransitionId { get; set; } = string.Empty;
+
+    /// <summary>State the instance was in when the transition started.</summary>
+    public string FromState { get; set; } = string.Empty;
+
+    /// <summary>State the instance moved to. Null when the transition is still in progress.</summary>
+    public string? ToState { get; set; }
+
+    /// <summary>UTC timestamp when the transition started.</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>UTC timestamp when the transition completed. Null when still in progress.</summary>
+    public DateTime? FinishedAt { get; set; }
+
+    /// <summary>Total transition duration in seconds. Null when still in progress.</summary>
+    public double? DurationSeconds { get; set; }
+
+    /// <summary>Trigger type that initiated the transition (Manual, Automatic, Timeout, etc.).</summary>
+    public TriggerType TriggerType { get; set; }
+
+    /// <summary>Body payload submitted with the transition.</summary>
+    public JsonElement? Body { get; set; }
+
+    /// <summary>Header payload submitted with the transition.</summary>
+    public JsonElement? Header { get; set; }
+
+    /// <summary>UTC timestamp when the transition record was created.</summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>User identifier that created the transition.</summary>
+    public string? CreatedBy { get; set; }
+
+    /// <summary>Behalf-of user identifier captured when the transition was created.</summary>
+    public string? CreatedByBehalfOf { get; set; }
 }
 
 /// <summary>
