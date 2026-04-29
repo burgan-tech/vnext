@@ -207,6 +207,23 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
         return total;
     }
 
+    /// <inheritdoc />
+    public Task InvalidateByDomainAsync(string domain, CancellationToken cancellationToken = default)
+    {
+        // Fan out across every cache set in parallel; each call is O(1) on the producer
+        // (FusionCache tag-based invalidation is lazy on consumers).
+        var tasks = CacheSets.Select(set => set.InvalidateByDomainAsync(domain, cancellationToken));
+        return Task.WhenAll(tasks);
+    }
+
+    /// <inheritdoc />
+    public Task InvalidateAllVersionsAsync<T>(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+        => Set<T>().InvalidateAllVersionsAsync(domain, key, cancellationToken);
+
     public void Dispose()
     {
         foreach (var cacheSet in CacheSets)

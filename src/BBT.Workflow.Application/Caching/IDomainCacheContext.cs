@@ -81,5 +81,25 @@ public interface IDomainCacheContext
         TimeSpan? ttl = null,
         int? maxItemsPerSet = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lazily evicts every cached entity belonging to <paramref name="domain"/> across all
+    /// cache sets and pods (via the FusionCache backplane). Implemented with FusionCache
+    /// tag-based invalidation: O(1) on the producer side; entries are detected as expired
+    /// on next access on consumers.
+    /// </summary>
+    Task InvalidateByDomainAsync(string domain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lazily evicts every version of (<paramref name="domain"/>, <paramref name="key"/>)
+    /// for entity type <typeparamref name="T"/> across all pods. Use when an entire entity
+    /// is retired - existing per-version <see cref="ICacheSet{T}.InvalidateAsync"/> only
+    /// targets a single version.
+    /// </summary>
+    Task InvalidateAllVersionsAsync<T>(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter;
 }
 

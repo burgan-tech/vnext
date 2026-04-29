@@ -696,6 +696,15 @@ public class CacheSet<T>(
         // Snapshot only contains managed objects, no cleanup needed
     }
 
+    // Tag-based invalidation is a FusionCache feature and is not implemented in this legacy
+    // class. The class is kept only for reference / Phase 5 cleanup; production wiring uses
+    // FusionCacheSet<T>.
+    public Task InvalidateAllVersionsAsync(string domain, string key, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("InvalidateAllVersionsAsync is only supported by FusionCacheSet<T>.");
+
+    public Task InvalidateByDomainAsync(string domain, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("InvalidateByDomainAsync is only supported by FusionCacheSet<T>.");
+
     // ----------------
     // Snapshot helpers (CAS-based updates)
     // ----------------

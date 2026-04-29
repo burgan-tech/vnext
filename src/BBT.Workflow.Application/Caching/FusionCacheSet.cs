@@ -85,6 +85,8 @@ public class FusionCacheSet<T>(
                 EnsureReferenceIsSet(v, cacheKey);
                 TrackVersion(v);
 
+                ctx.Tags = BuildTags(v.Domain, v.Key);
+
                 if (!string.IsNullOrEmpty(v.Domain) && !string.IsNullOrEmpty(v.Key) && !string.IsNullOrEmpty(v.Version))
                 {
                     _ = versionIndex.AddVersionAsync(ComponentKeyName, v.Domain, v.Key, v.Version, ct);
@@ -113,7 +115,13 @@ public class FusionCacheSet<T>(
 
         // FusionCache handles L1 + L2 in one call. AllowBackgroundDistributedCacheOperations
         // (set in DI) keeps L2 writes off the hot path while still propagating to other pods.
-        await entityCache.SetAsync(cacheKey, entity, token: cancellationToken).ConfigureAwait(false);
+        // Tags enable bulk eviction by domain and by entity-key (all versions) without
+        // the caller having to enumerate every cache key.
+        await entityCache.SetAsync(
+            cacheKey,
+            entity,
+            tags: BuildTags(entity.Domain, entity.Key),
+            token: cancellationToken).ConfigureAwait(false);
 
         TrackVersion(entity);
 
@@ -345,6 +353,7 @@ public class FusionCacheSet<T>(
                 cacheKey,
                 entity,
                 opts => opts.SetSkipDistributedCache(true, true),
+                tags: BuildTags(entity.Domain, entity.Key),
                 token: cancellationToken).ConfigureAwait(false);
 
             TrackVersion(entity);
@@ -370,7 +379,11 @@ public class FusionCacheSet<T>(
             EnsureReferenceIsSet(entity, cacheKey);
 
             // Default options write to both L1 and L2 (background L2 writes if AllowBackground… is on).
-            await entityCache.SetAsync(cacheKey, entity, token: cancellationToken).ConfigureAwait(false);
+            await entityCache.SetAsync(
+                cacheKey,
+                entity,
+                tags: BuildTags(entity.Domain, entity.Key),
+                token: cancellationToken).ConfigureAwait(false);
 
             TrackVersion(entity);
         }
@@ -396,6 +409,7 @@ public class FusionCacheSet<T>(
                 cacheKey,
                 entity,
                 opts => opts.SetSkipDistributedCache(true, true),
+                tags: BuildTags(entity.Domain, entity.Key),
                 token: cancellationToken).ConfigureAwait(false);
 
             TrackVersion(entity);
@@ -527,6 +541,54 @@ public class FusionCacheSet<T>(
     // share one named FusionCache. Prefix with the component-type discriminator.
     private static string CreateVidxCacheKey(string domain, string name)
         => $"vidx:{ComponentKeyName}:{domain}:{name}";
+
+    /// <summary>
+    /// Tags assigned to every cache entry. Lets callers do O(1) bulk eviction via
+    /// <see cref="IFusionCache.RemoveByTagAsync(string, FusionCacheEntryOptions?, CancellationToken)"/>:
+    ///   - <c>type:{ComponentTypeKey}</c> evicts every entry of this entity type
+    ///   - <c>domain:{ComponentTypeKey}:{domain}</c> evicts every entry under one tenant
+    ///   - <c>key:{ComponentTypeKey}:{domain}:{name}</c> evicts every version of one entity
+    /// Tags are namespaced with the component-type so two CacheSets can share one FusionCache
+    /// without leaking eviction across types.
+    /// </summary>
+    internal static IEnumerable<string> BuildTags(string? domain, string? name)
+    {
+        yield return TypeTag;
+        if (!string.IsNullOrEmpty(domain))
+            yield return DomainTag(domain);
+        if (!string.IsNullOrEmpty(domain) && !string.IsNullOrEmpty(name))
+            yield return KeyTag(domain, name);
+    }
+
+    internal static string TypeTag => $"type:{ComponentKeyName}";
+    internal static string DomainTag(string domain) => $"domain:{ComponentKeyName}:{domain}";
+    internal static string KeyTag(string domain, string name) => $"key:{ComponentKeyName}:{domain}:{name}";
+
+    /// <summary>
+    /// Lazily evicts every cached version of (<paramref name="domain"/>, <paramref name="key"/>)
+    /// across all pods via <see cref="IFusionCache.RemoveByTagAsync"/>. Also drops the local
+    /// domain-index entry so subsequent enumeration queries don't see stale version metadata.
+    /// </summary>
+    public async Task InvalidateAllVersionsAsync(string domain, string key, CancellationToken cancellationToken = default)
+    {
+        await entityCache.RemoveByTagAsync(KeyTag(domain, key), token: cancellationToken).ConfigureAwait(false);
+
+        _domainIndex.TryRemove(CreateIndexKey(domain, key), out _);
+        _ = vidxCache.RemoveAsync(CreateVidxCacheKey(domain, key), token: cancellationToken);
+    }
+
+    /// <summary>
+    /// Lazily evicts every cached entity under <paramref name="domain"/>. Used for tenant-level
+    /// cache wipes (e.g. domain delete). Local index entries for that domain are also dropped.
+    /// </summary>
+    public async Task InvalidateByDomainAsync(string domain, CancellationToken cancellationToken = default)
+    {
+        await entityCache.RemoveByTagAsync(DomainTag(domain), token: cancellationToken).ConfigureAwait(false);
+
+        var prefix = domain + ":";
+        foreach (var indexKey in _domainIndex.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList())
+            _domainIndex.TryRemove(indexKey, out _);
+    }
 
     private static string? ChooseHigher(string? a, string? b)
     {
