@@ -119,6 +119,22 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
             // what tests and dev hosts expect.
             .TryWithRegisteredBackplane();
 
+        // Dedicated short-TTL cache for IComponentVersionIndex lookups (the "vidx" cache).
+        // Memory-only by design: it's a local cache OF a Redis structure, so an L2 layer would
+        // just duplicate Redis. Stampede protection means multiple concurrent "latest version"
+        // resolutions for the same domain:key collapse into one Redis roundtrip; fail-safe lets
+        // us keep serving last-known versions for 5 min when Redis is hiccuping.
+        services.AddFusionCache(WorkflowCacheNames.VersionIndex)
+            .WithDefaultEntryOptions(new FusionCacheEntryOptions
+            {
+                Duration = TimeSpan.FromSeconds(60),
+                IsFailSafeEnabled = true,
+                FailSafeMaxDuration = TimeSpan.FromMinutes(5),
+                FailSafeThrottleDuration = TimeSpan.FromSeconds(5),
+                FactorySoftTimeout = TimeSpan.FromMilliseconds(200),
+                FactoryHardTimeout = TimeSpan.FromSeconds(2)
+            });
+
         services.AddSingleton<ComponentCacheStore>();
         services.AddSingleton<IComponentCacheStore>(serviceProvider =>
         {

@@ -18,7 +18,7 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
     public ICacheSet<Extension> Extensions { get; }
 
     public DomainCacheContext(
-        IFusionCache fusionCache,
+        IFusionCacheProvider fusionCacheProvider,
         ICacheBackend<Definitions.Workflow> workflowBackend,
         ICacheBackend<WorkflowTask> taskBackend,
         ICacheBackend<SchemaDefinition> schemaBackend,
@@ -31,43 +31,52 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
     {
         _warmupOptions = warmupOptions?.Value ?? new CacheWarmupOptions();
 
+        var entityCache = fusionCacheProvider.GetDefaultCache();
+        var vidxCache = fusionCacheProvider.GetCache(WorkflowCacheNames.VersionIndex);
+
         Workflows = new FusionCacheSet<Definitions.Workflow>(
-            fusionCache,
+            entityCache,
+            vidxCache,
             workflowBackend,
             versionIndex,
             loggerFactory.CreateLogger<FusionCacheSet<Definitions.Workflow>>(),
             warmupOptions);
 
         Tasks = new FusionCacheSet<WorkflowTask>(
-            fusionCache,
+            entityCache,
+            vidxCache,
             taskBackend,
             versionIndex,
             loggerFactory.CreateLogger<FusionCacheSet<WorkflowTask>>(),
             warmupOptions);
 
         Schemas = new FusionCacheSet<SchemaDefinition>(
-            fusionCache,
+            entityCache,
+            vidxCache,
             schemaBackend,
             versionIndex,
             loggerFactory.CreateLogger<FusionCacheSet<SchemaDefinition>>(),
             warmupOptions);
 
         Functions = new FusionCacheSet<Function>(
-            fusionCache,
+            entityCache,
+            vidxCache,
             functionBackend,
             versionIndex,
             loggerFactory.CreateLogger<FusionCacheSet<Function>>(),
             warmupOptions);
 
         Views = new FusionCacheSet<View>(
-            fusionCache,
+            entityCache,
+            vidxCache,
             viewBackend,
             versionIndex,
             loggerFactory.CreateLogger<FusionCacheSet<View>>(),
             warmupOptions);
 
         Extensions = new FusionCacheSet<Extension>(
-            fusionCache,
+            entityCache,
+            vidxCache,
             extensionBackend,
             versionIndex,
             loggerFactory.CreateLogger<FusionCacheSet<Extension>>(),
