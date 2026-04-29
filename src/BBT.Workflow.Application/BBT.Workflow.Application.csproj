@@ -19,6 +19,7 @@
     <ProjectReference Include="..\BBT.Workflow.Execution.Abstractions\BBT.Workflow.Execution.Abstractions.csproj" />
     <PackageReference Include="OpenTelemetry.Api" Version="$(OpenTelemetryPackageVersion)" />
     <PackageReference Include="ZiggyCreatures.FusionCache" Version="$(FusionCachePackageVersion)" />
+    <PackageReference Include="ZiggyCreatures.FusionCache.OpenTelemetry" Version="$(FusionCachePackageVersion)" />
     <PackageReference Include="ZiggyCreatures.FusionCache.Serialization.SystemTextJson" Version="$(FusionCachePackageVersion)" />
   </ItemGroup>
 </Project>

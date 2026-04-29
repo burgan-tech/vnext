@@ -18,6 +18,8 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -181,6 +183,15 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddTelemetry(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddAetherTelemetry(configuration);
+
+        // FusionCache emits its own ActivitySource and Meter via FusionCache.OpenTelemetry.
+        // Hook into the OpenTelemetry pipeline that AddAetherTelemetry already established so
+        // cache-hit/miss/factory/backplane traces & metrics flow into the same Jaeger /
+        // Prometheus exporters as the rest of the workflow telemetry, with no extra wiring.
+        services.AddOpenTelemetry()
+            .WithTracing(tracing => tracing.AddFusionCacheInstrumentation())
+            .WithMetrics(metrics => metrics.AddFusionCacheInstrumentation());
+
         return services;
     }
 
