@@ -40,6 +40,16 @@ public sealed class ScheduleTransitionsStep(
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(ScheduleTransitionsStep)}");
 
+        // Skip during SubFlow resume: context.Target is the parent's current SubFlow state (set by
+        // ClearBusyOnResumeStep). Creating scheduled jobs here is wrong — we are about to leave
+        // the SubFlow state via auto-transition, and jobs should only be created on state entry.
+        // Without this guard, job creation can fault the parent pipeline or trigger the scheduled
+        // transition before CancelScheduledJobsStep has a chance to cancel it.
+        if (context.Directives.IsSubFlowResume)
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
         // Skip if no scheduled transitions
         if (!HasScheduledTransitions(context))
         {
