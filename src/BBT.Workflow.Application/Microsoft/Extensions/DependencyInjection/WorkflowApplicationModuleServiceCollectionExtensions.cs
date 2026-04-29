@@ -113,7 +113,11 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
                 AllowBackgroundDistributedCacheOperations = true
             })
             .WithSerializer(new FusionCacheSystemTextJsonSerializer())
-            .TryWithRegisteredDistributedCache();
+            .TryWithRegisteredDistributedCache()
+            // Wired by Infrastructure.AddWorkflowFusionCacheBackplane when a Redis section exists.
+            // Without a backplane FusionCache silently falls back to single-pod mode, which is
+            // what tests and dev hosts expect.
+            .TryWithRegisteredBackplane();
 
         services.AddSingleton<ComponentCacheStore>();
         services.AddSingleton<IComponentCacheStore>(serviceProvider =>
