@@ -14,6 +14,8 @@ using BBT.Workflow.Authorization;
 using BBT.Workflow.Functions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using ZiggyCreatures.Caching.Fusion;
+using ZiggyCreatures.Caching.Fusion.Serialization.SystemTextJson;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -83,6 +85,35 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
     {
         services.AddOptions<CacheWarmupOptions>()
             .BindConfiguration(CacheWarmupOptions.SectionName);
+
+        // FusionCache: hybrid L1+L2 cache replacing the bespoke CacheSnapshot/CAS implementation.
+        // - Picks up the IDistributedCache registered by the host (Redis in prod, Memory in tests).
+        // - Default entry options match the legacy CacheSet defaults (12h TTL, fail-safe stale reads,
+        //   eager refresh, jittered duration to dampen stampede on simultaneous expiries).
+        // - AllowBackgroundDistributedCacheOperations preserves the legacy fire-and-forget L2-write
+        //   behavior while removing the manual try/catch plumbing.
+        // - Backplane (Phase 2) and named per-entity caches can layer on top without touching consumers.
+        services.AddFusionCache()
+            .WithDefaultEntryOptions(new FusionCacheEntryOptions
+            {
+                Duration = TimeSpan.FromHours(12),
+                JitterMaxDuration = TimeSpan.FromMinutes(5),
+
+                IsFailSafeEnabled = true,
+                FailSafeMaxDuration = TimeSpan.FromHours(24),
+                FailSafeThrottleDuration = TimeSpan.FromSeconds(30),
+
+                EagerRefreshThreshold = 0.8f,
+
+                FactorySoftTimeout = TimeSpan.FromSeconds(2),
+                FactoryHardTimeout = TimeSpan.FromSeconds(10),
+
+                DistributedCacheSoftTimeout = TimeSpan.FromMilliseconds(500),
+                DistributedCacheHardTimeout = TimeSpan.FromSeconds(2),
+                AllowBackgroundDistributedCacheOperations = true
+            })
+            .WithSerializer(new FusionCacheSystemTextJsonSerializer())
+            .TryWithRegisteredDistributedCache();
 
         services.AddSingleton<ComponentCacheStore>();
         services.AddSingleton<IComponentCacheStore>(serviceProvider =>

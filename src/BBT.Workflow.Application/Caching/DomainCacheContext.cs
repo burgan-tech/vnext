@@ -1,8 +1,8 @@
-using BBT.Aether.DistributedCache;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ZiggyCreatures.Caching.Fusion;
 
 namespace BBT.Workflow.Caching;
 
@@ -18,7 +18,7 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
     public ICacheSet<Extension> Extensions { get; }
 
     public DomainCacheContext(
-        IDistributedCacheService distributedCache,
+        IFusionCache fusionCache,
         ICacheBackend<Definitions.Workflow> workflowBackend,
         ICacheBackend<WorkflowTask> taskBackend,
         ICacheBackend<SchemaDefinition> schemaBackend,
@@ -31,46 +31,46 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
     {
         _warmupOptions = warmupOptions?.Value ?? new CacheWarmupOptions();
 
-        Workflows = new CacheSet<Definitions.Workflow>(
-            distributedCache,
+        Workflows = new FusionCacheSet<Definitions.Workflow>(
+            fusionCache,
             workflowBackend,
             versionIndex,
-            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>(),
+            loggerFactory.CreateLogger<FusionCacheSet<Definitions.Workflow>>(),
             warmupOptions);
 
-        Tasks = new CacheSet<WorkflowTask>(
-            distributedCache,
+        Tasks = new FusionCacheSet<WorkflowTask>(
+            fusionCache,
             taskBackend,
             versionIndex,
-            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>(),
+            loggerFactory.CreateLogger<FusionCacheSet<WorkflowTask>>(),
             warmupOptions);
 
-        Schemas = new CacheSet<SchemaDefinition>(
-            distributedCache,
+        Schemas = new FusionCacheSet<SchemaDefinition>(
+            fusionCache,
             schemaBackend,
             versionIndex,
-            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>(),
+            loggerFactory.CreateLogger<FusionCacheSet<SchemaDefinition>>(),
             warmupOptions);
 
-        Functions = new CacheSet<Function>(
-            distributedCache,
+        Functions = new FusionCacheSet<Function>(
+            fusionCache,
             functionBackend,
             versionIndex,
-            loggerFactory.CreateLogger<CacheSet<Function>>(),
+            loggerFactory.CreateLogger<FusionCacheSet<Function>>(),
             warmupOptions);
 
-        Views = new CacheSet<View>(
-            distributedCache,
+        Views = new FusionCacheSet<View>(
+            fusionCache,
             viewBackend,
             versionIndex,
-            loggerFactory.CreateLogger<CacheSet<View>>(),
+            loggerFactory.CreateLogger<FusionCacheSet<View>>(),
             warmupOptions);
 
-        Extensions = new CacheSet<Extension>(
-            distributedCache,
+        Extensions = new FusionCacheSet<Extension>(
+            fusionCache,
             extensionBackend,
             versionIndex,
-            loggerFactory.CreateLogger<CacheSet<Extension>>(),
+            loggerFactory.CreateLogger<FusionCacheSet<Extension>>(),
             warmupOptions);
 
         CacheSets =
