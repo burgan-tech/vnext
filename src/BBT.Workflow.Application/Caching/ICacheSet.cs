@@ -33,20 +33,6 @@ public interface ICacheSet : IDisposable
     /// Used by broadcast-receiving pods to avoid a full DB scan.
     /// </summary>
     Task LoadFromDistributedCacheAsync(IEnumerable<string> cacheKeys, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Lazily evicts every cached version of (<paramref name="domain"/>, <paramref name="key"/>)
-    /// across all pods. O(1) on the producer side via tag-based invalidation; consumers detect
-    /// expiration on next access.
-    /// </summary>
-    Task InvalidateAllVersionsAsync(string domain, string key, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Lazily evicts every cached entity under <paramref name="domain"/> across all pods.
-    /// Use for tenant-level cache wipes; per-version invalidation should use
-    /// <see cref="ICacheSet{T}.InvalidateAsync"/>.
-    /// </summary>
-    Task InvalidateByDomainAsync(string domain, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

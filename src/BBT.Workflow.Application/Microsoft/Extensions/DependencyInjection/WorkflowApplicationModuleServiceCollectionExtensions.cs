@@ -86,24 +86,28 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddOptions<CacheWarmupOptions>()
             .BindConfiguration(CacheWarmupOptions.SectionName);
 
-        // FusionCache: hybrid L1+L2 cache replacing the bespoke CacheSnapshot/CAS implementation.
-        // - Picks up the IDistributedCache registered by the host (Redis in prod, Memory in tests).
-        // - Default entry options match the legacy CacheSet defaults (12h TTL, fail-safe stale reads,
-        //   eager refresh, jittered duration to dampen stampede on simultaneous expiries).
-        // - AllowBackgroundDistributedCacheOperations preserves the legacy fire-and-forget L2-write
-        //   behavior while removing the manual try/catch plumbing.
-        // - Backplane (Phase 2) and named per-entity caches can layer on top without touching consumers.
+        // FusionCache for component bodies. The entity model is IMMUTABLE: once a component is
+        // published with a (domain, type, key, version) tuple, that body never changes - only
+        // new higher versions are appended. As a consequence:
+        //   - Duration is very long (30 days). Re-fetching a cached body would just produce the
+        //     same bytes, so expiring entries on a short cycle is pure waste.
+        //   - EagerRefresh is disabled. There is nothing to refresh.
+        //   - JitterMaxDuration is disabled. Without expiry-driven refresh there is no
+        //     stampede to dampen.
+        //   - IsFailSafeEnabled stays true: it lets us keep serving the last-known body during
+        //     a transient DB outage when an L1+L2 miss would otherwise have to call the factory.
+        //   - AllowBackgroundDistributedCacheOperations preserves the legacy fire-and-forget L2
+        //     write behavior so publish does not block on Redis.
+        // Tags are deliberately NOT set: every read on a tagged entry triggers extra cache
+        // round-trips to verify each tag's expiration timestamp, and we never bulk-evict.
         services.AddFusionCache()
             .WithDefaultEntryOptions(new FusionCacheEntryOptions
             {
-                Duration = TimeSpan.FromHours(12),
-                JitterMaxDuration = TimeSpan.FromMinutes(5),
+                Duration = TimeSpan.FromDays(30),
 
                 IsFailSafeEnabled = true,
-                FailSafeMaxDuration = TimeSpan.FromHours(24),
+                FailSafeMaxDuration = TimeSpan.FromDays(30),
                 FailSafeThrottleDuration = TimeSpan.FromSeconds(30),
-
-                EagerRefreshThreshold = 0.8f,
 
                 FactorySoftTimeout = TimeSpan.FromSeconds(2),
                 FactoryHardTimeout = TimeSpan.FromSeconds(10),
