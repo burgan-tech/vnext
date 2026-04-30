@@ -32,6 +32,6 @@ public sealed class SchemaWorkflowCastHandler(IDomainCacheContext cacheContext) 
     {
         var item = attributes.Deserialize<SchemaDefinition>(JsonSerializerConstants.JsonOptions);
         item!.SetReference(reference);
-        await cacheContext.Schemas.SetAsync(item!, cancellationToken);
+        await cacheContext.Schemas.SetAsync(item!, awaitDistributedCache: true, cancellationToken);
     }
 }

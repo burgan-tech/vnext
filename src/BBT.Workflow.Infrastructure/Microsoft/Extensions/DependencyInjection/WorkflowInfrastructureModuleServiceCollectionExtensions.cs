@@ -78,10 +78,6 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         {
             services.AddUrlTemplateServices(configuration);
 
-            // FusionCache cross-pod backplane (Phase 2). Reads the same "Redis" config used
-            // by Aether's AddRedis(); no-op if the section is absent so unit-test hosts that
-            // skip Redis configuration are unaffected.
-            services.AddWorkflowFusionCacheBackplane(configuration);
         }
         
         // DbContext

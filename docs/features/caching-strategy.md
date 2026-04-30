@@ -538,6 +538,10 @@ GetLatestByNameAsync / GetByVersionAsync(partial)
 
 ## Cross-Pod Cache Synchronization
 
+### Why No Backplane?
+
+Component data is **immutable**: once published with a `(domain, type, key, version)` tuple, the body never changes — only new higher versions are appended. FusionCache backplane performs key-based L1 invalidation, which has no value when keys are never modified. Cross-pod awareness instead relies on Dapr `ComponentPublishedEvent` broadcasts that proactively warm other pods' L1 caches.
+
 ### Publish Notification (Dapr Pub/Sub)
 
 When a component is published, cross-pod synchronization happens via Dapr:
@@ -547,24 +551,28 @@ Publishing Pod                          Other Pods
 ─────────────                          ──────────
 DB persist                             
   ↓                                    
-SetAsync                               
-  ├─ Snapshot upsert                   
-  ├─ Redis body cache SET              
-  └─ Redis vidx AddVersionAsync        
-  ↓                                    
+SetAsync (awaitDistributedCache=true)  
+  ├─ L1 write (FusionCache memory)     
+  ├─ L2 write (Redis, SYNCHRONOUS)     
+  ├─ Redis vidx AddVersionAsync        
+  ├─ _domainIndex TrackVersion         
+  └─ RefreshVidxCacheAsync             
+  ↓  (L2 write complete, safe to broadcast)
 PublishComponentPublishedEventAsync     
   └─ Dapr broadcast ─────────────────→ POST /component-published
       (vnext-pubsub-broadcast)           ├─ Environment check
       topic: definition.component.       ├─ Domain check (workers)
              published                   └─ WarmComponentAsync
                                               └─ LoadFromDistributedCacheAsync
-                                                   └─ Redis body GET → Snapshot upsert
+                                                   └─ GetAsync → L2 HIT
+                                                        ├─ L1 write
+                                                        └─ TrackVersion (_domainIndex)
 ```
 
 **Key points:**
-- The publishing pod writes to: in-memory snapshot + Redis body cache + Redis vidx
-- Other pods receive a Dapr notification and warm their local snapshot from the Redis body cache
-- vidx is not directly read during warm-up — the snapshot is populated with the exact version from the notification
+- The publishing pod writes to: L1 + L2 (synchronous) + Redis vidx + _domainIndex
+- CastHandlers use `SetAsync(entity, awaitDistributedCache: true)` to guarantee L2 is populated before the Dapr broadcast fires — this eliminates the race condition where other pods could see an L2 miss
+- Other pods receive the Dapr notification, call `GetAsync` which hits L2, populates L1, and calls `TrackVersion` to update the local `_domainIndex`
 - If Dapr notification fails, vidx serves as a safety net: the next `GetLatestByNameAsync` will discover the new version via Redis vidx
 
 ### Re-Initialize (Bulk Sync)
@@ -615,11 +623,17 @@ GetByVersionAsync(domain, key, null)
 ### Runtime Write Flow (Publish)
 
 ```
-SetAsync(entity)
-  ├─ 1. SnapshotUpsert (in-memory, immediate)
-  ├─ 2. distributedCache.SetAsync (Redis body cache)
+SetAsync(entity, awaitDistributedCache: true)   ← CastHandler publish path
+  ├─ 1. entityCache.SetAsync (L1 + L2 synchronous)
+  ├─ 2. TrackVersion (_domainIndex update)
   ├─ 3. versionIndex.AddVersionAsync (Redis vidx)
-  └─ 4. _vidxCache.TryRemove (invalidate local vidx cache)
+  └─ 4. RefreshVidxCacheAsync (rebuild vidx cache from _domainIndex)
+
+SetAsync(entity)                                ← Normal runtime path
+  ├─ 1. entityCache.SetAsync (L1 + L2 background)
+  ├─ 2. TrackVersion (_domainIndex update)
+  ├─ 3. versionIndex.AddVersionAsync (Redis vidx)
+  └─ 4. RefreshVidxCacheAsync (rebuild vidx cache from _domainIndex)
 ```
 
 ### When Distributed Cache (Redis Body) Is Read

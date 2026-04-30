@@ -96,8 +96,11 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         //     stampede to dampen.
         //   - IsFailSafeEnabled stays true: it lets us keep serving the last-known body during
         //     a transient DB outage when an L1+L2 miss would otherwise have to call the factory.
-        //   - AllowBackgroundDistributedCacheOperations preserves the legacy fire-and-forget L2
-        //     write behavior so publish does not block on Redis.
+        //   - AllowBackgroundDistributedCacheOperations keeps L2 writes off the hot path for
+        //     normal reads. Publish paths override this to synchronous via SetAsync(awaitDistributedCache: true)
+        //     so L2 is populated before the Dapr broadcast reaches other pods.
+        //   - No backplane: immutable keys are never invalidated, so cross-pod L1 invalidation
+        //     adds no value. Cross-pod awareness uses Dapr ComponentPublishedEvent instead.
         // Tags are deliberately NOT set: every read on a tagged entry triggers extra cache
         // round-trips to verify each tag's expiration timestamp, and we never bulk-evict.
         services.AddFusionCache()
@@ -117,11 +120,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
                 AllowBackgroundDistributedCacheOperations = true
             })
             .WithSerializer(new FusionCacheSystemTextJsonSerializer())
-            .TryWithRegisteredDistributedCache()
-            // Wired by Infrastructure.AddWorkflowFusionCacheBackplane when a Redis section exists.
-            // Without a backplane FusionCache silently falls back to single-pod mode, which is
-            // what tests and dev hosts expect.
-            .TryWithRegisteredBackplane();
+            .TryWithRegisteredDistributedCache();
 
         // Dedicated short-TTL cache for IComponentVersionIndex lookups (the "vidx" cache).
         // Memory-only by design: it's a local cache OF a Redis structure, so an L2 layer would

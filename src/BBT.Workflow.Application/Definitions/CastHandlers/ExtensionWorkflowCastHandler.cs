@@ -32,6 +32,6 @@ public sealed class ExtensionWorkflowCastHandler(IDomainCacheContext cacheContex
     {
         var item = attributes.Deserialize<Extension>(JsonSerializerConstants.JsonOptions);
         item!.SetReference(reference);
-        await cacheContext.Extensions.SetAsync(item!, cancellationToken);
+        await cacheContext.Extensions.SetAsync(item!, awaitDistributedCache: true, cancellationToken);
     }
 }

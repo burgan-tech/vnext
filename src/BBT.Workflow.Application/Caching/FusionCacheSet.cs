@@ -13,8 +13,10 @@ namespace BBT.Workflow.Caching;
 /// FusionCache-backed implementation of <see cref="ICacheSet{T}"/>.
 /// Replaces the bespoke L1 (CacheSnapshot/CAS) + L2 (IDistributedCacheService) cascade with
 /// FusionCache's hybrid memory+distributed cache. Stampede protection, fail-safe stale reads,
-/// soft/hard timeouts, eager refresh and (later) backplane invalidation are delegated to
-/// FusionCache. Domain-specific concerns kept in this class:
+/// and soft/hard timeouts are delegated to FusionCache. Cross-pod synchronization relies on
+/// Dapr broadcast (<c>ComponentPublishedEvent</c>) rather than a FusionCache backplane, because
+/// component data is immutable — key-based invalidation adds no value when keys never change.
+/// Domain-specific concerns kept in this class:
 ///   - Smart version matching (artifact / partial / "latest") via <see cref="InstanceDataVersionComparer"/>
 ///   - Cross-pod version index via <see cref="IComponentVersionIndex"/> (Redis-backed)
 ///   - Local "domain:key -> versions" index used by enumeration-style queries that FusionCache
@@ -88,7 +90,7 @@ public class FusionCacheSet<T>(
                 if (!string.IsNullOrEmpty(v.Domain) && !string.IsNullOrEmpty(v.Key) && !string.IsNullOrEmpty(v.Version))
                 {
                     _ = versionIndex.AddVersionAsync(ComponentKeyName, v.Domain, v.Key, v.Version, ct);
-                    _ = vidxCache.RemoveAsync(CreateVidxCacheKey(v.Domain, v.Key), token: ct);
+                    _ = RefreshVidxCacheAsync(v.Domain, v.Key, ct);
                 }
 
                 return v;
@@ -98,22 +100,38 @@ public class FusionCacheSet<T>(
         if (entity is not null)
         {
             EnsureReferenceIsSet(entity, cacheKey);
+            TrackVersion(entity);
             return Result<T>.Ok(entity);
         }
 
         return loadResult ?? Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
     }
 
-    public async Task<Result> SetAsync(T entity, CancellationToken cancellationToken = default)
+    public Task<Result> SetAsync(T entity, CancellationToken cancellationToken = default)
+        => SetAsyncCore(entity, awaitDistributedCache: false, cancellationToken);
+
+    public Task<Result> SetAsync(T entity, bool awaitDistributedCache, CancellationToken cancellationToken = default)
+        => SetAsyncCore(entity, awaitDistributedCache, cancellationToken);
+
+    private async Task<Result> SetAsyncCore(T entity, bool awaitDistributedCache, CancellationToken cancellationToken)
     {
         if (entity is null)
             return Result.Fail(CacheErrors.EntityCannotBeNull());
 
         var cacheKey = CreateCacheKey(entity);
 
-        // FusionCache handles L1 + L2 in one call. AllowBackgroundDistributedCacheOperations
-        // (set in DI) keeps L2 writes off the hot path while still propagating to other pods.
-        await entityCache.SetAsync(cacheKey, entity, token: cancellationToken).ConfigureAwait(false);
+        if (awaitDistributedCache)
+        {
+            await entityCache.SetAsync(
+                cacheKey,
+                entity,
+                opts => { opts.AllowBackgroundDistributedCacheOperations = false; },
+                token: cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await entityCache.SetAsync(cacheKey, entity, token: cancellationToken).ConfigureAwait(false);
+        }
 
         TrackVersion(entity);
 
@@ -126,7 +144,7 @@ public class FusionCacheSet<T>(
                 entity.Version,
                 cancellationToken);
 
-            _ = vidxCache.RemoveAsync(CreateVidxCacheKey(entity.Domain, entity.Key), token: cancellationToken);
+            _ = RefreshVidxCacheAsync(entity.Domain, entity.Key, cancellationToken);
         }
 
         return Result.Ok();
@@ -208,10 +226,17 @@ public class FusionCacheSet<T>(
                 .FirstOrDefault();
         }
 
-        var redisVersions = await GetCachedVersionsAsync(domain, name, cancellationToken).ConfigureAwait(false);
-        var indexLatest = redisVersions is { Count: > 0 }
-            ? InstanceDataVersionComparer.FindBestMatch(redisVersions, null)
-            : null;
+        // Only consult Redis vidx when the local index has no answer. Warm pods already
+        // have the full version set in _domainIndex, so skipping the Redis round-trip
+        // keeps the "hot" path entirely in-process.
+        string? indexLatest = null;
+        if (string.IsNullOrEmpty(localLatest))
+        {
+            var redisVersions = await GetCachedVersionsAsync(domain, name, cancellationToken).ConfigureAwait(false);
+            indexLatest = redisVersions is { Count: > 0 }
+                ? InstanceDataVersionComparer.FindBestMatch(redisVersions, null)
+                : null;
+        }
 
         var authoritativeLatest = ChooseHigher(indexLatest, localLatest);
 
@@ -265,10 +290,14 @@ public class FusionCacheSet<T>(
         if (_domainIndex.TryGetValue(indexKey, out var versions) && versions.Count > 0)
             localBest = InstanceDataVersionComparer.FindBestMatch(versions, version);
 
-        var redisVersions = await GetCachedVersionsAsync(domain, key, cancellationToken).ConfigureAwait(false);
-        var indexBest = redisVersions is { Count: > 0 }
-            ? InstanceDataVersionComparer.FindBestMatch(redisVersions, version)
-            : null;
+        string? indexBest = null;
+        if (string.IsNullOrEmpty(localBest))
+        {
+            var redisVersions = await GetCachedVersionsAsync(domain, key, cancellationToken).ConfigureAwait(false);
+            indexBest = redisVersions is { Count: > 0 }
+                ? InstanceDataVersionComparer.FindBestMatch(redisVersions, version)
+                : null;
+        }
 
         var authoritative = ChooseHigher(indexBest, localBest);
 
@@ -319,7 +348,7 @@ public class FusionCacheSet<T>(
                 parsed.Value.Version!,
                 cancellationToken);
 
-            _ = vidxCache.RemoveAsync(CreateVidxCacheKey(parsed.Value.Domain, parsed.Value.Key), token: cancellationToken);
+            _ = RefreshVidxCacheAsync(parsed.Value.Domain, parsed.Value.Key, cancellationToken);
         }
 
         return Result.Ok();
@@ -512,6 +541,23 @@ public class FusionCacheSet<T>(
             async (_, ct) => await versionIndex.GetVersionsAsync(
                 ComponentKeyName, domain, key, ct).ConfigureAwait(false),
             token: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Rebuilds the vidx cache entry from the local <c>_domainIndex</c> so that subsequent
+    /// <see cref="GetCachedVersionsAsync"/> calls on any code path (including cold pods
+    /// that lack a populated <c>_domainIndex</c>) can resolve versions without an extra
+    /// Redis round-trip. Called after a version is added to the Redis vidx.
+    /// </summary>
+    private async Task RefreshVidxCacheAsync(string domain, string key, CancellationToken cancellationToken)
+    {
+        var indexKey = CreateIndexKey(domain, key);
+        if (!_domainIndex.TryGetValue(indexKey, out var localVersions) || localVersions.Count == 0)
+            return;
+
+        var vidxKey = CreateVidxCacheKey(domain, key);
+        var snapshot = new SortedSet<string>(localVersions, StringComparer.OrdinalIgnoreCase);
+        await vidxCache.SetAsync(vidxKey, (SortedSet<string>?)snapshot, token: cancellationToken).ConfigureAwait(false);
     }
 
     private static string CreateCacheKey(T entity)

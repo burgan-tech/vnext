@@ -52,10 +52,29 @@ public interface ICacheSet<T> : ICacheSet where T : class, IDomainEntity, IRefer
     /// <summary>
     /// Stores an entity in the cache.
     /// </summary>
+    /// <param name="entity">The entity to cache.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>
     /// A <see cref="Result"/> indicating success or failure of the cache operation.
     /// </returns>
     Task<Result> SetAsync(T entity, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stores an entity in the cache with explicit control over distributed cache write timing.
+    /// When <paramref name="awaitDistributedCache"/> is <c>true</c>, the L2 (Redis) write completes
+    /// before this method returns, guaranteeing the entry is visible to other pods immediately.
+    /// Use this on publish paths where a Dapr broadcast follows the write.
+    /// </summary>
+    /// <param name="entity">The entity to cache.</param>
+    /// <param name="awaitDistributedCache">
+    /// When <c>true</c>, disables background L2 writes so the distributed cache is populated
+    /// synchronously. Prevents race conditions when a broadcast notification is sent after the write.
+    /// </param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>
+    /// A <see cref="Result"/> indicating success or failure of the cache operation.
+    /// </returns>
+    Task<Result> SetAsync(T entity, bool awaitDistributedCache, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Retrieves all versions of an entity by domain and name.

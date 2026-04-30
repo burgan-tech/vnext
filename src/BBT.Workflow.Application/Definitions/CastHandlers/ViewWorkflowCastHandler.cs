@@ -32,6 +32,6 @@ public sealed class ViewWorkflowCastHandler(IDomainCacheContext cacheContext) : 
     {
         var item = attributes.Deserialize<View>(JsonSerializerConstants.JsonOptions);
         item!.SetReference(reference);
-        await cacheContext.Views.SetAsync(item!, cancellationToken);
+        await cacheContext.Views.SetAsync(item!, awaitDistributedCache: true, cancellationToken);
     }
 }

@@ -31,6 +31,6 @@ public sealed class FlowCastHandler(IDomainCacheContext cacheContext) : IWorkflo
     {
         var item = attributes.Deserialize<Workflow>(JsonSerializerConstants.JsonOptions);
         item!.SetReference(reference);
-        await cacheContext.Workflows.SetAsync(item!, cancellationToken);
+        await cacheContext.Workflows.SetAsync(item!, awaitDistributedCache: true, cancellationToken);
     }
 }

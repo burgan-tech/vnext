@@ -20,7 +20,6 @@
     </PackageReference>
     <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
     <PackageReference Include="prometheus-net" Version="$(PrometheusVersion)" />
-    <PackageReference Include="ZiggyCreatures.FusionCache.Backplane.StackExchangeRedis" Version="$(FusionCachePackageVersion)" />
     <ProjectReference Include="..\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
   </ItemGroup>

@@ -32,6 +32,6 @@ public sealed class TaskWorkflowCastHandler(IDomainCacheContext cacheContext) : 
     {
         var item = attributes.Deserialize<WorkflowTask>(JsonSerializerConstants.JsonOptions);
         item!.SetReference(reference);
-        await cacheContext.Tasks.SetAsync(item!, cancellationToken);
+        await cacheContext.Tasks.SetAsync(item!, awaitDistributedCache: true, cancellationToken);
     }
 }

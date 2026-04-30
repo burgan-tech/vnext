@@ -22,7 +22,7 @@
         <PollyPackageVersion>8.6.5</PollyPackageVersion>
 
         <!-- FusionCache (ZiggyCreatures) packages -->
-        <FusionCachePackageVersion>2.4.0</FusionCachePackageVersion>
+        <FusionCachePackageVersion>2.6.0</FusionCachePackageVersion>
 
         <!-- OpenTelemetry packages -->
         <OpenTelemetryPackageVersion>1.14.0</OpenTelemetryPackageVersion>

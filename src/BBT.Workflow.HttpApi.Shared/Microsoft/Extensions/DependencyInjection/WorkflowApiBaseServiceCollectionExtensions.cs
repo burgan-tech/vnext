@@ -188,8 +188,16 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         // Hook into the OpenTelemetry pipeline that AddAetherTelemetry already established so
         // cache-hit/miss/factory/backplane traces & metrics flow into the same Jaeger /
         // Prometheus exporters as the rest of the workflow telemetry, with no extra wiring.
+        var isDevelopment = string.Equals(
+            configuration["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase);
+
         services.AddOpenTelemetry()
-            .WithTracing(tracing => tracing.AddFusionCacheInstrumentation())
+            .WithTracing(tracing => tracing
+                .AddFusionCacheInstrumentation(o =>
+                {
+                    o.IncludeMemoryLevel = isDevelopment;
+                    o.IncludeDistributedLevel = isDevelopment;
+                }))
             .WithMetrics(metrics => metrics.AddFusionCacheInstrumentation());
 
         return services;
