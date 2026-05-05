@@ -145,7 +145,9 @@ GET /api/v1/banking/workflows/payment-workflow/functions/data?filter={"status":{
 
 `items` contains `GroupSummary` objects:
 
-- `name`, `count`, `sum`, `avg`, `min`, `max`
+- `name` (legacy: single field value, or multiple fields joined with `_`)
+- `keys` (map of each groupBy field path to its value; use this for multi-column grouping)
+- `count`, `sum`, `avg`, `min`, `max`
 
 ### Data function list
 

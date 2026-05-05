@@ -1,3 +1,4 @@
+using BBT.Aether.Events;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
 
@@ -21,6 +22,7 @@ public sealed class PipelineDirectives
 {
     private readonly List<IPostCommitJob> _postCommitJobs = new();
     private readonly HashSet<string> _postCommitJobKeys = new(StringComparer.Ordinal);
+    private readonly List<DomainEventEnvelope> _deferredEvents = new();
 
     /// <summary>
     /// Gets the order number from which to resume pipeline execution.
@@ -196,6 +198,42 @@ public sealed class PipelineDirectives
         var copy = _postCommitJobs.ToArray();
         _postCommitJobs.Clear();
         _postCommitJobKeys.Clear();
+        return copy;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether there are deferred events waiting to be published.
+    /// </summary>
+    public bool HasDeferredEvents => _deferredEvents.Count > 0;
+
+    /// <summary>
+    /// Defers a domain event envelope for explicit publishing after UoW commit.
+    /// Events deferred here are NOT dispatched via the IDomainEventSink/SaveChanges path.
+    /// </summary>
+    /// <param name="envelope">The domain event envelope containing the event and its metadata.</param>
+    public void DeferEvent(DomainEventEnvelope envelope)
+    {
+        _deferredEvents.Add(envelope);
+    }
+
+    /// <summary>
+    /// Defers multiple domain event envelopes for explicit publishing after UoW commit.
+    /// </summary>
+    /// <param name="envelopes">The domain event envelopes to defer.</param>
+    public void DeferEvents(IEnumerable<DomainEventEnvelope> envelopes)
+    {
+        _deferredEvents.AddRange(envelopes);
+    }
+
+    /// <summary>
+    /// Consumes and clears all deferred events.
+    /// Called by TransitionRunner after UoW commit to publish events via IDistributedEventBus.
+    /// </summary>
+    /// <returns>A read-only list of deferred domain event envelopes.</returns>
+    public IReadOnlyList<DomainEventEnvelope> ConsumeDeferredEvents()
+    {
+        var copy = _deferredEvents.ToArray();
+        _deferredEvents.Clear();
         return copy;
     }
 }

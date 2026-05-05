@@ -365,7 +365,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                ?? (StartTransition.Key == key ? StartTransition : null)
                ?? (Cancel?.Key == key ? Cancel : null)
                ?? (UpdateData?.Key == key ? UpdateData : null)
-               ?? (Exit?.Key == key ? Exit : null);
+               ?? (Exit?.Key == key ? Exit : null)
+               ?? (Timeout?.Key == key ? Transition.Create(Timeout.Key, null, Timeout.Target, TriggerType.Manual, Timeout.VersionStrategy.Code) : null);
     }
 
     public Transition? ResolveTransition(string key, State currentState)

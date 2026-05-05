@@ -14,6 +14,7 @@ public static class WorkflowErrorCodes
     public const string Dependency = "App:900000";
     public const string Locked = "App:900001";
     public const string ValidationErrors = "App:900002";
+    public const string SchemaFilterValidation = "Validation:900010";
     public const string ExecutionStrategyNotSupported = "App:900003";
     public const string TransitionHandlerNotSupported = "App:900004";
     public const string InvalidSchema = "App:900005";

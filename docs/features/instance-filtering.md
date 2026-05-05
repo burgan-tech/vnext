@@ -72,6 +72,14 @@ Alternatively, pass `groupBy` and `aggregations` as query parameters:
 ?filter={"status":{"eq":"Active"}}&groupBy={"field":"attributes.status"}&aggregations={"count":true}
 ```
 
+`groupBy.field` / `groupBy.fields` may use JSON paths (`attributes.*`) or any **instance column** that is filterable on the `Instances` table (same whitelist as top-level GraphQL filters). Example grouping by creator:
+
+```
+?groupBy={"field":"createdBy"}&aggregations={"count":true}
+```
+
+You can combine instance-column filters with JSON or instance `groupBy` keys in one request.
+
 **Format precedence:** If any `filter` value is GraphQL JSON, the request is handled as GraphQL format.
 
 ### URL Encoding
@@ -99,6 +107,10 @@ Filters can target these Instance columns:
 | `modifiedAt` | Modification timestamp |
 | `completedAt` | Completion timestamp |
 | `isTransient` | Boolean flag |
+| `createdBy` | Creator user identifier |
+| `createdByBehalfOf` | Behalf-of user at creation |
+| `modifiedBy` | Last modifier user identifier |
+| `modifiedByBehalfOf` | Behalf-of user at last modification |
 
 ### JSON Attributes
 
@@ -140,6 +152,10 @@ Instance list results can be sorted via the `sort` or `orderBy` query parameter 
 | `status` | Instance status |
 | `key` | Instance key |
 | `currentState` / `state` | Current state (state is alias) |
+| `createdBy` | Creator user identifier |
+| `createdByBehalfOf` | Behalf-of user at creation |
+| `modifiedBy` | Last modifier user identifier |
+| `modifiedByBehalfOf` | Behalf-of user at last modification |
 | `attributes.fieldName` | JSON attribute (path into `InstancesData.Data`); nested paths supported (e.g. `attributes.nested.path`) |
 
 Instance columns are applied in the database; `attributes.*` ordering uses the latest instance data JSON and is subject to the same schema/security as filtering.
@@ -178,7 +194,73 @@ Instance columns are applied in the database; `attributes.*` ordering uses the l
 | `in` | Value in list | `filter=attributes=clientId=in:122,177,83` | `(Data ->> 'clientId') IN ('122','177','83')` |
 | `nin` | Value not in list | `filter=attributes=clientId=nin:122,177` | `(Data ->> 'clientId') NOT IN ('122','177')` |
 
-**GraphQL-only operator:** `isNull` (e.g., `{"attributes":{"field":{"isNull":true}}}`)
+**GraphQL-only operators:** `isNull` (e.g., `{"attributes":{"field":{"isNull":true}}}`) and `includes` for JSON **array** containment (see below). These are not available in the legacy `field=operator:value` string format.
+
+### Array containment (`includes`) — GraphQL only
+
+Use `includes` when `InstancesData.Data` stores a **JSON array** at a path (e.g. `members`, `videoCallUrls`) and you need “at least one array element contains this partial object”. The engine builds a PostgreSQL `jsonb @>` pattern with a single-element array at the leaf path.
+
+**Rules:**
+
+- Value must be a **JSON object** (not a string or array at the `includes` key).
+- Do not combine `includes` with other operators on the **same** field in one condition object (e.g. no `includes` + `eq` together).
+- When [schema-driven filtering](./schema-driven-filtering-en.md) is enabled, the array field must list `includes` in `x-filterOperators` for that path.
+
+**Example — `members` array contains an object with `memberId` and `role`:**
+
+```json
+{
+  "attributes": {
+    "members": {
+      "includes": {
+        "memberId": "ia002",
+        "role": "advisor"
+      }
+    }
+  }
+}
+```
+
+**Example — `role` is advisor OR member (two branches):**
+
+```json
+{
+  "or": [
+    {
+      "attributes": {
+        "members": {
+          "includes": { "memberId": "ia002", "role": "advisor" }
+        }
+      }
+    },
+    {
+      "attributes": {
+        "members": {
+          "includes": { "memberId": "ia002", "role": "member" }
+        }
+      }
+    }
+  ]
+}
+```
+
+**Example — array of single-key objects (`videoCallUrls`):**
+
+Data shape: `"videoCallUrls": [ { "ia002": "https://..." } ]`
+
+```json
+{
+  "attributes": {
+    "videoCallUrls": {
+      "includes": {
+        "ia002": "https://example.com/room/ia002"
+      }
+    }
+  }
+}
+```
+
+Nested attribute paths work the same way (e.g. `org.members` in the filter tree under `attributes`).
 
 ## Data Type Support
 
@@ -399,7 +481,7 @@ HTTP 400 Bad Request
 ```
 HTTP 400 Bad Request
 {
-  "error": "Unsupported operator: xyz. Supported operators: eq, ne, gt, ge, lt, le, between, like, match, startswith, endswith, in, nin"
+  "error": "Unsupported operator: xyz. Supported operators: eq, ne, gt, ge, lt, le, between, like, match, startswith, endswith, in, nin (legacy); GraphQL JSON adds isnull, includes, and others"
 }
 ```
 

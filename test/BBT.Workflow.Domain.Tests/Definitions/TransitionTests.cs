@@ -479,5 +479,132 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         Assert.NotNull(transition);
         Assert.Null(transition.TriggerKind);
     }
+
+    [Fact]
+    public void View_ShouldDeserialize_FromOldViewFormat()
+    {
+        var json = """
+        {
+            "key": "shared-cancel",
+            "from": null,
+            "target": "cancelled",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "view": {
+                "view": {
+                    "key": "cancel-confirmation-view",
+                    "domain": "core",
+                    "version": "1.0.0",
+                    "flow": "sys-views"
+                },
+                "loadData": true
+            }
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.NotNull(transition.View);
+        Assert.Single(transition.View.Views);
+        Assert.Equal("cancel-confirmation-view", transition.View.Views[0].View.Key);
+    }
+
+    [Fact]
+    public void View_ShouldDeserialize_FromNewViewsArrayFormat()
+    {
+        var json = """
+        {
+            "key": "submit-transition",
+            "from": null,
+            "target": "review-state",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "views": [
+                {
+                    "view": {
+                        "key": "submit-desktop-view",
+                        "domain": "forms",
+                        "version": "1.0.0",
+                        "flow": "sys-views"
+                    },
+                    "loadData": true
+                }
+            ]
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.NotNull(transition.View);
+        Assert.Single(transition.View.Views);
+        Assert.Equal("submit-desktop-view", transition.View.Views[0].View.Key);
+    }
+
+    [Fact]
+    public void View_ShouldPreferNewFormat_WhenBothPresent()
+    {
+        var json = """
+        {
+            "key": "dual-format-transition",
+            "from": null,
+            "target": "next-state",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "view": {
+                "view": {
+                    "key": "old-view",
+                    "domain": "core",
+                    "version": "1.0.0",
+                    "flow": "sys-views"
+                }
+            },
+            "views": [
+                {
+                    "view": {
+                        "key": "new-view",
+                        "domain": "forms",
+                        "version": "2.0.0",
+                        "flow": "sys-views"
+                    }
+                }
+            ]
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.NotNull(transition.View);
+        Assert.Equal("new-view", transition.View.Views[0].View.Key);
+    }
+
+    [Fact]
+    public void View_ShouldBeNull_WhenNeitherFormatPresent()
+    {
+        var json = """
+        {
+            "key": "no-view-transition",
+            "from": null,
+            "target": "next-state",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": []
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.Null(transition.View);
+    }
 }
 

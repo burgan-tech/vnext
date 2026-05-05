@@ -1,15 +1,15 @@
 using BBT.Aether.DistributedCache;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Caching;
 
-public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
+/// <summary>
+/// Provides typed cache sets for each workflow component type.
+/// All operations delegate directly to Redis via <see cref="CacheSet{T}"/>.
+/// </summary>
+public class DomainCacheContext : IDomainCacheContext, IDisposable
 {
-    private readonly CacheWarmupOptions _warmupOptions;
-
     public ICacheSet<Definitions.Workflow> Workflows { get; }
     public ICacheSet<WorkflowTask> Tasks { get; }
     public ICacheSet<SchemaDefinition> Schemas { get; }
@@ -25,63 +25,37 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
         ICacheBackend<Function> functionBackend,
         ICacheBackend<View> viewBackend,
         ICacheBackend<Extension> extensionBackend,
-        IComponentVersionIndex versionIndex,
-        ILoggerFactory loggerFactory,
-        IOptions<CacheWarmupOptions>? warmupOptions = null)
+        ILoggerFactory loggerFactory)
     {
-        _warmupOptions = warmupOptions?.Value ?? new CacheWarmupOptions();
-
         Workflows = new CacheSet<Definitions.Workflow>(
             distributedCache,
             workflowBackend,
-            versionIndex,
-            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>(),
-            warmupOptions);
+            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>());
 
         Tasks = new CacheSet<WorkflowTask>(
             distributedCache,
             taskBackend,
-            versionIndex,
-            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>(),
-            warmupOptions);
+            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>());
 
         Schemas = new CacheSet<SchemaDefinition>(
             distributedCache,
             schemaBackend,
-            versionIndex,
-            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>(),
-            warmupOptions);
+            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>());
 
         Functions = new CacheSet<Function>(
             distributedCache,
             functionBackend,
-            versionIndex,
-            loggerFactory.CreateLogger<CacheSet<Function>>(),
-            warmupOptions);
+            loggerFactory.CreateLogger<CacheSet<Function>>());
 
         Views = new CacheSet<View>(
             distributedCache,
             viewBackend,
-            versionIndex,
-            loggerFactory.CreateLogger<CacheSet<View>>(),
-            warmupOptions);
+            loggerFactory.CreateLogger<CacheSet<View>>());
 
         Extensions = new CacheSet<Extension>(
             distributedCache,
             extensionBackend,
-            versionIndex,
-            loggerFactory.CreateLogger<CacheSet<Extension>>(),
-            warmupOptions);
-
-        CacheSets =
-        [
-            Workflows,
-            Tasks,
-            Schemas,
-            Functions,
-            Views,
-            Extensions
-        ];
+            loggerFactory.CreateLogger<CacheSet<Extension>>());
     }
 
     public ICacheSet<T> Set<T>() where T : class, IDomainEntity, IReferenceSetter
@@ -96,111 +70,13 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
         throw new NotSupportedException($"Type {typeof(T).Name} is not supported in DomainCacheContext.");
     }
 
-    public new Task InitializeAsync(Dictionary<Type, object> initialData, CancellationToken cancellationToken = default)
-        => base.InitializeAsync(initialData, cancellationToken);
-
-    public async Task InitializeWithDistributedCacheAsync(Dictionary<Type, object> initialData, CancellationToken cancellationToken = default)
-    {
-        foreach (var cacheSet in CacheSets)
-        {
-            var cacheSetType = cacheSet.GetType().GetGenericArguments()[0];
-
-            if (initialData.TryGetValue(cacheSetType, out var data))
-            {
-                await cacheSet.LoadAllWithDistributedCacheAsync(data, cancellationToken);
-            }
-        }
-    }
-
-    public Task LoadFromDistributedCacheAsync(Dictionary<Type, IEnumerable<string>> cacheKeysByType, CancellationToken cancellationToken = default)
-    {
-        var options = new ParallelOptions
-        {
-            CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = Math.Max(1, _warmupOptions.MaxConcurrencyAcrossCacheSets)
-        };
-
-        // CacheSets are independent (separate _snapshot fields) → safe to warm in parallel.
-        return Parallel.ForEachAsync(CacheSets, options, async (cacheSet, ct) =>
-        {
-            if (cacheKeysByType.TryGetValue(cacheSet.EntityType, out var keys))
-                await cacheSet.LoadFromDistributedCacheAsync(keys, ct).ConfigureAwait(false);
-        });
-    }
-
-    public Task WarmComponentAsync(
-        string componentType,
-        string domain,
-        string key,
-        string version,
-        CancellationToken cancellationToken = default)
-    {
-        ICacheSet? targetSet = componentType switch
-        {
-            RuntimeSysSchemaInfo.Flows => Workflows,
-            RuntimeSysSchemaInfo.Tasks => Tasks,
-            RuntimeSysSchemaInfo.Schemas => Schemas,
-            RuntimeSysSchemaInfo.Functions => Functions,
-            RuntimeSysSchemaInfo.Views => Views,
-            RuntimeSysSchemaInfo.Extensions => Extensions,
-            _ => null
-        };
-
-        if (targetSet is null)
-            return Task.CompletedTask;
-
-        // Mirror the cache-key format produced by CacheSet.CreateCacheKey
-        // ("{ComponentTypeKey}:{domain}:{key}:{version}") so the snapshot upsert key
-        // collides with the one written by the publishing pod.
-        var cacheKey = $"{componentType}:{domain}:{key}:{version}";
-
-        return targetSet.LoadFromDistributedCacheAsync(new[] { cacheKey }, cancellationToken);
-    }
-
-    public async Task MergeAsync(Dictionary<Type, object> deltaData, CancellationToken cancellationToken = default)
-    {
-        foreach (var cacheSet in CacheSets)
-        {
-            var cacheSetType = cacheSet.GetType().GetGenericArguments()[0];
-
-            if (deltaData.TryGetValue(cacheSetType, out var data))
-            {
-                await cacheSet.MergeAllAsync(data, cancellationToken);
-            }
-        }
-    }
-
-    public int CleanupAll(
-        TimeSpan? ttl = null,
-        int? maxItemsPerSet = null,
-        CancellationToken cancellationToken = default)
-    {
-        var total = 0;
-
-        foreach (var cacheSet in CacheSets)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (cacheSet is ICacheSet<Definitions.Workflow> wf && cacheSet.EntityType == typeof(Definitions.Workflow))
-                total += wf.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<WorkflowTask> wt && cacheSet.EntityType == typeof(WorkflowTask))
-                total += wt.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<SchemaDefinition> sd && cacheSet.EntityType == typeof(SchemaDefinition))
-                total += sd.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<Function> fn && cacheSet.EntityType == typeof(Function))
-                total += fn.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<View> vw && cacheSet.EntityType == typeof(View))
-                total += vw.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<Extension> ex && cacheSet.EntityType == typeof(Extension))
-                total += ex.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-        }
-
-        return total;
-    }
-
     public void Dispose()
     {
-        foreach (var cacheSet in CacheSets)
-            cacheSet.Dispose();
+        Workflows.Dispose();
+        Tasks.Dispose();
+        Schemas.Dispose();
+        Functions.Dispose();
+        Views.Dispose();
+        Extensions.Dispose();
     }
 }

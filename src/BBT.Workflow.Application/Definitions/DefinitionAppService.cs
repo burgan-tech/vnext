@@ -1,19 +1,15 @@
 using System.Text.Json;
 using BBT.Aether.Application.Services;
-using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions.CastHandlers;
-using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
-using Dapr.Client;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Nito.Disposables;
@@ -30,10 +26,7 @@ public sealed class DefinitionAppService(
     ComponentValidatorProcessor componentValidatorProcessor,
     WorkflowCastProcessor castProcessor,
     IWorkflowMetrics workflowMetrics,
-    IRuntimeCacheInitializer runtimeCacheInitializer,
-    DaprClient daprClient,
-    IConfiguration configuration,
-    IServiceScopeFactory  scopeFactory,
+    IServiceScopeFactory scopeFactory,
     IServiceProvider serviceProvider)
     : ApplicationService(serviceProvider), IDefinitionAppService
 {
@@ -43,14 +36,13 @@ public sealed class DefinitionAppService(
         runtimeInfoProvider.Check(input.Domain);
         using (currentSchema.Use(input.Flow))
         {
-            // Only migrate schema for sys-flows component type
             if (input.Flow == RuntimeSysSchemaInfo.Flows)
             {
                 var migrationResult = await MigrateSchemaAsync(input.Key, cancellationToken);
                 if (!migrationResult.IsSuccess)
                     return migrationResult;
             }
-            
+
             var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken)
                            ?? Instance.Create(GuidGenerator.Create(), input.Flow, input.FlowVersion, input.Key);
 
@@ -62,7 +54,7 @@ public sealed class DefinitionAppService(
         }
     }
 
-    private async Task<Result> MigrateSchemaAsync(string flow, CancellationToken cancellationToken =  default)
+    private async Task<Result> MigrateSchemaAsync(string flow, CancellationToken cancellationToken = default)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var schema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
@@ -85,16 +77,12 @@ public sealed class DefinitionAppService(
         }
     }
 
-    /// <summary>
-    /// Validates a component using the appropriate validator for the component type.
-    /// </summary>
     private Result ValidateComponent(PublishInput input)
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
 
         if (!validationResult.IsValid)
         {
-            // Record validation failure metrics
             foreach (var error in validationResult.ValidationErrors)
             {
                 var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
@@ -111,9 +99,6 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
-    /// <summary>
-    /// Saves a new component instance to the repository.
-    /// </summary>
     private async Task<Result> SaveNewInstanceAsync(
         Instance instance,
         PublishInput input,
@@ -131,15 +116,12 @@ public sealed class DefinitionAppService(
 
         await instanceRepository.InsertAsync(instance, true, cancellationToken);
 
-        // Cast to cache via CastProcessor
         await castProcessor.ProcessAsync(
             input.Flow,
             new Reference(input.Key, input.Domain, input.Flow, input.Version),
             input.Attributes,
             cancellationToken
         );
-
-        await PublishComponentPublishedEventAsync(input.Domain, input.Flow, input.Key, input.Version, cancellationToken);
 
         if (input.Data?.Any() == true)
         {
@@ -151,9 +133,6 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
-    /// <summary>
-    /// Handles updating an existing component instance.
-    /// </summary>
     private async Task<Result> HandleExistingInstanceAsync(
         Instance instance,
         PublishInput input,
@@ -188,15 +167,12 @@ public sealed class DefinitionAppService(
         instance.ModifiedAt = DateTime.UtcNow;
         await instanceRepository.UpdateAsync(instance, true, cancellationToken);
 
-        // Cast to cache via CastProcessor
         await castProcessor.ProcessAsync(
             input.Flow,
             new Reference(input.Key, input.Domain, input.Flow, input.Version),
             input.Attributes,
             cancellationToken
         );
-
-        await PublishComponentPublishedEventAsync(input.Domain, input.Flow, input.Key, input.Version, cancellationToken);
 
         if (input.Data?.Any() == true)
         {
@@ -208,10 +184,6 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
-    /// <summary>
-    /// Handles processing additional data versions from the publish input.
-    /// </summary>
-    /// <returns>A result containing any validation errors from seed data processing.</returns>
     private async Task<Result> HandleAdditionalDataVersionsAsync(
         PublishInput input,
         CancellationToken cancellationToken)
@@ -236,9 +208,6 @@ public sealed class DefinitionAppService(
         }
     }
 
-    /// <summary>
-    /// Processes a single data item for additional data versions.
-    /// </summary>
     private async Task<Result> ProcessDataItemAsync(
         IInstanceRepository instanceRepo,
         PublishInput input,
@@ -256,7 +225,6 @@ public sealed class DefinitionAppService(
             return Result.Ok();
         }
 
-        // Validate seed data using the same validator as the parent component type
         var validationResult = ValidateSeedData(input.Key, dataItem);
         if (!validationResult.IsSuccess)
             return validationResult;
@@ -285,63 +253,13 @@ public sealed class DefinitionAppService(
             cancellationToken
         );
 
-        await PublishComponentPublishedEventAsync(input.Domain, input.Key, dataItem.Key, dataItem.Version, cancellationToken);
-
         return Result.Ok();
     }
 
-    /// <summary>
-    /// Best-effort granular broadcast that lets every pod warm its local snapshot for the
-    /// just-published component. Failures are logged and swallowed so a publish is never
-    /// blocked by pubsub issues - the Redis version index keeps consumers correct in that case.
-    /// </summary>
-    private async Task PublishComponentPublishedEventAsync(
-        string domain,
-        string componentType,
-        string key,
-        string version,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var evt = new ComponentPublishedEvent
-            {
-                Domain = domain,
-                Environment = configuration["ASPNETCORE_ENVIRONMENT"]!,
-                ComponentType = componentType,
-                Key = key,
-                Version = version,
-                PublishedBy = "System",
-                PublishedAt = DateTime.UtcNow
-            };
-
-            await daprClient.PublishEventAsync(
-                pubsubName: configuration["DAPR_PUBSUB_BROADCAST_STORE_NAME"]!,
-                topicName: ComponentPublishedEvent.TopicName,
-                data: evt,
-                cancellationToken: cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(
-                ex,
-                "ComponentPublishedEvent broadcast failed for {ComponentType} {Domain}/{Key}@{Version}",
-                componentType, domain, key, version);
-        }
-    }
-
-    /// <summary>
-    /// Validates seed data using the appropriate validator for the component type.
-    /// Uses TryValidate to gracefully handle component types without dedicated validators.
-    /// </summary>
-    /// <param name="componentType">The component type (e.g., sys-flows, sys-tasks).</param>
-    /// <param name="dataItem">The seed data item to validate.</param>
-    /// <returns>A result indicating validation success or failure.</returns>
     private Result ValidateSeedData(string componentType, PublishDataInput dataItem)
     {
         if (!componentValidatorProcessor.TryValidate(componentType, dataItem.Attributes, out var validationResult))
         {
-            // No validator found for this component type, skip validation
             return Result.Ok();
         }
 
@@ -399,24 +317,11 @@ public sealed class DefinitionAppService(
     }
 
     /// <inheritdoc />
-    public async Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
+    public Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
     {
-        // Then, publish broadcast event to all pods using Dapr client directly
-        var cacheInvalidationEvent = new DefinitionCacheInvalidationEvent
-        {
-            Domain = runtimeInfoProvider.Domain,
-            RequestedBy = "System",
-            RequestedAt = DateTime.UtcNow,
-            Environment = configuration["ASPNETCORE_ENVIRONMENT"]!,
-            FullLoad = fullLoad
-        };
-
-        await daprClient.PublishEventAsync(
-            pubsubName: configuration["DAPR_PUBSUB_BROADCAST_STORE_NAME"]!,
-            topicName: DefinitionCacheInvalidationEvent.TopicName,
-            data: cacheInvalidationEvent,
-            cancellationToken: cancellationToken);
-
-        return Result.Ok();
+        // With the lazy Redis-only cache strategy, there is no in-memory state to reinitialize.
+        // Cache is populated on-demand and invalidated on publish via shared Redis.
+        // This method is retained for API compatibility but is now a no-op.
+        return Task.FromResult(Result.Ok());
     }
 }

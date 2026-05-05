@@ -66,8 +66,6 @@ public static class OrchestrationApiServiceCollectionExtensions
         #if DEBUG
         services.AddHostedService<MultiSchemaMigrationHostedService>();
         #endif
-        services.AddHostedService<CacheCleanupHostedService>();
-        services.AddHostedService<CacheInitializationHostedService>();
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
         return services;
     }

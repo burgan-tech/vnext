@@ -201,6 +201,14 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
                 case "isnull":
                     condition.IsNull = reader.TokenType == JsonTokenType.Null ? null : reader.GetBoolean();
                     break;
+                case "includes":
+                    if (reader.TokenType != JsonTokenType.StartObject)
+                        throw new JsonException("includes operator requires a JSON object value.");
+                    using (var includesDoc = JsonDocument.ParseValue(ref reader))
+                    {
+                        condition.Includes = includesDoc.RootElement.Clone();
+                    }
+                    break;
                 default:
                     // This could be a nested field - handle as nested condition
                     // e.g., {"parent": {"child": {"eq": "value"}}}
@@ -293,7 +301,129 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
         if (value.Attributes != null && value.Attributes.Count > 0)
         {
             writer.WritePropertyName("attributes");
-            JsonSerializer.Serialize(writer, value.Attributes, options);
+            writer.WriteStartObject();
+            foreach (var (fieldName, condition) in value.Attributes)
+            {
+                writer.WritePropertyName(fieldName);
+                WriteFieldCondition(writer, condition, options);
+            }
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndObject();
+    }
+
+    /// <summary>
+    /// Writes <see cref="FieldCondition"/> so it round-trips with <see cref="ReadFieldCondition"/>.
+    /// Default <see cref="JsonSerializer"/> on <see cref="FieldCondition"/> can encode <see cref="FieldCondition.Includes"/>
+    /// (<see cref="JsonElement"/>) as a JSON string, which breaks re-parsing (e.g. after <c>JsonSerializer.Serialize</c> on
+    /// <see cref="GraphQLFilterNode"/> when building <c>combinedFilter</c> for groupBy/aggregation paths).
+    /// </summary>
+    private static void WriteFieldCondition(Utf8JsonWriter writer, FieldCondition condition, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+
+        static void WriteScalar(Utf8JsonWriter w, object? v, JsonSerializerOptions opt)
+        {
+            if (v is JsonElement je)
+            {
+                je.WriteTo(w);
+                return;
+            }
+            JsonSerializer.Serialize(w, v, v!.GetType(), opt);
+        }
+
+        if (condition.Eq != null)
+        {
+            writer.WritePropertyName("eq");
+            WriteScalar(writer, condition.Eq, options);
+        }
+        if (condition.Ne != null)
+        {
+            writer.WritePropertyName("ne");
+            WriteScalar(writer, condition.Ne, options);
+        }
+        if (condition.Gt != null)
+        {
+            writer.WritePropertyName("gt");
+            WriteScalar(writer, condition.Gt, options);
+        }
+        if (condition.Ge != null)
+        {
+            writer.WritePropertyName("ge");
+            WriteScalar(writer, condition.Ge, options);
+        }
+        if (condition.Lt != null)
+        {
+            writer.WritePropertyName("lt");
+            WriteScalar(writer, condition.Lt, options);
+        }
+        if (condition.Le != null)
+        {
+            writer.WritePropertyName("le");
+            WriteScalar(writer, condition.Le, options);
+        }
+        if (condition.Between != null)
+        {
+            writer.WritePropertyName("between");
+            JsonSerializer.Serialize(writer, condition.Between, options);
+        }
+        if (condition.Like != null)
+        {
+            writer.WritePropertyName("like");
+            writer.WriteStringValue(condition.Like);
+        }
+        if (condition.Match != null)
+        {
+            writer.WritePropertyName("match");
+            writer.WriteStringValue(condition.Match);
+        }
+        if (condition.StartsWith != null)
+        {
+            writer.WritePropertyName("startswith");
+            writer.WriteStringValue(condition.StartsWith);
+        }
+        if (condition.EndsWith != null)
+        {
+            writer.WritePropertyName("endswith");
+            writer.WriteStringValue(condition.EndsWith);
+        }
+        if (condition.In != null)
+        {
+            writer.WritePropertyName("in");
+            JsonSerializer.Serialize(writer, condition.In, options);
+        }
+        if (condition.NotIn != null)
+        {
+            writer.WritePropertyName("nin");
+            JsonSerializer.Serialize(writer, condition.NotIn, options);
+        }
+        if (condition.IsNull.HasValue)
+        {
+            writer.WritePropertyName("isNull");
+            writer.WriteBooleanValue(condition.IsNull.Value);
+        }
+        if (condition.Includes is { ValueKind: JsonValueKind.Object } includesElement)
+        {
+            writer.WritePropertyName("includes");
+            includesElement.WriteTo(writer);
+        }
+
+        if (condition.NestedConditions != null)
+        {
+            foreach (var (name, nested) in condition.NestedConditions)
+            {
+                writer.WritePropertyName(name);
+                switch (nested)
+                {
+                    case JsonElement je:
+                        je.WriteTo(writer);
+                        break;
+                    default:
+                        JsonSerializer.Serialize(writer, nested, nested.GetType(), options);
+                        break;
+                }
+            }
         }
 
         writer.WriteEndObject();

@@ -24,7 +24,11 @@ public static class InstanceFieldDiscriminator
         "CompletedAt",
         "IsTransient",
         "EffectiveStateType",
-        "EffectiveStateSubType"
+        "EffectiveStateSubType",
+        "CreatedBy",
+        "CreatedByBehalfOf",
+        "ModifiedBy",
+        "ModifiedByBehalfOf"
     };
 
     /// <summary>

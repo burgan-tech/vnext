@@ -43,6 +43,6 @@ public sealed class StandardTaskPersistenceStrategy(
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
     {
-        await instanceTaskRepository.UpdateAsync(instanceTask, false, cancellationToken);
+        await instanceTaskRepository.UpdateAsync(instanceTask, true, cancellationToken);
     }
 }

@@ -99,9 +99,21 @@ public sealed class Transition : IHasKey
     private List<RoleGrant> roles = new();
 
     [JsonInclude]
+    [JsonPropertyName("view")]
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
+    private ViewDefinition? view { get; set; }
+
+    [JsonInclude]
     [JsonPropertyName("views")]
     [JsonConverter(typeof(ViewDefinitionJsonConverter))]
-    public ViewDefinition? View { get; private set; }
+    private ViewDefinition? views { get; set; }
+
+    /// <summary>
+    /// View definition for the transition. Supports both old "view" and new "views" JSON formats.
+    /// New format takes precedence when both are present.
+    /// </summary>
+    [JsonIgnore]
+    public ViewDefinition? View => views ?? view;
 
     /// <summary>
     /// Transition roles for authorization. DENY always overrides ALLOW.
@@ -114,12 +126,6 @@ public sealed class Transition : IHasKey
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<LanguageLabel> Labels => labels.AsReadOnly();
-
-    // /// <summary>
-    // /// Transition View
-    // /// </summary>
-    // [JsonIgnore]
-    // public ViewDefinition? View { get; private set; }
 
     /// <summary>
     /// On Execution Tasks
@@ -166,7 +172,7 @@ public sealed class Transition : IHasKey
 
     public void SetView(ViewDefinition viewDefinition)
     {
-        View = viewDefinition;
+        views = viewDefinition;
     }
 
     public void AddOnExecutionTask(OnExecuteTask task)

@@ -1,9 +1,11 @@
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Services;
 
@@ -12,9 +14,11 @@ namespace BBT.Workflow.Execution.Services;
 /// Transition chaining (auto/scheduled) is now handled by TransitionPipeline via sync dispatch.
 /// This runner focuses on UoW lifecycle management for a single transition execution.
 /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and context management.
+/// After UoW commit, publishes deferred domain events via IDistributedEventBus.
 /// </summary>
 public sealed class TransitionRunner(
-    IServiceScopeFactory scopeFactory) : ITransitionRunner
+    IServiceScopeFactory scopeFactory,
+    ILogger<TransitionRunner> logger) : ITransitionRunner
 {
     /// <inheritdoc />
     /// <summary>
@@ -25,7 +29,6 @@ public sealed class TransitionRunner(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        // Execute in isolated scope + UoW
         var hopResult = await ExecuteWithScopeAsync(context, cancellationToken);
         if (!hopResult.IsSuccess)
             return Result<TransitionOutput>.Fail(hopResult.Error);
@@ -37,6 +40,7 @@ public sealed class TransitionRunner(
     /// <summary>
     /// Executes the transition in a new DI scope with RequiresNew UoW.
     /// This ensures complete isolation from any ambient UoW.
+    /// After commit, publishes deferred domain events collected during pipeline execution.
     /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and IWorkflowContext setup.
     /// </summary>
     private Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
@@ -60,11 +64,43 @@ public sealed class TransitionRunner(
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    // Commit is THE boundary
                     await uow.CommitAsync(ct);
+
+                    await PublishDeferredEventsAsync(sp, coreResult.Value!, ct);
 
                     return coreResult;
                 }
             }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Publishes deferred domain events via IDistributedEventBus after UoW commit.
+    /// Each event passes through HookedDistributedEventBus, preserving hook behavior.
+    /// Events include pre-extracted metadata from AddDistributedEvent time.
+    /// </summary>
+    private async Task PublishDeferredEventsAsync(
+        IServiceProvider sp,
+        TransitionCoreOutput coreOutput,
+        CancellationToken ct)
+    {
+        if (coreOutput.DeferredEvents.Count == 0)
+            return;
+
+        var eventBus = sp.GetRequiredService<IDistributedEventBus>();
+
+        foreach (var envelope in coreOutput.DeferredEvents)
+        {
+            try
+            {
+                await eventBus.PublishAsync(envelope.Event, envelope.Metadata, cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "Failed to publish deferred event {EventType} for transition",
+                    envelope.Event.GetType().Name);
+            }
+        }
     }
 }

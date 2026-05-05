@@ -65,22 +65,23 @@ public sealed class WorkflowExecutionService(
         => strategy.ExecuteAsync(context, cancellationToken);
 
     /// <summary>
-    /// Builds the core output including transition output and directives snapshot.
-    /// The snapshot captures inline auto queue for post-commit processing.
+    /// Builds the core output including transition output and deferred domain events.
+    /// Deferred events are consumed from the execution context directives and will be
+    /// published by TransitionRunner after UoW commit.
     /// </summary>
     private async Task<Result<TransitionCoreOutput>> BuildCoreOutputAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext executionContext,
         CancellationToken cancellationToken)
     {
-        // Build transition output
         var outputResult = await BuildTransitionOutputAsync(context, executionContext, cancellationToken);
         if (!outputResult.IsSuccess)
         {
             return Result<TransitionCoreOutput>.Fail(outputResult.Error);
         }
-        
-        return Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!));
+
+        var deferredEvents = executionContext.Directives.ConsumeDeferredEvents();
+        return Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!, deferredEvents));
     }
 
     /// <summary>

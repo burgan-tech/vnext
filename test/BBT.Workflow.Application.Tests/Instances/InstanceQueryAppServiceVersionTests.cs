@@ -18,6 +18,7 @@ using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Extentions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -113,6 +114,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             representationEtagService: _representationEtagService,
             schemaFieldFilterService: _schemaFieldFilterService,
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
+            instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

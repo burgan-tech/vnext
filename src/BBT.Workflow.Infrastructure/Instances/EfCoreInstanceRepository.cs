@@ -15,7 +15,7 @@ using BBT.Workflow.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-
+using BBT.Workflow.Definitions.Schemas;
 namespace BBT.Workflow.Instances;
 
 public sealed class EfCoreInstanceRepository(
@@ -30,14 +30,41 @@ public sealed class EfCoreInstanceRepository(
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
 {
+    #region Compiled Queries
+
+    private static readonly Func<WorkflowDbContext, string, Guid, Task<bool>>
+        AnyActiveByKeyCompiledQuery = EF.CompileAsyncQuery(
+            (WorkflowDbContext ctx, string key, Guid excludeId) =>
+                ctx.Instances.Any(
+                    i => i.Key == key
+                         && i.Id != excludeId
+                         && i.Status == InstanceStatus.Active));
+
+    private static readonly Func<WorkflowDbContext, string, string, IAsyncEnumerable<InstanceAndDataModel>>
+        FindActiveDataExactCompiledQuery = EF.CompileAsyncQuery(
+            (WorkflowDbContext ctx, string key, string version) =>
+                ctx.Instances
+                    .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+                    .Join(ctx.InstancesData,
+                        i => i.Id,
+                        d => d.InstanceId,
+                        (i, d) => new { Instance = i, Data = d })
+                    .Where(x => x.Data.Version == version)
+                    .Select(x => new InstanceAndDataModel
+                    {
+                        Instance = x.Instance,
+                        InstanceData = x.Data
+                    }));
+
+    #endregion
+
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
-        // Runtime only consumes the latest InstanceData snapshot and active (non-completed)
-        // child correlations. Filtered includes keep the join sets minimal so the partial
-        // indexes UX_InstancesData_Instance_IsLatest and IX_InstancesCorrelations_ActiveByParent_Covering
-        // can serve these reads as index-only scans.
+        // Loads the full InstanceData history so that Instance.AddData can perform
+        // correct JSON merges against previous versions during execution.
+        // ChildCorrelations are still filtered to active-only.
         return (await base.WithDetailsAsync())
-            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.DataList)
             .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
     }
 
@@ -68,32 +95,38 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <summary>
-    /// Updates an instance and automatically records status change metrics
+    /// Updates an instance and automatically records status change metrics.
+    /// Uses EF change tracker to detect status changes without an extra DB round-trip.
     /// </summary>
     public override async Task<Instance> UpdateAsync(Instance entity, bool autoSave = false,
         CancellationToken cancellationToken = default)
     {
-        // Get the original entity to compare status changes
-        var originalEntity = await FindAsync(entity.Id, includeDetails: false, cancellationToken);
-        var originalStatus = originalEntity?.Status;
+        var dbContext = await GetDbContextAsync();
+        var entry = dbContext.Entry(entity);
+
+        InstanceStatus? originalStatus = null;
+        if (entry.State != EntityState.Detached)
+        {
+            var statusProperty = entry.Property(nameof(Instance.Status));
+            if (statusProperty.IsModified)
+            {
+                originalStatus = (InstanceStatus)statusProperty.OriginalValue!;
+            }
+        }
 
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
 
-        // Database metrics are automatically recorded by WorkflowDatabaseInterceptor
-        // Only handle business-specific status change metrics here
         if (originalStatus != null && !originalStatus.Equals(entity.Status))
         {
             await HandleStatusChangeMetrics(entity, originalStatus, entity.Status);
         }
 
-        // Transfer to data sinks (e.g., ClickHouse) if enabled
         try
         {
             await dataSinkManager.HandleUpdateAsync(result, cancellationToken);
         }
         catch (Exception ex)
         {
-            // Log error but don't fail the main operation
             logger.LogWarning(ex, "Failed to transfer instance to data sinks");
         }
 
@@ -157,9 +190,8 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
-        // Bypass WithDetailsAsync because its DataList include is filtered to
-        // IsLatest = true. GetInstanceHistoryAsync needs every InstanceData revision
-        // to enumerate the full transition history.
+        // Read-only query for history enumeration. Uses AsNoTracking since the caller
+        // only reads; WithDetailsAsync is not used here to keep the query detached.
         var dbSet = await GetDbSetAsync();
         var query = dbSet
             .Include(i => i.DataList)
@@ -231,34 +263,29 @@ public sealed class EfCoreInstanceRepository(
     {
         var context = await GetDbContextAsync();
 
-        // If full version → exact match (optimized query)
+        // If full version → exact match via compiled query (avoids expression tree re-compilation)
         if (InstanceDataVersionComparer.IsFullVersion(version))
         {
-            return await (from instance in context.Instances
-                          where instance.Status == InstanceStatus.Active
-                          join data in context.InstancesData on instance.Id equals data.InstanceId
-                          where instance.Key == key && data.Version == version
-                          select new InstanceAndDataModel
-                          {
-                              Instance = instance,
-                              InstanceData = data
-                          })
-                .AsNoTracking()
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(cancellationToken);
+            await foreach (var item in FindActiveDataExactCompiledQuery(context, key, version))
+            {
+                return item;
+            }
+
+            return null;
         }
 
         // For artifact or partial version → load all matching versions and use smart matching
-        var candidates = await (from instance in context.Instances
-                                where instance.Status == InstanceStatus.Active && instance.Key == key
-                                join data in context.InstancesData on instance.Id equals data.InstanceId
-                                select new InstanceAndDataModel
-                                {
-                                    Instance = instance,
-                                    InstanceData = data
-                                })
+        var candidates = await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new InstanceAndDataModel
+                {
+                    Instance = i,
+                    InstanceData = d
+                })
             .AsNoTracking()
-            .AsSplitQuery()
             .ToListAsync(cancellationToken);
 
         if (candidates.Count == 0)
@@ -279,22 +306,24 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active && instance.Key == key
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new InstanceAndDataModel
+                {
+                    Instance = i,
+                    InstanceData = d
+                })
             .AsNoTracking()
-            .AsSplitQuery()
             .ToListAsync(cancellationToken);
     }
 
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null)
     {
         // Apply PostgreSQL native JSON filters if provided
         if (!string.IsNullOrWhiteSpace(filter))
@@ -307,7 +336,8 @@ public sealed class EfCoreInstanceRepository(
                         jsonColumnName: "Data",
                         tableName: "InstancesData",
                         schema: currentSchema.Name ?? "public",
-                        schemaValidator: schemaValidator
+                        schemaValidator: schemaValidator,
+                        schemaContext: schemaContext
                     );
 
                 return filteredInstances
@@ -350,7 +380,8 @@ public sealed class EfCoreInstanceRepository(
         string? filter,
         string? groupBy = null,
         string? aggregations = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null)
     {
         // If groupBy or aggregations are provided, use ApplyFilterWithAggregationsAsync
         if (!string.IsNullOrWhiteSpace(groupBy) || !string.IsNullOrWhiteSpace(aggregations))
@@ -398,7 +429,7 @@ public sealed class EfCoreInstanceRepository(
                 }
             }
 
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
+             var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
                 context,
                 dbSet,
                 combinedFilter,
@@ -408,7 +439,8 @@ public sealed class EfCoreInstanceRepository(
                 currentSchema.Name ?? "public",
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
-                cancellationToken);
+                cancellationToken,
+                schemaContext);
 
             // If response has groups or aggregations, return empty paged list
             // (groups and aggregations are handled separately in the response)
@@ -467,7 +499,8 @@ public sealed class EfCoreInstanceRepository(
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null)
     {
         // If groupBy is provided, use ApplyFilterWithAggregationsAsync
         if (!string.IsNullOrWhiteSpace(groupBy))
@@ -525,7 +558,8 @@ public sealed class EfCoreInstanceRepository(
                 currentSchema.Name ?? "public",
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
-                cancellationToken);
+                cancellationToken,
+                schemaContext);
 
             // Convert GroupByResponse to GroupSummary
             List<GroupSummary>? groups = null;
@@ -613,7 +647,8 @@ public sealed class EfCoreInstanceRepository(
                 currentSchema.Name ?? "public",
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
-                cancellationToken);
+                cancellationToken,
+                schemaContext);
 
             // Aggregations without groupBy - return empty groups
             HateoasPagedList<Instance> pagedList;
@@ -649,8 +684,7 @@ public sealed class EfCoreInstanceRepository(
 
         if (string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
         {
-            // No filter + attributes orderBy: raw SQL with ORDER BY, then load DataList by IDs
-            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema);
+            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema, schemaContext: schemaContext);
             if (!string.IsNullOrEmpty(orderByClause))
             {
                 var dbSet = await GetDbSetAsync();
@@ -659,16 +693,16 @@ public sealed class EfCoreInstanceRepository(
                     .FromSqlRaw(rawSql)
                     .AsNoTracking()
                     .ToListAsync(cancellationToken);
-
+ 
                 hasNextPage = orderedInstances.Count > pageSize;
                 if (hasNextPage)
                     orderedInstances = orderedInstances.Take(pageSize).ToList();
-
+ 
                 items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
             }
             else
             {
-                var query = await GetFilteredQueryAsync(filter, cancellationToken);
+                var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
                 if (orderBy != null)
                     query = InstanceOrderByApplicator.Apply(query, orderBy);
                 items = await query
@@ -683,28 +717,28 @@ public sealed class EfCoreInstanceRepository(
         else if (!string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
         {
             var combinedFilter = BuildCombinedFilterJson(filter);
-            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema);
+            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema, schemaContext: schemaContext);
             if (!string.IsNullOrEmpty(combinedFilter) && !string.IsNullOrEmpty(orderByClause))
             {
                 var dbSet = await GetDbSetAsync();
                 var filterNode = GraphQLFilterParser.ParseFilter(combinedFilter);
                 if (filterNode != null && filterNode.NodeType != FilterNodeType.Empty)
                 {
-                    var query = dbSet.ApplyGraphQLFilter(filterNode, "Data", "InstancesData", schema, schemaValidator, null, orderByClause);
+                    var query = dbSet.ApplyGraphQLFilter(filterNode, "Data", "InstancesData", schema, schemaValidator, null, orderByClause, schemaContext: schemaContext);
                     var orderedInstances = await query
                         .Skip(skipCount)
                         .Take(pageSize + 1)
                         .ToListAsync(cancellationToken);
-
+ 
                     hasNextPage = orderedInstances.Count > pageSize;
                     if (hasNextPage)
                         orderedInstances = orderedInstances.Take(pageSize).ToList();
-
+ 
                     items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
                 }
                 else
                 {
-                    var query = await GetFilteredQueryAsync(filter, cancellationToken);
+                    var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
                     if (orderBy != null)
                         query = InstanceOrderByApplicator.Apply(query, orderBy);
                     items = await query
@@ -718,7 +752,7 @@ public sealed class EfCoreInstanceRepository(
             }
             else
             {
-                var query = await GetFilteredQueryAsync(filter, cancellationToken);
+                var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
                 if (orderBy != null)
                     query = InstanceOrderByApplicator.Apply(query, orderBy);
                 items = await query
@@ -732,7 +766,7 @@ public sealed class EfCoreInstanceRepository(
         }
         else
         {
-            var query = await GetFilteredQueryAsync(filter, cancellationToken);
+            var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
             if (orderBy != null)
                 query = InstanceOrderByApplicator.Apply(query, orderBy);
             items = await query
@@ -743,7 +777,7 @@ public sealed class EfCoreInstanceRepository(
             if (hasNextPage)
                 items = items.Take(pageSize).ToList();
         }
-
+ 
         var normalPagedList = new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
         return (normalPagedList, null);
     }
@@ -919,18 +953,17 @@ public sealed class EfCoreInstanceRepository(
     public async Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
-
-        // Optimize query with proper indexing and reduced data transfer
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
-            .AsNoTracking() // Don't track changes for read-only operations
-            .AsSplitQuery() // Use split queries for better performance with joins
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new InstanceAndDataModel
+                {
+                    Instance = i,
+                    InstanceData = d
+                })
+            .AsNoTracking()
             .ToListAsync(cancellationToken);
     }
 
@@ -938,18 +971,18 @@ public sealed class EfCoreInstanceRepository(
         int skip, int take, CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
-
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                      orderby instance.Id
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .OrderBy(i => i.Id)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new InstanceAndDataModel
+                {
+                    Instance = i,
+                    InstanceData = d
+                })
             .AsNoTracking()
-            .AsSplitQuery()
             .Skip(skip)
             .Take(take)
             .ToListAsync(cancellationToken);
@@ -961,21 +994,22 @@ public sealed class EfCoreInstanceRepository(
         var context = await GetDbContextAsync();
 
         // Uses the LastTouchedAt STORED GENERATED column (COALESCE(ModifiedAt, CreatedAt)).
-        // The previous (instance.ModifiedAt ?? instance.CreatedAt) expression prevented the
-        // planner from using any index. Reading the shadow column via EF.Property keeps the
-        // query strongly typed while letting IX_Instances_Active_LastTouched_Id serve it.
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                            && EF.Property<DateTime>(instance, "LastTouchedAt") >= since
-                      orderby EF.Property<DateTime>(instance, "LastTouchedAt"), instance.Id
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
+        // Reading the shadow column via EF.Property keeps the query strongly typed
+        // while letting IX_Instances_Active_LastTouched_Id serve it.
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active
+                        && EF.Property<DateTime>(i, "LastTouchedAt") >= since)
+            .OrderBy(i => EF.Property<DateTime>(i, "LastTouchedAt"))
+            .ThenBy(i => i.Id)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new InstanceAndDataModel
+                {
+                    Instance = i,
+                    InstanceData = d
+                })
             .AsNoTracking()
-            .AsSplitQuery()
             .Skip(skip)
             .Take(take)
             .ToListAsync(cancellationToken);
@@ -985,24 +1019,22 @@ public sealed class EfCoreInstanceRepository(
     public async Task<bool> AnyActiveByKeyAsync(string key, Guid excludeInstanceId,
         CancellationToken cancellationToken = default)
     {
-        return await (await GetDbSetAsync())
-            .AsNoTracking()
-            .AnyAsync(
-                i => i.Key == key
-                     && i.Id != excludeInstanceId
-                     && i.Status == InstanceStatus.Active,
-                cancellationToken);
+        var context = await GetDbContextAsync();
+        return await AnyActiveByKeyCompiledQuery(context, key, excludeInstanceId);
     }
 
     /// <inheritdoc />
     public async Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      where data.IsLatest
-                      select new InstanceKeyModel(instance.Key!, data.Version))
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new { Instance = i, Data = d })
+            .Where(x => x.Data.IsLatest)
+            .Select(x => new InstanceKeyModel(x.Instance.Key!, x.Data.Version))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
     }

@@ -1,6 +1,7 @@
 using BBT.Aether;
 using BBT.Aether.Domain.Repositories;
 using BBT.Aether.Results;
+using BBT.Workflow.Definitions.Schemas;
 using Microsoft.AspNetCore.Http;
 
 namespace BBT.Workflow.Instances;
@@ -14,19 +15,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads an instance with the full <see cref="Instance.DataList"/> history (no IsLatest
-    /// filter). Dedicated to <c>GetInstanceHistoryAsync</c>; runtime hot-paths must keep
-    /// using <see cref="FindByIdentifierAsReadOnlyAsync"/> which loads only the latest
-    /// snapshot.
+    /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
+    /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
     /// </summary>
     Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads a change-tracked instance with the full <see cref="Instance.DataList"/> (no
-    /// IsLatest filter). Use for write paths that need to inspect non-latest versions
-    /// (e.g. duplicate version checks during publish). Prefer <see cref="FindByIdentifierAsync"/>
-    /// when only the latest version is needed.
+    /// Loads a change-tracked instance with the full <see cref="Instance.DataList"/>.
+    /// Use for write paths that need to inspect non-latest versions
+    /// (e.g. duplicate version checks during publish).
     /// </summary>
     Task<Instance?> FindByIdentifierWithFullDataAsync(string? identifier,
         CancellationToken cancellationToken = default);
@@ -46,17 +44,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
         
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
-        int page, 
-        int pageSize, 
+        int page,
+        int pageSize,
         string? filter,
         string? groupBy = null,
         string? aggregations = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null);
 
     /// <summary>
     /// Gets paged results with optional groups for groupBy queries
     /// </summary>
     /// <param name="sort">Optional orderBy JSON (e.g. {"field":"createdAt","direction":"desc"} or {"fields":[...]})</param>
+    /// <param name="schemaContext">Optional schema-driven filter/sort metadata</param>
     Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
@@ -64,7 +64,8 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null);
 
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)

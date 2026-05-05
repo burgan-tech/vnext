@@ -149,6 +149,24 @@ public sealed class TransitionExecutionContext
     }
 
     /// <summary>
+    /// Extracts pending distributed events from the Instance aggregate and defers them
+    /// in <see cref="Directives"/> for explicit publishing after UoW commit.
+    /// Clears the aggregate's event list so they won't be dispatched automatically via IDomainEventSink/SaveChanges.
+    /// </summary>
+    public void ExtractAndDeferInstanceEvents()
+    {
+        if (Instance == null)
+            return;
+
+        var domainEvents = Instance.GetDomainEvents();
+        if (domainEvents.Count == 0)
+            return;
+
+        Directives.DeferEvents(domainEvents);
+        Instance.ClearDomainEvents();
+    }
+
+    /// <summary>
     /// Applies changes made within the provided <see cref="ScriptContext"/> back to the live transition context.
     /// </summary>
     /// <param name="scriptContext">The script context containing potential instance updates.</param>

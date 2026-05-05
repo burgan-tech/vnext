@@ -73,6 +73,7 @@ public sealed class ChangeStateStep(
         var fromState = context.Instance.GetCurrentState;
 
         context.Instance.ChangeState(context.Target);
+        context.ExtractAndDeferInstanceEvents();
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
         // Sync context to reflect the applied state (mirrors UpdateTargetStateInContext)
@@ -131,6 +132,7 @@ public sealed class ChangeStateStep(
         }
         
         context.Instance.ChangeState(stateResult.Value!);
+        context.ExtractAndDeferInstanceEvents();
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
         
         return Result<StateTransitionInfo>.Ok(info);

@@ -343,7 +343,7 @@ public static class GraphQLFilterParser
         {
             "eq" or "ne" or "gt" or "ge" or "lt" or "le" or
             "between" or "like" or "match" or "startswith" or "endswith" or
-            "in" or "nin" or "isnull" => true,
+            "in" or "nin" or "isnull" or "includes" => true,
             _ => false
         };
     }

@@ -327,9 +327,14 @@ function processComponentFile(jsonData, vnextConfig, shouldReplaceDomain, target
     processed = updateComponentVersions(processed, vnextConfig.version, vnextConfig.domain);
     
     // Step 2: Replace domain at ALL levels if requested
+    // Skip root-level crossDomain components — they intentionally target another domain
     if (shouldReplaceDomain && targetDomain) {
-        log.detail(`Replacing domain → ${targetDomain}`);
-        processed = replaceDomainInJson(processed, targetDomain);
+        if (processed.crossDomain === true) {
+            log.detail(`Skipping domain replacement (crossDomain component)`);
+        } else {
+            log.detail(`Replacing domain → ${targetDomain}`);
+            processed = replaceDomainInJson(processed, targetDomain);
+        }
     }
     
     return processed;
@@ -527,14 +532,17 @@ async function downloadPackage(packageName, version, registry, authOptions = {})
 
 /**
  * Replace ALL domain fields in JSON object at ALL levels
- * 
+ *
  * Replaces domain in:
  * - Root level domain (if object has key, flow, version, domain)
  * - attributes.domain
  * - data[].domain
  * - data[].attributes.domain
  * - Any nested object's domain field
- * 
+ *
+ * Cross-domain exclusion: if an object has `crossDomain: true`, its `domain`
+ * field is preserved as-is (intentionally targets another domain).
+ *
  * @param {Object} obj - Object to process
  * @param {string} targetDomain - Target domain to replace with
  */
@@ -542,29 +550,29 @@ function replaceDomainInJson(obj, targetDomain) {
     if (typeof obj !== 'object' || obj === null) {
         return obj;
     }
-    
+
     if (Array.isArray(obj)) {
         return obj.map(item => replaceDomainInJson(item, targetDomain));
     }
-    
+
     // Create a copy of the object
     const result = { ...obj };
-    
-    // Replace domain field if it exists and is a string
-    if (typeof result.domain === 'string') {
+
+    // Replace domain field only if this object is not marked as cross-domain
+    if (typeof result.domain === 'string' && result.crossDomain !== true) {
         result.domain = targetDomain;
     }
-    
+
     // Recursively process all properties to find nested domain fields
-    // BUT skip "config" and "process" keys - it should always remain unchanged
+    // BUT skip "config" and "process" keys - they should always remain unchanged
     for (const [key, value] of Object.entries(result)) {
-        if (key !== 'domain' && key !== 'config' && key !== "process") { // Skip domain (already processed) and attributes (always preserved)
+        if (key !== 'domain' && key !== 'config' && key !== "process") {
             result[key] = replaceDomainInJson(value, targetDomain);
         }
     }
-    
+
     return result;
-} 
+}
 
 
 /**
@@ -1056,14 +1064,18 @@ async function handleRuntimePublish(req, res) {
 /**
  * Handle Standard Package Publish (async job pattern)
  * Endpoint: POST /api/package/publish
- * 
+ *
  * Returns 202 Accepted immediately with a jobId.
  * Processing runs in the background; poll GET /api/package/publish/status/:jobId for progress.
+ *
+ * Domain replacement is opt-in: set `replaceDomain: true` together with a non-empty
+ * `appDomain` to replace domain fields in all components.  Components (or nested
+ * references) that carry `crossDomain: true` are exempt from replacement.
  */
 async function handlePackagePublish(req, res) {
     try {
         const body = await parseJSON(req);
-        
+
         const {
             packageName,
             version = 'latest',
@@ -1072,6 +1084,8 @@ async function handlePackagePublish(req, res) {
             npmUsername,
             npmPassword,
             npmEmail,
+            appDomain,
+            replaceDomain = false,
             reInitialize = false
         } = body;
 
@@ -1081,11 +1095,16 @@ async function handlePackagePublish(req, res) {
             return;
         }
 
+        // Domain replacement is enabled only when explicitly requested AND a target domain is given
+        const effectiveAppDomain = (replaceDomain === true && appDomain && appDomain.trim() !== '')
+            ? appDomain.trim()
+            : null;
+
         const job = createJob(packageName);
 
         log.section(`API Request: Package Publish [job=${job.id}]`);
         log.info(`Package: ${packageName}@${version}`);
-        log.info(`Domain Replacement: DISABLED`);
+        log.info(`Domain Replacement: ${effectiveAppDomain ? `ENABLED → ${effectiveAppDomain}` : 'DISABLED'}`);
         log.info(`Re-initialize after publish: ${reInitialize === true ? 'ENABLED' : 'DISABLED'}`);
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -1100,11 +1119,11 @@ async function handlePackagePublish(req, res) {
             version,
             npmRegistry,
             authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
-            appDomain: null,
+            appDomain: effectiveAppDomain,
             isRuntimePackage: false,
             reInitialize: reInitialize === true,
         });
-        
+
     } catch (error) {
         log.error(`Error: ${error.message}`);
         if (error.stack) {
@@ -1455,8 +1474,8 @@ function startServer() {
         log.detail(`  - Special ordering (Workflows first, sys-flows first)`);
         log.info(`Package Publish: POST http://localhost:${PORT}/api/package/publish`);
         log.detail(`  - For any npm package`);
-        log.detail(`  - appDomain is OPTIONAL`);
-        log.detail(`  - If appDomain provided, replaces all domains`);
+        log.detail(`  - replaceDomain: true + appDomain to enable domain replacement`);
+        log.detail(`  - Components with crossDomain:true are exempt from replacement`);
         log.info(`Job Status: GET http://localhost:${PORT}/api/package/publish/status/:jobId`);
         log.detail(`  - Poll for job progress after publish`);
         log.info(`Cancel Job: POST http://localhost:${PORT}/api/package/publish/cancel/:jobId`);
