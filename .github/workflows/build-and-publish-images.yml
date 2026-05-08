@@ -155,6 +155,10 @@ jobs:
         if: steps.version.outputs.is_prerelease != 'true'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+
+          # Pull latest remote state to avoid non-fast-forward on re-runs
+          git pull --rebase origin ${{ github.ref_name }}
+
           sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
           echo "Updated common.props with version $VERSION"
 
@@ -167,7 +171,7 @@ jobs:
             git push origin ${{ github.ref_name }}
             echo "Committed and pushed common.props update"
           else
-            echo "No changes in common.props"
+            echo "No changes in common.props (already at version $VERSION)"
           fi
 
   build-sign-scan:
