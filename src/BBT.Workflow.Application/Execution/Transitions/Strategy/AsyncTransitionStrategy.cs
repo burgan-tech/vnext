@@ -247,7 +247,8 @@ public sealed class AsyncTransitionStrategy(
             RouteValues = context.RouteValues,
             ExecutionActor = context.Actor,
             TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString
+            TraceState = activity?.TraceStateString,
+            Stage = context.Data?.Stage
         };
 
         var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow).ExpressionValue;

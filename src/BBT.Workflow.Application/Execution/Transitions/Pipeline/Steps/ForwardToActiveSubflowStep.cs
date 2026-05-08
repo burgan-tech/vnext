@@ -46,6 +46,7 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             context.Instance.Subflow.SubFlowName,
             context.Instance.Subflow.SubFlowVersion,
             context.InstanceKey,
+            context.Stage,
             context.Tags,
             context.DataElement,
             context.Headers.ToDictionary(),

@@ -189,6 +189,7 @@ public class DefaultPostCommitFailurePolicyTests
             "test-workflow",
             "1.0.0",
             "test-key",
+            "initial",
             null,
             null,
             new Dictionary<string, string?>(),

@@ -50,7 +50,8 @@ public sealed class TransitionJobHandler(
                             new TransitionDataInput(args.Data)
                             {
                                 Key = args.InstanceKey,
-                                Tags = args.Tags
+                                Tags = args.Tags,
+                                Stage = args.Stage
                             },
                             sync: true) // Force sync=true to avoid infinite loop
                         {

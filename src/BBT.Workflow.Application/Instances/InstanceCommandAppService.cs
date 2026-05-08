@@ -540,9 +540,10 @@ public sealed class InstanceCommandAppService(
             RouteValues = input.RouteValues,
             Data = new TransitionDataInfo(input.Data?.Key, input.Data?.Attributes)
             {
+                Stage = input.Data?.Stage,
                 Tags = input.Data?.Tags,
             },
-            IsReentry = false,
+            IsReentry = false
         };
     }
 

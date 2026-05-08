@@ -51,6 +51,7 @@ public sealed record StartSubflowJob(
 /// <param name="SubflowName">The workflow name of the subflow.</param>
 /// <param name="SubflowVersion">The version of the subflow workflow.</param>
 /// <param name="InstanceKey">The key of the parent instance.</param>
+/// <param name="Stage">The stage from the transition.</param>
 /// <param name="Tags">The tags from the transition.</param>
 /// <param name="DataElement">The data element to forward.</param>
 /// <param name="Headers">The headers to forward.</param>
@@ -63,6 +64,7 @@ public sealed record ForwardToSubflowJob(
     string SubflowName,
     string? SubflowVersion,
     string? InstanceKey,
+    string? Stage,
     string[]? Tags,
     JsonElement? DataElement,
     Dictionary<string, string?> Headers,

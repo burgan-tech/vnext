@@ -98,9 +98,10 @@ public sealed class ForwardToSubflowJobHandler(
             new TransitionDataInput(job.DataElement)
             {
                 Key = job.InstanceKey,
-                Tags = job.Tags
+                Tags = job.Tags,
+                Stage = job.Stage
             },
-            true) // sync = true for forward
+            false) // sync = true for forward
         {
             Headers = headers,
             RouteValues = job.RouteValues

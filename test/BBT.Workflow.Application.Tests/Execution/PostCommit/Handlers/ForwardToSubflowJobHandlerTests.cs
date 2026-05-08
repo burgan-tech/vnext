@@ -148,6 +148,7 @@ public class ForwardToSubflowJobHandlerTests
             SubflowName: "test-subflow",
             SubflowVersion: "1.0.0",
             InstanceKey: "test-key",
+            Stage: "initial",
             Tags: null,
             DataElement: JsonDocument.Parse("{}").RootElement,
             Headers: new Dictionary<string, string?>(),

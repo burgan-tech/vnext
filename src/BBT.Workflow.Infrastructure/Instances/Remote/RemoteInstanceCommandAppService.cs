@@ -72,6 +72,7 @@ public sealed class RemoteInstanceCommandAppService(
             var requestBody = new CreateInstanceInput
             {
                 Key = input.Instance.Key,
+                Stage = input.Instance.Stage,
                 Tags = input.Instance.Tags,
                 Attributes = input.Instance.Attributes
             };
@@ -147,6 +148,7 @@ public sealed class RemoteInstanceCommandAppService(
                 Id = input.Instance.Id,
                 Key = input.Instance.Key,
                 Tags = input.Instance.Tags,
+                Stage = input.Instance.Stage,
                 Attributes = input.Instance.Attributes,
                 Callback = input.Instance.Callback,
                 ExtraProperties = input.Instance.ExtraProperties
