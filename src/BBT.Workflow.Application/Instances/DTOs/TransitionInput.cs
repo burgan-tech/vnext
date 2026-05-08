@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -53,6 +54,7 @@ public sealed class TransitionInput(
             Data = new TransitionDataInfo(Data?.Key, Data?.Attributes)
             {
                 Tags = Data?.Tags,
+                Stage = Data?.Stage,
             },
             IsReentry = false // Manual transitions are never re-entry
         };
@@ -74,4 +76,10 @@ public sealed class TransitionDataInput
     public string? Key { get; set; }
     public string[]? Tags { get; set; }
     public JsonElement? Attributes { get; set; }
+
+    /// <summary>
+    /// Optional stage label for the instance (max 120 characters).
+    /// </summary>
+    [StringLength(InstanceConstants.MaxStageLength)]
+    public string? Stage { get; set; }
 }

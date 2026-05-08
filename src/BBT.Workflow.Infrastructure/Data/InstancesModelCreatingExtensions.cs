@@ -37,12 +37,21 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.CurrentState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
+            b.Property(p => p.CurrentStateType)
+                .HasConversion<int?>();
+
+            b.Property(p => p.CurrentStateSubType)
+                .HasConversion<int?>();
+
             b.Property(p => p.EffectiveState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
             // Index for EffectiveState for query performance
             b.HasIndex(p => p.EffectiveState)
                 .HasDatabaseName("IX_Instances_EffectiveState");
+
+            b.Property(p => p.Stage)
+                .HasMaxLength(InstanceConstants.MaxStageLength);
 
             b.Property(p => p.Status)
                 .IsRequired()

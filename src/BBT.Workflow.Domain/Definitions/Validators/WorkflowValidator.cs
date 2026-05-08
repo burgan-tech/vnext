@@ -338,10 +338,10 @@ public class WorkflowValidator
             ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false);
         }
 
-        // Validate Cancel transition
+        // Validate Cancel transition — AvailableIn is allowed (same as shared transitions)
         if (workflow.Cancel != null)
         {
-            ValidateSingleTransition(workflow.Cancel, "Cancel", result, isSharedTransition: false);
+            ValidateSingleTransition(workflow.Cancel, "Cancel", result, isSharedTransition: true);
         }
 
         // Validate SharedTransitions - AvailableIn is allowed here

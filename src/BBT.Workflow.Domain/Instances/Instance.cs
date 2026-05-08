@@ -79,6 +79,18 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public string? CurrentState { get; private set; }
 
     /// <summary>
+    /// Type of the current (engine-internal) state.
+    /// Updated together with CurrentState in <see cref="ChangeState"/>.
+    /// </summary>
+    public StateType? CurrentStateType { get; private set; }
+
+    /// <summary>
+    /// Subtype of the current (engine-internal) state.
+    /// Updated together with CurrentState in <see cref="ChangeState"/>.
+    /// </summary>
+    public StateSubType? CurrentStateSubType { get; private set; }
+
+    /// <summary>
     /// Effective state - the state exposed to the external world (persisted in DB)
     /// For parent: SubFlow's state if active SubFlow exists, otherwise own state
     /// For SubFlow: Own state
@@ -96,6 +108,12 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Tracked alongside EffectiveState for efficient filtering and automated status handling
     /// </summary>
     public StateSubType? EffectiveStateSubType { get; private set; }
+
+    /// <summary>
+    /// Free-form stage label set by the caller at start or transition time.
+    /// Enables lightweight categorization without workflow definition changes.
+    /// </summary>
+    public string? Stage { get; private set; }
 
     public string GetCurrentState => string.IsNullOrWhiteSpace(CurrentState) ? string.Empty : CurrentState;
     
@@ -249,7 +267,12 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             Status = Status,
             CompletedAt = CompletedAt,
             CurrentState = CurrentState,
+            CurrentStateType = CurrentStateType,
+            CurrentStateSubType = CurrentStateSubType,
             EffectiveState = EffectiveState,
+            EffectiveStateType = EffectiveStateType,
+            EffectiveStateSubType = EffectiveStateSubType,
+            Stage = Stage,
             Duration = Duration,
             Tags = [.. Tags],
             CreatedBy = CreatedBy,
@@ -500,6 +523,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Key = Check.NotNullOrWhiteSpace(key, nameof(key), InstanceConstants.MaxKeyLength);
     }
 
+    /// <summary>
+    /// Sets the instance stage label. Accepts null to clear.
+    /// </summary>
+    /// <param name="stage">Stage value (max <see cref="InstanceConstants.MaxStageLength"/> characters), or null.</param>
+    public void SetStage(string? stage)
+    {
+        Stage = Check.Length(stage, nameof(stage), InstanceConstants.MaxStageLength);
+    }
+
     private void SetState(string currentState)
     {
         CurrentState = Check.Length(currentState, nameof(currentState), StateConstants.MaxKeyLength);
@@ -593,6 +625,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     {
         var previousState = GetCurrentState;
         SetState(state.Key);
+
+        CurrentStateType = state.StateType;
+        CurrentStateSubType = state.SubType;
 
         // Domain Logic: Update EffectiveState with type and subtype if no active SubFlow
         if (!HasActiveSubFlow)

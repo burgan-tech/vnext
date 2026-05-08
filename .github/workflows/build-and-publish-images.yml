@@ -217,6 +217,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Stamp version into common.props
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
+          echo "Stamped common.props with version $VERSION"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:

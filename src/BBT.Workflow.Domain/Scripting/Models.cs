@@ -291,7 +291,14 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// essential for making context-aware decisions in mapping implementations.
     /// </remarks>
     public Instance? Instance { get; private set; }
-    
+
+    /// <summary>
+    /// Accumulates controlled mutations for <see cref="Instance"/> properties
+    /// that scripts are allowed to change (e.g. Stage). Mutations are applied
+    /// atomically by <c>ApplyScriptContextChanges</c> after script execution.
+    /// </summary>
+    public InstanceMutations Mutations { get; } = new();
+
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
     /// for the current workflow execution context.

@@ -388,8 +388,8 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Merges subflow transition names with the parent workflow's shared transitions only (manual/event, available in current state).
-    /// When in active subflow, clients see subflow transitions plus parent's shared transitions; state-level parent transitions are not included.
+    /// Merges subflow transition names with the parent workflow's shared transitions and cancel transition (manual/event, available in current state).
+    /// When in active subflow, clients see subflow transitions plus parent's shared transitions and cancel; state-level parent transitions are not included.
     /// </summary>
     private static List<string> MergeWithParentAvailableTransitions(
         List<string> subflowTransitionNames,
@@ -400,8 +400,15 @@ public sealed class InstanceQueryAppService(
         if (!stateResult.IsSuccess)
             return subflowTransitionNames;
 
-        var parentSharedOnly = currentWorkflow.GetAvailableSharedTransitionKeysOnly(stateResult.Value!);
-        return subflowTransitionNames.Union(parentSharedOnly).ToList();
+        var currentState = stateResult.Value!;
+        var parentSharedOnly = currentWorkflow.GetAvailableSharedTransitionKeysOnly(currentState);
+        var merged = subflowTransitionNames.Union(parentSharedOnly);
+
+        var cancelKey = currentWorkflow.GetCancelTransitionKey(currentState);
+        if (cancelKey != null)
+            merged = merged.Union(new[] { cancelKey });
+
+        return merged.ToList();
     }
 
     /// <summary>

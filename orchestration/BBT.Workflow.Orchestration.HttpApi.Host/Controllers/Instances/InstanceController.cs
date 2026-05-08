@@ -50,7 +50,8 @@ public sealed class InstanceController(
             {
                 Key = request?.Key,
                 Tags = request?.Tags,
-                Attributes = request?.Attributes
+                Attributes = request?.Attributes,
+                Stage = request?.Stage
             },
             Extensions = extensions
         };
@@ -85,6 +86,7 @@ public sealed class InstanceController(
                 Key = request.Key,
                 Tags = request.Tags,
                 Attributes = request.Attributes,
+                Stage = request.Stage,
                 Callback = request.Callback,
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
             },

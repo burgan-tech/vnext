@@ -56,7 +56,8 @@ public sealed class StartInstanceInput(
             RouteValues = RouteValues,
             Data = new TransitionDataInfo(Instance.Attributes)
             {
-                Tags = Instance.Tags
+                Tags = Instance.Tags,
+                Stage = Instance.Stage
             },
             IsReentry = false // Start transitions are never re-entry
         };
@@ -73,6 +74,13 @@ public sealed class CreateInstanceInput: IHasExtraProperties
     public string[]? Tags { get; set; }
     public JsonElement? Attributes { get; set; }
     public string? Callback { get; set; }
+
+    /// <summary>
+    /// Optional stage label for the instance (max 120 characters).
+    /// </summary>
+    [StringLength(InstanceConstants.MaxStageLength)]
+    public string? Stage { get; set; }
+
     public ExtraPropertyDictionary ExtraProperties { get; set; } = new();
 }
 

@@ -37,6 +37,9 @@ public sealed class TransitionExecutionContext
     /// <summary>Gets or sets instance tags (Optional).</summary>
     public string[]? Tags { get; set; }
 
+    /// <summary>Gets or sets the instance stage label (Optional, max 120 chars).</summary>
+    public string? Stage { get; set; }
+
     /// <summary>Gets the trigger type that initiated this transition.</summary>
     public TriggerType Trigger { get; init; }
 
@@ -201,6 +204,11 @@ public sealed class TransitionExecutionContext
         if (applied)
         {
             Data = Instance.Data;
+        }
+
+        if (scriptContext.Mutations.HasChanges)
+        {
+            scriptContext.Mutations.ApplyTo(Instance);
         }
     }
 }

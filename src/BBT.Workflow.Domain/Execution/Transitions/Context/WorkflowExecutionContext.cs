@@ -100,4 +100,5 @@ public sealed class TransitionDataInfo
     public string? Key { get; set; }
     public JsonElement? Attributes  { get; set; }
     public string[]? Tags { get; set; }
+    public string? Stage { get; set; }
 }

@@ -78,6 +78,9 @@ public sealed class InstanceMetadataDto
         Status = instance.Status;
         EffectiveStateType = instance.EffectiveStateType;
         EffectiveStateSubType = instance.EffectiveStateSubType;
+        CurrentStateType = instance.CurrentStateType;
+        CurrentStateSubType = instance.CurrentStateSubType;
+        Stage = instance.Stage;
         CompletedAt = instance.CompletedAt;
         Duration = instance.Duration?.TotalSeconds;
         CreatedAt = instance.CreatedAt;
@@ -102,6 +105,15 @@ public sealed class InstanceMetadataDto
 
     /// <summary>Subtype of the effective state (None, Success, Error, Terminated, Suspended, Busy, Human).</summary>
     public StateSubType? EffectiveStateSubType { get; set; }
+
+    /// <summary>Type of the current state (Initial, Intermediate, Finish, SubFlow, Wizard).</summary>
+    public StateType? CurrentStateType { get; set; }
+
+    /// <summary>Subtype of the current state (None, Success, Error, Terminated, Suspended, Busy, Human).</summary>
+    public StateSubType? CurrentStateSubType { get; set; }
+
+    /// <summary>User-defined stage label for the instance.</summary>
+    public string? Stage { get; set; }
 
     /// <summary>When the instance completed. Null if not completed.</summary>
     public DateTime? CompletedAt { get; set; }

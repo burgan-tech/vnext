@@ -128,6 +128,11 @@ public sealed class CreateTransitionRecordStep(
         {
             context.Instance.AddTags(context.Tags);
         }
+
+        if (!string.IsNullOrWhiteSpace(context.Stage))
+        {
+            context.Instance.SetStage(context.Stage);
+        }
     }
 
     /// <summary>

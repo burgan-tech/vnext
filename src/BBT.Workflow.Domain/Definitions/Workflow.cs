@@ -451,7 +451,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         // Get manual shared transitions (AvailableIn empty/null = available in all states, aligned with SharedTransitionAvailabilitySpecification)
         var manualSharedTransitions = GetAvailableSharedTransitionKeysOnly(currentState);
         manualTransitions.AddRange(manualSharedTransitions);
+
+        AppendCancelTransitionKey(manualTransitions, currentState);
+
         return manualTransitions;
+    }
+
+    /// <summary>
+    /// Appends the cancel transition key if configured with Manual or Event trigger type
+    /// and the current state satisfies the AvailableIn constraint.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// </summary>
+    private void AppendCancelTransitionKey(List<string> transitions, State currentState)
+    {
+        if (Cancel is { TriggerType: TriggerType.Manual or TriggerType.Event }
+            && (Cancel.AvailableIn == null || !Cancel.AvailableIn.Any() || Cancel.AvailableIn.Contains(currentState.Key))
+            && !transitions.Contains(Cancel.Key))
+            transitions.Add(Cancel.Key);
     }
 
     /// <summary>
@@ -465,6 +481,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                         (t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event))
             .Select(t => t.Key)
             .ToList();
+    }
+
+    /// <summary>
+    /// Gets the cancel transition key if configured with Manual or Event trigger type
+    /// and the given state satisfies the AvailableIn constraint.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// Used when merging parent transitions into SubFlow available transitions.
+    /// </summary>
+    public string? GetCancelTransitionKey(State currentState)
+    {
+        if (Cancel is not { TriggerType: TriggerType.Manual or TriggerType.Event })
+            return null;
+
+        if (Cancel.AvailableIn != null && Cancel.AvailableIn.Any() && !Cancel.AvailableIn.Contains(currentState.Key))
+            return null;
+
+        return Cancel.Key;
     }
 
     public static Workflow Create()

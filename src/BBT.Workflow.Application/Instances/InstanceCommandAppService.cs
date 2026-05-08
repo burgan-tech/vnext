@@ -189,6 +189,7 @@ public sealed class InstanceCommandAppService(
                 input.Instance.Id ?? guidGenerator.Create(),
                 input.Instance.Key,
                 input.Instance.Tags?.ToList(),
+                input.Instance.Stage,
                 input.Instance.ExtraProperties,
                 input.Sync,
                 input.Instance.Callback,
@@ -655,6 +656,7 @@ public sealed class InstanceCommandAppService(
         Guid instanceId,
         string? instanceKey,
         List<string>? tags,
+        string? stage,
         ExtraPropertyDictionary metadata,
         bool isSync,
         string? callback,
@@ -670,6 +672,9 @@ public sealed class InstanceCommandAppService(
 
                 if (tags?.Any() == true)
                     instance.AddTags(tags.ToArray());
+
+                if (!string.IsNullOrWhiteSpace(stage))
+                    instance.SetStage(stage);
 
                 return instance;
             }));
