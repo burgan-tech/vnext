@@ -10,6 +10,7 @@
     <PackageReference Include="BBT.Aether.AspNetCore" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
+    <PackageReference Include="Npgsql" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
     <PackageReference Include="prometheus-net.AspNetCore" Version="$(PrometheusVersion)" />
     <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" Version="$(PrometheusVersion)" />

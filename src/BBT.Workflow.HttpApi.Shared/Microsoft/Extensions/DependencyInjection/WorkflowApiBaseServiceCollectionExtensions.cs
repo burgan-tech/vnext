@@ -1,4 +1,5 @@
 using System.Net;
+using Npgsql;
 using BBT.Aether.AspNetCore.ExceptionHandling;
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Domain.Services;
@@ -101,7 +102,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddAetherDbContext<WorkflowDbContext>((sp, options) =>
         {
-            options.UseNpgsql(configuration.GetConnectionString("Default"),
+            options.UseNpgsql(BuildPgBouncerCompatibleConnectionString(configuration.GetConnectionString("Default")),
                     npgsqlOptions => { npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations"); })
                 .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 
@@ -124,7 +125,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddAetherDbContext<MessagingDbContext>((_, options) =>
         {
-            options.UseNpgsql(configuration.GetConnectionString("Default"),
+            options.UseNpgsql(BuildPgBouncerCompatibleConnectionString(configuration.GetConnectionString("Default")),
                     npgsqlOptions =>
                     {
                         npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations", "sys_queues");
@@ -275,5 +276,27 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             .ReplaceSchemaResolver<HeaderSchemaResolutionStrategy, WorkflowHeaderSchemaResolutionStrategy>();
         
         return services;
+    }
+
+    /// <summary>
+    /// Applies PgBouncer transactional-mode–safe overrides to the connection string.
+    /// <list type="bullet">
+    ///   <item><b>MaxAutoPrepare=0</b> — disables Npgsql's automatic statement preparation.
+    ///   Prepared statements are session-scoped in PostgreSQL; PgBouncer may route consecutive
+    ///   commands to different backends, causing "prepared statement does not exist" errors and
+    ///   Npgsql fallback/reconnect that adds seconds to response time.</item>
+    ///   <item><b>NoResetOnClose=true</b> — prevents Npgsql from sending <c>DISCARD ALL</c>
+    ///   when returning a connection to its pool. That command is session-level and incompatible
+    ///   with transactional-mode pooling; PgBouncer handles connection reset itself.</item>
+    /// </list>
+    /// </summary>
+    private static string BuildPgBouncerCompatibleConnectionString(string? connectionString)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            MaxAutoPrepare = 0,
+            NoResetOnClose = true
+        };
+        return builder.ConnectionString;
     }
 }
