@@ -410,6 +410,32 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string taskKey);
 
+    /// <summary>
+    /// Logs when the transition pipeline begins execution with an execution profile applied.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10060,
+        Level = LogLevel.Debug,
+        Message = "Pipeline executing with profile '{ProfileName}', {StepCount} steps, chain depth {ChainDepth}")]
+    public static partial void PipelineExecutingWithProfile(
+        this ILogger logger,
+        string profileName,
+        int stepCount,
+        int chainDepth);
+
+    /// <summary>
+    /// Logs how many lifecycle steps were excluded for a transition according to the active profile.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10061,
+        Level = LogLevel.Debug,
+        Message = "Profile '{ProfileName}' excluded {ExcludedCount} steps for transition {TransitionKey}")]
+    public static partial void ProfileExcludedSteps(
+        this ILogger logger,
+        string profileName,
+        int excludedCount,
+        string transitionKey);
+
     #endregion
 
     #region Task Execution

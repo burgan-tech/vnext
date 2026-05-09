@@ -138,6 +138,37 @@ public class ForwardToSubflowJobHandlerTests
         context.ClientResponse.Error!.Value.Prefix.ShouldBe(ErrorCodes.Prefixes.Dependency);
     }
 
+    [Theory]
+    [InlineData(ExecMode.Sync, true)]
+    [InlineData(ExecMode.Async, false)]
+    public async Task HandleAsync_ShouldPropagateSyncFromContextMode(ExecMode mode, bool expectedSync)
+    {
+        // Arrange
+        var job = CreateForwardToSubflowJob();
+        var context = CreateContext(mode);
+
+        TransitionInput? capturedInput = null;
+        _mockForwardingService
+            .ForwardTransitionAsync(
+                job.SubflowInstanceId,
+                job.TransitionKey,
+                Arg.Do<TransitionInput>(input => capturedInput = input),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<Guid?>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = job.SubflowInstanceId,
+                Status = InstanceStatus.Active
+            }));
+
+        // Act
+        await _handler.HandleAsync(job, context, CancellationToken.None);
+
+        // Assert
+        capturedInput.ShouldNotBeNull();
+        capturedInput!.Sync.ShouldBe(expectedSync);
+    }
+
     private static ForwardToSubflowJob CreateForwardToSubflowJob()
     {
         return new ForwardToSubflowJob(
@@ -156,7 +187,7 @@ public class ForwardToSubflowJobHandlerTests
         );
     }
 
-    private static TransitionExecutionContext CreateContext()
+    private static TransitionExecutionContext CreateContext(ExecMode mode = ExecMode.Sync)
     {
         var instanceId = Guid.NewGuid();
         var instance = Instance.Create(instanceId, "sys_flows", "1.0.0","test-key");
@@ -168,7 +199,8 @@ public class ForwardToSubflowJobHandlerTests
             Instance = instance,
             Domain = "test-domain",
             WorkflowKey = "test-workflow",
-            TransitionKey = "test-transition"
+            TransitionKey = "test-transition",
+            Mode = mode
         };
     }
 }

@@ -1,0 +1,151 @@
+---
+description: vNext workflow engine domain knowledge — pipeline steps, state semantics, long-polling, error boundary, subflow lifecycle, include strategy
+globs: 
+alwaysApply: true
+---
+
+# vNext Workflow Developer — Domain Knowledge
+
+## Transition Pipeline
+
+Transitions execute through a deterministic pipeline of ordered steps. Each step has a single responsibility and returns `Result<StepOutcome>`.
+
+### Step Execution Order
+
+| Order | Step | Responsibility |
+|-------|------|----------------|
+| 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
+| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 19 | SetBusyStep | Set instance status to Busy and persist |
+| 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
+| 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
+| 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
+| 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
+| 39 | CancelScheduledJobsStep | Cancel scheduled jobs for current state |
+| 40 | RunOnExitTasksStep | Run leaving-state OnExit tasks |
+| 50 | ChangeStateStep | Persist state change |
+| 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
+| 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
+| 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
+| 80 | ScheduleTransitionsStep | Schedule future transitions |
+| 90 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 100 | HandleFinishStep | Complete/cancel instance on finish states |
+| 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
+| 112 | ResolveAvailableStep | Resolve deferred Active status |
+
+### StepOutcome Values
+
+- `Continue()` — advance to next step
+- `Stop()` — break inner step loop (`StopPipeline = true`)
+- `SkipTo(order)` — jump to a specific step (calls `Directives.RequestResumeFrom` + replan)
+- `SkipToFinalize()` — shorthand for `SkipTo(LifecycleOrder.Finalize)`
+- `With(Action<PipelineDirectives>)` — mutate directives before flow decision
+
+Pipeline flow: apply `MutateDirectives` → if Stop → break → if SkipTo → replan → else continue.
+
+### PipelineExecutionProfile
+
+Each trigger type resolves to a profile that excludes irrelevant steps:
+
+| Profile | Trigger | Key Exclusions |
+|---------|---------|----------------|
+| Manual | Manual (0) | None |
+| AutoChain | Automatic (1) | Preflight, SetBusy, CreateTransition, ResourceLock, ResolveAvailable |
+| Scheduled | Scheduled (2) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
+| Event | Event (3) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
+| ErrorBoundary | Error boundary | Preflight, UpdateDataCheck, ForwardSubflow, ResourceLock, Auto, Schedule; `AllowAutoChain=false`, `AllowSubFlow=false` |
+
+Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryTransition` → ErrorBoundary; else by `TriggerType`.
+
+## Instance Repository Include Strategy
+
+- Pipeline steps do NOT call EF `Include` directly. Includes are applied at load time.
+- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
+- History paths use `AsNoTracking` + explicit includes.
+- `includeDetails` parameter on `GetResultAsync` exists but both paths load full details today.
+- **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
+
+## Long-Polling / State Function
+
+- Function type: `FunctionTypeConst.Longpooling` — conditional GET with ETag.
+- Client cycle: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
+- ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
+- **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
+- No server-side hold — 304 response drives client polling.
+
+## Sync vs Async Execution
+
+- `sync=true`: Request blocks until pipeline completes; response includes full instance data.
+- `sync=false` (default): Request accepted immediately; client polls via State function.
+- Sync is suitable for deterministic short-lived processes; async for human tasks and external calls.
+
+## Status / State / Type Semantics
+
+### Instance Status
+
+| Status | Code | Description |
+|--------|------|-------------|
+| Busy | B | Pipeline executing |
+| Active | A | Waiting (human task, idle) |
+| Passive | P | Deactivated |
+| Completed | C | Successfully finished |
+| Faulted | F | Terminal error |
+
+### State Types
+
+`Initial = 1`, `Intermediate = 2`, `Finish = 3`, `SubFlow = 4`, `Wizard = 5`
+
+### State Sub Types
+
+`None = 0`, `Success = 1`, `Error = 2`, `Terminated = 3`, `Suspended = 4`, `Busy = 5`, `Human = 6`, `Cancelled = 7`, `Timeout = 8`
+
+### Trigger Types
+
+`Manual = 0`, `Automatic = 1`, `Scheduled = 2`, `Event = 3`
+
+## Error Boundary
+
+- Levels: Task → State → Global (resolved by `CompiledBoundaryChain`).
+- Rules sorted by `EffectivePriority` ASC → specificity DESC → definition order.
+- Actions: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
+- `BoundaryOutcomeHandler` maps result to pipeline outcome:
+  - `Log`/`Ignore` → `Continue()`
+  - Transition set → `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`
+  - Abort without transition → Fail → instance fault
+- Error-boundary transitions set `IsErrorBoundaryTransition = true` on chained context.
+- Error-boundary profile disables auto-chain and subflow to prevent cascading.
+
+## SubFlow Lifecycle
+
+- **SubFlow (S)**: On completion → output mapping → `ResumePipelineAsync` with `ExecMode.Resume`, `ResumeFrom = ClearBusyOnResumeStep`, `IsSubFlowResume = true`. Parent pipeline resumes from step 79.
+- **SubProcess (P)**: On completion → correlation complete + persist → no parent resume (fire-and-forget).
+- On resume failure, correlation is reverted in a new UoW for retry.
+- Start creates `CreateInstanceInput` with parent metadata in `ExtraProperties` and `StrictIdempotency: true`.
+
+### SubFlow Completion Window
+
+If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.
+
+## Instance Data
+
+- Immutable, versioned (SemVer): task results → Patch, schema changes → Minor/Major.
+- Full-merge model: each version contains the complete state + delta.
+- `LatestData` marks current version. `DataList` contains version history.
+- Queryable via filters on instance columns and `attributes.*` JSON paths.
+
+## View Selection
+
+- Views array on states/transitions; evaluated in order, first matching rule wins.
+- Rule: C# script implementing `IConditionMapping` with access to `ScriptContext` (Headers, QueryParams, Instance.Data, State, Transition).
+- Last entry without a rule serves as fallback.
+- `loadData: true` → instance data loaded with view response.
+
+## TransitionExecutionContext
+
+- Built by `TransitionContextFactory`: workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`.
+- Request payload overlays `Data` from `input.Data?.Attributes`.
+- `Cache` dict holds ephemeral data (e.g. `ScriptContext`), cleared at Finalize.
+- `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
+- Same context reference flows through all pipeline steps — avoid redundant loads.

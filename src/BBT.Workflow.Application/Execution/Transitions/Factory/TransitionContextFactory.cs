@@ -120,6 +120,7 @@ public sealed class TransitionContextFactory(
             Stage = input.Data?.Stage,
 
             // Flags
+            Mode = input.Mode,
             IsReentry = input.IsReentry,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
 

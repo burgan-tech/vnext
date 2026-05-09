@@ -67,6 +67,7 @@ public sealed class StartSubflowJobHandler(
                 context.Transition!,
                 correlation,
                 scriptContext,
+                context.Mode,
                 cancellationToken);
 
             if (startResult.IsSuccess)

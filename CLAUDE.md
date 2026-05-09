@@ -72,16 +72,6 @@ The two services communicate via **Dapr service invocation**. Orchestration call
 | `BBT.Workflow.Workers.Outbox` | Publishes outbox events to the event bus (transactional outbox pattern). |
 | `BBT.Workflow.DbMigrator` | Runs EF Core schema migrations at deploy time. |
 
-### Transition Pipeline
-
-Workflow execution flows through a deterministic **transition pipeline**. When a transition is triggered:
-1. Orchestration validates and persists state
-2. Orchestration invokes Execution via Dapr
-3. Execution runs task invokers (C# scripts, HTTP calls, etc.)
-4. Execution reports back; Orchestration applies the result and may auto-trigger the next transition
-
-Synchronous mode (`sync=true`) waits for the entire pipeline to complete and returns instance data in the response.
-
 ### Key Infrastructure
 
 - **Database**: PostgreSQL with multi-schema support (one schema per tenant/flow)
@@ -96,11 +86,121 @@ Each workflow "flow" has its own PostgreSQL schema. Schema resolution uses `ICur
 
 ### Domain Events (dual-processing pattern)
 
-Every domain event requires **two** handlers (see `.claude/CLAUDE.md` for the full checklist):
+Every domain event requires **two** handlers:
 - **Event Hook** (`IEventPublishHook<T>` in `*.Infrastructure/*/Events/`) — synchronous, local, within the same UoW
 - **Event Handler** (`IEventHandler<T>` in `workers/BBT.Workflow.Workers.Inbox/Handlers/`) — asynchronous, distributed, fault-tolerant
 
-### Context7 MCP Sources
+---
+
+## Domain Concepts
+
+### Transition Pipeline
+
+Transitions execute through a deterministic pipeline of ordered steps. Each step has a single responsibility and returns `Result<StepOutcome>`. Steps are defined in `LifecycleOrder`:
+
+| Order | Step | Responsibility |
+|-------|------|----------------|
+| 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
+| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 19 | SetBusyStep | Set instance status to Busy and persist |
+| 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
+| 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
+| 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
+| 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
+| 39 | CancelScheduledJobsStep | Cancel scheduled jobs for current state |
+| 40 | RunOnExitTasksStep | Run leaving-state OnExit tasks |
+| 50 | ChangeStateStep | Persist state change |
+| 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
+| 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
+| 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
+| 80 | ScheduleTransitionsStep | Schedule future transitions |
+| 90 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 100 | HandleFinishStep | Complete/cancel instance on finish states |
+| 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
+| 112 | ResolveAvailableStep | Resolve deferred Active status |
+
+**StepOutcome**: `Continue()` (next step), `Stop()` (break loop), `SkipTo(order)` (jump + replan), `SkipToFinalize()` (shorthand), `With(Action<PipelineDirectives>)` (mutate directives).
+
+**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/SetBusy/CreateTransition/ResourceLock/ResolveAvailable), Scheduled, Event, ErrorBoundary (`AllowAutoChain=false`, `AllowSubFlow=false`).
+
+**TransitionExecutionContext**: Built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`). Same context reference flows through all steps. `Cache` dict cleared at Finalize. `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
+
+### Status / State / Type Semantics
+
+**Instance Status**: `Busy (B)` pipeline executing, `Active (A)` waiting, `Passive (P)` deactivated, `Completed (C)` finished, `Faulted (F)` terminal error.
+
+**State Types**: `Initial = 1`, `Intermediate = 2`, `Finish = 3`, `SubFlow = 4`, `Wizard = 5`.
+
+**State Sub Types**: `None = 0`, `Success = 1`, `Error = 2`, `Terminated = 3`, `Suspended = 4`, `Busy = 5`, `Human = 6`, `Cancelled = 7`, `Timeout = 8`.
+
+**Trigger Types**: `Manual = 0`, `Automatic = 1`, `Scheduled = 2`, `Event = 3`.
+
+### Sync vs Async Execution
+
+- `sync=true`: Request blocks until pipeline completes; response includes full instance data. Use for deterministic short-lived processes and backend-to-backend integration.
+- `sync=false` (default): Request accepted immediately with `{ id, status }`. Client polls via State function for completion. Use for human tasks, external API calls, and mobile/web clients.
+
+### Long-Polling / State Function
+
+- Conditional GET with ETag: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
+- ETag sources: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
+- **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
+- No server-side hold — 304 response drives client-side polling.
+- Subflow completion window: while parent correlation is open, State function shows **parent** main-flow transitions instead of subflow terminal view.
+
+### User Integration (Backend-Driven View)
+
+Client interaction follows a deterministic loop managed by vNext Client Workflow Manager SDK:
+1. Start instance → poll State function until `status = Active`
+2. Fetch view definition via View function → fetch data via Data function if `loadData: true`
+3. Render UI → user triggers transition → check for transition-level view (modal/popup)
+4. Submit transition → re-poll State function → loop until `status = Completed`
+
+Backend-Driven View approach: UI changes deploy via backend only, minimizing mobile/web release cycles.
+
+### View Selection
+
+- `views[]` array on states and transitions; evaluated in declaration order, first matching rule wins.
+- Rule: inline C# script implementing `IConditionMapping` with access to `ScriptContext` (Headers, QueryParameters, Instance.Data, State, Transition).
+- Last entry without a rule serves as default/fallback — always include one.
+- `loadData: true` → instance data loaded alongside view response.
+
+### Instance Data
+
+- **Immutable, versioned** (SemVer): task results → Patch, schema additions → Minor, breaking changes → Major.
+- **Full-merge model**: each version contains the complete state + delta. `LatestData` marks current version, `DataList` contains history.
+- **Queryable**: filterable on instance columns (`key`, `status`, `currentState`, `createdAt`, etc.) and `attributes.*` JSON paths using GraphQL-style filter syntax.
+- **Operators**: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `between`, `like`, `startswith`, `endswith`, `in`, `nin`, `isnull`.
+- **Logical operators**: `and`, `or`, `not` for complex nested queries.
+- **Aggregations**: `groupBy` with `count`, `sum`, `avg`, `min`, `max`.
+- Master schema (`attributes.schema`) governs data structure; changes are versioned.
+
+### Error Boundary
+
+- **Levels**: Task → State → Global (resolved by `CompiledBoundaryChain`). Rules sorted by `EffectivePriority` ASC → specificity DESC → definition order.
+- **Actions**: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
+- **Pipeline mapping** (`BoundaryOutcomeHandler`): `Log`/`Ignore` → `Continue()`; transition set → `RequestNextTransition` + `SkipToFinalize()`; abort without transition → Fail → instance fault.
+- Error-boundary profile disables auto-chain and subflow to prevent cascading.
+
+### SubFlow Lifecycle
+
+- **SubFlow (S)**: On completion → output mapping → `ResumePipelineAsync` with `ResumeFrom = ClearBusyOnResumeStep` (order 79). Parent pipeline resumes execution.
+- **SubProcess (P)**: On completion → correlation complete + persist → no parent resume (fire-and-forget).
+- Start uses `StrictIdempotency: true` with parent metadata in `ExtraProperties`.
+- On resume failure, correlation is reverted in a new UoW for retry.
+- **Completion window**: If subflow is in terminal status while parent correlation is still open, State function shows parent transitions instead of subflow terminal view.
+
+### Instance Repository Include Strategy
+
+- Pipeline steps do NOT call EF `Include` directly — includes are applied at load time via `WithDetailsAsync()`.
+- Default load: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- History paths use `AsNoTracking` + explicit filtered includes.
+- **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
+
+---
+
+## Context7 MCP Sources
 
 For domain/platform knowledge beyond what's in code:
 - vNext domain: `burgan-tech/vnext-runtime` (tag `vnext-runtime`)
