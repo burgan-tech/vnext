@@ -143,6 +143,16 @@ public sealed class TransitionContextFactory(
         return executionContext;
     }
 
+    /// <inheritdoc />
+    public Result<TransitionExecutionContext> CreateFromPreloaded(
+        WorkflowExecutionContext input,
+        Definitions.Workflow workflow,
+        Instance instance)
+    {
+        return ResolveStateAndTransition((workflow, instance), input)
+            .Map(data => BuildExecutionContext(data, input));
+    }
+
     /// <summary>
     /// Resolves and validates the transition for the given trigger type.
     /// </summary>
