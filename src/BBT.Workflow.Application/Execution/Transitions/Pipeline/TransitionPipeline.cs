@@ -577,6 +577,7 @@ public class TransitionPipeline
     /// - Auto chain is continuing (NextTransition is set)
     /// - Instance has reached a terminal status (Completed/Faulted)
     /// - Target state SubType is Busy (ChangeState already set Busy)
+    /// - Instance has an active SubFlow correlation (SubFlow is still running)
     /// </summary>
     private async Task ApplyResolvedStatusAsync(
         TransitionExecutionContext context,
@@ -596,6 +597,15 @@ public class TransitionPipeline
 
         // Target state SubType is Busy — ChangeState already set Busy
         if (context.Target?.SubType == StateSubType.Busy)
+            return;
+
+        // Active SubFlow correlation exists — instance must stay Busy while SubFlow is running.
+        // Defense-in-depth guard: HandleSubFlowStep adds the correlation at order 70, before
+        // ResolveAvailableStep (112) or ClearBusyOnResumeStep (79) run. A resume pipeline that
+        // immediately enters a new SubFlow would otherwise flip the parent to Active while the
+        // SubFlow is still initialising, producing a premature A for long-polling clients.
+        if (context.Instance.ActiveCorrelations.Any(c =>
+                c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted))
             return;
 
         // All guards passed — re-acquire lock and apply the resolved status
