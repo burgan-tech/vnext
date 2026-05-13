@@ -84,6 +84,8 @@ public sealed class RunOnEntryTasksStep(
         {
             context.Items[FailedOnExecuteTaskKey] = tasksResult.FailedTask;
             context.Items[TaskExecutionErrorKey] = tasksResult.TaskError;
+
+            BoundaryOutcomeHandler.RecordUnhandledIncident(context, tasksResult.TaskError);
             
             return Result<StepOutcome>.Fail(tasksResult.TaskError.ToError());
         }

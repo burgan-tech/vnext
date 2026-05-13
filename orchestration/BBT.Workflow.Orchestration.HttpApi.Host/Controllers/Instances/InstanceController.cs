@@ -20,7 +20,8 @@ public sealed class InstanceController(
     IInstanceRetryAppService retryAppService,
     IHttpContextAccessor httpContextAccessor,
     ISubflowCompletionService subflowCompletionService,
-    ISubflowStateService subflowStateService) : AetherControllerBase
+    ISubflowStateService subflowStateService,
+    ISubflowFaultService subflowFaultService) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -133,6 +134,24 @@ public sealed class InstanceController(
     )
     {
         await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Propagates SubFlow fault to parent instance.
+    /// Internal endpoint for cross-domain SubFlow fault propagation.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/sub/fault")]
+    public async Task<IActionResult> FaultSubAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromBody] SubFlowFaultedInput request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await subflowFaultService.FaultAsync(request, cancellationToken);
         return Ok();
     }
 

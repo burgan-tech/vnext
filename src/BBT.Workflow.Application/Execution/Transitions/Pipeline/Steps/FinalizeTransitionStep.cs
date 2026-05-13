@@ -38,9 +38,26 @@ public sealed class FinalizeTransitionStep(
                 .TapAsync(transition => UpdateTransitionIfExistsAsync(transition, cancellationToken));
         }
 
+        ResolveIncidentOnSuccessfulErrorBoundaryTransition(context);
+
         PerformCleanup(context);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
+    }
+
+    /// <summary>
+    /// If this pipeline run was an error-boundary transition and it completed successfully
+    /// (no new fault), resolve the active incident that triggered it.
+    /// </summary>
+    private static void ResolveIncidentOnSuccessfulErrorBoundaryTransition(TransitionExecutionContext context)
+    {
+        if (!context.IsErrorBoundaryTransition)
+            return;
+
+        if (context.Instance.Status.Equals(Instances.InstanceStatus.Faulted))
+            return;
+
+        context.Instance.ResolveActiveIncident();
     }
 
     /// <summary>

@@ -496,6 +496,21 @@ public class TransitionPipeline
             error.Code,
             error.Message);
 
+        // Record incident if not already recorded by a boundary handler
+        if (!context.Instance.HasActiveIncident)
+        {
+            var incident = InstanceIncidentFactory.Create(
+                state: context.Instance.GetCurrentState,
+                transition: context.TransitionKey,
+                taskKey: null,
+                message: error.Message ?? "Unhandled pipeline error",
+                errorCode: error.Code ?? "Pipeline:Unhandled",
+                errorLayer: "Pipeline",
+                traceId: context.TraceId);
+
+            context.Instance.AddIncident(incident);
+        }
+
         // Already within lock scope - update instance directly
         context.Instance.Fault(context.Domain);
         context.ExtractAndDeferInstanceEvents();
