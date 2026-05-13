@@ -46,6 +46,8 @@ public static class PipelineServiceCollectionExtensions
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
 
+        services.AddSingleton<IPipelineProfileResolver, PipelineProfileResolver>();
+
         // State Machine Validation - Specification Pattern
         services.AddScoped<ITransitionSpecification, ResumeModeSpecification>();
         services.AddScoped<ITransitionSpecification, SubFlowBypassSpecification>();

@@ -29,4 +29,12 @@ public interface IRemoteInstanceCommandAppService
     Task<Result> UpdateSubFlowStateAsync(
         SubFlowStateChangedInput input,
         CancellationToken cancellationToken = default);
-} 
+
+    /// <summary>
+    /// Propagates SubFlow fault to parent instance by calling the remote API.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/sub/fault
+    /// </summary>
+    Task<Result> FaultAsync(
+        SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default);
+}

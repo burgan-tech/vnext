@@ -3,6 +3,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Validation;
@@ -29,6 +30,7 @@ public sealed class AsyncTransitionStrategy(
     IInstanceRepository instanceRepository,
     IDistributedLockService distributedLockService,
     ITransitionValidationService validationService,
+    IUnitOfWorkManager uowManager,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     /// <summary>
@@ -37,6 +39,7 @@ public sealed class AsyncTransitionStrategy(
     private const int DefaultLockLeaseSeconds = 30;
 
     public ExecMode Mode => ExecMode.Async;
+
     /// <inheritdoc />
     /// <summary>
     /// Executes transition asynchronously by enqueuing a background job.
@@ -146,8 +149,15 @@ public sealed class AsyncTransitionStrategy(
         if (ctx.Instance.IsBusy || ctx.Instance.IsCompleted || ctx.Directives.IsSubFlowResume)
             return;
 
+        await using var innerUow = await uowManager.BeginAsync(
+            new UnitOfWorkOptions
+            {
+                Scope = UnitOfWorkScopeOption.RequiresNew
+            }, cancellationToken);
+
         ctx.Instance.Busy();
-        await instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken);
+        await instanceRepository.UpdateAsync(ctx.Instance, false, cancellationToken);
+        await innerUow.CommitAsync(cancellationToken);
         logger.InstanceSetBusyForAsyncTransition(ctx.InstanceId, ctx.TransitionKey);
     }
 
@@ -276,7 +286,7 @@ public sealed class AsyncTransitionStrategy(
     {
         logger.TransitionEnqueued(context.TransitionKey, context.InstanceId, jobName);
     }
-    
+
     /// <summary>
     /// Enriches the activity with telemetry tags and baggage for distributed tracing correlation.
     /// Includes job name for async job correlation.
@@ -304,7 +314,7 @@ public sealed class AsyncTransitionStrategy(
         activity.SetBaggage(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
         activity.SetBaggage(TelemetryConstants.TagNames.JobName, jobName);
     }
-    
+
     /// <summary>
     /// Sets activity status based on result.
     /// </summary>
@@ -321,7 +331,7 @@ public sealed class AsyncTransitionStrategy(
             SetActivityError(activity, result.Error);
         }
     }
-    
+
     /// <summary>
     /// Sets activity error status with error details.
     /// </summary>
@@ -332,7 +342,7 @@ public sealed class AsyncTransitionStrategy(
         activity.SetStatus(ActivityStatusCode.Error, error.Message);
         activity.AddTag("error.code", error.Code);
     }
-    
+
     /// <summary>
     /// Logs failed job enqueue.
     /// </summary>

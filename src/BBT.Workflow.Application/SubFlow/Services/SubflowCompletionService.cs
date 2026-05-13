@@ -178,6 +178,7 @@ public sealed class SubflowCompletionService(
 
     /// <summary>
     /// Processes SubFlow output mapping by executing the mapping script and merging results into parent instance data.
+    /// Also applies any <see cref="InstanceMutations"/> (e.g. Stage) that the script recorded on <see cref="ScriptContext.Mutations"/>.
     /// </summary>
     private async Task ProcessSubFlowOutputMappingAsync(
         Instance parentInstance,
@@ -208,14 +209,23 @@ public sealed class SubflowCompletionService(
                 outputMappingResult = await subFlowMapping.OutputHandler(scriptContext);
             }
 
-            if (outputMappingResult?.Data != null)
+            var hasData = outputMappingResult?.Data != null;
+
+            if (hasData)
             {
-                // Add the mapped output data to the parent instance
                 parentInstance.AddData(
                     guidGenerator.Create(),
-                    new JsonData(JsonSerializer.Serialize(outputMappingResult.Data)),
+                    new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
                     parentState.VersionStrategy);
+            }
 
+            if (scriptContext.Mutations.HasChanges)
+            {
+                scriptContext.Mutations.ApplyTo(parentInstance);
+            }
+
+            if (hasData || scriptContext.Mutations.HasChanges)
+            {
                 await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
             }
         }

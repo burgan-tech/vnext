@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
 
@@ -22,6 +23,7 @@ public interface ISubflowStarter
     /// <param name="transition">The current transition.</param>
     /// <param name="correlation">Correlation information for tracking.</param>
     /// <param name="context">The script context containing execution data and headers.</param>
+    /// <param name="mode">The execution mode from the original request, propagated to the subflow start call.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>Result indicating success or failure of the sub-flow initiation.</returns>
     /// <remarks>
@@ -41,28 +43,6 @@ public interface ISubflowStarter
         Transition transition,
         InstanceCorrelation correlation,
         ScriptContext context,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Starts a SubProcess workflow without requiring a target state or mapping.
-    /// Used for triggering SubProcess workflows from tasks.
-    /// </summary>
-    /// <param name="workflow">The parent workflow.</param>
-    /// <param name="parentInstance">The parent instance.</param>
-    /// <param name="subFlowReference">Reference to the SubFlow/SubProcess to start.</param>
-    /// <param name="transition">The transition triggering the SubProcess.</param>
-    /// <param name="correlation">Correlation information for tracking.</param>
-    /// <param name="subFlowType">Type code of the SubFlow ("S" or "P").</param>
-    /// <param name="inputMappingResult">Optional input mapping result containing data, headers, and key information.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Result indicating success or failure of the sub-flow initiation.</returns>
-    Task<Result> SubStartAsync(
-        Definitions.Workflow workflow,
-        Instance parentInstance,
-        Reference subFlowReference,
-        Transition transition,
-        InstanceCorrelation correlation,
-        string subFlowType,
-        ScriptResponse? inputMappingResult = null,
+        ExecMode mode,
         CancellationToken cancellationToken = default);
 }

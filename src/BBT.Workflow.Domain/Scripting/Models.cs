@@ -140,6 +140,22 @@ public sealed class ScriptTransitionRequest
     }
 }
 
+/// <summary>
+/// Lightweight projection of incident information exposed to workflow scripts.
+/// Provides awareness of active error incidents without exposing the full incident history.
+/// </summary>
+public sealed class ScriptIncidentInfo
+{
+    /// <summary>Whether the instance has at least one unresolved incident.</summary>
+    public bool HasActiveIncident { get; init; }
+
+    /// <summary>The most recent unresolved incident (null if all resolved).</summary>
+    public InstanceIncident? ActiveIncident { get; init; }
+
+    /// <summary>Total number of incidents (resolved + unresolved) retained on the instance.</summary>
+    public int TotalIncidentCount { get; init; }
+}
+
 public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncDisposable
 {
     public static readonly JsonSerializerOptions JsonScriptBodyOptions = new()
@@ -168,6 +184,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 Headers = null;
                 RouteValues = null;
                 CurrentTransition = null;
+                Incident = null;
             }
             catch (InvalidOperationException ex)
             {
@@ -298,6 +315,20 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// atomically by <c>ApplyScriptContextChanges</c> after script execution.
     /// </summary>
     public InstanceMutations Mutations { get; } = new();
+
+    /// <summary>
+    /// Error boundary incident information for the current instance.
+    /// Provides awareness of active incidents so scripts can implement
+    /// compensating logic or display error context to users.
+    /// </summary>
+    /// <value>
+    /// A <see cref="ScriptIncidentInfo"/> containing:
+    /// - HasActiveIncident: whether any unresolved incident exists
+    /// - ActiveIncident: the most recent unresolved incident (with error details)
+    /// - TotalIncidentCount: total incidents retained on the instance
+    /// Null when no instance is loaded in the script context.
+    /// </value>
+    public ScriptIncidentInfo? Incident { get; private set; }
 
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
@@ -555,6 +586,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetInstance(Instance instance)
         {
             _context.Instance = instance;
+            _context.Incident = new ScriptIncidentInfo
+            {
+                HasActiveIncident = instance.HasActiveIncident,
+                ActiveIncident = instance.Incidents.LastOrDefault(i => !i.IsResolved),
+                TotalIncidentCount = instance.Incidents.Count
+            };
             return this;
         }
 

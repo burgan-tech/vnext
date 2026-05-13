@@ -70,5 +70,16 @@ public interface IInstanceCommandGateway
     Task<Result> UpdateSubFlowStateAsync(
         SubFlowStateChangedInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Handles upward SubFlow fault propagation to the parent instance.
+    /// Routes to local or remote based on target domain in input.
+    /// </summary>
+    /// <param name="input">The SubFlow fault data including incident details for the parent.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result indicating success or failure.</returns>
+    Task<Result> FaultAsync(
+        SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default);
 }
 

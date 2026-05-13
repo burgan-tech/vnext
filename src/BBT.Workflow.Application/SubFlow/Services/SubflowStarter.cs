@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -35,6 +36,7 @@ public sealed class SubflowStarter(
         Transition transition,
         InstanceCorrelation correlation,
         ScriptContext context,
+        ExecMode mode,
         CancellationToken cancellationToken = default)
     {
         var subFlowConfig = targetState.SubFlow!;
@@ -62,34 +64,10 @@ public sealed class SubflowStarter(
             inputMappingResult,
             subFlowConfig.HasTimeoutOverride ? subFlowConfig.Overrides!.Timeout : null,
             subFlowConfig.Overrides,
+            mode,
             cancellationToken);
     }
-
-    /// <inheritdoc />
-    public async Task<Result> SubStartAsync(
-        Definitions.Workflow workflow,
-        Instance parentInstance,
-        Reference subFlowReference,
-        Transition transition,
-        InstanceCorrelation correlation,
-        string subFlowType,
-        ScriptResponse? inputMappingResult = null,
-        CancellationToken cancellationToken = default)
-    {
-        return await StartSubFlowInternalAsync(
-            workflow,
-            parentInstance,
-            subFlowReference,
-            parentInstance.GetCurrentState,
-            transition.Key,
-            correlation,
-            subFlowType,
-            inputMappingResult,
-            null, // no timeout override for task-triggered sub-processes
-            null, // no role overrides for task-triggered sub-processes
-            cancellationToken);
-    }
-
+    
     /// <summary>
     /// Internal method that contains the common logic for starting SubFlow/SubProcess workflows.
     /// </summary>
@@ -105,6 +83,7 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult,
         WorkflowTimeout? timeoutOverride,
         SubFlowOverrides? overrides,
+        ExecMode mode,
         CancellationToken cancellationToken)
     {
         using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
@@ -204,7 +183,7 @@ public sealed class SubflowStarter(
                 subFlowReference.Domain,
                 subFlowReference.Key,
                 subFlowReference.Version,
-                sync: true
+                sync: mode == ExecMode.Sync
             )
             {
                 Instance = createInstanceInput,

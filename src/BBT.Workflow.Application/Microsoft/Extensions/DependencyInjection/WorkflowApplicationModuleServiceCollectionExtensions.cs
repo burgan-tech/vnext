@@ -64,6 +64,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
+        services.AddScoped<ISubflowFaultService, SubflowFaultService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();

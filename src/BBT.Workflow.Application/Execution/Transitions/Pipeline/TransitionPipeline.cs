@@ -27,6 +27,7 @@ public class TransitionPipeline
     private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
     private readonly ITransitionValidationService _validationService;
+    private readonly IPipelineProfileResolver _profileResolver;
     private readonly ILogger<TransitionPipeline> _logger;
     /// <summary>
     /// Default lock lease duration in seconds.
@@ -48,6 +49,7 @@ public class TransitionPipeline
     /// <param name="postCommitExecutor">Executor for post-commit jobs.</param>
     /// <param name="instanceRepository">Repository for instance operations.</param>
     /// <param name="validationService">Service for transition validation.</param>
+    /// <param name="profileResolver">Resolver that selects the pipeline execution profile for the current workflow context.</param>
     /// <param name="logger">Logger instance.</param>
     public TransitionPipeline(
         IEnumerable<ITransitionStep> steps,
@@ -56,6 +58,7 @@ public class TransitionPipeline
         IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
         ITransitionValidationService validationService,
+        IPipelineProfileResolver profileResolver,
         ILogger<TransitionPipeline> logger)
     {
         _steps = steps.OrderBy(s => s.Order).ToList();
@@ -64,6 +67,7 @@ public class TransitionPipeline
         _postCommitExecutor = postCommitExecutor;
         _instanceRepository = instanceRepository;
         _validationService = validationService;
+        _profileResolver = profileResolver;
         _logger = logger;
     }
 
@@ -115,6 +119,9 @@ public class TransitionPipeline
             // Guard: Skip immediate execution requested (e.g., scheduled transitions)
             if (context.SkipImmediateExecution)
                 return Result<TransitionExecutionContext>.Ok(context);
+
+            var profile = _profileResolver.Resolve(currentWorkflowContext);
+            context.Profile = profile;
 
             // Post-commit jobs collected during pipeline execution
             IReadOnlyList<IPostCommitJob> postCommitJobs = [];
@@ -202,7 +209,8 @@ public class TransitionPipeline
     {
         EnrichTelemetry(context);
 
-        var state = CreateInitialState(context);
+        var profile = context.Profile ?? PipelineExecutionProfile.ForManual();
+        var state = CreateInitialState(context, profile);
 
         using (_logger.BeginScope(BuildLogScope(context)))
         {
@@ -230,7 +238,7 @@ public class TransitionPipeline
 
                     if (flowControl.ShouldReplan)
                     {
-                        state = CreateInitialState(context);
+                        state = CreateInitialState(context, profile);
                         continue;
                     }
 
@@ -265,7 +273,9 @@ public class TransitionPipeline
             [TelemetryConstants.TagNames.StateFrom]     = context.Transition?.From ?? context.Instance.GetCurrentState,
             [TelemetryConstants.TagNames.StateTo]       = context.Transition?.Target ?? "N/A",
             [TelemetryConstants.TagNames.TransitionKey] = context.TransitionKey,
-            [TelemetryConstants.TagNames.TriggerType]    = context.Transition?.TriggerType.ToString() ?? "N/A"
+            [TelemetryConstants.TagNames.TriggerType]    = context.Transition?.TriggerType.ToString() ?? "N/A",
+            ["ChainDepth"] = context.ChainDepth,
+            ["PipelineProfile"] = context.Profile?.Name ?? "unknown",
         };
         if (context.Headers.TryGetValue(TelemetryConstants.HeaderNames.ParentInstanceId, out var raw)
             && Guid.TryParse(raw, out var parentId))
@@ -308,6 +318,10 @@ public class TransitionPipeline
         {
             activity.SetTag(TelemetryConstants.TagNames.TriggerType, context.Transition.TriggerType.ToString());
         }
+
+        activity.SetTag("vnext.chain.depth", context.ChainDepth);
+        activity.SetTag("vnext.pipeline.profile", context.Profile?.Name ?? "unknown");
+        activity.SetTag("vnext.chain.id", context.ExecutionChainId);
         
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
         activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
@@ -351,16 +365,28 @@ public class TransitionPipeline
     /// <summary>
     /// Creates initial pipeline state with execution plan.
     /// </summary>
-    private PipelineState CreateInitialState(TransitionExecutionContext context)
-        => new(BuildExecutionPlan(context), 0);
+    private PipelineState CreateInitialState(TransitionExecutionContext context, PipelineExecutionProfile profile)
+    {
+        var plan = BuildExecutionPlan(context, profile);
+        _logger.PipelineExecutingWithProfile(profile.Name, plan.Count, context.ChainDepth);
+        var excludedCount = _steps.Count - plan.Count;
+        if (excludedCount > 0)
+            _logger.ProfileExcludedSteps(profile.Name, excludedCount, context.TransitionKey);
+
+        return new PipelineState(plan, 0);
+    }
 
     /// <summary>
     /// Builds an execution plan by filtering and ordering steps based on context directives.
     /// Handles resume points, epilogue modes, and terminal states.
     /// </summary>
-    private IReadOnlyList<ITransitionStep> BuildExecutionPlan(TransitionExecutionContext context)
+    private IReadOnlyList<ITransitionStep> BuildExecutionPlan(
+        TransitionExecutionContext context,
+        PipelineExecutionProfile profile)
     {
-        var ordered = _steps.ToList();
+        var ordered = _steps
+            .Where(s => !profile.ExcludedStepOrders.Contains(s.Order))
+            .ToList();
 
         // 1) ResumeFrom start
         var startOrder = context.Directives.ConsumeResumeFrom();
@@ -470,6 +496,21 @@ public class TransitionPipeline
             error.Code,
             error.Message);
 
+        // Record incident if not already recorded by a boundary handler
+        if (!context.Instance.HasActiveIncident)
+        {
+            var incident = InstanceIncidentFactory.Create(
+                state: context.Instance.GetCurrentState,
+                transition: context.TransitionKey,
+                taskKey: null,
+                message: error.Message ?? "Unhandled pipeline error",
+                errorCode: error.Code ?? "Pipeline:Unhandled",
+                errorLayer: "Pipeline",
+                traceId: context.TraceId);
+
+            context.Instance.AddIncident(incident);
+        }
+
         // Already within lock scope - update instance directly
         context.Instance.Fault(context.Domain);
         context.ExtractAndDeferInstanceEvents();
@@ -551,6 +592,7 @@ public class TransitionPipeline
     /// - Auto chain is continuing (NextTransition is set)
     /// - Instance has reached a terminal status (Completed/Faulted)
     /// - Target state SubType is Busy (ChangeState already set Busy)
+    /// - Instance has an active SubFlow correlation (SubFlow is still running)
     /// </summary>
     private async Task ApplyResolvedStatusAsync(
         TransitionExecutionContext context,
@@ -570,6 +612,15 @@ public class TransitionPipeline
 
         // Target state SubType is Busy — ChangeState already set Busy
         if (context.Target?.SubType == StateSubType.Busy)
+            return;
+
+        // Active SubFlow correlation exists — instance must stay Busy while SubFlow is running.
+        // Defense-in-depth guard: HandleSubFlowStep adds the correlation at order 70, before
+        // ResolveAvailableStep (112) or ClearBusyOnResumeStep (79) run. A resume pipeline that
+        // immediately enters a new SubFlow would otherwise flip the parent to Active while the
+        // SubFlow is still initialising, producing a premature A for long-polling clients.
+        if (context.Instance.ActiveCorrelations.Any(c =>
+                c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted))
             return;
 
         // All guards passed — re-acquire lock and apply the resolved status
