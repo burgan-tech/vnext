@@ -837,19 +837,21 @@ public sealed class InstanceQueryAppService(
                 {
                     var subFlowItem = subFlowItemsByName.GetValueOrDefault(key);
                     bool hasView, loadData, hasSchema;
+                    Dictionary<string, string>? annotations;
                     if (subFlowItem != null)
                     {
                         hasView = subFlowItem.View?.HasView ?? false;
                         loadData = subFlowItem.View?.LoadData ?? false;
                         hasSchema = subFlowItem.Schema?.HasSchema ?? false;
+                        annotations = subFlowItem.Annotations;
                     }
                     else
                     {
-                        // Parent-owned transition (e.g., shared transition not from SubFlow): resolve from parent workflow
                         var transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
                         hasSchema = transition?.Schema != null;
+                        annotations = transition?.Annotations;
                     }
                     return new TransitionItem
                     {
@@ -868,7 +870,8 @@ public sealed class InstanceQueryAppService(
                             Href = urlTemplateBuilder.BuildSchemaUrl(input.Domain, input.Workflow,
                                 instance.Id.ToString(), key),
                             HasSchema = hasSchema
-                        }
+                        },
+                        Annotations = annotations
                     };
                 })
                 .ToList();
@@ -896,7 +899,8 @@ public sealed class InstanceQueryAppService(
                         Href = urlTemplateBuilder.BuildSchemaUrl(input.Domain, input.Workflow, instance.Id.ToString(),
                             transitionKey),
                         HasSchema = hasSchema
-                    }
+                    },
+                    Annotations = transition?.Annotations
                 };
             }).ToList();
         }

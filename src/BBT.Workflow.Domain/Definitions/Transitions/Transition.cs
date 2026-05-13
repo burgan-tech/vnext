@@ -87,6 +87,15 @@ public sealed class Transition : IHasKey
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
     [JsonInclude] public ResourceLockDefinition? ResourceLock { get; private set; }
 
+    /// <summary>
+    /// Optional key-value metadata for client-side filtering and UI context.
+    /// The platform treats annotations as pure passthrough and does not interpret or act on values.
+    /// Use namespaced keys to avoid collisions (e.g., <c>ui/visible-in</c>, <c>ui/priority</c>).
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("annotations")]
+    public Dictionary<string, string>? Annotations { get; private set; }
+
     [JsonInclude]
     [JsonPropertyName("labels")]
     private List<LanguageLabel> labels = new();

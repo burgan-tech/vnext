@@ -1,5 +1,6 @@
 using BBT.Aether.AspNetCore.Dapr;
 using BBT.Aether.AspNetCore.Threads;
+using BBT.Workflow.Logging;
 using Dapr.Client;
 using Dapr.Extensions.Configuration;
 
@@ -17,10 +18,24 @@ if(builder.Configuration.GetValue<bool>("Vault:Enabled", false)){
     builder.Configuration.AddDaprSecretStore(builder.Configuration["DAPR_SECRET_STORE_NAME"] ?? "vnext-secret", daprClient);
 }
 
-builder.WebHost.ConfigureKestrel(option => option.AddServerHeader = false);
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.AddServerHeader = false;
+
+    var limitsSection = builder.Configuration.GetSection("Kestrel:Limits");
+    options.Limits.MaxRequestHeadersTotalSize =
+        limitsSection.GetValue<int>(nameof(options.Limits.MaxRequestHeadersTotalSize), 65_536);
+    options.Limits.MaxRequestHeaderCount =
+        limitsSection.GetValue<int>(nameof(options.Limits.MaxRequestHeaderCount), 200);
+});
+
 builder.Services.AddExecutionApiModule();
 
 var app = builder.Build();
 app.UseExecutionApiModule();
+
+app.Logger.KestrelLimitsConfigured(
+    app.Configuration.GetValue<int>("Kestrel:Limits:MaxRequestHeadersTotalSize", 65_536),
+    app.Configuration.GetValue<int>("Kestrel:Limits:MaxRequestHeaderCount", 200));
 
 await app.RunAsync();

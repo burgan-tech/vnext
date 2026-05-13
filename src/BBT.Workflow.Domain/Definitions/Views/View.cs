@@ -22,12 +22,14 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
         ViewType type,
         object content,
         string display,
-        LanguageLabel[]? labels) : this()
+        LanguageLabel[]? labels,
+        string? renderer) : this()
     {
         Type = type;
         Content = content;
         Display = display;
         Labels = labels ?? [];
+        Renderer = renderer;
     }
 
     /// <summary>
@@ -71,10 +73,18 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     public string Display { get; private set; } = string.Empty;
     
     /// <summary>
-    /// Display
+    /// Localization labels
     /// </summary>
     public LanguageLabel[]? Labels { get; private set; } = [];
-    
+
+    /// <summary>
+    /// Identifies which UI SDK / render engine should interpret the view content.
+    /// Only relevant when <see cref="Type"/> is <see cref="ViewType.Json"/>.
+    /// Well-known values are defined in <see cref="ViewRenderer"/>.
+    /// </summary>
+    [JsonPropertyName("renderer")]
+    public string? Renderer { get; private set; }
+
     public static string ComponentTypeKey => RuntimeSysSchemaInfo.Views;
     public string ComponentKey => ComponentTypeKey;
 
