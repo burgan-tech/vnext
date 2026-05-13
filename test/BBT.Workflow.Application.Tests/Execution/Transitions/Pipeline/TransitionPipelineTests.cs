@@ -76,10 +76,14 @@ public class TransitionPipelineTests
             .Returns(PostCommitResult.Ok());
 
         // Default validation service behavior - always succeed
-        _mockValidationService.ValidateTriggerTypeAsync(
+        _mockValidationService.ValidateAsync(
             Arg.Any<TransitionExecutionContext>(),
             Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
+
+        _mockInstanceRepository
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult(callInfo.ArgAt<Instance>(0)));
 
         _pipeline = new TransitionPipeline(
             _mockSteps,
@@ -88,6 +92,7 @@ public class TransitionPipelineTests
             _mockPostCommitExecutor,
             _mockInstanceRepository,
             _mockValidationService,
+            new PipelineProfileResolver(),
             _mockLogger);
     }
 
@@ -148,7 +153,7 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenStepFails_ShouldStopAndReturnError()
+    public async Task RunAsync_WhenStepFails_ShouldStopAndMarkInstanceFaultedWithSuccessResult()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
@@ -187,10 +192,11 @@ public class TransitionPipelineTests
         // Act
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
-        // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.ShouldBe(error);
+        // Assert — pipeline marks instance faulted and returns OK so clients see Status = F (see TransitionPipeline.RunAsync)
+        result.IsSuccess.ShouldBeTrue();
         executionCount.ShouldBe(3); // Only first 3 steps executed
+        await _mockInstanceRepository.Received(1)
+            .UpdateAsync(Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)), true, Arg.Any<CancellationToken>());
     }
 
     [Fact]

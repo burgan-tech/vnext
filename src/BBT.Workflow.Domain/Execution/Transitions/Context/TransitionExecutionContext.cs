@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Aether.Aspects;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
@@ -85,6 +86,9 @@ public sealed class TransitionExecutionContext
     public object? Data { get; set; }
 
     // Execution flags
+    /// <summary>Gets the execution mode (sync/async/resume) from the original request.</summary>
+    public ExecMode Mode { get; init; } = ExecMode.Sync;
+
     /// <summary>Gets or sets whether to skip immediate execution (for scheduled transitions).</summary>
     public bool SkipImmediateExecution { get; set; }
 
@@ -93,6 +97,11 @@ public sealed class TransitionExecutionContext
 
     /// <summary>Gets whether this transition was requested by an error boundary (e.g. Rollback/Notify). When true, state policy checks are bypassed so the transition can run from any state.</summary>
     public bool IsErrorBoundaryTransition { get; init; }
+
+    /// <summary>
+    /// Gets or sets the active pipeline execution profile for this transition (assigned by <c>TransitionPipeline</c> before executing steps).
+    /// </summary>
+    public PipelineExecutionProfile? Profile { get; set; }
 
     // Telemetry & Headers & Temporary storage
     /// <summary>Gets the distributed tracing trace identifier.</summary>

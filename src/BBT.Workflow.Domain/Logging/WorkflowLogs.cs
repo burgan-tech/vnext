@@ -410,6 +410,32 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string taskKey);
 
+    /// <summary>
+    /// Logs when the transition pipeline begins execution with an execution profile applied.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10060,
+        Level = LogLevel.Debug,
+        Message = "Pipeline executing with profile '{ProfileName}', {StepCount} steps, chain depth {ChainDepth}")]
+    public static partial void PipelineExecutingWithProfile(
+        this ILogger logger,
+        string profileName,
+        int stepCount,
+        int chainDepth);
+
+    /// <summary>
+    /// Logs how many lifecycle steps were excluded for a transition according to the active profile.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10061,
+        Level = LogLevel.Debug,
+        Message = "Profile '{ProfileName}' excluded {ExcludedCount} steps for transition {TransitionKey}")]
+    public static partial void ProfileExcludedSteps(
+        this ILogger logger,
+        string profileName,
+        int excludedCount,
+        string transitionKey);
+
     #endregion
 
     #region Task Execution
@@ -888,6 +914,98 @@ public static partial class WorkflowLogs
         string transitionKey,
         string errorCode,
         string errorMessage);
+
+    /// <summary>
+    /// Logs when a SubFlow fault propagation event is received (upward: child faulted, notifying parent).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40110,
+        Level = LogLevel.Information,
+        Message = "SubFlow fault event received for SubInstance {SubInstanceId}, Parent {ParentInstanceId} in {Domain}/{Flow}")]
+    public static partial void SubFlowFaultReceived(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string domain,
+        string flow);
+
+    /// <summary>
+    /// Logs when a SubFlow fault event is ignored due to domain mismatch.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40111,
+        Level = LogLevel.Debug,
+        Message = "SubFlow fault event ignored: event domain {EventDomain} does not match runtime domain {RuntimeDomain}. SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
+    public static partial void SubFlowFaultIgnoredDomainMismatch(
+        this ILogger logger,
+        string eventDomain,
+        string runtimeDomain,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a SubFlow fault is successfully propagated to the parent instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40112,
+        Level = LogLevel.Information,
+        Message = "SubFlow fault propagated to parent: SubInstance {SubInstanceId} -> Parent {ParentInstanceId}")]
+    public static partial void SubFlowFaultPropagatedToParent(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when SubFlow fault propagation processing fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40113,
+        Level = LogLevel.Error,
+        Message = "SubFlow fault propagation failed for SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
+    public static partial void SubFlowFaultProcessingFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a downward child SubFlow fault request is received (parent faulted, notifying child).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40114,
+        Level = LogLevel.Information,
+        Message = "Child subflow fault request received for instance {InstanceId} in {Domain}/{Flow}")]
+    public static partial void ChildSubflowFaultRequestReceived(
+        this ILogger logger,
+        Guid instanceId,
+        string domain,
+        string flow);
+
+    /// <summary>
+    /// Logs when a child subflow fault request is ignored due to domain mismatch.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40115,
+        Level = LogLevel.Debug,
+        Message = "Child subflow fault request ignored: event domain {EventDomain} does not match runtime domain {RuntimeDomain}. Instance {InstanceId}, Flow {Flow}")]
+    public static partial void ChildSubflowFaultIgnoredDomainMismatch(
+        this ILogger logger,
+        string eventDomain,
+        string runtimeDomain,
+        Guid instanceId,
+        string flow);
+
+    /// <summary>
+    /// Logs when a child subflow is successfully faulted by downward propagation from parent.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40116,
+        Level = LogLevel.Information,
+        Message = "Child subflow fault applied: Instance {InstanceId} faulted by parent {ParentInstanceId}")]
+    public static partial void ChildSubflowFaultApplied(
+        this ILogger logger,
+        Guid instanceId,
+        Guid parentInstanceId);
 
     #endregion
 
@@ -1804,6 +1922,50 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Incidents
+
+    /// <summary>
+    /// Logs when an incident is recorded on an instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20200,
+        Level = LogLevel.Warning,
+        Message = "Incident recorded on instance {InstanceId}. State: {State}, Transition: {Transition}, ErrorCode: {ErrorCode}, Action: {BoundaryAction}")]
+    public static partial void IncidentRecorded(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        string transition,
+        string errorCode,
+        string? boundaryAction);
+
+    /// <summary>
+    /// Logs when an incident is resolved (via retry or successful error-boundary transition).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20201,
+        Level = LogLevel.Information,
+        Message = "Incident resolved on instance {InstanceId}. IncidentId: {IncidentId}")]
+    public static partial void IncidentResolved(
+        this ILogger logger,
+        Guid instanceId,
+        Guid incidentId);
+
+    /// <summary>
+    /// Logs when an informational incident is recorded (Log/Ignore action - already resolved).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20202,
+        Level = LogLevel.Debug,
+        Message = "Informational incident recorded (already resolved) on instance {InstanceId}. ErrorCode: {ErrorCode}, Action: {BoundaryAction}")]
+    public static partial void IncidentRecordedInformational(
+        this ILogger logger,
+        Guid instanceId,
+        string errorCode,
+        string? boundaryAction);
+  
+    #endregion
+  
     #region Server Configuration
 
     /// <summary>

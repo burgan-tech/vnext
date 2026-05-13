@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Definitions;
@@ -32,6 +33,7 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IInstanceRepository> _mockInstanceRepository;
     private readonly Mock<IDistributedLockService> _mockDistributedLockRepository;
     private readonly Mock<ITransitionValidationService> _mockValidationService;
+    private readonly Mock<IUnitOfWorkManager> _uowManager;
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger;
     private readonly AsyncTransitionStrategy _strategy;
 
@@ -43,6 +45,7 @@ public class AsyncTransitionStrategyTests
         _mockInstanceRepository = new Mock<IInstanceRepository>();
         _mockDistributedLockRepository = new Mock<IDistributedLockService>();
         _mockValidationService = new Mock<ITransitionValidationService>();
+        _uowManager = new Mock<IUnitOfWorkManager>();
         _mockLogger = new Mock<ILogger<AsyncTransitionStrategy>>();
 
         // Default: validation passes — individual tests override this when they need to
@@ -58,6 +61,7 @@ public class AsyncTransitionStrategyTests
             _mockInstanceRepository.Object,
             _mockDistributedLockRepository.Object,
             _mockValidationService.Object,
+            _uowManager.Object,
             _mockLogger.Object);
     }
 
