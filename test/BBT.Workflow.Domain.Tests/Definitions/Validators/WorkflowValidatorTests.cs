@@ -336,6 +336,164 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region SharedTransition AvailableIn Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenSharedTransitionHasNoAvailableIn()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "review",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Review", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "cancelled",
+                    "stateType": "finish",
+                    "labels": [{"label": "Cancelled", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [
+                {
+                    "key": "cancel",
+                    "target": "cancelled",
+                    "triggerType": "manual",
+                    "labels": [{"label": "Cancel", "language": "en"}]
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var availableInErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("availableIn", StringComparison.OrdinalIgnoreCase) ||
+                        e.ErrorMessage!.Contains("AvailableIn", StringComparison.Ordinal))
+            .ToList();
+        availableInErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenSharedTransitionHasValidAvailableIn()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "review",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Review", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "cancelled",
+                    "stateType": "finish",
+                    "labels": [{"label": "Cancelled", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [
+                {
+                    "key": "cancel",
+                    "target": "cancelled",
+                    "triggerType": "manual",
+                    "availableIn": ["initial", "review"],
+                    "labels": [{"label": "Cancel", "language": "en"}]
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var availableInErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("availableIn", StringComparison.OrdinalIgnoreCase) ||
+                        e.ErrorMessage!.Contains("AvailableIn", StringComparison.Ordinal))
+            .ToList();
+        availableInErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenSharedTransitionAvailableInReferencesInvalidState()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "cancelled",
+                    "stateType": "finish",
+                    "labels": [{"label": "Cancelled", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [
+                {
+                    "key": "cancel",
+                    "target": "cancelled",
+                    "triggerType": "manual",
+                    "availableIn": ["non-existent-state"],
+                    "labels": [{"label": "Cancel", "language": "en"}]
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("availableIn", StringComparison.OrdinalIgnoreCase) &&
+            e.ErrorMessage.Contains("non-existent-state", StringComparison.Ordinal));
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private WorkflowDefinition CreateWorkflowWithDefaultAutoTransition()

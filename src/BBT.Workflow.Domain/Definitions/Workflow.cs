@@ -186,8 +186,11 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public IReadOnlyCollection<IReference> Features => features.AsReadOnly();
 
     /// <summary>
-    /// It is used for common transition definitions such as Cancel in the flow.
-    /// It is to prevent redefinition in each state that passes.
+    /// Common transition definitions available across multiple states (e.g. Cancel, AddNote).
+    /// Prevents redefinition in each state.
+    /// Each shared transition may optionally specify an <see cref="Transition.AvailableIn"/> list
+    /// to restrict which states it can be executed from. When <c>AvailableIn</c> is empty or null,
+    /// the transition is available from all states.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<Transition> SharedTransitions => sharedTransitions.AsReadOnly();
