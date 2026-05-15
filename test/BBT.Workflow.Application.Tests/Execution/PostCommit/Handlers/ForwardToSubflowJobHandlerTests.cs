@@ -141,11 +141,11 @@ public class ForwardToSubflowJobHandlerTests
     [Theory]
     [InlineData(ExecMode.Sync, true)]
     [InlineData(ExecMode.Async, false)]
-    public async Task HandleAsync_ShouldPropagateSyncFromContextMode(ExecMode mode, bool expectedSync)
+    public async Task HandleAsync_ShouldPropagateSyncFromCallerMode(ExecMode callerMode, bool expectedSync)
     {
         // Arrange
         var job = CreateForwardToSubflowJob();
-        var context = CreateContext(mode);
+        var context = CreateContext(callerMode: callerMode);
 
         TransitionInput? capturedInput = null;
         _mockForwardingService
@@ -169,6 +169,36 @@ public class ForwardToSubflowJobHandlerTests
         capturedInput!.Sync.ShouldBe(expectedSync);
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenModeIsSyncButCallerModeIsAsync_ShouldUseCallerModeForSubflow()
+    {
+        // Arrange — simulates a background job handler scenario where Mode=Sync (loop prevention)
+        // but CallerMode=Async (original caller wanted async)
+        var job = CreateForwardToSubflowJob();
+        var context = CreateContext(mode: ExecMode.Sync, callerMode: ExecMode.Async);
+
+        TransitionInput? capturedInput = null;
+        _mockForwardingService
+            .ForwardTransitionAsync(
+                job.SubflowInstanceId,
+                job.TransitionKey,
+                Arg.Do<TransitionInput>(input => capturedInput = input),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<Guid?>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = job.SubflowInstanceId,
+                Status = InstanceStatus.Active
+            }));
+
+        // Act
+        await _handler.HandleAsync(job, context, CancellationToken.None);
+
+        // Assert — subflow should receive sync=false (from CallerMode), not sync=true (from Mode)
+        capturedInput.ShouldNotBeNull();
+        capturedInput!.Sync.ShouldBeFalse();
+    }
+
     private static ForwardToSubflowJob CreateForwardToSubflowJob()
     {
         return new ForwardToSubflowJob(
@@ -187,11 +217,10 @@ public class ForwardToSubflowJobHandlerTests
         );
     }
 
-    private static TransitionExecutionContext CreateContext(ExecMode mode = ExecMode.Sync)
+    private static TransitionExecutionContext CreateContext(ExecMode mode = ExecMode.Sync, ExecMode? callerMode = null)
     {
         var instanceId = Guid.NewGuid();
         var instance = Instance.Create(instanceId, "sys_flows", "1.0.0","test-key");
-        // Instance.Status is Active by default after creation
 
         return new TransitionExecutionContext
         {
@@ -200,7 +229,8 @@ public class ForwardToSubflowJobHandlerTests
             Domain = "test-domain",
             WorkflowKey = "test-workflow",
             TransitionKey = "test-transition",
-            Mode = mode
+            Mode = mode,
+            CallerMode = callerMode ?? mode
         };
     }
 }

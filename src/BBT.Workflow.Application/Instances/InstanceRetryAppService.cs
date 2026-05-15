@@ -251,6 +251,7 @@ public sealed class InstanceRetryAppService(
             TransitionKey = data.Transition.TransitionId,
             TriggerType = TriggerType.Manual, // Retry is always manual
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             Actor = Shared.ExecutionActor.User,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,

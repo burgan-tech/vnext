@@ -1,5 +1,6 @@
-using System.Text;
+using System.Dynamic;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Gateway;
@@ -25,6 +26,7 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
     private readonly IScriptEngine _scriptEngine;
     private readonly INotificationScriptProvider _scriptProvider;
     private readonly IInstanceQueryGateway _instanceQueryGateway;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of NotificationTaskExecutor.
@@ -34,6 +36,7 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
         IScriptEngine scriptEngine,
         INotificationScriptProvider scriptProvider,
         IInstanceQueryGateway instanceQueryGateway,
+        ICurrentUser currentUser,
         ILogger<NotificationTaskExecutor> logger)
         : base(logger)
     {
@@ -41,6 +44,7 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
         _scriptEngine = scriptEngine;
         _scriptProvider = scriptProvider;
         _instanceQueryGateway = instanceQueryGateway;
+        _currentUser = currentUser;
     }
 
     /// <inheritdoc />
@@ -205,13 +209,19 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
             ? instance.Key
             : instance.Id.ToString();
 
+        var headers = DynamicToDictionary(context.ScriptContext.Headers);
+        var queryParams = DynamicToDictionary(context.ScriptContext.QueryParameters);
+
         var input = new GetFunctionWithInstanceInput
         {
             Domain = context.ScriptContext.Workflow.Domain,
             Workflow = context.ScriptContext.Workflow.Key,
             Instance = instanceIdentifier,
             Version = context.ScriptContext.Workflow.Version,
-            Extensions = null
+            Extensions = null,
+            Headers = headers,
+            QueryParams = queryParams,
+            Role = _currentUser.Roles is { Length: > 0 } ? _currentUser.Roles[0] : null
         };
 
         var stateResult = await _instanceQueryGateway.GetFunctionWithStateAsync(input, cancellationToken);
@@ -225,5 +235,33 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
 
         context.ScriptContext.SetBody(new { state = stateResult.Result.Value });
         return Result.Ok();
+    }
+
+    /// <summary>
+    /// Safely converts a dynamic property (ExpandoObject or Dictionary) to Dictionary&lt;string, string?&gt;.
+    /// Returns an empty dictionary when the input is null or not convertible.
+    /// </summary>
+    private static Dictionary<string, string?> DynamicToDictionary(dynamic? value)
+    {
+        if (value == null)
+            return new Dictionary<string, string?>();
+
+        if (value is IDictionary<string, string?> stringDict)
+            return new Dictionary<string, string?>(stringDict);
+
+        if (value is IDictionary<string, object?> objectDict)
+            return objectDict.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value?.ToString());
+
+        if (value is ExpandoObject expando)
+        {
+            var dict = (IDictionary<string, object?>)expando;
+            return dict.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value?.ToString());
+        }
+
+        return new Dictionary<string, string?>();
     }
 }

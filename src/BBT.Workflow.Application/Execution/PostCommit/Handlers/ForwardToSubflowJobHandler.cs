@@ -31,7 +31,7 @@ public sealed class ForwardToSubflowJobHandler(
             logger.SubFlowForwardStarted(job.TransitionKey, job.SubflowInstanceId, job.ParentInstanceId);
 
             // Reconstruct TransitionInput from job's primitive values (includes parent instance id header for trace correlation)
-            var input = CreateTransitionInput(job, context.Mode);
+            var input = CreateTransitionInput(job, context.CallerMode);
 
             // Perform the forward operation (remote call, now outside lock)
             var result = await subflowForwardingService.ForwardTransitionAsync(

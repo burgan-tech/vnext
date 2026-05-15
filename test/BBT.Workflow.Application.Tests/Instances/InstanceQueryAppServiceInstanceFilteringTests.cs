@@ -7,6 +7,7 @@ using BBT.Aether;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Application.Pagination;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Users;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow;
@@ -271,6 +272,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            currentUser: Substitute.For<ICurrentUser>(),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: instanceFilteringOptions,
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());

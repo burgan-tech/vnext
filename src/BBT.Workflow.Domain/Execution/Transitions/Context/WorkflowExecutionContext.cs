@@ -36,6 +36,9 @@ public sealed class WorkflowExecutionContext
     
     /// <summary>Gets or sets the execution mode (sync/async).</summary>
     public ExecMode Mode { get; set; } = ExecMode.Sync;
+
+    /// <summary>Gets or sets the original caller's execution mode intent. Used for subflow propagation; defaults to Mode.</summary>
+    public ExecMode CallerMode { get; set; } = ExecMode.Sync;
     
     /// <summary> Get or sets the execution actor (default: User) </summary>
     public ExecutionActor Actor { get; set; } = ExecutionActor.User;

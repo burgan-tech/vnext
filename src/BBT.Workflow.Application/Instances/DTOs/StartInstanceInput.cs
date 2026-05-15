@@ -50,6 +50,7 @@ public sealed class StartInstanceInput(
             TransitionKey = startTransitionKey,
             TriggerType = TriggerType.Manual, // Start transitions are always manual,
             Mode = Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = Headers,

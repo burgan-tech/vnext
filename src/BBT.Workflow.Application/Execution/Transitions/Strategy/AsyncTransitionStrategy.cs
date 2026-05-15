@@ -256,6 +256,7 @@ public sealed class AsyncTransitionStrategy(
             Headers = context.Headers,
             RouteValues = context.RouteValues,
             ExecutionActor = context.Actor,
+            CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
             Stage = context.Data?.Stage

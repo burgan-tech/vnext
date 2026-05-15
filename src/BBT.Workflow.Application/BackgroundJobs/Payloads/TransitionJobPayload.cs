@@ -78,6 +78,12 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     public ExecutionActor ExecutionActor { get; set; } = ExecutionActor.User;
 
     /// <summary>
+    /// Preserves the original caller's sync/async intent.
+    /// When false, subflows started from this transition will also run asynchronously.
+    /// </summary>
+    public bool CallerSync { get; set; }
+
+    /// <summary>
     /// Gets or sets the W3C Trace Context traceparent header for distributed tracing correlation.
     /// Format: {version}-{trace-id}-{parent-id}-{trace-flags}
     /// </summary>

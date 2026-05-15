@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -63,6 +64,7 @@ public sealed class TransitionJobHandler(
                         transitionInput.ToExecutionContext(args.InstanceId.ToString(), args.Version,
                             args.TransitionKey);
                     context.Actor = args.ExecutionActor;
+                    context.CallerMode = args.CallerSync ? ExecMode.Sync : ExecMode.Async;
 
                     // Use the background-specific method that handles pre-reserved instances
                     var result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);

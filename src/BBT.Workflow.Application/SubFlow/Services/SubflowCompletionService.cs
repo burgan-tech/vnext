@@ -262,6 +262,7 @@ public sealed class SubflowCompletionService(
                 TransitionKey = "", // For logging purposes only
                 TriggerType = TriggerType.Manual,
                 Mode = ExecMode.Resume, // Use Resume mode for SubFlow completion
+                CallerMode = ExecMode.Async,
                 Headers = new Dictionary<string, string?>(),
                 Actor = ExecutionActor.System,
                 RequestedAt = DateTimeOffset.UtcNow,

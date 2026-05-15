@@ -20,13 +20,13 @@ public class NotificationMapping : IMapping
             ?? throw new InvalidOperationException("Task must be a NotificationTask");
 
         var messageData = TryGetStateFromBody(context);
+        var subject = ResolveSubject(context);
 
-        // Create the CloudEvents-style notification message
         var message = NotificationMessage.Create(
             id: context.Instance.Id.ToString(),
-            data: messageData);
+            data: messageData,
+            subject: subject);
 
-        // Set the notification properties on the task
         notifyTask.SetBody(message);
         
         return Task.FromResult(new ScriptResponse());
@@ -35,6 +35,17 @@ public class NotificationMapping : IMapping
     public Task<ScriptResponse> OutputHandler(ScriptContext context)
     {
         return Task.FromResult(new ScriptResponse());
+    }
+
+    private static string ResolveSubject(ScriptContext context)
+    {
+        var status = context.Instance?.Status;
+        return status switch
+        {
+            InstanceStatus.Completed => "workflow-completed",
+            InstanceStatus.Faulted => "workflow-faulted",
+            _ => "workflow-state-change"
+        };
     }
 
     private static object? TryGetStateFromBody(ScriptContext context)
@@ -100,20 +111,25 @@ public class NotificationMessage
     public required object Data { get; set; }
 
     /// <summary>
-    /// Creates a new notification message with the specified identifier and data.
-    /// The source, type, and subject are set to default values: "vnext", "vnext.workflow", and "workflow-completed" respectively.
+    /// Creates a new notification message with the specified identifier, data, and optional subject/type overrides.
     /// </summary>
     /// <param name="id">The unique identifier of the message.</param>
     /// <param name="data">The data payload of the message.</param>
+    /// <param name="subject">The subject of the message. Defaults to "workflow-state-change".</param>
+    /// <param name="type">The type of the message. Defaults to "vnext.workflow".</param>
     /// <returns>A new instance of NotificationMessage.</returns>
-    public static NotificationMessage Create(string id, object data)
+    public static NotificationMessage Create(
+        string id,
+        object data,
+        string? subject = null,
+        string? type = null)
     {
         return new NotificationMessage
         {
             Id = id,
             Source = "vnext",
-            Type = "vnext.workflow",
-            Subject = "workflow-completed",
+            Type = type ?? "vnext.workflow",
+            Subject = subject ?? "workflow-state-change",
             Data = data
         };
     }
@@ -152,7 +168,12 @@ internal class NotificationStateOutput
     public List<TransitionItem> Transitions { get; set; } = [];
 
     /// <summary>
-    /// ETag from the latest instance data
+    /// Representation ETag (RFC 7232 quoted) for cache validation
     /// </summary>
     public string ETag { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Entity (DB row) version for concurrency, RFC 7232 quoted
+    /// </summary>
+    public string EntityEtag { get; set; } = string.Empty;
 }
