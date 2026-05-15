@@ -1,0 +1,65 @@
+{
+  "since": "0.0.1",
+  "policies": [
+    {
+      "id": "query-filter-count-and-length-limits",
+      "scope": "query",
+      "enforcedSince": "0.0.1",
+      "description": "Instance/query filter inputs reject more than InputValidator.MaxFiltersCount filters and any filter string longer than InputValidator.MaxFilterLength."
+    },
+    {
+      "id": "query-field-name-safety",
+      "scope": "query",
+      "enforcedSince": "0.0.1",
+      "description": "Filter field paths must satisfy InputValidator.ValidateFieldName: length limits, max dot depth, alphanumeric segments starting with a letter, and rejection of dangerous punctuation/control characters."
+    },
+    {
+      "id": "query-filter-value-length",
+      "scope": "query",
+      "enforcedSince": "0.0.1",
+      "description": "Filter values passed to InputValidator.ValidateValue may not exceed InputValidator.MaxValueLength characters."
+    },
+    {
+      "id": "query-includes-json-limits",
+      "scope": "query",
+      "enforcedSince": "0.0.1",
+      "description": "Includes-filter JSON payloads must be objects bounded by InputValidator MaxIncludesPayloadJsonLength, MaxIncludesPayloadNestingDepth, and MaxIncludesPayloadPropertyCount (including array element counts)."
+    },
+    {
+      "id": "query-json-and-sql-identifier-safety",
+      "scope": "query",
+      "enforcedSince": "0.0.1",
+      "description": "Arbitrary JSON strings are capped by InputValidator.ValidateJsonLength (same max as filters); JSONB column identifiers must pass InputValidator.ValidateSqlJsonColumnIdentifier (PostgreSQL-safe quoted identifiers)."
+    },
+    {
+      "id": "transition-automatic-trigger-system-actor-only",
+      "scope": "transition",
+      "enforcedSince": "0.0.1",
+      "description": "ActorAuthorizationSpecification requires ExecutionActor.System for TriggerType.Automatic transitions."
+    },
+    {
+      "id": "transition-scheduled-trigger-system-actor-only",
+      "scope": "transition",
+      "enforcedSince": "0.0.1",
+      "description": "ActorAuthorizationSpecification requires ExecutionActor.System for TriggerType.Scheduled transitions."
+    },
+    {
+      "id": "transition-automatic-chain-depth-limit",
+      "scope": "transition",
+      "enforcedSince": "0.0.1",
+      "description": "ActorAuthorizationSpecification rejects automatic transitions when TransitionExecutionContext.ChainDepth exceeds 50 (defense in depth alongside the pipeline)."
+    },
+    {
+      "id": "transition-role-grant-evaluation",
+      "scope": "transition",
+      "enforcedSince": "0.0.1",
+      "description": "TransitionAuthorizationManager evaluates transition RoleGrant lists: any matching DENY denies; otherwise any matching ALLOW permits; empty role grants allow all callers."
+    },
+    {
+      "id": "transition-predefined-and-dynamic-role-grants",
+      "scope": "transition",
+      "enforcedSince": "0.0.1",
+      "description": "When an instance is present, TransitionAuthorizationManager resolves $InstanceStarter, $PreviousUser, $InstanceBehalfOfStarter, $PreviousBehalfOfUser against CreatedBy/CreatedByBehalfOf and last completed manual transition; dynamic grants use $.context.* paths compared to actor, subject, or caller role."
+    }
+  ]
+}

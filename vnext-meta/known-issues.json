@@ -1,0 +1,64 @@
+{
+  "items": [
+    {
+      "id": "automatic-transition-chain-depth-capped",
+      "affectedVersions": ">=0.0.26",
+      "severity": "error",
+      "component": "transition",
+      "path": "states[].transitions[] (automatic chains)",
+      "title": "Automatic transition sync dispatch stops when chain depth exceeds 50; the pipeline fails with error code Transition:100017.",
+      "workaround": "Refactor the workflow so automatic chains do not exceed the depth guard, insert intermediate human states, or split logic across transitions.",
+      "fixedIn": null
+    },
+    {
+      "id": "scheduled-transition-without-timer-skipped",
+      "affectedVersions": ">=0.0.26",
+      "severity": "warning",
+      "component": "timer",
+      "path": "states[].scheduledTransitions[].timer",
+      "title": "If a scheduled transition has no timer configuration, ScheduleTransitionsStep logs a warning and skips enqueueing that schedule (transition does not fire from scheduling).",
+      "workaround": "Ensure every scheduled transition defines a timer evaluated by the timer service.",
+      "fixedIn": null
+    },
+    {
+      "id": "workflow-timeout-mapping-fallback-static-duration",
+      "affectedVersions": ">=0.0.26",
+      "severity": "warning",
+      "component": "timer",
+      "path": "workflow.timeout.mapping",
+      "title": "When dynamic workflow timeout mapping fails, the runtime falls back to the static ISO 8601 duration from workflow timeout configuration.",
+      "workaround": "Fix or simplify the timeout mapping script; verify TimeoutMappingFallback logs during instance start.",
+      "fixedIn": null
+    },
+    {
+      "id": "workflow-timeout-job-scheduling-failure-non-blocking",
+      "affectedVersions": ">=0.0.26",
+      "severity": "warning",
+      "component": "instance",
+      "path": "workflow.timeout",
+      "title": "If enqueueing or persisting the workflow timeout background job throws, the failure is logged but instance start continues without blocking.",
+      "workaround": "Monitor WorkflowTimeoutSchedulingFailed logs and job infrastructure; retry or reconcile timeouts externally if needed.",
+      "fixedIn": null
+    },
+    {
+      "id": "cancel-scheduled-jobs-failure-does-not-block-transition",
+      "affectedVersions": ">=0.0.26",
+      "severity": "warning",
+      "component": "timer",
+      "path": "lifecycle.CancelScheduledJobsStep",
+      "title": "When cancelling scheduled transition jobs for the leaving state fails, the pipeline logs ScheduledJobsCancellationFailed and continues the transition anyway.",
+      "workaround": "Inspect cancellation/job-store failures; manually reconcile orphaned scheduled jobs if transitions completed despite cancellation errors.",
+      "fixedIn": null
+    },
+    {
+      "id": "duplicate-async-transition-job-conflict",
+      "affectedVersions": ">=0.0.26",
+      "severity": "info",
+      "component": "transition",
+      "path": null,
+      "title": "A second async transition request for the same instance and transition key while a job is already active is rejected with HTTP 409 Conflict.",
+      "workaround": "Use idempotency keys, poll instance state, or wait for the in-flight job to finish before retrying.",
+      "fixedIn": null
+    }
+  ]
+}

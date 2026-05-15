@@ -763,3 +763,43 @@ jobs:
           echo "| BBT.Workflow.Modules.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Modules.Scripting) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Domain | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Domain) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Tasks.Abstractions | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Tasks.Abstractions) |" >> $GITHUB_STEP_SUMMARY
+
+  publish-npm:
+    name: Publish npm Package
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: vnext-meta
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Set package version
+        run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Determine npm dist-tag
+        id: dist_tag
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          if [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "tag=alpha" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" == *"-beta"* ]]; then
+            echo "tag=beta" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" == *"-rc"* ]]; then
+            echo "tag=rc" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public --tag ${{ steps.dist_tag.outputs.tag }}

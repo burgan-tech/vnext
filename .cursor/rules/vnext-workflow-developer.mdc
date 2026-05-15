@@ -149,3 +149,24 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
 - `Cache` dict holds ephemeral data (e.g. `ScriptContext`), cleared at Finalize.
 - `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
 - Same context reference flows through all pipeline steps — avoid redundant loads.
+
+## vnext-meta Package
+
+- **Purpose**: Runtime metadata package for offline consumption by Forge Studio, CLI, and domain packages.
+- **npm package name**: `@burgan-tech/vnext-meta`
+- **Location in repo**: `vnext-meta/`
+
+| File | Purpose |
+|------|---------|
+| version-manifest.json | Runtime version to schema version mapping |
+| features.json | Engine capabilities, API endpoints, integration status |
+| deprecations.json | Fields/features past end-of-life |
+| migrations.json | Version migration steps and guides |
+| known-issues.json | Active bugs, workarounds, affected version ranges |
+| component-registry.json | Task, function, and extension catalog with availability |
+| performance-profiles.json | Runtime limits and thresholds |
+| security-policy.json | Enforced security rules by scope |
+
+- **Consumers**: Forge Studio (designer validation, feature gating, inline warnings), vnext-template CLI (`npm run validate`), domain packages (CI pre-publish checks).
+- **Key principle**: All data is runtime-specific, machine-readable, offline-accessible. No runtime connection required.
+- **Version alignment**: Package version matches runtime version from `common.props`. Published via `publish-npm` GitHub Actions job.

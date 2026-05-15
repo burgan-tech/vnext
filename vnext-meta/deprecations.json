@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "id": "direct-trigger-task-version",
+      "type": "field",
+      "component": "task",
+      "path": "directTriggerTask.version",
+      "deprecatedSince": "0.0.26",
+      "removedAt": null,
+      "replacement": null,
+      "severity": "warning",
+      "message": "Version is not used for direct trigger tasks"
+    }
+  ]
+}

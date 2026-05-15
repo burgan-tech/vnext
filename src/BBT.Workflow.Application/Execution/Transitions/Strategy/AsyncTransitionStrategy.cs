@@ -261,7 +261,7 @@ public sealed class AsyncTransitionStrategy(
             Stage = context.Data?.Stage
         };
 
-        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow).ExpressionValue;
+        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow.AddSeconds(2)).ExpressionValue;
 
         var metadata = new Dictionary<string, object>
         {
