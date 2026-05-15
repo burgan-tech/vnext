@@ -75,4 +75,12 @@ public interface IInstanceQueryAppService : IApplicationService
     Task<Result<GetInstanceHierarchyOutput>> GetInstanceHierarchyAsync(
         GetInstanceHierarchyInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves active instances with Human state subtype across all workflow schemas,
+    /// filtered by transition role authorization.
+    /// </summary>
+    Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
+        string domain,
+        CancellationToken cancellationToken = default);
 }

@@ -87,4 +87,13 @@ public interface ITransitionAuthorizationManager
     Task<IReadOnlyList<string>> GetEffectiveCallerRolesForFieldVisibilityAsync(
         Instance? instance,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks whether the current user matches any predefined role ($InstanceStarter, $PreviousUser)
+    /// in the given role grants. Only evaluates predefined roles; static roles are ignored.
+    /// </summary>
+    Task<bool> IsPredefinedRoleMatchAsync(
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        Instance instance,
+        CancellationToken cancellationToken = default);
 }

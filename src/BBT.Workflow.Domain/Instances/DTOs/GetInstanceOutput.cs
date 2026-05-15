@@ -350,3 +350,27 @@ public sealed class GetInstanceDataOutput
 
     public Dictionary<string, object>? Extensions { get; set; }
 }
+
+/// <summary>
+/// Output for the human-task function: represents an active instance pending human action.
+/// </summary>
+public sealed class HumanTaskItemOutput
+{
+    /// <summary>Workflow instance identifier.</summary>
+    public string? InstanceId { get; set; }
+
+    /// <summary>Workflow key (schema) this instance belongs to.</summary>
+    public string? Workflow { get; set; }
+
+    /// <summary>Human task title extracted from instance data.</summary>
+    public string? Title { get; set; }
+
+    /// <summary>Human task description extracted from instance data.</summary>
+    public string? Description { get; set; }
+
+    /// <summary>When the instance was created.</summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>Static flag indicating this is a vNext task.</summary>
+    public bool VNext { get; set; } = true;
+}
