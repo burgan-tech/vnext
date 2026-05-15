@@ -679,6 +679,9 @@ public sealed class InstanceCommandAppService(
                 instance.SetInfoMetadata(isSync, callback, workflow.Type.Code, metadata);
                 instance.ChangeState(initialState);
 
+                if (instance.IsSubItem)
+                    instance.Busy();
+
                 if (tags?.Any() == true)
                     instance.AddTags(tags.ToArray());
 
