@@ -101,6 +101,23 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex("LastTouchedAt", "Id")
                 .HasFilter("\"Status\" = 'A'")
                 .HasDatabaseName("IX_Instances_Active_LastTouched_Id");
+
+            // Partial covering index for GetHumanTaskInstancesAsync.
+            // Filters: Status IN ('A','B'), EffectiveStateSubType = Human,
+            // ExtraProperties does NOT contain 'parent.id'.
+            // CreatedAt DESC is the leading column to serve ORDER BY without a sort.
+            b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
+                .IsDescending(true)
+                .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')")
+                .IncludeProperties(p => new
+                {
+                    p.Key,
+                    p.Flow,
+                    p.FlowVersion,
+                    p.CurrentState,
+                    p.EffectiveState,
+                    p.Status
+                });
         });
 
         builder.Entity<InstanceCorrelation>(b =>

@@ -19,7 +19,9 @@ using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions.Schemas;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Instances;
@@ -41,6 +43,7 @@ public sealed class InstanceQueryAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
+    ICurrentUser currentUser,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     ILogger<InstanceQueryAppService> logger)
@@ -1418,6 +1421,242 @@ public sealed class InstanceQueryAppService(
             cancellationToken);
 
         return Result<GetInstanceHierarchyOutput>.Ok(new GetInstanceHierarchyOutput { Root = rootNode });
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
+        string domain,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(domain);
+
+        List<InstanceKeyModel> workflowSchemas;
+        using (currentSchema.Use(RuntimeSysSchemaInfo.Flows))
+        {
+            workflowSchemas = await instanceRepository.GetActiveInstanceKeysAsync(cancellationToken);
+        }
+
+        if (workflowSchemas.Count == 0)
+            return Result<List<HumanTaskItemOutput>>.Ok([]);
+
+        var allItems = new List<HumanTaskItemOutput>();
+        
+        foreach (var schema in workflowSchemas)
+        {
+            var flowResult = await componentCacheStore.GetFlowAsync(domain, schema.Key, schema.Version, cancellationToken);
+            if (!flowResult.IsSuccess || flowResult.Value == null)
+                continue;
+
+            var currentWorkflow = flowResult.Value;
+            
+            var scopeFactory = serviceProvider.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>();
+            var instances = await scopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
+            {
+                var scopedSchema = sp.GetRequiredService<ICurrentSchema>();
+                var scopedRepo = sp.GetRequiredService<IInstanceRepository>();
+
+                using (scopedSchema.Use(schema.Key))
+                {
+                    return await scopedRepo.GetHumanTaskInstancesAsync(ct);
+                }
+            }, cancellationToken);
+
+            if (instances.Count == 0)
+                continue;
+
+            var userRoles = currentUser.Roles ?? [];
+
+            var filtered = await FilterAuthorizedInstancesAsync(
+                instances, currentWorkflow, domain, userRoles, cancellationToken);
+
+            foreach (var instance in filtered)
+            {
+                var title = string.Empty;
+                var description = string.Empty;
+
+                var latestData = instance.LatestData;
+                if (latestData?.Data != null
+                    && latestData.Data.JsonElement.ValueKind == JsonValueKind.Object
+                    && latestData.Data.JsonElement.TryGetProperty("humanTask", out var humanTaskElement)
+                    && humanTaskElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (humanTaskElement.TryGetProperty("title", out var titleProp))
+                        title = titleProp.GetString() ?? string.Empty;
+                    if (humanTaskElement.TryGetProperty("description", out var descProp))
+                        description = descProp.GetString() ?? string.Empty;
+                }
+
+                allItems.Add(new HumanTaskItemOutput
+                {
+                    InstanceId = instance.Key ?? instance.Id.ToString(),
+                    Workflow = schema.Key,
+                    Title = title,
+                    Description = description,
+                    CreatedAt = instance.CreatedAt,
+                    VNext = true
+                });
+            }
+        }
+
+        allItems.Sort((a, b) => b.CreatedAt.CompareTo(a.CreatedAt));
+        return Result<List<HumanTaskItemOutput>>.Ok(allItems);
+    }
+
+    /// <summary>
+    /// Resolves the workflow and state for transition authorization.
+    /// If the instance has an active SubFlow correlation, loads the sub-workflow
+    /// and resolves the state from SubFlowCurrentState. Otherwise uses the parent workflow.
+    /// </summary>
+    private async Task<(Definitions.Workflow? Workflow, State? State)> ResolveInstanceWorkflowAndStateAsync(
+        Instance instance,
+        Definitions.Workflow parentWorkflow,
+        string domain,
+        CancellationToken cancellationToken)
+    {
+        var activeSubFlow = instance.Subflow;
+
+        if (activeSubFlow == null)
+        {
+            var stateResult = parentWorkflow.GetState(instance.GetCurrentState);
+            if (!stateResult.IsSuccess || stateResult.Value == null)
+                return (null, null);
+
+            return (parentWorkflow, stateResult.Value);
+        }
+
+        var subFlowResult = await componentCacheStore.GetFlowAsync(
+            domain, activeSubFlow.SubFlowName, null, cancellationToken);
+
+        if (!subFlowResult.IsSuccess || subFlowResult.Value == null)
+            return (null, null);
+
+        var subFlowState = activeSubFlow.SubFlowCurrentState;
+        if (string.IsNullOrEmpty(subFlowState))
+            return (null, null);
+
+        var stateInSubFlow = subFlowResult.Value.GetState(subFlowState);
+        if (!stateInSubFlow.IsSuccess || stateInSubFlow.Value == null)
+            return (null, null);
+
+        return (subFlowResult.Value, stateInSubFlow.Value);
+    }
+
+    /// <summary>
+    /// Filters instances by checking whether the current user is authorized to trigger
+    /// at least one transition. For each instance, resolves the correct workflow and state
+    /// (main flow or active SubFlow via correlation), then checks static roles and predefined roles.
+    /// When a SubFlow transition is overridden by the parent, the parent's role grants are used instead.
+    /// </summary>
+    private async Task<List<Instance>> FilterAuthorizedInstancesAsync(
+        List<Instance> instances,
+        Definitions.Workflow parentWorkflow,
+        string domain,
+        string[] userRoles,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<Instance>(instances.Count);
+
+        foreach (var instance in instances)
+        {
+            var (workflow, state) = await ResolveInstanceWorkflowAndStateAsync(
+                instance, parentWorkflow, domain, cancellationToken);
+
+            if (workflow == null || state == null)
+                continue;
+
+            var transitions = workflow.GetAvailableUserTransitionKeys(state);
+            if (transitions.Count == 0)
+                continue;
+
+            var parentOverrides = GetParentTransitionOverrides(instance, parentWorkflow);
+
+            var isAuthorized = false;
+
+            foreach (var transitionKey in transitions)
+            {                
+                List<RoleGrant> transitionRoles = [];
+                var transition = workflow.FindTransitionInContext(transitionKey);
+                if (transition == null)
+                    continue;
+
+                if (parentOverrides != null
+                    && parentOverrides.TryGetValue(transitionKey, out var tOverride)
+                    && tOverride.Roles is { Count: > 0 })
+                {
+                    transitionRoles = tOverride.Roles;
+                }
+                else
+                {
+                    transitionRoles = transition.Roles.ToList();
+                }
+
+                var staticRoles = transitionRoles
+                    .Where(r => !PredefinedInstanceRoles.IsPredefinedRole(r.Role))
+                    .ToList();
+
+                var predefinedRoles = transitionRoles
+                    .Where(r => PredefinedInstanceRoles.IsPredefinedRole(r.Role))
+                    .ToList();
+
+                var hasStaticRoles = staticRoles.Count > 0;
+                var hasPredefinedRoles = predefinedRoles.Count > 0;
+
+                if (!hasStaticRoles && !hasPredefinedRoles)
+                {
+                    isAuthorized = true;
+                    break;
+                }
+
+                var staticMatch = !hasStaticRoles;
+                if (hasStaticRoles)
+                {
+                    foreach (var role in userRoles)
+                    {
+                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles))
+                        {
+                            staticMatch = true;
+                            break;
+                        }
+                    }
+                }
+
+                var predefinedMatch = !hasPredefinedRoles;
+                if (hasPredefinedRoles)
+                {
+                    predefinedMatch = await transitionAuthorizationManager.IsPredefinedRoleMatchAsync(
+                        predefinedRoles, instance, cancellationToken);
+                }
+
+                if (staticMatch && predefinedMatch)
+                {
+                    isAuthorized = true;
+                    break;
+                }
+            }
+
+            if (isAuthorized)
+                result.Add(instance);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Gets parent-defined transition role overrides for instances in a SubFlow state.
+    /// Returns null if the instance is not in a SubFlow or no overrides are defined.
+    /// </summary>
+    private static Dictionary<string, SubFlowTransitionOverride>? GetParentTransitionOverrides(
+        Instance instance,
+        Definitions.Workflow parentWorkflow)
+    {
+        if (instance.Subflow == null)
+            return null;
+
+        var parentStateResult = parentWorkflow.GetState(instance.GetCurrentState);
+        if (!parentStateResult.IsSuccess || parentStateResult.Value?.SubFlow?.Overrides?.Transitions == null)
+            return null;
+
+        return parentStateResult.Value.SubFlow.Overrides.Transitions;
     }
 
     private async Task<List<InstanceHierarchyNode>> BuildHierarchyTreeAsync(

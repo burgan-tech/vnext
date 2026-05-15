@@ -17,7 +17,8 @@ namespace BBT.Workflow.Controllers.Instances;
 public sealed class FunctionController(
     IFunctionAppService functionAppService,
     ICurrentUser currentUser,
-    IInstanceFunctionHandlerFactory handlerFactory) : AetherControllerBase
+    IInstanceFunctionHandlerFactory handlerFactory,
+    IDomainFunctionHandlerFactory domainHandlerFactory) : AetherControllerBase
 {
     [HttpGet("{domain}/functions")]
     public async Task<IActionResult> GetDomainFunctionsAsync(
@@ -37,14 +38,16 @@ public sealed class FunctionController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
-        var response = await functionAppService.GetFunctionByKeyAsync(
-            function,
+        var request = new DomainFunctionRequest(
             domain,
+            function,
             version,
             requestContext.Headers,
             requestContext.QueryParameters,
-            cancellationToken);
-        return FromResult(response);
+            HttpContext);
+
+        var handler = domainHandlerFactory.Get(function.ToLowerInvariant());
+        return await handler.HandleAsync(request, cancellationToken);
     }
 
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/functions/{function}")]
