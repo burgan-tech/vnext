@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Results;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Users;
 using BBT.Aether.Uow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
@@ -89,6 +90,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: _representationEtagService,
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            currentUser: Substitute.For<ICurrentUser>(),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());

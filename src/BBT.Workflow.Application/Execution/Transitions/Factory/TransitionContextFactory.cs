@@ -121,6 +121,7 @@ public sealed class TransitionContextFactory(
 
             // Flags
             Mode = input.Mode,
+            CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
 

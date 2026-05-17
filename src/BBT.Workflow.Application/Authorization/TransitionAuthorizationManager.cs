@@ -421,11 +421,19 @@ public sealed class TransitionAuthorizationManager(
         string? previousUserCreatedBy = null;
         string? previousBehalfOf = null;
 
-        if (predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)))
-            previousUserCreatedBy = (await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken))?.CreatedBy?.Trim();
+        var needsPreviousUser = predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal));
+        var needsPreviousBehalfOf = predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal));
 
-        if (predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal)))
-            previousBehalfOf = (await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken))?.CreatedByBehalfOf?.Trim();
+        if (needsPreviousUser || needsPreviousBehalfOf)
+        {
+            var lastTransition = await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken);
+
+            if (needsPreviousUser)
+                previousUserCreatedBy = lastTransition?.CreatedBy?.Trim();
+
+            if (needsPreviousBehalfOf)
+                previousBehalfOf = lastTransition?.CreatedByBehalfOf?.Trim();
+        }
 
         if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)
                                       && !string.IsNullOrEmpty(previousUserCreatedBy)
@@ -436,21 +444,10 @@ public sealed class TransitionAuthorizationManager(
                                       && !string.IsNullOrEmpty(previousBehalfOf)
                                       && string.Equals(actorUserName, previousBehalfOf, StringComparison.Ordinal)))
             return false;
-        
-        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal)
-                                      && string.Equals(actorUserName, instance.CreatedBy?.Trim(), StringComparison.Ordinal)))
-            return false;
-
-        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.InstanceBehalfOfStarter, StringComparison.Ordinal)
-                                      && string.Equals(actorUserName, instance.CreatedByBehalfOf?.Trim(), StringComparison.Ordinal)))
-            return false;
 
         if (predefinedGrants.Any(g => g.IsAllow && string.Equals(g.Role, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal)
                                       && string.Equals(actorUserName, instance.CreatedBy?.Trim(), StringComparison.Ordinal)))
-                                      {
-                                        return true;
-                                      }
-            
+            return true;
 
         if (predefinedGrants.Any(g => g.IsAllow && string.Equals(g.Role, PredefinedInstanceRoles.InstanceBehalfOfStarter, StringComparison.Ordinal)
                                       && string.Equals(actorUserName, instance.CreatedByBehalfOf?.Trim(), StringComparison.Ordinal)))

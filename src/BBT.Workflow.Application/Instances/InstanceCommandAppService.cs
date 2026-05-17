@@ -537,6 +537,7 @@ public sealed class InstanceCommandAppService(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = input.Headers,

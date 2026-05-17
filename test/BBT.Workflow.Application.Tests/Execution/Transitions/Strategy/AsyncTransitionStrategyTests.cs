@@ -126,6 +126,7 @@ public class AsyncTransitionStrategyTests
         capturedPayload.Domain.ShouldBe(workflowContext.Domain);
         capturedPayload.Workflow.ShouldBe(workflowContext.WorkflowKey);
         capturedPayload.ExecutionActor.ShouldBe(workflowContext.Actor);
+        capturedPayload.CallerSync.ShouldBeFalse();
     }
 
     [Fact]

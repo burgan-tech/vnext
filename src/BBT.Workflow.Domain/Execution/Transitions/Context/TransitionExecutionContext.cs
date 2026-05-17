@@ -89,6 +89,9 @@ public sealed class TransitionExecutionContext
     /// <summary>Gets the execution mode (sync/async/resume) from the original request.</summary>
     public ExecMode Mode { get; init; } = ExecMode.Sync;
 
+    /// <summary>Gets the original caller's execution mode intent (sync/async). Used by post-commit handlers for subflow mode propagation.</summary>
+    public ExecMode CallerMode { get; init; } = ExecMode.Sync;
+
     /// <summary>Gets or sets whether to skip immediate execution (for scheduled transitions).</summary>
     public bool SkipImmediateExecution { get; set; }
 

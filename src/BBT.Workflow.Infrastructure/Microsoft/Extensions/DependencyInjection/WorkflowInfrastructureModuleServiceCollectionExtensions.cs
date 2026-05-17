@@ -135,13 +135,9 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();
-        services.ConfigureEmbeddedScripts(opt =>
-        {
-            opt.Add(
-                NotificationScriptProvider.DefaultKey,
-                "BBT.Workflow.Tasks.Scripting.NotificationMapping.csx",
-                typeof(EmbeddedScriptEntry).Assembly);
-        });
+
+        // Notification channel resolver (needed by NotificationTaskExecutor in Application layer)
+        services.AddNotificationChannelResolver();
 
         return services;
     }

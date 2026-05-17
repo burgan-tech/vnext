@@ -346,6 +346,7 @@ public class TransitionPipeline
             TransitionKey = nextTransition.TransitionKey,
             TriggerType = TriggerType.Automatic,
             Mode = ExecMode.Sync,
+            CallerMode = currentContext.CallerMode,
             Actor = Shared.ExecutionActor.System,
             CorrelationId = currentContext.CorrelationId,
             CausationId = currentContext.ExecutionChainId,
