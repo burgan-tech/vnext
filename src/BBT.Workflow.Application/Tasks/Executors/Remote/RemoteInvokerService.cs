@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -130,7 +131,11 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             instanceId: instance?.Id ?? Guid.Empty,
             domain: domain,
             workflowKey: workflow?.Key ?? string.Empty,
-            workflowVersion: workflow?.Version ?? string.Empty);
+            workflowVersion: workflow?.Version ?? string.Empty,
+            headers: scriptContext.Headers != null
+                ? scriptContext.GetHeadersAsDictionary()
+                : null,
+            instanceDataJson: instance?.LatestData?.Data?.Json);
     }
 }
 

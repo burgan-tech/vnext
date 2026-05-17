@@ -31,7 +31,8 @@ public sealed class TaskEnvelope
 }
 
 /// <summary>
-/// Trace context for distributed tracing (minimal, no workflow state).
+/// Trace context for distributed tracing and placeholder resolution.
+/// Carried from Orchestration to Execution via Dapr service invocation.
 /// </summary>
 public sealed class TaskTraceContext
 {
@@ -54,6 +55,18 @@ public sealed class TaskTraceContext
     /// Workflow version for tracing.
     /// </summary>
     public string? WorkflowVersion { get; init; }
+
+    /// <summary>
+    /// Original HTTP request headers forwarded from orchestration.
+    /// Used for <c>{HEADER.*}</c> placeholder resolution.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
+
+    /// <summary>
+    /// Serialized instance latest data JSON for placeholder resolution.
+    /// Used for <c>{INSTANCE.*}</c> placeholder resolution.
+    /// </summary>
+    public string? InstanceDataJson { get; init; }
 }
 
 /// <summary>

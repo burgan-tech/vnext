@@ -1965,6 +1965,66 @@ public static partial class WorkflowLogs
         string? boundaryAction);
   
     #endregion
+
+    #region Multi-Channel Notification
+
+    /// <summary>
+    /// Logs when a notification channel message is successfully dispatched to a Dapr binding.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10090,
+        Level = LogLevel.Information,
+        Message = "Notification channel dispatched. TaskKey={TaskKey}, Channel={Channel}, BindingName={BindingName}, InstanceId={InstanceId}")]
+    public static partial void NotificationChannelDispatched(
+        this ILogger logger,
+        string taskKey,
+        string channel,
+        string bindingName,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a notification channel is skipped because the mapping returned null.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10091,
+        Level = LogLevel.Debug,
+        Message = "Notification channel skipped (mapping returned null). TaskKey={TaskKey}, Channel={Channel}, InstanceId={InstanceId}")]
+    public static partial void NotificationChannelSkipped(
+        this ILogger logger,
+        string taskKey,
+        string channel,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a notification channel dispatch fails (other channels continue).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10092,
+        Level = LogLevel.Warning,
+        Message = "Notification channel failed. TaskKey={TaskKey}, Channel={Channel}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void NotificationChannelFailed(
+        this ILogger logger,
+        string taskKey,
+        string channel,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs the summary when multi-channel notification dispatch completes.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10093,
+        Level = LogLevel.Information,
+        Message = "Notification multi-channel completed. TaskKey={TaskKey}, InstanceId={InstanceId}, Dispatched={DispatchedCount}, Skipped={SkippedCount}, Failed={FailedCount}")]
+    public static partial void NotificationMultiChannelCompleted(
+        this ILogger logger,
+        string taskKey,
+        Guid instanceId,
+        int dispatchedCount,
+        int skippedCount,
+        int failedCount);
+
+    #endregion
   
     #region Server Configuration
 

@@ -4,16 +4,16 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
-using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Gateway;
-using BBT.Workflow.Tasks;
+using BBT.Workflow.Tasks.Notification;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Shared;
+using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Executors;
+using Dapr.Client;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -25,16 +25,22 @@ public sealed class NotificationTaskExecutorTests
     private const string TestDomain = "test-domain";
     private const string TestWorkflow = "test-flow";
     private const string TestVersion = "1.0.0";
-    private const string DummyScript = "// notification mapping script";
 
-    private static NotificationTask CreateNotificationTask(string key = "notify-task")
+    #region Helpers
+
+    private static NotificationTask CreateTask(
+        string key = "notify-task",
+        string[]? channels = null,
+        bool includeStateChannel = false)
     {
+        var channelList = channels ?? ["sms", "email"];
+        var channelsJson = JsonSerializer.Serialize(channelList);
         var config = $$"""
         {
             "key": "{{key}}",
             "type": "14",
-            "subject": "Test Notification",
-            "to": ["user@example.com"]
+            "channels": {{channelsJson}},
+            "includeStateChannel": {{includeStateChannel.ToString().ToLowerInvariant()}}
         }
         """;
         var task = NotificationTask.Create(config.ToJsonElement());
@@ -44,294 +50,431 @@ public sealed class NotificationTaskExecutorTests
 
     private static TaskExecutorContext CreateContext(
         NotificationTask task,
-        Dictionary<string, string?>? headers = null,
-        Dictionary<string, string?>? queryParams = null)
+        string? mappingCode = null)
     {
-        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+        var scriptCode = !string.IsNullOrEmpty(mappingCode)
+            ? ScriptCode.FromNative(mappingCode)
+            : ScriptCode.FromNative(string.Empty);
+
+        var onExecute = OnExecuteTask.Create(1, task, scriptCode);
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "ctx-key");
+
         var workflow = Definitions.Workflow.Create();
         workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
 
-        var builder = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+        var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
             .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
             .SetInstance(instance)
             .SetWorkflow(workflow)
-            .SetHeaders(headers)
-            .SetQueryParameters(queryParams);
-
-        var scriptContext = builder.Build();
+            .Build();
 
         return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
     }
 
-    private static INotificationScriptProvider CreateScriptProvider(bool hasScript = true)
-    {
-        var provider = Substitute.For<INotificationScriptProvider>();
-        provider.GetDefaultScriptAsync(Arg.Any<CancellationToken>())
-            .Returns(hasScript
-                ? Result<string>.Ok(DummyScript)
-                : Result<string>.Fail(Error.Failure("no-script", "No script")));
-        return provider;
-    }
-
-    private static IScriptEngine CreateScriptEngine()
-    {
-        var mapping = Substitute.For<IMapping>();
-        mapping.InputHandler(Arg.Any<WorkflowTask>(), Arg.Any<ScriptContext>())
-            .Returns(Task.FromResult(new ScriptResponse()));
-        mapping.OutputHandler(Arg.Any<ScriptContext>())
-            .Returns(Task.FromResult(new ScriptResponse()));
-
-        var engine = Substitute.For<IScriptEngine>();
-        engine.CompileToInstanceAsync<IMapping>(
-            Arg.Any<string>(),
-            Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
-            Arg.Any<IEnumerable<string>?>(),
-            Arg.Any<CancellationToken>())
-            .Returns(mapping);
-        return engine;
-    }
-
     private static NotificationTaskExecutor CreateExecutor(
-        IInstanceQueryGateway? gateway = null,
-        INotificationScriptProvider? scriptProvider = null,
-        ICurrentUser? currentUser = null,
-        IScriptEngine? scriptEngine = null,
-        IRemoteInvokerService? remoteInvoker = null)
+        Mock<DaprClient>? daprClient = null,
+        INotificationChannelResolver? channelResolver = null,
+        IStateChannelMessageBuilder? stateBuilder = null,
+        IScriptEngine? scriptEngine = null)
     {
-        gateway ??= Substitute.For<IInstanceQueryGateway>();
-        scriptProvider ??= CreateScriptProvider();
-        currentUser ??= Substitute.For<ICurrentUser>();
-        scriptEngine ??= CreateScriptEngine();
-
-        if (remoteInvoker == null)
-        {
-            remoteInvoker = Substitute.For<IRemoteInvokerService>();
-            remoteInvoker.InvokeAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
-                Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
-                .Returns(Result<TaskInvocationResult>.Ok(new TaskInvocationResult()));
-        }
+        daprClient ??= new Mock<DaprClient>();
+        channelResolver ??= new TestChannelResolver();
+        stateBuilder ??= CreateDefaultStateBuilder();
+        scriptEngine ??= Substitute.For<IScriptEngine>();
 
         return new NotificationTaskExecutor(
-            remoteInvoker,
+            daprClient.Object,
+            channelResolver,
+            stateBuilder,
             scriptEngine,
-            scriptProvider,
-            gateway,
-            currentUser,
             NullLogger<NotificationTaskExecutor>.Instance);
     }
 
-    private static IInstanceQueryGateway CreateGateway(string state = "step-1")
+    private static IStateChannelMessageBuilder CreateDefaultStateBuilder()
     {
-        var gateway = Substitute.For<IInstanceQueryGateway>();
-        gateway.GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
-            .Returns(ConditionalResult<GetInstanceStateOutput>.Success(new GetInstanceStateOutput
+        var builder = Substitute.For<IStateChannelMessageBuilder>();
+        builder.BuildAsync(
+                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<IStateNotificationMapping?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
             {
-                State = state,
-                Status = InstanceStatus.Active,
-                Data = new DataHref { Href = "/data" },
-                View = new ViewHref { Href = "/view" },
-                ETag = "\"etag-123\"",
-                EntityEtag = "\"entity-456\"",
-                Transitions = [new TransitionItem { Name = "approve", Href = "/approve" }],
-                ActiveCorrelations = []
+                Data = new { state = "step-1", status = "Active" }
             }));
-        return gateway;
+        return builder;
     }
 
-    [Fact]
-    public async Task ExecuteAsync_ShouldPopulateHeaders_FromScriptContext()
+    private static INotificationMapping CreateMapping(
+        Func<string, ScriptContext, Task<NotificationMessage?>>? handler = null)
     {
-        var task = CreateNotificationTask();
-        var headers = new Dictionary<string, string?>
+        var mapping = Substitute.For<INotificationMapping>();
+        mapping.ChannelHandler(Arg.Any<string>(), Arg.Any<ScriptContext>())
+            .Returns(ci =>
+            {
+                if (handler is not null)
+                    return handler(ci.Arg<string>(), ci.Arg<ScriptContext>());
+
+                return Task.FromResult<NotificationMessage?>(new NotificationMessage
+                {
+                    Data = new { channel = ci.Arg<string>() }
+                });
+            });
+        return mapping;
+    }
+
+    private static IScriptEngine CreateScriptEngineWithMapping(
+        INotificationMapping mapping,
+        IStateNotificationMapping? stateMapping = null)
+    {
+        var engine = Substitute.For<IScriptEngine>();
+        engine.CompileToInstanceAsync<INotificationMapping>(
+                Arg.Any<string>(),
+                Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+                Arg.Any<IEnumerable<string>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(mapping);
+
+        if (stateMapping is not null)
         {
-            ["authorization"] = "Bearer token123",
-            ["x-correlation-id"] = "corr-abc"
-        };
-        var context = CreateContext(task, headers: headers);
-        var gateway = CreateGateway();
-
-        var executor = CreateExecutor(gateway: gateway);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i =>
-                i.Headers != null &&
-                i.Headers["authorization"] == "Bearer token123" &&
-                i.Headers["x-correlation-id"] == "corr-abc"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldPopulateRole_FromCurrentUser()
-    {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
-        var gateway = CreateGateway();
-
-        var currentUser = Substitute.For<ICurrentUser>();
-        currentUser.Roles.Returns(new[] { "admin", "operator" });
-
-        var executor = CreateExecutor(gateway: gateway, currentUser: currentUser);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i => i.Role == "admin"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldHandleNullHeaders_Gracefully()
-    {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
-        var gateway = CreateGateway();
-
-        var executor = CreateExecutor(gateway: gateway);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i =>
-                i.Headers != null && i.Headers.Count == 0 &&
-                i.QueryParams != null && i.QueryParams.Count == 0),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldHandleNullRoles_Gracefully()
-    {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
-        var gateway = CreateGateway();
-
-        var currentUser = Substitute.For<ICurrentUser>();
-        currentUser.Roles.Returns((string[]?)null);
-
-        var executor = CreateExecutor(gateway: gateway, currentUser: currentUser);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i => i.Role == null),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldHandleEmptyRoles_Gracefully()
-    {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
-        var gateway = CreateGateway();
-
-        var currentUser = Substitute.For<ICurrentUser>();
-        currentUser.Roles.Returns(Array.Empty<string>());
-
-        var executor = CreateExecutor(gateway: gateway, currentUser: currentUser);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i => i.Role == null),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldPassQueryParams_WhenAvailable()
-    {
-        var task = CreateNotificationTask();
-        var queryParams = new Dictionary<string, string?>
+            engine.CompileToInstanceAsync<IStateNotificationMapping>(
+                    Arg.Any<string>(),
+                    Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+                    Arg.Any<IEnumerable<string>?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(stateMapping);
+        }
+        else
         {
-            ["version"] = "2.0",
-            ["extensions"] = "ext1"
-        };
-        var context = CreateContext(task, queryParams: queryParams);
-        var gateway = CreateGateway();
+            engine.CompileToInstanceAsync<IStateNotificationMapping>(
+                    Arg.Any<string>(),
+                    Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+                    Arg.Any<IEnumerable<string>?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns<IStateNotificationMapping>(_ =>
+                    throw new InvalidOperationException("No type implementing IStateNotificationMapping found."));
+        }
 
-        var executor = CreateExecutor(gateway: gateway);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i =>
-                i.QueryParams != null &&
-                i.QueryParams["version"] == "2.0" &&
-                i.QueryParams["extensions"] == "ext1"),
-            Arg.Any<CancellationToken>());
+        return engine;
     }
 
-    [Fact]
-    public async Task ExecuteAsync_ShouldReturnOk_WhenNoScript()
+    private sealed class TestChannelResolver : INotificationChannelResolver
     {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
+        public string ResolveBindingName(string channel) =>
+            $"vnext-notification-{channel.ToLowerInvariant()}";
+    }
 
-        var executor = CreateExecutor(scriptProvider: CreateScriptProvider(hasScript: false));
+    #endregion
+
+    [Fact]
+    public async Task ExecuteAsync_MultiChannel_DispatchesAllChannels()
+    {
+        var daprClient = new Mock<DaprClient>();
+        var mapping = CreateMapping();
+        var scriptEngine = CreateScriptEngineWithMapping(mapping);
+
+        var task = CreateTask(channels: ["sms", "email"]);
+        var context = CreateContext(task, mappingCode: "// mapping");
+
+        var executor = CreateExecutor(daprClient: daprClient, scriptEngine: scriptEngine);
         var result = await executor.ExecuteAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-sms"),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-email"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldReturnFail_WhenStateFetchFails()
+    public async Task ExecuteAsync_StateChannel_UsesStateChannelBuilder()
     {
-        var task = CreateNotificationTask();
+        var daprClient = new Mock<DaprClient>();
+        var stateBuilder = Substitute.For<IStateChannelMessageBuilder>();
+        stateBuilder.BuildAsync(
+                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<IStateNotificationMapping?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
+            {
+                Data = new { state = "active-state" }
+            }));
+
+        var task = CreateTask(channels: [], includeStateChannel: true);
         var context = CreateContext(task);
 
-        var gateway = Substitute.For<IInstanceQueryGateway>();
-        gateway.GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
-            .Returns(ConditionalResult<GetInstanceStateOutput>.Fail(
-                Error.Failure("state_fetch_failed", "Instance not found")));
-
-        var executor = CreateExecutor(gateway: gateway);
+        var executor = CreateExecutor(daprClient: daprClient, stateBuilder: stateBuilder);
         var result = await executor.ExecuteAsync(context, CancellationToken.None);
 
-        result.IsSuccess.ShouldBeFalse();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_ShouldBindDomainAndWorkflow_FromScriptContext()
-    {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
-        var gateway = CreateGateway();
-
-        var executor = CreateExecutor(gateway: gateway);
-        await executor.ExecuteAsync(context, CancellationToken.None);
-
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i =>
-                i.Domain == TestDomain &&
-                i.Workflow == TestWorkflow &&
-                i.Version == TestVersion),
+        result.IsSuccess.ShouldBeTrue();
+        await stateBuilder.Received(1).BuildAsync(
+            Arg.Any<TaskExecutorContext>(),
+            Arg.Any<IStateNotificationMapping?>(),
             Arg.Any<CancellationToken>());
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-state"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldUseInstanceKey_WhenAvailable()
+    public async Task ExecuteAsync_NullMappingReturn_SkipsChannel()
     {
-        var task = CreateNotificationTask();
-        var context = CreateContext(task);
-        var gateway = CreateGateway();
+        var daprClient = new Mock<DaprClient>();
+        var mapping = CreateMapping(handler: (channel, _) =>
+            channel == "sms"
+                ? Task.FromResult<NotificationMessage?>(null)
+                : Task.FromResult<NotificationMessage?>(new NotificationMessage { Data = "ok" }));
+        var scriptEngine = CreateScriptEngineWithMapping(mapping);
 
-        var executor = CreateExecutor(gateway: gateway);
-        await executor.ExecuteAsync(context, CancellationToken.None);
+        var task = CreateTask(channels: ["sms", "email"]);
+        var context = CreateContext(task, mappingCode: "// mapping");
 
-        await gateway.Received(1).GetFunctionWithStateAsync(
-            Arg.Is<GetFunctionWithInstanceInput>(i => i.Instance == "ctx-key"),
-            Arg.Any<CancellationToken>());
+        var executor = CreateExecutor(daprClient: daprClient, scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-sms"),
+            It.IsAny<CancellationToken>()), Times.Never);
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-email"),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldNotCallGateway_WhenNoScript()
+    public async Task ExecuteAsync_NoChannels_ReturnsSuccessWithNoDispatch()
     {
-        var task = CreateNotificationTask();
+        var daprClient = new Mock<DaprClient>();
+        var task = CreateTask(channels: [], includeStateChannel: false);
         var context = CreateContext(task);
-        var gateway = Substitute.For<IInstanceQueryGateway>();
+
+        var executor = CreateExecutor(daprClient: daprClient);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        daprClient.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ChannelError_IsolatedPerChannel()
+    {
+        var daprClient = new Mock<DaprClient>();
+        daprClient
+            .Setup(c => c.InvokeBindingAsync(
+                It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-sms"),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Dapr sidecar not available"));
+
+        var mapping = CreateMapping();
+        var scriptEngine = CreateScriptEngineWithMapping(mapping);
+
+        var task = CreateTask(channels: ["sms", "email"]);
+        var context = CreateContext(task, mappingCode: "// mapping");
+
+        var executor = CreateExecutor(daprClient: daprClient, scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-email"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_IncludeStateChannel_DoesNotDuplicate()
+    {
+        var daprClient = new Mock<DaprClient>();
+        var mapping = CreateMapping();
+        var scriptEngine = CreateScriptEngineWithMapping(mapping);
+
+        var task = CreateTask(channels: ["state", "email"], includeStateChannel: true);
+        var context = CreateContext(task, mappingCode: "// mapping");
+
+        var executor = CreateExecutor(daprClient: daprClient, scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        daprClient.Verify(c => c.InvokeBindingAsync(
+            It.Is<BindingRequest>(r => r.BindingName == "vnext-notification-state"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoMapping_NonStateChannel_FailsGracefully()
+    {
+        var daprClient = new Mock<DaprClient>();
+        var task = CreateTask(channels: ["sms"]);
+        var context = CreateContext(task);
+
+        var executor = CreateExecutor(daprClient: daprClient);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var invocationResult = result.Value!;
+        var errors = (List<string>)invocationResult.Metadata!["errors"];
+        errors.Count.ShouldBe(1);
+        errors[0].ShouldContain("requires an INotificationMapping script");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MetadataIncludesDispatchSummary()
+    {
+        var mapping = CreateMapping(handler: (channel, _) =>
+            channel == "sms"
+                ? Task.FromResult<NotificationMessage?>(null)
+                : Task.FromResult<NotificationMessage?>(new NotificationMessage { Data = "ok" }));
+        var scriptEngine = CreateScriptEngineWithMapping(mapping);
+
+        var task = CreateTask(channels: ["sms", "email"]);
+        var context = CreateContext(task, mappingCode: "// mapping");
+
+        var executor = CreateExecutor(scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var invocationResult = result.Value!;
+        var dispatched = (List<string>)invocationResult.Metadata!["dispatched"];
+        var skipped = (List<string>)invocationResult.Metadata!["skipped"];
+        dispatched.ShouldContain("email");
+        skipped.ShouldContain("sms");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StateChannel_PassesStateMappingToBuilder()
+    {
+        var daprClient = new Mock<DaprClient>();
+
+        var stateMapping = Substitute.For<IStateNotificationMapping>();
+        stateMapping.EnrichAsync(Arg.Any<ScriptContext>())
+            .Returns(new StateNotificationMetadata
+            {
+                Metadata = new Dictionary<string, string>
+                {
+                    ["X-Device-Id"] = "device-123",
+                    ["X-Token-Id"] = "token-456"
+                }
+            });
+
+        var mapping = CreateMapping();
+        var scriptEngine = CreateScriptEngineWithMapping(mapping, stateMapping);
+
+        var stateBuilder = Substitute.For<IStateChannelMessageBuilder>();
+        stateBuilder.BuildAsync(
+                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<IStateNotificationMapping?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
+            {
+                Data = new { state = "step-1" },
+                Metadata = new Dictionary<string, string>
+                {
+                    ["instanceId"] = "inst-1",
+                    ["X-Device-Id"] = "device-123"
+                }
+            }));
+
+        var task = CreateTask(channels: ["email"], includeStateChannel: true);
+        var context = CreateContext(task, mappingCode: "// mapping with state");
 
         var executor = CreateExecutor(
-            gateway: gateway,
-            scriptProvider: CreateScriptProvider(hasScript: false));
-        await executor.ExecuteAsync(context, CancellationToken.None);
+            daprClient: daprClient, stateBuilder: stateBuilder, scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
 
-        await gateway.DidNotReceive()
-            .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>());
+        result.IsSuccess.ShouldBeTrue();
+        await stateBuilder.Received(1).BuildAsync(
+            Arg.Any<TaskExecutorContext>(),
+            stateMapping,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StateChannel_NoStateMappingInScript_PassesNull()
+    {
+        var daprClient = new Mock<DaprClient>();
+        var mapping = CreateMapping();
+        var scriptEngine = CreateScriptEngineWithMapping(mapping, stateMapping: null);
+
+        var stateBuilder = Substitute.For<IStateChannelMessageBuilder>();
+        stateBuilder.BuildAsync(
+                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<IStateNotificationMapping?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
+            {
+                Data = new { state = "step-1" }
+            }));
+
+        var task = CreateTask(channels: [], includeStateChannel: true);
+        var context = CreateContext(task, mappingCode: "// mapping without state");
+
+        var executor = CreateExecutor(
+            daprClient: daprClient, stateBuilder: stateBuilder, scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await stateBuilder.Received(1).BuildAsync(
+            Arg.Any<TaskExecutorContext>(),
+            null,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StateOnly_DoesNotCompileINotificationMapping()
+    {
+        var scriptEngine = Substitute.For<IScriptEngine>();
+        scriptEngine.CompileToInstanceAsync<IStateNotificationMapping>(
+                Arg.Any<string>(),
+                Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+                Arg.Any<IEnumerable<string>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns<IStateNotificationMapping>(_ =>
+                throw new InvalidOperationException("Not found"));
+
+        var task = CreateTask(channels: [], includeStateChannel: true);
+        var context = CreateContext(task, mappingCode: "// state only script");
+
+        var executor = CreateExecutor(scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await scriptEngine.DidNotReceive().CompileToInstanceAsync<INotificationMapping>(
+            Arg.Any<string>(),
+            Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+            Arg.Any<IEnumerable<string>?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonStateOnly_DoesNotCompileIStateNotificationMapping()
+    {
+        var mapping = CreateMapping();
+        var scriptEngine = Substitute.For<IScriptEngine>();
+        scriptEngine.CompileToInstanceAsync<INotificationMapping>(
+                Arg.Any<string>(),
+                Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+                Arg.Any<IEnumerable<string>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(mapping);
+
+        var task = CreateTask(channels: ["sms", "email"], includeStateChannel: false);
+        var context = CreateContext(task, mappingCode: "// non-state script");
+
+        var executor = CreateExecutor(scriptEngine: scriptEngine);
+        var result = await executor.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await scriptEngine.DidNotReceive().CompileToInstanceAsync<IStateNotificationMapping>(
+            Arg.Any<string>(),
+            Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+            Arg.Any<IEnumerable<string>?>(),
+            Arg.Any<CancellationToken>());
     }
 }

@@ -36,12 +36,8 @@ public static class EmbeddedScriptServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection AddEmbeddedScriptServices(this IServiceCollection services)
     {
-        // Register the generic embedded script provider as singleton
         // Scripts are loaded lazily and cached in memory
         services.AddSingleton<IEmbeddedScriptProvider, EmbeddedScriptProvider>();
-
-        // Register domain-specific script providers
-        services.AddSingleton<INotificationScriptProvider, NotificationScriptProvider>();
 
         return services;
     }

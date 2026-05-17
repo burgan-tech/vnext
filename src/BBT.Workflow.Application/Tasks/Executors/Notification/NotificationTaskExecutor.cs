@@ -1,112 +1,35 @@
-using System.Dynamic;
+using System.Text.Json;
 using BBT.Aether.Results;
-using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Execution;
-using BBT.Workflow.Gateway;
-using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks.Mapping;
+using BBT.Workflow.Tasks.Notification;
+using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
-/// Executor for notification tasks.
-/// Handles input/output mapping using INotificationScriptProvider for default scripts,
-/// and delegates execution to the RemoteInvokerService.
-/// 
-/// This executor is binding-agnostic - it doesn't know about Dapr bindings.
-/// The actual binding resolution happens in NotificationTaskInvoker.
+/// Multi-channel notification task executor.
+/// Dispatches messages to one or more Dapr bindings (<c>vnext-notification-{channel}</c>)
+/// using an <see cref="INotificationMapping"/> script for per-channel message generation
+/// and an automatic <c>state</c> channel powered by <see cref="IStateChannelMessageBuilder"/>.
+/// If the mapping script also implements <see cref="IStateNotificationMapping"/>,
+/// its metadata is merged into the state channel message.
+/// Executes locally in the Application layer — does not route through the Execution service.
 /// </summary>
-public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask>
+public sealed class NotificationTaskExecutor(
+    DaprClient daprClient,
+    INotificationChannelResolver channelResolver,
+    IStateChannelMessageBuilder stateChannelBuilder,
+    IScriptEngine scriptEngine,
+    ILogger<NotificationTaskExecutor> logger)
+    : TaskExecutorBase<NotificationTask>(logger)
 {
-    private readonly IRemoteInvokerService _remoteInvoker;
-    private readonly IScriptEngine _scriptEngine;
-    private readonly INotificationScriptProvider _scriptProvider;
-    private readonly IInstanceQueryGateway _instanceQueryGateway;
-    private readonly ICurrentUser _currentUser;
-
-    /// <summary>
-    /// Initializes a new instance of NotificationTaskExecutor.
-    /// </summary>
-    public NotificationTaskExecutor(
-        IRemoteInvokerService remoteInvoker,
-        IScriptEngine scriptEngine,
-        INotificationScriptProvider scriptProvider,
-        IInstanceQueryGateway instanceQueryGateway,
-        ICurrentUser currentUser,
-        ILogger<NotificationTaskExecutor> logger)
-        : base(logger)
-    {
-        _remoteInvoker = remoteInvoker;
-        _scriptEngine = scriptEngine;
-        _scriptProvider = scriptProvider;
-        _instanceQueryGateway = instanceQueryGateway;
-        _currentUser = currentUser;
-    }
+    private const string StateChannel = "state";
 
     /// <inheritdoc />
     public override TaskType TaskType => TaskType.Notification;
-
-    /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        NotificationTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    { 
-        string? scriptCode = null;
-        var defaultScriptResult = await _scriptProvider.GetDefaultScriptAsync(cancellationToken);
-        if (defaultScriptResult.IsSuccess)
-        {
-            scriptCode = defaultScriptResult.Value;
-        }
-        else
-        {
-            Logger.NotificationScriptRetrievalFailed(
-                task.Key,
-                context.ScriptContext.Instance.Id);
-        }
-
-        if (string.IsNullOrEmpty(scriptCode))
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var stateResult = await InjectInstanceStateAsync(context, cancellationToken);
-        if (!stateResult.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
-                stateResult.Error.Message ?? "Failed to resolve instance state");
-            return Result<ScriptResponse?>.Fail(stateResult.Error);
-        }
-        
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                scriptCode,
-                cancellationToken: ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Notification task input handler failed: {ex.Message}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
 
     /// <inheritdoc />
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
@@ -114,154 +37,161 @@ public sealed class NotificationTaskExecutor : TaskExecutorBase<NotificationTask
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        // Create the envelope from the task - Body, Subject, To are already set by mapping
-        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
-        if (!envelopeResult.IsSuccess)
+        var channels = BuildChannelList(task);
+        if (channels.Count == 0)
         {
-            Logger.TaskEnvelopeCreationFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
-                envelopeResult.Error.Message ?? "Unknown error");
-            return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
+            Logger.LogWarning("Notification task {TaskKey} has no channels configured", task.Key);
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                executionDurationMs: 0,
+                taskType: TaskType.ToString()));
         }
 
-        var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
+        var mappingCode = context.OnExecuteTask.Mapping?.DecodedCode;
+        INotificationMapping? mapping = null;
+        IStateNotificationMapping? stateMapping = null;
 
-        // Send to remote invoker - binding resolution happens in NotificationTaskInvoker
-        var result = await _remoteInvoker.InvokeAsync(
-            TaskTypes.Notification,
+        var hasStateChannel = channels.Any(c => string.Equals(c, StateChannel, StringComparison.OrdinalIgnoreCase));
+        var hasNonStateChannels = channels.Any(c => !string.Equals(c, StateChannel, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrEmpty(mappingCode))
+        {
+            if (hasNonStateChannels)
+                mapping = await scriptEngine.CompileToInstanceAsync<INotificationMapping>(
+                    mappingCode, cancellationToken: cancellationToken);
+
+            if (hasStateChannel)
+                stateMapping = await TryCompileStateMappingAsync(mappingCode, cancellationToken);
+        }
+
+        var dispatched = new List<string>();
+        var skipped = new List<string>();
+        var errors = new List<string>();
+
+        foreach (var channel in channels)
+        {
+            var result = await DispatchChannelAsync(
+                channel, task, mapping, stateMapping, context, cancellationToken);
+
+            switch (result.Outcome)
+            {
+                case ChannelOutcome.Dispatched:
+                    dispatched.Add(channel);
+                    break;
+                case ChannelOutcome.Skipped:
+                    skipped.Add(channel);
+                    break;
+                case ChannelOutcome.Failed:
+                    errors.Add($"{channel}: {result.Error}");
+                    break;
+            }
+        }
+
+        Logger.NotificationMultiChannelCompleted(
             task.Key,
-            envelopeResult.Value!,
-            traceContext,
-            cancellationToken);
+            context.ScriptContext.Instance?.Id ?? Guid.Empty,
+            dispatched.Count, skipped.Count, errors.Count);
 
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInvocationFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
+        return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+            executionDurationMs: 0,
+            taskType: TaskType.ToString(),
+            metadata: new Dictionary<string, object>
+            {
+                ["dispatched"] = dispatched,
+                ["skipped"] = skipped,
+                ["errors"] = errors
+            }));
     }
 
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
+    private async Task<IStateNotificationMapping?> TryCompileStateMappingAsync(
+        string code, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await scriptEngine.CompileToInstanceAsync<IStateNotificationMapping>(
+                code,
+                cancellationToken: cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static List<string> BuildChannelList(NotificationTask task)
+    {
+        var channels = new List<string>(task.Channels);
+        if (task.IncludeStateChannel && !channels.Contains(StateChannel, StringComparer.OrdinalIgnoreCase))
+            channels.Add(StateChannel);
+        return channels;
+    }
+
+    private async Task<ChannelDispatchResult> DispatchChannelAsync(
+        string channel,
         NotificationTask task,
-        TaskInvocationResult invocationResult,
+        INotificationMapping? mapping,
+        IStateNotificationMapping? stateMapping,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        // Get the default output script for notification tasks
-        string? scriptCode = null;
-        var defaultScriptResult = await _scriptProvider.GetDefaultScriptAsync(cancellationToken);
-        if (defaultScriptResult.IsSuccess)
+        try
         {
-            scriptCode = defaultScriptResult.Value;
+            NotificationMessage? message;
+
+            if (string.Equals(channel, StateChannel, StringComparison.OrdinalIgnoreCase))
+            {
+                var buildResult = await stateChannelBuilder.BuildAsync(
+                    context, stateMapping, cancellationToken);
+                if (!buildResult.IsSuccess)
+                    return ChannelDispatchResult.Fail(buildResult.Error.Message ?? "State channel build failed");
+                
+                message = buildResult.Value;
+            }
+            else
+            {
+                if (mapping is null)
+                {
+                    return ChannelDispatchResult.Fail(
+                        $"Channel '{channel}' requires an INotificationMapping script");
+                }
+
+                message = await mapping.ChannelHandler(channel, context.ScriptContext);
+                if (message is null)
+                {
+                    Logger.NotificationChannelSkipped(task.Key, channel,
+                        context.ScriptContext.Instance?.Id ?? Guid.Empty);
+                    return ChannelDispatchResult.Skip();
+                }
+            }
+
+            var bindingName = channelResolver.ResolveBindingName(channel);
+            var data = JsonSerializer.SerializeToUtf8Bytes(message.Data, options: JsonSerializerConstants.JsonOptions);
+
+            var bindingRequest = new BindingRequest(bindingName, message.Operation) { Data = data };
+            bindingRequest.Metadata.TryAdd("Content-Type", "application/json");
+            foreach (var kvp in message.Metadata)
+                bindingRequest.Metadata.TryAdd(kvp.Key, kvp.Value);
+
+            await daprClient.InvokeBindingAsync(bindingRequest, cancellationToken);
+
+            Logger.NotificationChannelDispatched(task.Key, channel, bindingName,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty);
+
+            return ChannelDispatchResult.Ok();
         }
-        else
+        catch (Exception ex)
         {
-            Logger.NotificationScriptRetrievalFailed(
-                task.Key,
-                context.ScriptContext.Instance.Id);
+            Logger.NotificationChannelFailed(task.Key, channel,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty, ex.Message);
+            return ChannelDispatchResult.Fail(ex.Message);
         }
-
-        if (string.IsNullOrEmpty(scriptCode))
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                scriptCode,
-                cancellationToken: ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Notification task output handler failed: {ex.Message}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
     }
 
-    private async Task<Result> InjectInstanceStateAsync(
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
+    private enum ChannelOutcome { Dispatched, Skipped, Failed }
+
+    private readonly record struct ChannelDispatchResult(ChannelOutcome Outcome, string? Error)
     {
-        var instance = context.ScriptContext.Instance;
-        var instanceIdentifier = !string.IsNullOrWhiteSpace(instance.Key)
-            ? instance.Key
-            : instance.Id.ToString();
-
-        var headers = DynamicToDictionary(context.ScriptContext.Headers);
-        var queryParams = DynamicToDictionary(context.ScriptContext.QueryParameters);
-
-        var input = new GetFunctionWithInstanceInput
-        {
-            Domain = context.ScriptContext.Workflow.Domain,
-            Workflow = context.ScriptContext.Workflow.Key,
-            Instance = instanceIdentifier,
-            Version = context.ScriptContext.Workflow.Version,
-            Extensions = null,
-            Headers = headers,
-            QueryParams = queryParams,
-            Role = _currentUser.Roles is { Length: > 0 } ? _currentUser.Roles[0] : null
-        };
-
-        var stateResult = await _instanceQueryGateway.GetFunctionWithStateAsync(input, cancellationToken);
-        if (!stateResult.Result.IsSuccess)
-        {
-            return Result.Fail(Error.Failure(
-                WorkflowErrorCodes.TaskExecution,
-                $"Notification task state fetch failed: {stateResult.Result.Error.Message}",
-                detail: stateResult.Result.Error.Detail));
-        }
-
-        context.ScriptContext.SetBody(new { state = stateResult.Result.Value });
-        return Result.Ok();
-    }
-
-    /// <summary>
-    /// Safely converts a dynamic property (ExpandoObject or Dictionary) to Dictionary&lt;string, string?&gt;.
-    /// Returns an empty dictionary when the input is null or not convertible.
-    /// </summary>
-    private static Dictionary<string, string?> DynamicToDictionary(dynamic? value)
-    {
-        if (value == null)
-            return new Dictionary<string, string?>();
-
-        if (value is IDictionary<string, string?> stringDict)
-            return new Dictionary<string, string?>(stringDict);
-
-        if (value is IDictionary<string, object?> objectDict)
-            return objectDict.ToDictionary(
-                kvp => kvp.Key,
-                kvp => kvp.Value?.ToString());
-
-        if (value is ExpandoObject expando)
-        {
-            var dict = (IDictionary<string, object?>)expando;
-            return dict.ToDictionary(
-                kvp => kvp.Key,
-                kvp => kvp.Value?.ToString());
-        }
-
-        return new Dictionary<string, string?>();
+        public static ChannelDispatchResult Ok() => new(ChannelOutcome.Dispatched, null);
+        public static ChannelDispatchResult Skip() => new(ChannelOutcome.Skipped, null);
+        public static ChannelDispatchResult Fail(string error) => new(ChannelOutcome.Failed, error);
     }
 }
