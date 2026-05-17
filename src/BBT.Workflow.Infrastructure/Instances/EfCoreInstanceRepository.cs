@@ -587,7 +587,8 @@ public sealed class EfCoreInstanceRepository(
                         }
                         summary.Name = string.Join("_", keyValues);
                     }
-
+                    if (group.Keys.Count > 0)
+                    summary.Keys = new Dictionary<string, object?>(group.Keys);
                     // Map aggregations
                     if (group.Aggregations != null)
                     {
@@ -838,7 +839,8 @@ public sealed class EfCoreInstanceRepository(
                     }
                     summary.Name = string.Join("_", keyValues);
                 }
-
+                if (group.Keys.Count > 0)
+                    summary.Keys = new Dictionary<string, object?>(group.Keys);
                 // Map aggregations
                 if (group.Aggregations != null)
                 {
