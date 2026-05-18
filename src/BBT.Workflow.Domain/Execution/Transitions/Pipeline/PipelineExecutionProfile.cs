@@ -32,6 +32,7 @@ public sealed class PipelineExecutionProfile
         LifecycleOrder.Preflight,
         LifecycleOrder.CheckParentUpdateDataTransition,
         LifecycleOrder.ForwardToActiveSubflow,
+        LifecycleOrder.SetBusy,
         LifecycleOrder.ResourceLock,
         LifecycleOrder.ApplyTimeoutState);
 

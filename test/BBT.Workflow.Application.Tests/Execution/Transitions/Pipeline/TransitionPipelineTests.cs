@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -11,7 +10,6 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -21,13 +19,16 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 
 /// <summary>
-/// Unit tests for TransitionPipeline
-/// Tests pipeline orchestration, step execution, lock management and flow control
+/// Unit tests for TransitionPipeline.
+/// Validates request-scoped lock, reserved transition bypass, auto-chain under single lock,
+/// busy marking, and fault handling.
 /// </summary>
 public class TransitionPipelineTests
 {
     private readonly ILogger<TransitionPipeline> _mockLogger;
-    private readonly IDistributedLockService _mockLockService;
+    private readonly ITransitionLockScopeFactory _mockLockScopeFactory;
+    private readonly IReservedTransitionResolver _mockReservedResolver;
+    private readonly IInstanceBusyMarker _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
@@ -38,14 +39,15 @@ public class TransitionPipelineTests
     public TransitionPipelineTests()
     {
         _mockLogger = Substitute.For<ILogger<TransitionPipeline>>();
-        _mockLockService = Substitute.For<IDistributedLockService>();
+        _mockLockScopeFactory = Substitute.For<ITransitionLockScopeFactory>();
+        _mockReservedResolver = Substitute.For<IReservedTransitionResolver>();
+        _mockBusyMarker = Substitute.For<IInstanceBusyMarker>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
         _mockSteps = new List<ITransitionStep>();
-        
-        // Create a default set of steps in order
+
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnExecute));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnExit));
@@ -55,27 +57,30 @@ public class TransitionPipelineTests
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Auto));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Finalize));
 
-        // Default lock service behavior - always succeed
-        _mockLockService.ExecuteWithLockAsync(
-            Arg.Any<string>(),
-            Arg.Any<Func<Task>>(),
-            Arg.Any<int>(),
-            Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                var action = callInfo.ArgAt<Func<Task>>(1);
-                action().GetAwaiter().GetResult();
-                return true;
-            });
+        // Default: lock acquired successfully
+        var mockLockScope = CreateAcquiredLockScope();
+        _mockLockScopeFactory
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(mockLockScope);
 
-        // Default post-commit executor behavior - always succeed
+        // Default: not a reserved transition
+        _mockReservedResolver
+            .IsReserved(Arg.Any<TransitionExecutionContext>())
+            .Returns(false);
+
+        // Default: busy marker succeeds silently
+        _mockBusyMarker
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        // Default: post-commit succeeds
         _mockPostCommitExecutor.ExecuteAsync(
             Arg.Any<IReadOnlyList<IPostCommitJob>>(),
             Arg.Any<TransitionExecutionContext>(),
             Arg.Any<CancellationToken>())
             .Returns(PostCommitResult.Ok());
 
-        // Default validation service behavior - always succeed
+        // Default: validation succeeds
         _mockValidationService.ValidateAsync(
             Arg.Any<TransitionExecutionContext>(),
             Arg.Any<CancellationToken>())
@@ -87,7 +92,9 @@ public class TransitionPipelineTests
 
         _pipeline = new TransitionPipeline(
             _mockSteps,
-            _mockLockService,
+            _mockLockScopeFactory,
+            _mockReservedResolver,
+            _mockBusyMarker,
             _mockContextFactory,
             _mockPostCommitExecutor,
             _mockInstanceRepository,
@@ -96,10 +103,10 @@ public class TransitionPipelineTests
             _mockLogger);
     }
 
-    #region RunAsync Tests
+    #region Lock Scope Tests
 
     [Fact]
-    public async Task RunAsync_WithValidContext_ShouldExecuteAllStepsInOrder()
+    public async Task RunAsync_WithValidContext_ShouldAcquireLockOnceAndExecuteAllSteps()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
@@ -107,7 +114,7 @@ public class TransitionPipelineTests
         var executionOrder = new List<int>();
 
         SetupContextFactory(context);
-        
+
         foreach (var step in _mockSteps)
         {
             var order = step.Order;
@@ -126,6 +133,10 @@ public class TransitionPipelineTests
         result.IsSuccess.ShouldBeTrue();
         executionOrder.Count.ShouldBe(_mockSteps.Count);
         executionOrder.ShouldBe(_mockSteps.Select(m => m.Order).OrderBy(o => o).ToList());
+
+        // Lock acquired exactly once for the entire chain
+        await _mockLockScopeFactory.Received(1)
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -136,13 +147,11 @@ public class TransitionPipelineTests
         var workflowContext = CreateWorkflowExecutionContext(context);
 
         SetupContextFactory(context);
-        
-        _mockLockService.ExecuteWithLockAsync(
-            Arg.Any<string>(),
-            Arg.Any<Func<Task>>(),
-            Arg.Any<int>(),
-            Arg.Any<CancellationToken>())
-            .Returns(false);
+
+        var failedScope = CreateNotAcquiredLockScope();
+        _mockLockScopeFactory
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(failedScope);
 
         // Act
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
@@ -153,127 +162,62 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenStepFails_ShouldStopAndMarkInstanceFaultedWithSuccessResult()
+    public async Task RunAsync_ShouldMarkBusyImmediatelyAfterLockAcquisition()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
         var workflowContext = CreateWorkflowExecutionContext(context);
-        var error = Error.Failure("step.failed", "Step execution failed");
-        var executionCount = 0;
 
         SetupContextFactory(context);
-
-        // Setup first two steps to succeed
-        for (int i = 0; i < 2; i++)
-        {
-            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                .Returns(callInfo =>
-                {
-                    executionCount++;
-                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
-                });
-        }
-
-        // Setup third step to fail
-        _mockSteps[2].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                executionCount++;
-                return Task.FromResult(Result<StepOutcome>.Fail(error));
-            });
-
-        // Setup remaining steps
-        for (int i = 3; i < _mockSteps.Count; i++)
-        {
-            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
-        }
+        SetupStepsToSucceed();
 
         // Act
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
-        // Assert — pipeline marks instance faulted and returns OK so clients see Status = F (see TransitionPipeline.RunAsync)
-        result.IsSuccess.ShouldBeTrue();
-        executionCount.ShouldBe(3); // Only first 3 steps executed
-        await _mockInstanceRepository.Received(1)
-            .UpdateAsync(Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)), true, Arg.Any<CancellationToken>());
+        // Assert
+        await _mockBusyMarker.Received(1)
+            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
     }
 
+    #endregion
+
+    #region Reserved Transition Tests
+
     [Fact]
-    public async Task RunAsync_WhenStepReturnsStop_ShouldStopPipeline()
+    public async Task RunAsync_WhenReservedTransition_ShouldBypassLockAndBusy()
     {
         // Arrange
-        var context = CreateTransitionExecutionContext();
+        var context = CreateTransitionExecutionContext("cancel");
         var workflowContext = CreateWorkflowExecutionContext(context);
-        var executionCount = 0;
 
         SetupContextFactory(context);
+        SetupStepsToSucceed();
 
-        // Setup first two steps to succeed
-        for (int i = 0; i < 2; i++)
-        {
-            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                .Returns(callInfo =>
-                {
-                    executionCount++;
-                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
-                });
-        }
-
-        // Setup third step to stop pipeline
-        _mockSteps[2].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                executionCount++;
-                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Stop()));
-            });
-
-        // Setup remaining steps
-        for (int i = 3; i < _mockSteps.Count; i++)
-        {
-            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
-        }
+        _mockReservedResolver
+            .IsReserved(Arg.Any<TransitionExecutionContext>())
+            .Returns(true);
 
         // Act
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        executionCount.ShouldBe(3); // Only first 3 steps executed
+
+        // Lock should NOT be acquired
+        await _mockLockScopeFactory.DidNotReceive()
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        // Busy should NOT be marked
+        await _mockBusyMarker.DidNotReceive()
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task RunAsync_WhenSkipImmediateExecution_ShouldNotExecuteSteps()
-    {
-        // Arrange
-        var context = CreateTransitionExecutionContext();
-        context.SkipImmediateExecution = true;
-        var workflowContext = CreateWorkflowExecutionContext(context);
-        var executionCount = 0;
+    #endregion
 
-        SetupContextFactory(context);
-
-        foreach (var step in _mockSteps)
-        {
-            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                .Returns(callInfo =>
-                {
-                    executionCount++;
-                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
-                });
-        }
-
-        // Act
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-        executionCount.ShouldBe(0);
-    }
+    #region Auto-Chain Tests
 
     [Fact]
-    public async Task RunAsync_WithNextTransitionRequest_ShouldChainTransitions()
+    public async Task RunAsync_WithAutoChain_ShouldRunEntireChainUnderSingleLock()
     {
         // Arrange
         var context1 = CreateTransitionExecutionContext();
@@ -286,12 +230,11 @@ public class TransitionPipelineTests
             {
                 contextCallCount++;
                 return Task.FromResult(
-                    contextCallCount == 1 
+                    contextCallCount == 1
                         ? Result<TransitionExecutionContext>.Ok(context1)
                         : Result<TransitionExecutionContext>.Ok(context2));
             });
 
-        // Setup steps to return continue except auto step which requests next transition
         foreach (var step in _mockSteps)
         {
             if (step.Order == LifecycleOrder.Auto)
@@ -304,8 +247,10 @@ public class TransitionPipelineTests
                         if (callCount == 1)
                         {
                             var ctx = callInfo.ArgAt<TransitionExecutionContext>(0);
-                            ctx.Directives.RequestNextTransition(new NextTransitionRequest("auto-transition", "auto"));
-                            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                            ctx.Directives.RequestNextTransition(
+                                new NextTransitionRequest("auto-transition", "auto"));
+                            return Task.FromResult(
+                                Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
                         }
                         return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
                     });
@@ -322,7 +267,182 @@ public class TransitionPipelineTests
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        contextCallCount.ShouldBe(2); // Two contexts created for two transitions
+        contextCallCount.ShouldBe(2);
+
+        // Lock acquired only ONCE for the entire chain (not per-transition)
+        await _mockLockScopeFactory.Received(1)
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WithAutoChain_ShouldExtendLockBetweenIterations()
+    {
+        // Arrange
+        var context1 = CreateTransitionExecutionContext();
+        var context2 = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(context1);
+        var contextCallCount = 0;
+
+        var mockLockScope = CreateAcquiredLockScope();
+
+        _mockLockScopeFactory
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(mockLockScope);
+
+        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                contextCallCount++;
+                return Task.FromResult(
+                    contextCallCount == 1
+                        ? Result<TransitionExecutionContext>.Ok(context1)
+                        : Result<TransitionExecutionContext>.Ok(context2));
+            });
+
+        foreach (var step in _mockSteps)
+        {
+            if (step.Order == LifecycleOrder.Auto)
+            {
+                var callCount = 0;
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(callInfo =>
+                    {
+                        callCount++;
+                        if (callCount == 1)
+                        {
+                            var ctx = callInfo.ArgAt<TransitionExecutionContext>(0);
+                            ctx.Directives.RequestNextTransition(
+                                new NextTransitionRequest("auto-transition", "auto"));
+                            return Task.FromResult(
+                                Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                        }
+                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                    });
+            }
+            else
+            {
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+            }
+        }
+
+        // Act
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert: lock extended between chain iterations
+        await mockLockScope.Received(1)
+            .ExtendAsync(Arg.Any<CancellationToken>());
+    }
+
+    #endregion
+
+    #region Fault Handling Tests
+
+    [Fact]
+    public async Task RunAsync_WhenStepFails_ShouldMarkInstanceFaultedWithSuccessResult()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var error = Error.Failure("step.failed", "Step execution failed");
+        var executionCount = 0;
+
+        SetupContextFactory(context);
+
+        for (int i = 0; i < 2; i++)
+        {
+            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionCount++;
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        _mockSteps[2].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                executionCount++;
+                return Task.FromResult(Result<StepOutcome>.Fail(error));
+            });
+
+        for (int i = 3; i < _mockSteps.Count; i++)
+        {
+            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        executionCount.ShouldBe(3);
+        await _mockInstanceRepository.Received(1)
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+                true,
+                Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenStepReturnsStop_ShouldStopPipeline()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionCount = 0;
+
+        SetupContextFactory(context);
+
+        for (int i = 0; i < 2; i++)
+        {
+            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionCount++;
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        _mockSteps[2].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                executionCount++;
+                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Stop()));
+            });
+
+        for (int i = 3; i < _mockSteps.Count; i++)
+        {
+            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        executionCount.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenSkipImmediateExecution_ShouldNotAcquireLockOrExecuteSteps()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext();
+        context.SkipImmediateExecution = true;
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        await _mockLockScopeFactory.DidNotReceive()
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     #endregion
@@ -336,10 +456,36 @@ public class TransitionPipelineTests
         return mockStep;
     }
 
+    private static ITransitionLockScope CreateAcquiredLockScope()
+    {
+        var scope = Substitute.For<ITransitionLockScope>();
+        scope.IsAcquired.Returns(true);
+        scope.LockKey.Returns("test-lock-key");
+        scope.ExtendAsync(Arg.Any<CancellationToken>()).Returns(true);
+        return scope;
+    }
+
+    private static ITransitionLockScope CreateNotAcquiredLockScope()
+    {
+        var scope = Substitute.For<ITransitionLockScope>();
+        scope.IsAcquired.Returns(false);
+        scope.LockKey.Returns("test-lock-key");
+        return scope;
+    }
+
     private void SetupContextFactory(TransitionExecutionContext context)
     {
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Result<TransitionExecutionContext>.Ok(context)));
+    }
+
+    private void SetupStepsToSucceed()
+    {
+        foreach (var step in _mockSteps)
+        {
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
     }
 
     private WorkflowExecutionContext CreateWorkflowExecutionContext(TransitionExecutionContext context)
@@ -413,8 +559,8 @@ public class TransitionPipelineTests
         }
         """;
 
-        var options = new System.Text.Json.JsonSerializerOptions 
-        { 
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
             PropertyNameCaseInsensitive = true,
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
         };

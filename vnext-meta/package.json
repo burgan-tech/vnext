@@ -1,6 +1,6 @@
 {
   "name": "@burgan-tech/vnext-meta",
-  "version": "0.0.26",
+  "version": "0.0.53",
   "description": "vNext Runtime metadata package — version manifest, feature catalog, deprecation registry, and component metadata for offline consumption by Forge Studio, CLI, and domain packages.",
   "main": "index.js",
   "files": [

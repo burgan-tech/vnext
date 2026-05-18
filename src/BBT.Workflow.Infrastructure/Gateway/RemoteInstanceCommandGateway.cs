@@ -72,5 +72,13 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     {
         return _remoteService.FaultAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.MarkBusyAsync(input, cancellationToken);
+    }
 }
 

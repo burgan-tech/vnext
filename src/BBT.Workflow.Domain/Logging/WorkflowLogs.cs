@@ -49,6 +49,20 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
+    /// Logs when recursive SubFlow busy propagation fails during async transition enqueue.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10096,
+        Level = LogLevel.Warning,
+        Message =
+            "SubFlow busy propagation failed for parent instance {ParentInstanceId} targeting subflow {SubFlowInstanceId}: {Reason}")]
+    public static partial void SubFlowBusyPropagationFailedForAsyncTransition(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subFlowInstanceId,
+        string reason);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>

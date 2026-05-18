@@ -39,6 +39,7 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
+            .AddTransitionLockScope()
             .AddBackgroundJob()
             .AddRedis()
             .AddExceptionHandling()

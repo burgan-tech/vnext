@@ -38,6 +38,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
+            .AddTransitionLockScope()
             .AddAetherBackgroundJob<WorkflowDbContext>()
             .AddDaprJobScheduler()
             .AddRedis()

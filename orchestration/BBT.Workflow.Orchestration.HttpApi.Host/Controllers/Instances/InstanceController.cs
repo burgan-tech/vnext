@@ -3,6 +3,7 @@ using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
 using BBT.Workflow.Domain.Shared;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -21,7 +22,8 @@ public sealed class InstanceController(
     IHttpContextAccessor httpContextAccessor,
     ISubflowCompletionService subflowCompletionService,
     ISubflowStateService subflowStateService,
-    ISubflowFaultService subflowFaultService) : AetherControllerBase
+    ISubflowFaultService subflowFaultService,
+    IInstanceCommandGateway instanceCommandGateway) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -153,6 +155,38 @@ public sealed class InstanceController(
     {
         await subflowFaultService.FaultAsync(request, cancellationToken);
         return Ok();
+    }
+
+    /// <summary>
+    /// Marks an instance Busy and recursively propagates to nested SubFlows.
+    /// Internal endpoint for cross-domain SubFlow busy propagation.
+    /// </summary>
+    /// <param name="domain">Target workflow domain.</param>
+    /// <param name="workflow">Target workflow definition key.</param>
+    /// <param name="instance">Instance identifier (GUID).</param>
+    /// <param name="version">Optional workflow version for schema resolution.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Operation completed successfully or instance was absent (no-op).</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPut("{domain}/workflows/{workflow}/instances/{instance}/busy")]
+    public async Task<IActionResult> MarkBusyAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await instanceCommandGateway.MarkBusyAsync(
+            new MarkBusyInput
+            {
+                Domain = domain,
+                Workflow = workflow,
+                InstanceId = instance,
+                Version = version
+            },
+            cancellationToken);
+
+        return FromResult(result);
     }
 
     /// <summary>
