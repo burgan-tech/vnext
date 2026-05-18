@@ -70,6 +70,14 @@ public sealed class InstanceTransition : Entity<Guid>, ICreationAuditedObject
     /// </summary>
     public JsonData Header { get; private set; }
     
+    /// <summary>
+    /// Updates the transition body with post-processed data (e.g. after mapping script execution).
+    /// </summary>
+    public void SetBody(JsonData body)
+    {
+        Body = body;
+    }
+
     public void Completed(string toState)
     {
         ToState = toState;

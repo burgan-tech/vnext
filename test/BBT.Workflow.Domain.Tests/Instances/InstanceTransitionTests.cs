@@ -318,5 +318,52 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.NotEqual(transition1.StartedAt, transition2.StartedAt);
     }
+
+    [Fact]
+    public void SetBody_ShouldUpdateBody()
+    {
+        // Arrange
+        var instanceTransition = InstanceTransition.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "transition",
+            "state",
+            TriggerType.Manual,
+            JsonData.CreateFrom("{\"raw\":true}"),
+            JsonData.CreateFrom("{}")
+        );
+        var mappedBody = JsonData.CreateFrom("{\"mapped\":true}");
+
+        // Act
+        instanceTransition.SetBody(mappedBody);
+
+        // Assert
+        Assert.Equal(mappedBody.Json, instanceTransition.Body.Json);
+    }
+
+    [Fact]
+    public void SetBody_ShouldReplaceOriginalBody()
+    {
+        // Arrange
+        var originalBody = JsonData.CreateFrom("{\"sensitive\":\"secret\",\"extra\":\"field\"}");
+        var instanceTransition = InstanceTransition.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "transition",
+            "state",
+            TriggerType.Manual,
+            originalBody,
+            JsonData.CreateFrom("{}")
+        );
+        var mappedBody = JsonData.CreateFrom("{\"safe\":\"value\"}");
+
+        // Act
+        instanceTransition.SetBody(mappedBody);
+
+        // Assert
+        Assert.DoesNotContain("sensitive", instanceTransition.Body.Json);
+        Assert.DoesNotContain("secret", instanceTransition.Body.Json);
+        Assert.Contains("safe", instanceTransition.Body.Json);
+    }
 }
 

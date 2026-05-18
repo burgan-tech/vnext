@@ -83,9 +83,25 @@ public sealed class Transition : IHasKey
     [JsonInclude] public ScriptCode? Timer { get; private set; }
     [JsonInclude] public ScriptCode? Rule { get; private set; }
     [JsonInclude] public Reference? Schema { get; private set; }
+
+    /// <summary>
+    /// Optional list of state keys restricting where this shared transition can be executed.
+    /// When empty or null, the transition is available from all states.
+    /// When populated, the transition is only available in the listed states.
+    /// Only valid for shared transitions and cancel; ignored for state-level transitions.
+    /// </summary>
     [JsonInclude] public List<string> AvailableIn { get; private set; }
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
     [JsonInclude] public ResourceLockDefinition? ResourceLock { get; private set; }
+
+    /// <summary>
+    /// Optional key-value metadata for client-side filtering and UI context.
+    /// The platform treats annotations as pure passthrough and does not interpret or act on values.
+    /// Use namespaced keys to avoid collisions (e.g., <c>ui/visible-in</c>, <c>ui/priority</c>).
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("annotations")]
+    public Dictionary<string, string>? Annotations { get; private set; }
 
     [JsonInclude]
     [JsonPropertyName("labels")]

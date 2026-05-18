@@ -89,8 +89,26 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<bool> AnyActiveByKeyAsync(string key, Guid excludeInstanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Loads a change-tracked instance with only active SubFlow-type correlations.
+    /// DataList and SubProcess correlations are NOT loaded.
+    /// Designed for lightweight operations that need SubFlow chain traversal
+    /// (e.g. recursive busy propagation).
+    /// </summary>
+    Task<Instance?> FindWithActiveSubFlowAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns active instances with Human state subtype.
+    /// Includes DataList for JSON data extraction.
+    /// </summary>
+    Task<List<Instance>> GetHumanTaskInstancesAsync(CancellationToken cancellationToken = default);
+
+  
+    /// <summary>
     /// Returns the key and version of every active instance without loading <c>InstanceData.Data</c>.
     /// Used by broadcast-receiving pods to discover what to warm from the distributed cache.
     /// </summary>
     Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default);
+
 }

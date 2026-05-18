@@ -36,6 +36,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         ExtraProperties = new ExtraPropertyDictionary();
 
         _dataList = [];
+        _incidents = [];
     }
 
     /// <summary>
@@ -181,6 +182,21 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     public ExtraPropertyDictionary ExtraProperties { get; private set; }
 
+    private List<InstanceIncident> _incidents = new();
+
+    /// <summary>
+    /// Error boundary incidents recorded for this instance.
+    /// Stored as JSONB; pruned to <see cref="InstanceIncident.MaxRetainedIncidents"/> entries.
+    /// Internal to prevent Aether's TrackRelatedEntities from discovering via reflection.
+    /// </summary>
+    internal IReadOnlyCollection<InstanceIncident> Incidents => _incidents.AsReadOnly();
+
+    /// <summary>
+    /// Indicates whether the instance has at least one unresolved incident.
+    /// Backed by a stored generated column with partial B-tree index for efficient querying.
+    /// </summary>
+    public bool HasActiveIncident => _incidents.Any(i => !i.IsResolved);
+
     public void SetMetaData(ExtraPropertyDictionary data)
     {
         ExtraProperties = data;
@@ -292,6 +308,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             snapshot._childCorrelations.Add(correlation.CreateSnapshot());
         }
 
+        snapshot._incidents = _incidents.ToList();
+
         return snapshot;
     }
 
@@ -341,7 +359,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     /// <summary>
     /// Marks the instance as faulted and publishes fault cleanup event.
-    /// Sets the instance status to Faulted and records the completion time.
+    /// Also propagates fault downward to active SubFlow children and upward to parent (if this is a SubFlow).
+    /// Correlations are intentionally kept open (not completed) so retry can cascade through them.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
     public void Fault(string domain)
@@ -349,20 +368,65 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Faulted;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
-        
-        // Publish cleanup event to cancel all scheduled jobs
+
         AddDistributedEvent(new InstanceFaultedCleanupEvent
         {
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
-            Version =   FlowVersion,
+            Version = FlowVersion,
             FaultedAt = CompletedAt.Value
         });
+
+        // Downward: notify active SubFlow children to fault themselves
+        foreach (var correlation in ActiveCorrelations
+            .Where(c => c.SubFlowType.Equals(SubFlowType.SubFlow)))
+        {
+            AddDistributedEvent(new ChildSubflowFaultRequestedEvent
+            {
+                InstanceId = correlation.SubFlowInstanceId,
+                ParentInstanceId = Id,
+                Domain = correlation.SubFlowDomain,
+                Flow = correlation.SubFlowName,
+                Version = correlation.SubFlowVersion,
+                FaultedAt = CompletedAt.Value
+            });
+        }
+
+        // Upward: notify parent if this instance is a blocking SubFlow
+        if (IsSubFlow)
+        {
+            var activeIncident = _incidents.LastOrDefault(i => !i.IsResolved);
+            var contractInfo = ExtraProperties.ToSubFlowContractInfo();
+            if (contractInfo.Id != Guid.Empty)
+            {
+                AddDistributedEvent(new InstanceSubFaultedEvent
+                {
+                    InstanceId = contractInfo.Id,
+                    SubInstanceId = Id,
+                    Domain = contractInfo.Domain,
+                    Flow = contractInfo.Flow,
+                    Version = contractInfo.Version,
+                    FaultedState = GetCurrentState,
+                    FaultedAt = CompletedAt.Value,
+                    SubFlowName = Flow,
+                    IncidentMessage = activeIncident?.Message,
+                    IncidentErrorCode = activeIncident?.ErrorCode,
+                    IncidentErrorLayer = activeIncident?.ErrorLayer,
+                    IncidentTraceId = activeIncident?.TraceId,
+                    IncidentTaskKey = activeIncident?.Task,
+                    IncidentTransition = activeIncident?.Transition,
+                    IncidentState = activeIncident?.State,
+                    IncidentBoundaryAction = activeIncident?.BoundaryAction,
+                    IncidentBoundaryLevel = activeIncident?.BoundaryLevel
+                });
+            }
+        }
     }
     /// <summary>
     /// Unfaults the instance, allowing it to be retried.
-    /// Changes the status from Faulted to Active and clears completion time.
+    /// Changes the status from Faulted to Active, clears completion time,
+    /// and resolves the active incident.
     /// </summary>
     /// <returns>True if the instance was successfully unfaulted, false if it was not in Faulted state.</returns>
     public bool Unfault()
@@ -373,7 +437,28 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Active;
         CompletedAt = null;
         Duration = null;
+        ResolveActiveIncident();
         return true;
+    }
+
+    /// <summary>
+    /// Records an error boundary incident on this instance.
+    /// Prunes oldest resolved incidents to stay within <see cref="InstanceIncident.MaxRetainedIncidents"/>.
+    /// </summary>
+    public void AddIncident(InstanceIncident incident)
+    {
+        _incidents.Add(incident);
+        PruneIncidents();
+    }
+
+    /// <summary>
+    /// Resolves the most recent unresolved incident (if any).
+    /// Called on successful retry or when an error-boundary transition completes.
+    /// </summary>
+    public void ResolveActiveIncident()
+    {
+        var active = _incidents.LastOrDefault(i => !i.IsResolved);
+        active?.Resolve();
     }
     /// <summary>
     /// Cancels the instance and publishes a cancellation event.
@@ -812,6 +897,21 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 .Where(d => d.Version == version)
                 .OrderByDescending(d => d.HistorySequence)
                 .FirstOrDefault();
+        }
+    }
+
+    /// <summary>
+    /// Removes oldest resolved incidents when the list exceeds <see cref="InstanceIncident.MaxRetainedIncidents"/>.
+    /// Active (unresolved) incidents are never pruned.
+    /// </summary>
+    private void PruneIncidents()
+    {
+        while (_incidents.Count > InstanceIncident.MaxRetainedIncidents)
+        {
+            var oldestResolved = _incidents.FirstOrDefault(i => i.IsResolved);
+            if (oldestResolved == null)
+                break;
+            _incidents.Remove(oldestResolved);
         }
     }
 }

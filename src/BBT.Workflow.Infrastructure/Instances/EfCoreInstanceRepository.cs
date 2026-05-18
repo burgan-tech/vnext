@@ -68,6 +68,18 @@ public sealed class EfCoreInstanceRepository(
             .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindWithActiveSubFlowAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .Include(i => i.ChildCorrelations
+                .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+    }
+
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>
@@ -587,7 +599,8 @@ public sealed class EfCoreInstanceRepository(
                         }
                         summary.Name = string.Join("_", keyValues);
                     }
-
+                    if (group.Keys.Count > 0)
+                    summary.Keys = new Dictionary<string, object?>(group.Keys);
                     // Map aggregations
                     if (group.Aggregations != null)
                     {
@@ -838,7 +851,8 @@ public sealed class EfCoreInstanceRepository(
                     }
                     summary.Name = string.Join("_", keyValues);
                 }
-
+                if (group.Keys.Count > 0)
+                    summary.Keys = new Dictionary<string, object?>(group.Keys);
                 // Map aggregations
                 if (group.Aggregations != null)
                 {
@@ -1128,5 +1142,35 @@ public sealed class EfCoreInstanceRepository(
         }
 
         await Task.CompletedTask; // For potential future async operations
+    }
+
+    /// <inheritdoc />
+    public async Task<List<Instance>> GetHumanTaskInstancesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var schema = SanitizeIdentifier(currentSchema.Name ?? string.Empty);
+        var activeCode = InstanceStatus.Active.Code;
+        var busyCode = InstanceStatus.Busy.Code;
+        var subType = (int)StateSubType.Human;
+
+        var dbSet = await GetDbSetAsync();
+
+        return await dbSet
+            .FromSqlRaw(
+                "SELECT * FROM \"" + schema + "\".\"Instances\""
+                + " WHERE \"Status\" IN ({0}, {1})"
+                + " AND \"EffectiveStateSubType\" = {2}"
+                + " AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')"
+                + " ORDER BY \"CreatedAt\" DESC",
+                activeCode, busyCode, subType)
+            .Include(i => i.DataList)
+            .Include(i => i.ChildCorrelations)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    private static string SanitizeIdentifier(string identifier)
+    {
+        return identifier.Replace("\"", "", StringComparison.Ordinal);
     }
 }

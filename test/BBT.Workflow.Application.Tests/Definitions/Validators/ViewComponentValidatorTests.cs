@@ -93,4 +93,108 @@ public class ViewComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeFalse();
     }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForJsonViewWithRenderer()
+    {
+        // Arrange
+        var viewJson = """
+        {
+            "type": "json",
+            "content": "{\"test\": \"content\"}",
+            "display": "test-display",
+            "renderer": "flutter"
+        }
+        """;
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForJsonViewWithoutRenderer()
+    {
+        // Arrange
+        var viewJson = """
+        {
+            "type": "json",
+            "content": "{\"test\": \"content\"}",
+            "display": "test-display"
+        }
+        """;
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_ForNonJsonViewWithRenderer()
+    {
+        // Arrange
+        var viewJson = """
+        {
+            "type": "html",
+            "content": "<p>hello</p>",
+            "display": "test-display",
+            "renderer": "angular"
+        }
+        """;
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("View.Renderer"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForNonJsonViewWithoutRenderer()
+    {
+        // Arrange
+        var viewJson = """
+        {
+            "type": "html",
+            "content": "<p>hello</p>",
+            "display": "test-display"
+        }
+        """;
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForJsonViewWithNullRenderer()
+    {
+        // Arrange
+        var viewJson = """
+        {
+            "type": "json",
+            "content": "{\"test\": \"content\"}",
+            "display": "test-display",
+            "renderer": null
+        }
+        """;
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
 }

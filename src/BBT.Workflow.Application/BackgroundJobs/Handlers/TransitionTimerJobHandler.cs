@@ -3,6 +3,7 @@ using BBT.Aether.BackgroundJob;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -57,6 +58,7 @@ public sealed class TransitionTimerJobHandler(
                     // Override trigger type to Scheduled for timer-based transitions
                     executionContext.TriggerType = TriggerType.Scheduled;
                     executionContext.Actor = ExecutionActor.System;
+                    executionContext.CallerMode = ExecMode.Async;
                     executionContext.IsReentry = true; // Timer transitions are re-entry executions
                     await workflowExecutionService.ExecuteTransitionAsync(
                         executionContext,

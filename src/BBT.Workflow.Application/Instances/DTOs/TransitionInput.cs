@@ -47,6 +47,7 @@ public sealed class TransitionInput(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual, // TransitionInput always represents manual triggers
             Mode = Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = Headers,

@@ -587,6 +587,71 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void Annotations_ShouldBeNull_ByDefault()
+    {
+        // Act
+        var transition = Transition.Create("key", "from", "to", TriggerType.Manual, "Patch");
+
+        // Assert
+        Assert.Null(transition.Annotations);
+    }
+
+    [Fact]
+    public void Annotations_ShouldDeserialize_FromJson()
+    {
+        // Arrange
+        var json = """
+        {
+            "key": "submit",
+            "from": "draft",
+            "target": "review",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "annotations": {
+                "ui/visible-in": "detail-page",
+                "ui/priority": "high"
+            }
+        }
+        """;
+
+        // Act
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(transition);
+        Assert.NotNull(transition.Annotations);
+        Assert.Equal(2, transition.Annotations.Count);
+        Assert.Equal("detail-page", transition.Annotations["ui/visible-in"]);
+        Assert.Equal("high", transition.Annotations["ui/priority"]);
+    }
+
+    [Fact]
+    public void Annotations_ShouldBeNull_WhenNotInJson()
+    {
+        // Arrange
+        var json = """
+        {
+            "key": "submit",
+            "from": "draft",
+            "target": "review",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": []
+        }
+        """;
+
+        // Act
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(transition);
+        Assert.Null(transition.Annotations);
+    }
+
+    [Fact]
     public void View_ShouldBeNull_WhenNeitherFormatPresent()
     {
         var json = """

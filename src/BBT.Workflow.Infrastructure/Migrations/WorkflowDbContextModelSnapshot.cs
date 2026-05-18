@@ -184,6 +184,10 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("character varying(180)");
 
+                    b.Property<string>("Incidents")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("Key")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
@@ -231,6 +235,12 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex(new[] { "Key" }, "IX_Instances_Active_Key")
                         .HasFilter("\"Status\" = 'A'");
+
+                    b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
+                        .IsDescending()
+                        .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')");
+
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask"), new[] { "Key", "Flow", "FlowVersion", "CurrentState", "EffectiveState", "Status" });
 
                     b.HasIndex(new[] { "Key" }, "IX_Instances_Key");
 
@@ -322,15 +332,17 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("InstanceId");
 
-                    b.HasIndex("ParentInstanceId")
-                        .HasDatabaseName("IX_InstancesCorrelations_ActiveBlockingSubFlow")
-                        .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
-
-                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("ParentInstanceId"), new[] { "SubFlowType", "SubFlowInstanceId", "SubFlowDomain", "SubFlowName", "SubFlowVersion", "SubFlowCurrentState", "SubFlowStateChangedAt", "ParentState" });
-
                     b.HasIndex("SubFlowInstanceId")
                         .IsUnique()
                         .HasDatabaseName("UX_InstancesCorrelations_SubFlowInstanceId");
+
+                    b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveBlockingSubFlow")
+                        .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
+
+                    b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveByParent_Covering")
+                        .HasFilter("\"IsCompleted\" = false");
+
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveByParent_Covering"), new[] { "SubFlowType", "SubFlowInstanceId", "SubFlowDomain", "SubFlowName", "SubFlowVersion", "SubFlowCurrentState", "SubFlowStateChangedAt", "ParentState" });
 
                     b.ToTable("InstancesCorrelations", "public");
                 });
@@ -435,6 +447,10 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("JobId")
                         .IsUnique();
+
+                    b.HasIndex("InstanceId", "JobName")
+                        .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName")
+                        .HasFilter("\"IsActive\" = true");
 
                     b.ToTable("InstanceJobs", "public");
                 });

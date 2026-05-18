@@ -1,8 +1,10 @@
+using System.Text.Json;
 using BBT.Aether.Domain.EntityFrameworkCore.Modeling;
 using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace BBT.Workflow.Data;
 
@@ -12,6 +14,8 @@ public static class InstancesModelCreatingExtensions
         this ModelBuilder builder, string? schema = null)
     {
         /* Configure all entities here. */
+
+        builder.Ignore<InstanceIncident>();
 
         builder.Entity<Instance>(b =>
         {
@@ -58,6 +62,22 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
+            b.Property(p => p.Incidents)
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
+                    v => JsonSerializer.Deserialize<IReadOnlyCollection<InstanceIncident>>(v, JsonSerializerOptions.Default)
+                         ?? Array.Empty<InstanceIncident>())
+                .Metadata.SetValueComparer(new ValueComparer<IReadOnlyCollection<InstanceIncident>>(
+                    (c1, c2) => JsonSerializer.Serialize(c1, JsonSerializerOptions.Default) ==
+                                JsonSerializer.Serialize(c2, JsonSerializerOptions.Default),
+                    c => c == null ? 0 : JsonSerializer.Serialize(c, JsonSerializerOptions.Default).GetHashCode(),
+                    c => JsonSerializer.Deserialize<IReadOnlyCollection<InstanceIncident>>(
+                        JsonSerializer.Serialize(c, JsonSerializerOptions.Default),
+                        JsonSerializerOptions.Default)!));
+
+            b.Ignore(p => p.HasActiveIncident);
+
             b.HasMany(m => m.DataList)
                 .WithOne()
                 .HasForeignKey(p => p.InstanceId)
@@ -101,6 +121,23 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex("LastTouchedAt", "Id")
                 .HasFilter("\"Status\" = 'A'")
                 .HasDatabaseName("IX_Instances_Active_LastTouched_Id");
+
+            // Partial covering index for GetHumanTaskInstancesAsync.
+            // Filters: Status IN ('A','B'), EffectiveStateSubType = Human,
+            // ExtraProperties does NOT contain 'parent.id'.
+            // CreatedAt DESC is the leading column to serve ORDER BY without a sort.
+            b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
+                .IsDescending(true)
+                .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')")
+                .IncludeProperties(p => new
+                {
+                    p.Key,
+                    p.Flow,
+                    p.FlowVersion,
+                    p.CurrentState,
+                    p.EffectiveState,
+                    p.Status
+                });
         });
 
         builder.Entity<InstanceCorrelation>(b =>
@@ -137,7 +174,9 @@ public static class InstancesModelCreatingExtensions
             // include precisely and serves it as an index-only scan.
             // CompletedAt is intentionally omitted from INCLUDE: it is NULL within the
             // partial set by definition.
-            b.HasIndex(p => p.ParentInstanceId)
+            // Named overload is required so EF Core does not deduplicate two indexes on the
+            // same column (ParentInstanceId) into a single model entry.
+            b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ActiveByParent_Covering")
                 .HasFilter("\"IsCompleted\" = false")
                 .IncludeProperties(p => new
                 {
@@ -149,14 +188,12 @@ public static class InstancesModelCreatingExtensions
                     p.SubFlowCurrentState,
                     p.SubFlowStateChangedAt,
                     p.ParentState
-                })
-                .HasDatabaseName("IX_InstancesCorrelations_ActiveByParent_Covering");
+                });
 
             // Tiny partial index dedicated to the blocking-subflow predicate evaluated on
             // every transition (AnyActiveSubFlowByParentAsync / FindActiveSubFlowByParentAsync).
-            b.HasIndex(p => p.ParentInstanceId)
-                .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'")
-                .HasDatabaseName("IX_InstancesCorrelations_ActiveBlockingSubFlow");
+            b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ActiveBlockingSubFlow")
+                .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
 
             // SubFlowInstanceId is 1-1 with the started SubFlow instance (subflow start is
             // unique per parent state). UNIQUE both enforces this invariant and gives the
@@ -383,6 +420,15 @@ public static class InstancesModelCreatingExtensions
 
             b.HasIndex(i => i.JobId)
                 .IsUnique();
+
+            // Partial composite index for the three hot-path queries that filter by
+            // InstanceId + JobName + IsActive (GetListActiveAsync, MarkAsProcessedAsync,
+            // AnyActiveByJobNameAsync). Active jobs are a small subset per instance, so
+            // the partial filter keeps the index compact while covering all three patterns
+            // via the (InstanceId, JobName) leftmost prefix.
+            b.HasIndex(i => new { i.InstanceId, i.JobName })
+                .HasFilter("\"IsActive\" = true")
+                .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");
         });
     }
 }

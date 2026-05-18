@@ -480,7 +480,8 @@ public sealed class InstanceCommandAppService(
         // later in the background job (leaving the instance Faulted). The same check is also
         // performed inside AsyncTransitionStrategy as defense in depth for callers that
         // bypass the AppService and invoke WorkflowExecutionService directly.
-        var preValidation = await ValidateTransitionRequestAsync(context, cancellationToken);
+        var preValidation = await ValidateTransitionRequestAsync(
+            context, resolvedInstance, workflowDefinition!, cancellationToken);
         if (!preValidation.IsSuccess)
         {
             logger.TransitionValidationFailed(resolvedInstance.Id, transitionKey, preValidation.Error.Code);
@@ -501,16 +502,18 @@ public sealed class InstanceCommandAppService(
 
     /// <summary>
     /// Pre-dispatch schema + state-machine validation for a transition request.
-    /// Builds the execution context via <see cref="ITransitionContextFactory"/> (read-only,
-    /// no side effects) and runs the same <see cref="ITransitionValidationService.ValidateAsync"/>
+    /// Builds the execution context from pre-loaded instance and workflow (zero DB calls)
+    /// and runs the same <see cref="ITransitionValidationService.ValidateAsync"/>
     /// that the sync pipeline uses, so both sync=true and sync=false callers get the same
     /// validation error contract before any state mutation or background-job enqueue.
     /// </summary>
     private async Task<Result> ValidateTransitionRequestAsync(
         WorkflowExecutionContext context,
+        Instance instance,
+        Definitions.Workflow workflow,
         CancellationToken cancellationToken)
     {
-        var contextResult = await transitionContextFactory.CreateAsync(context, cancellationToken);
+        var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
         if (!contextResult.IsSuccess)
             return Result.Fail(contextResult.Error);
 
@@ -534,6 +537,7 @@ public sealed class InstanceCommandAppService(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = input.Headers,
@@ -590,15 +594,20 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken)
         where TOutput : class
     {
-        var freshInstance = await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
-        if (freshInstance is null)
+        // Use pipeline instance if available (already committed, avoids redundant DB read).
+        // Falls back to DB read when PipelineInstance is not set (e.g. idempotent existing-instance path).
+        var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
+        var instance = pipelineInstance
+            ?? await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
+
+        if (instance is null)
             return Result<TOutput>.Ok(output);
 
-        var latestData = freshInstance.LatestData;
+        var latestData = instance.LatestData;
         var rawAttributes = latestData?.Data.JsonElement;
-        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, freshInstance, cancellationToken);
+        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, instance, cancellationToken);
 
-        var key = freshInstance.Key;
+        var key = instance.Key;
         var entityEtag = latestData?.ETag;
         var attributes = filteredAttributes ?? rawAttributes;
 
@@ -607,7 +616,7 @@ public sealed class InstanceCommandAppService(
         {
             var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
                 .WithWorkflow(workflow)
-                .WithInstance(freshInstance)
+                .WithInstance(instance)
                 .WithRuntime(runtimeInfoProvider)
                 .WithTransition(string.Empty)
                 .WithBody(latestData?.Data ?? new JsonData("{}"))
@@ -632,7 +641,7 @@ public sealed class InstanceCommandAppService(
             start.Attributes = attributes;
             start.EntityEtag = entityEtag;
             start.Extensions = extensions;
-            // ETag must be generated after all other fields are set (ETag itself is null at generation time)
+            start.PipelineInstance = null;
             start.ETag = representationEtagService.Generate(start);
         }
         else if (output is TransitionOutput transition)
@@ -641,7 +650,7 @@ public sealed class InstanceCommandAppService(
             transition.Attributes = attributes;
             transition.EntityEtag = entityEtag;
             transition.Extensions = extensions;
-            // ETag must be generated after all other fields are set (ETag itself is null at generation time)
+            transition.PipelineInstance = null;
             transition.ETag = representationEtagService.Generate(transition);
         }
 
@@ -670,6 +679,9 @@ public sealed class InstanceCommandAppService(
                 var instance = Instance.Create(instanceId, workflow.Key, workflow.Version, instanceKey);
                 instance.SetInfoMetadata(isSync, callback, workflow.Type.Code, metadata);
                 instance.ChangeState(initialState);
+
+                if (instance.IsSubItem)
+                    instance.Busy();
 
                 if (tags?.Any() == true)
                     instance.AddTags(tags.ToArray());

@@ -74,7 +74,8 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
 
-        // Notification task executor (uses Dapr binding with runtime-resolved component)
+        // Notification task executor (multi-channel direct Dapr binding dispatch)
+        services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
         services.AddTaskExecutor<NotificationTaskExecutor>();
 
         // Trigger task executors (domain-aware: local or remote)

@@ -32,4 +32,10 @@ public sealed class ViewInstanceAttributesDto
     /// </summary>
     [JsonPropertyName("label")]
     public string? Label { get; set; }
+
+    /// <summary>
+    /// Identifies which UI SDK / render engine should interpret the view content.
+    /// </summary>
+    [JsonPropertyName("renderer")]
+    public string? Renderer { get; set; }
 }

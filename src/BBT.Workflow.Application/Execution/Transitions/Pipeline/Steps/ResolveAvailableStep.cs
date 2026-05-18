@@ -71,21 +71,19 @@ public sealed class ResolveAvailableStep(
             return false;
         }
 
-        // Terminal state reached (SubFlow entry point). When target is a SubFlow state, set Active
-        // so the parent is Available until the subflow actually starts (e.g. after resume and chained transition).
+        // Terminal state reached — stay Busy regardless of state type.
+        // When the target is a SubFlow entry, HandleSubFlowStep has already added the correlation
+        // and set the instance to Busy. Setting Active here would create a window where the parent
+        // appears Active while the SubFlow is still initialising, causing long-polling clients to
+        // receive a premature A status before the SubFlow is ready for interaction.
+        // The state function delegates to the active SubFlow's own status, so the parent's Busy
+        // is the correct signal while any SubFlow is running.
         if (context.Directives.TerminalReached)
         {
-            if (context.Target?.StateType == StateType.SubFlow)
-            {
-                logger.LogDebug(
-                    "Instance {InstanceId} reached terminal SubFlow state {TargetState}, setting Available",
-                    context.InstanceId,
-                    context.Target.Key);
-                return true;
-            }
             logger.LogDebug(
-                "Instance {InstanceId} reached terminal state (non-SubFlow), staying Busy",
-                context.InstanceId);
+                "Instance {InstanceId} reached terminal state {TargetState}, staying Busy",
+                context.InstanceId,
+                context.Target?.Key ?? "unknown");
             return false;
         }
 

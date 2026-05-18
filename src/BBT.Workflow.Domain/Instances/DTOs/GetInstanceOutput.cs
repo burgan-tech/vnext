@@ -89,6 +89,11 @@ public sealed class InstanceMetadataDto
         CreatedByBehalfOf = instance.CreatedByBehalfOf;
         ModifiedBy = instance.ModifiedBy;
         ModifiedByBehalfOf = instance.ModifiedByBehalfOf;
+
+        if (instance.HasActiveIncident || instance.Incidents.Count > 0)
+        {
+            Incident = IncidentInfoDto.FromInstance(instance);
+        }
     }
     
     /// <summary>Current state key (engine internal state).</summary>
@@ -138,6 +143,116 @@ public sealed class InstanceMetadataDto
 
     /// <summary>Modifier behalf-of user identifier.</summary>
     public string? ModifiedByBehalfOf { get; set; }
+
+    /// <summary>Error boundary incident information. Null when no incidents have occurred.</summary>
+    public IncidentInfoDto? Incident { get; set; }
+}
+
+/// <summary>
+/// Incident tracking information exposed in instance metadata.
+/// </summary>
+public sealed class IncidentInfoDto
+{
+    /// <summary>Whether the instance currently has an unresolved incident.</summary>
+    public bool HasActiveIncident { get; set; }
+
+    /// <summary>Total number of incidents (resolved + unresolved) retained for this instance.</summary>
+    public int TotalCount { get; set; }
+
+    /// <summary>The most recent unresolved incident, or null if all are resolved.</summary>
+    public IncidentDetailDto? Active { get; set; }
+
+    /// <summary>All retained incidents ordered by creation time descending.</summary>
+    public List<IncidentDetailDto> History { get; set; } = [];
+
+    internal static IncidentInfoDto FromInstance(Instance instance)
+    {
+        var incidents = instance.Incidents;
+        var active = incidents.LastOrDefault(i => !i.IsResolved);
+
+        var dto = new IncidentInfoDto
+        {
+            HasActiveIncident = instance.HasActiveIncident,
+            TotalCount = incidents.Count,
+            Active = active != null ? IncidentDetailDto.FromIncident(active) : null,
+            History = incidents
+                .OrderByDescending(i => i.CreatedAt)
+                .Select(IncidentDetailDto.FromIncident)
+                .ToList()
+        };
+
+        return dto;
+    }
+}
+
+/// <summary>
+/// Detail of a single error boundary incident.
+/// </summary>
+public sealed class IncidentDetailDto
+{
+    /// <summary>Unique incident identifier.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>When the incident occurred (UTC).</summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>State where the error occurred.</summary>
+    public string State { get; set; } = default!;
+
+    /// <summary>Transition that was executing when the error occurred.</summary>
+    public string Transition { get; set; } = default!;
+
+    /// <summary>Task key that failed (null for pipeline-level errors).</summary>
+    public string? Task { get; set; }
+
+    /// <summary>Human-readable error message.</summary>
+    public string Message { get; set; } = default!;
+
+    /// <summary>Normalized error code (e.g. "Task:Http:503").</summary>
+    public string? ErrorCode { get; set; }
+
+    /// <summary>Error layer: "Transport", "Task", or "Pipeline".</summary>
+    public string? ErrorLayer { get; set; }
+
+    /// <summary>HTTP status code (when applicable).</summary>
+    public int? StatusCode { get; set; }
+
+    /// <summary>Error boundary action taken (e.g. "Abort", "Retry", "Log", "Ignore").</summary>
+    public string? BoundaryAction { get; set; }
+
+    /// <summary>Error boundary level that matched (e.g. "Task", "State", "Global").</summary>
+    public string? BoundaryLevel { get; set; }
+
+    /// <summary>OpenTelemetry trace identifier for correlation with distributed traces.</summary>
+    public string? TraceId { get; set; }
+
+    /// <summary>Whether this incident has been resolved.</summary>
+    public bool IsResolved { get; set; }
+
+    /// <summary>When the incident was resolved (UTC). Null if still active.</summary>
+    public DateTime? ResolvedAt { get; set; }
+
+    /// <summary>Number of retry attempts before resolution or exhaustion.</summary>
+    public int RetryCount { get; set; }
+
+    internal static IncidentDetailDto FromIncident(InstanceIncident incident) => new()
+    {
+        Id = incident.Id,
+        CreatedAt = incident.CreatedAt,
+        State = incident.State,
+        Transition = incident.Transition,
+        Task = incident.Task,
+        Message = incident.Message,
+        ErrorCode = incident.ErrorCode,
+        ErrorLayer = incident.ErrorLayer,
+        StatusCode = incident.StatusCode,
+        BoundaryAction = incident.BoundaryAction,
+        BoundaryLevel = incident.BoundaryLevel,
+        TraceId = incident.TraceId,
+        IsResolved = incident.IsResolved,
+        ResolvedAt = incident.ResolvedAt,
+        RetryCount = incident.RetryCount
+    };
 }
 
 /// <summary>
@@ -234,4 +349,28 @@ public sealed class GetInstanceDataOutput
     private string? _entityEtag = string.Empty;
 
     public Dictionary<string, object>? Extensions { get; set; }
+}
+
+/// <summary>
+/// Output for the human-task function: represents an active instance pending human action.
+/// </summary>
+public sealed class HumanTaskItemOutput
+{
+    /// <summary>Workflow instance identifier.</summary>
+    public string? InstanceId { get; set; }
+
+    /// <summary>Workflow key (schema) this instance belongs to.</summary>
+    public string? Workflow { get; set; }
+
+    /// <summary>Human task title extracted from instance data.</summary>
+    public string? Title { get; set; }
+
+    /// <summary>Human task description extracted from instance data.</summary>
+    public string? Description { get; set; }
+
+    /// <summary>When the instance was created.</summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>Static flag indicating this is a vNext task.</summary>
+    public bool VNext { get; set; } = true;
 }
