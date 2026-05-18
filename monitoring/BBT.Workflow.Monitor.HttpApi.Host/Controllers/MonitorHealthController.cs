@@ -6,8 +6,8 @@ namespace BBT.Workflow.Monitor.Controllers;
 
 /// <summary>
 /// Exposes a detailed health check report for operator tooling.
-/// Standard liveness and readiness probes are served by ASP.NET Core's
-/// built-in health check middleware at <c>/health/live</c> and <c>/health/ready</c>.
+/// Standard liveness and readiness probes are served by
+/// <c>/live</c> and <c>/ready</c> (combined report at <c>/health</c>).
 /// </summary>
 [ApiController]
 [Route("monitor/health")]

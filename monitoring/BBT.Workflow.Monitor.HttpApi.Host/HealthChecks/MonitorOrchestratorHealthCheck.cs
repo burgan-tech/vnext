@@ -4,7 +4,8 @@ namespace BBT.Workflow.Monitor.HealthChecks;
 
 /// <summary>
 /// Health check that verifies the vNext Orchestration API is reachable by probing its
-/// <c>/health/live</c> endpoint. The base URL is resolved from configuration key
+/// <c>/live</c> endpoint, matching orchestration host health mapping (<c>/health</c>, <c>/live</c>, <c>/ready</c>).
+/// The base URL is resolved from configuration key
 /// <c>vNextApi:BaseUrl</c> (same key used by the Orchestration service).
 /// </summary>
 public sealed class MonitorOrchestratorHealthCheck(
@@ -23,7 +24,7 @@ public sealed class MonitorOrchestratorHealthCheck(
         try
         {
             var client = httpClientFactory.CreateClient("orchestrator-health");
-            var probe = $"{baseUrl.TrimEnd('/')}/health/live";
+            var probe = $"{baseUrl.TrimEnd('/')}/live";
             var response = await client.GetAsync(probe, cancellationToken);
 
             return response.IsSuccessStatusCode
