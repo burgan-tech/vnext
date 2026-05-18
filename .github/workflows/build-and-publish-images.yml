@@ -785,7 +785,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Set package version
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
@@ -805,9 +804,4 @@ jobs:
           fi
 
       - name: Publish to npm (OIDC)
-        uses: JS-DevTools/npm-publish@v4
-        with:
-          access: public
-          tag: ${{ steps.dist_tag.outputs.tag }}
-          provenance: true
-          package: vnext-meta
+        run: npm publish --provenance --access public --tag ${{ steps.dist_tag.outputs.tag }}
