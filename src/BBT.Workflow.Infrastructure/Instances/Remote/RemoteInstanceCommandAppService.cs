@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Remote;
 using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.SubFlow;
@@ -377,6 +378,49 @@ public sealed class RemoteInstanceCommandAppService(
             {
                 Content = content
             };
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Marks instance Busy recursively by calling the remote API.
+    /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
+    /// </summary>
+    public async Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            if (!endpointResult.IsSuccess)
+                return Result.Fail(endpointResult.Error);
+
+            var endpoint = endpointResult.Value!;
+
+            var relativePath = InstanceUrlTemplates.MarkBusy(
+                input.Domain,
+                input.Workflow,
+                input.InstanceId.ToString(),
+                ApiVersionPrefix);
+
+            if (!string.IsNullOrEmpty(input.Version))
+                relativePath += $"?version={Uri.EscapeDataString(input.Version)}";
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Put, requestUri);
 
             var forwardHeaders = currentUser.ToForwardHeaders();
             CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);

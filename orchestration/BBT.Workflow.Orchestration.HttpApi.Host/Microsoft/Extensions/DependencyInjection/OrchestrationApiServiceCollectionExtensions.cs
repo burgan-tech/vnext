@@ -36,6 +36,7 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration) // Can be called before or after InfrastructureModule
             .AddDistributedLock(configuration)
+            .AddTransitionLockScope()
             .AddBackgroundJob()
             .AddRedis()
             .AddExceptionHandling()
