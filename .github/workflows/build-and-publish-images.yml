@@ -232,7 +232,7 @@ jobs:
         with:
           dotnet-version: |
             9.0.x
-            10.0.x
+            10.0.2xx
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -705,7 +705,10 @@ jobs:
         with:
           dotnet-version: |
             9.0.x
-            10.0.x
+            10.0.2xx
+
+      - name: Setup NETStandard.Library.Ref for PostSharp
+        run: ./scripts/setup-netstandard-ref.sh
 
       - name: Restore solution
         run: dotnet restore ./BBT.Workflow.slnx --verbosity normal
@@ -801,5 +804,10 @@ jobs:
             echo "tag=latest" >> $GITHUB_OUTPUT
           fi
 
-      - name: Publish to npm with provenance
-        run: npm publish --provenance --access public --tag ${{ steps.dist_tag.outputs.tag }}
+      - name: Publish to npm (OIDC)
+        uses: JS-DevTools/npm-publish@v4
+        with:
+          access: public
+          tag: ${{ steps.dist_tag.outputs.tag }}
+          provenance: true
+          package: vnext-meta
