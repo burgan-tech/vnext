@@ -93,5 +93,15 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
             ? _local.FaultAsync(input, cancellationToken)
             : _remote.FaultAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.MarkBusyAsync(input, cancellationToken)
+            : _remote.MarkBusyAsync(input, cancellationToken);
+    }
 }
 

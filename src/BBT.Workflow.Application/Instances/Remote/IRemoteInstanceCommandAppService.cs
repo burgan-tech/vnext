@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.SubFlow;
 
 namespace BBT.Workflow.Instances.Remote;
@@ -36,5 +37,13 @@ public interface IRemoteInstanceCommandAppService
     /// </summary>
     Task<Result> FaultAsync(
         SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Marks an instance Busy and propagates recursively to nested SubFlows.
+    /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
+    /// </summary>
+    Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
         CancellationToken cancellationToken = default);
 }

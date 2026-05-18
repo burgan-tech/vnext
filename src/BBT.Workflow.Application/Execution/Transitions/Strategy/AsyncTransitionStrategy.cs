@@ -7,6 +7,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Dapr.Jobs.Models;
@@ -31,6 +32,7 @@ public sealed class AsyncTransitionStrategy(
     IDistributedLockService distributedLockService,
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
+    IInstanceCommandGateway instanceCommandGateway,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     /// <summary>
@@ -139,26 +141,42 @@ public sealed class AsyncTransitionStrategy(
 
     /// <summary>
     /// Marks the instance as Busy and persists it within the ambient UoW.
-    /// Skips silently when the instance is already Busy (chained auto transitions),
-    /// already Completed, or being resumed from a SubFlow.
+    /// Skips self-marking silently when the instance is already Busy (chained auto transitions),
+    /// already Completed, or being resumed from a SubFlow. SubFlow busy propagation runs regardless.
     /// </summary>
     private async Task SetInstanceBusyAsync(
         TransitionExecutionContext ctx,
         CancellationToken cancellationToken)
     {
-        if (ctx.Instance.IsBusy || ctx.Instance.IsCompleted || ctx.Directives.IsSubFlowResume)
+        if (!ctx.Instance.IsBusy && !ctx.Instance.IsCompleted && !ctx.Directives.IsSubFlowResume)
+        {
+            await using var innerUow = await uowManager.BeginAsync(
+                new UnitOfWorkOptions
+                {
+                    Scope = UnitOfWorkScopeOption.RequiresNew
+                }, cancellationToken);
+
+            ctx.Instance.Busy();
+            await instanceRepository.UpdateAsync(ctx.Instance, false, cancellationToken);
+            await innerUow.CommitAsync(cancellationToken);
+            logger.InstanceSetBusyForAsyncTransition(ctx.InstanceId, ctx.TransitionKey);
+        }
+
+        var subflow = ctx.Instance.Subflow;
+        if (subflow is null)
             return;
 
-        await using var innerUow = await uowManager.BeginAsync(
-            new UnitOfWorkOptions
-            {
-                Scope = UnitOfWorkScopeOption.RequiresNew
-            }, cancellationToken);
+        var markBusyResult = await instanceCommandGateway.MarkBusyAsync(new MarkBusyInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            InstanceId = subflow.SubFlowInstanceId,
+            Version = subflow.SubFlowVersion
+        }, cancellationToken);
 
-        ctx.Instance.Busy();
-        await instanceRepository.UpdateAsync(ctx.Instance, false, cancellationToken);
-        await innerUow.CommitAsync(cancellationToken);
-        logger.InstanceSetBusyForAsyncTransition(ctx.InstanceId, ctx.TransitionKey);
+        if (!markBusyResult.IsSuccess)
+            logger.SubFlowBusyPropagationFailedForAsyncTransition(ctx.InstanceId, subflow.SubFlowInstanceId,
+                markBusyResult.Error.Message);
     }
 
     /// <summary>

@@ -119,6 +119,12 @@ public static class InstanceUrlTemplates
     public const string SubFlowFaultTemplate = "/{0}/workflows/{1}/instances/{2}/sub/fault";
 
     /// <summary>
+    /// URL template for SubFlow Busy propagation endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/busy
+    /// </summary>
+    public const string MarkBusyTemplate = "/{0}/workflows/{1}/instances/{2}/busy";
+
+    /// <summary>
     /// URL template for retry instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/retry
     /// </summary>
@@ -336,6 +342,17 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string SubFlowFault(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(SubFlowFaultTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for SubFlow Busy propagation endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance id</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string MarkBusy(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(MarkBusyTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for retry instance endpoint.

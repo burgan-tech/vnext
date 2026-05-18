@@ -198,6 +198,18 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers request-scoped transition lock scope and busy marker services.
+    /// </summary>
+    public static IServiceCollection AddTransitionLockScope(this IServiceCollection services)
+    {
+        services.AddScoped<BBT.Workflow.Execution.Pipeline.ITransitionLockScopeFactory,
+            BBT.Workflow.Infrastructure.Execution.Locks.TransitionLockScopeFactory>();
+        services.AddScoped<BBT.Workflow.Execution.Pipeline.IInstanceBusyMarker,
+            BBT.Workflow.Infrastructure.Execution.Locks.InstanceBusyMarker>();
+        return services;
+    }
+
     public static IServiceCollection AddResourceLock(this IServiceCollection services, string lockStoreName)
     {
         services.AddScoped<BBT.Workflow.Execution.IResourceLockService>(sp =>

@@ -68,6 +68,18 @@ public sealed class EfCoreInstanceRepository(
             .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindWithActiveSubFlowAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .Include(i => i.ChildCorrelations
+                .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+    }
+
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>

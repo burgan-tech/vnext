@@ -81,5 +81,18 @@ public interface IInstanceCommandGateway
     Task<Result> FaultAsync(
         SubFlowFaultedInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Marks a workflow instance as Busy and recursively propagates to active SubFlow correlations.
+    /// Routes to local or remote execution based on target domain.
+    /// Each level marks itself Busy, then checks for an active SubFlow correlation and
+    /// calls <see cref="MarkBusyAsync"/> for the nested instance (cross-domain routing).
+    /// </summary>
+    /// <param name="input">Target domain, workflow, and instance id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result indicating success or failure of remote or local persistence.</returns>
+    Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default);
 }
 
