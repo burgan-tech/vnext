@@ -128,7 +128,7 @@ public sealed class FunctionAppService(
 
         object scriptBody = body.HasValue
             ? (object)body.Value
-            : (object)(instance?.LatestData?.Data ?? new JsonData("{}"));
+            : new JsonData("{}");
 
         var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(workflow)
@@ -155,6 +155,7 @@ public sealed class FunctionAppService(
     /// <summary>
     /// Builds the final response: uses the <c>output</c> script when defined, otherwise falls back to
     /// legacy single-task extraction from <see cref="ScriptContext.OutputResponse"/>.
+    /// When <see cref="Function.RawResponse"/> is <c>true</c>, data is returned unwrapped.
     /// </summary>
     private async Task<Result<Dictionary<string, dynamic?>>> BuildResponseAsync(
         Function function,
@@ -166,11 +167,63 @@ public sealed class FunctionAppService(
             var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
                 function.Output.DecodedCode, cancellationToken: cancellationToken);
             var scriptResponse = await handler.OutputHandler(scriptContext);
+
+            if (function.RawResponse)
+                return Result<Dictionary<string, dynamic?>>.Ok(ToRawDictionary(scriptResponse.Data));
+
             return Result<Dictionary<string, dynamic?>>.Ok(
                 new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = scriptResponse.Data });
         }
 
+        if (function.RawResponse)
+            return Result<Dictionary<string, dynamic?>>.Ok(ExtractRawFunctionResponse(function, scriptContext));
+
         return Result<Dictionary<string, dynamic?>>.Ok(ExtractFunctionResponse(function, scriptContext));
+    }
+
+    /// <summary>
+    /// Converts an arbitrary object to a flat <c>Dictionary&lt;string, dynamic?&gt;</c> for raw responses.
+    /// </summary>
+    private static Dictionary<string, dynamic?> ToRawDictionary(object? data)
+    {
+        if (data is Dictionary<string, dynamic?> dict)
+            return dict;
+
+        var json = JsonSerializer.Serialize(data);
+        return JsonSerializer.Deserialize<Dictionary<string, dynamic?>>(json) ?? [];
+    }
+
+    /// <summary>
+    /// Raw variant of legacy single-task extraction: returns the task value directly
+    /// without wrapping it in the function-key dictionary.
+    /// </summary>
+    private static Dictionary<string, dynamic?> ExtractRawFunctionResponse(
+        Function function,
+        ScriptContext scriptContext)
+    {
+        var variableKeyTask = function.Task!.Task.Key.ToVariableName();
+
+        if (!scriptContext.OutputResponse.TryGetValue(variableKeyTask, out var value))
+            return [];
+
+        try
+        {
+            if (value is JsonElement jsonElement)
+            {
+                var target = jsonElement.TryGetProperty("data", out var dataProp)
+                    ? dataProp
+                    : jsonElement;
+
+                if (target.ValueKind == JsonValueKind.Object)
+                    return JsonSerializer.Deserialize<Dictionary<string, dynamic?>>(target.GetRawText()) ?? [];
+            }
+
+            if (value is Dictionary<string, dynamic?> d)
+                return d;
+        }
+        catch { /* ignore */ }
+
+        return [];
     }
 
     /// <summary>

@@ -83,7 +83,7 @@ public sealed class FunctionController(
 
         return FromResult(await functionAppService.GetFunctionByInstanceAsync(
             function, workflow, domain, instance,
-            requestContext.Headers, requestContext.QueryParameters, cancellationToken));
+            requestContext.Headers, requestContext.QueryParameters, null, cancellationToken));
     }
 
     [HttpPost("{domain}/functions/{function}")]
