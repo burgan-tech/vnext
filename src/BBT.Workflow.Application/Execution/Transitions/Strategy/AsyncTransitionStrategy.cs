@@ -5,6 +5,7 @@ using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Gateway;
@@ -12,6 +13,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Dapr.Jobs.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
@@ -33,6 +35,7 @@ public sealed class AsyncTransitionStrategy(
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
     IInstanceCommandGateway instanceCommandGateway,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     /// <summary>
@@ -213,6 +216,11 @@ public sealed class AsyncTransitionStrategy(
         Dictionary<string, object> metadata,
         CancellationToken cancellationToken)
     {
+        var fp = executionOptions.Value.FailurePolicy;
+        var failurePolicy = JobScheduleFailurePolicy.Constant(
+            TimeSpan.FromSeconds(fp.IntervalSeconds),
+            (uint)fp.MaxRetries);
+
         return ResultExtensions.TryAsync(
             async ct => await backgroundJobService.EnqueueAsync(
                 TransitionJobHandler.HandlerName,
@@ -220,6 +228,7 @@ public sealed class AsyncTransitionStrategy(
                 jobPayload,
                 schedule,
                 metadata,
+                failurePolicy,
                 ct),
             cancellationToken,
             ex => Error.Dependency(

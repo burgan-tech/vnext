@@ -370,7 +370,7 @@ public sealed class InstanceCommandAppService(
                 payload,
                 schedule,
                 metadata,
-                cancellationToken);
+                cancellationToken: cancellationToken);
 
             // Track the job in the database
             await instanceJobRepository.InsertAsync(

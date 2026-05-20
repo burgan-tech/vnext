@@ -162,8 +162,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
         });
-        
+
         services.AddDaprJobScheduler();
+
         return services;
     }
     

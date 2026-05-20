@@ -1,3 +1,5 @@
+using BBT.Workflow.BackgroundJobs.Options;
+using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
@@ -45,6 +47,19 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskFactories();
         services.AddTaskPersistence();
         services.AddScriptingServices();
+
+        // Background job recovery and execution options
+        services.AddBackgroundJobServices();
+
+        return services;
+    }
+
+    private static IServiceCollection AddBackgroundJobServices(this IServiceCollection services)
+    {
+        services.AddOptions<WorkflowExecutionOptions>()
+            .BindConfiguration(WorkflowExecutionOptions.SectionName);
+
+        services.AddScoped<IJobTimeoutRecoveryService, JobTimeoutRecoveryService>();
 
         return services;
     }

@@ -172,7 +172,7 @@ public sealed class ScheduleTransitionsStep(
             info.Payload,
             info.ScheduleExpression,
             metadata: info.Metadata,
-            cancellationToken);
+            cancellationToken: cancellationToken);
 
         await jobRepository.InsertAsync(
             InstanceJob.Create(
