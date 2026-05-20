@@ -1490,6 +1490,33 @@ public static partial class WorkflowLogs
         string transitionKey,
         Guid instanceId);
 
+    /// <summary>
+    /// Logs when a job's execution budget is exceeded (timeout.layer=job).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40117,
+        Level = LogLevel.Error,
+        Message = "Job {JobName} timed out after {TimeoutSeconds}s: {TransitionKey} for instance {InstanceId} [timeout.layer=job]")]
+    public static partial void JobTimedOut(
+        this ILogger logger,
+        string jobName,
+        int timeoutSeconds,
+        string transitionKey,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a job handler is cancelled by Dapr or an external signal (not host shutdown).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40118,
+        Level = LogLevel.Error,
+        Message = "Job {JobName} cancelled by Dapr/external signal: {TransitionKey} for instance {InstanceId} [timeout.layer=dapr-cancel]")]
+    public static partial void JobCancelledByExternal(
+        this ILogger logger,
+        string jobName,
+        string transitionKey,
+        Guid instanceId);
+
     #endregion
 
     #region Runtime

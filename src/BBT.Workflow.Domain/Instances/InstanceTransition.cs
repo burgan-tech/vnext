@@ -85,6 +85,17 @@ public sealed class InstanceTransition : Entity<Guid>, ICreationAuditedObject
         Duration = FinishedAt - StartedAt;
     }
 
+    /// <summary>
+    /// Closes the transition record as failed without a target state.
+    /// Used when the pipeline was aborted (timeout, unhandled fault) before reaching ChangeStateStep.
+    /// </summary>
+    public void Failed()
+    {
+        FinishedAt = DateTime.UtcNow;
+        Duration = FinishedAt - StartedAt;
+        // ToState remains null — signals incomplete/aborted transition
+    }
+
     public static InstanceTransition Create(
         Guid id,
         Guid instanceId,
