@@ -2,8 +2,8 @@ namespace BBT.Workflow.Execution.Pipeline;
 
 /// <summary>
 /// Determines whether a transition is "reserved" relative to instance locking.
-/// Most reserved transitions (cancel, exit, updateData, timeout) bypass the lock entirely.
-/// Subflow resume is reserved but uses its own lock scope via <see cref="RequiresOwnLock"/>.
+/// All reserved transitions acquire their own type-specific lock that is independent
+/// of the main flow lock, so they can run even while another transition holds the instance lock.
 /// </summary>
 public interface IReservedTransitionResolver
 {
@@ -14,9 +14,11 @@ public interface IReservedTransitionResolver
     bool IsReserved(TransitionExecutionContext context);
 
     /// <summary>
-    /// Returns <c>true</c> when the reserved transition must acquire its own instance lock scope
-    /// instead of bypassing locking (subflow resume only).
+    /// Returns the type-specific lock key for this reserved transition.
+    /// This key is independent from <see cref="TransitionExecutionContext.LockKey"/>
+    /// so the reserved transition never conflicts with the main flow lock, while still
+    /// serializing concurrent requests of the same reserved type per instance.
     /// </summary>
     /// <param name="context">The transition execution context.</param>
-    bool RequiresOwnLock(TransitionExecutionContext context);
+    string GetOwnLockKey(TransitionExecutionContext context);
 }

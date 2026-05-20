@@ -10,7 +10,7 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 /// <summary>
 /// Tests for <see cref="ReservedTransitionResolver"/>.
 /// Validates reserved transition detection for cancel, exit, updateData,
-/// timeout, and subflow resume, and <see cref="IReservedTransitionResolver.RequiresOwnLock"/>.
+/// timeout, and subflow resume, and lock key isolation via GetOwnLockKey.
 /// </summary>
 public class ReservedTransitionResolverTests
 {
@@ -61,40 +61,72 @@ public class ReservedTransitionResolverTests
     }
 
     [Fact]
-    public void RequiresOwnLock_WithSubFlowResume_ShouldReturnTrue()
-    {
-        var ctx = CreateContext(transitionKey: "resume");
-        ctx.Directives.MarkAsSubFlowResume();
-        _resolver.RequiresOwnLock(ctx).ShouldBeTrue();
-    }
-
-    [Fact]
-    public void RequiresOwnLock_WithTimeoutTransition_ShouldReturnFalse()
-    {
-        var ctx = CreateContext(transitionKey: "$timeout");
-        ctx.Directives.MarkAsTimeoutTransition();
-        _resolver.RequiresOwnLock(ctx).ShouldBeFalse();
-    }
-
-    [Fact]
-    public void RequiresOwnLock_WithCancelTransition_ShouldReturnFalse()
-    {
-        var ctx = CreateContext(cancelKey: "cancel", transitionKey: "cancel");
-        _resolver.RequiresOwnLock(ctx).ShouldBeFalse();
-    }
-
-    [Fact]
-    public void RequiresOwnLock_WithNormalTransition_ShouldReturnFalse()
-    {
-        var ctx = CreateContext(transitionKey: "approve");
-        _resolver.RequiresOwnLock(ctx).ShouldBeFalse();
-    }
-
-    [Fact]
     public void IsReserved_WithMismatchedKey_ShouldReturnFalse()
     {
         var ctx = CreateContext(cancelKey: "cancel", transitionKey: "not-cancel");
         _resolver.IsReserved(ctx).ShouldBeFalse();
+    }
+
+    // GetOwnLockKey — type-label tests
+
+    [Fact]
+    public void GetOwnLockKey_WithSubFlowResume_ShouldUseResumeLabel()
+    {
+        var ctx = CreateContext(transitionKey: "resume");
+        ctx.Directives.MarkAsSubFlowResume();
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":resume");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithSubFlowResume_ShouldDifferFromMainFlowLockKey()
+    {
+        var ctx = CreateContext(transitionKey: "resume");
+        ctx.Directives.MarkAsSubFlowResume();
+        _resolver.GetOwnLockKey(ctx).ShouldNotBe(ctx.LockKey);
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithCancelTransition_ShouldUseCancelLabel()
+    {
+        var ctx = CreateContext(cancelKey: "cancel", transitionKey: "cancel");
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":cancel");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithExitTransition_ShouldUseExitLabel()
+    {
+        var ctx = CreateContext(exitKey: "exit", transitionKey: "exit");
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":exit");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithUpdateDataTransition_ShouldUseUpdateDataLabel()
+    {
+        var ctx = CreateContext(updateDataKey: "updateData", transitionKey: "updateData");
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":updatedata");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithTimeoutTransition_ShouldUseTimeoutLabel()
+    {
+        var ctx = CreateContext(transitionKey: "$timeout");
+        ctx.Directives.MarkAsTimeoutTransition();
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":timeout");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_AllReservedTypes_ShouldDifferFromMainFlowLockKey()
+    {
+        var ctxCancel = CreateContext(cancelKey: "cancel", transitionKey: "cancel");
+        var ctxExit = CreateContext(exitKey: "exit", transitionKey: "exit");
+        var ctxUpdate = CreateContext(updateDataKey: "updateData", transitionKey: "updateData");
+        var ctxTimeout = CreateContext(transitionKey: "$timeout");
+        ctxTimeout.Directives.MarkAsTimeoutTransition();
+
+        _resolver.GetOwnLockKey(ctxCancel).ShouldNotBe(ctxCancel.LockKey);
+        _resolver.GetOwnLockKey(ctxExit).ShouldNotBe(ctxExit.LockKey);
+        _resolver.GetOwnLockKey(ctxUpdate).ShouldNotBe(ctxUpdate.LockKey);
+        _resolver.GetOwnLockKey(ctxTimeout).ShouldNotBe(ctxTimeout.LockKey);
     }
 
     private static TransitionExecutionContext CreateContext(

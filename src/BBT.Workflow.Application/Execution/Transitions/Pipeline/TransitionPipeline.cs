@@ -82,27 +82,25 @@ public class TransitionPipeline
         if (context.SkipImmediateExecution)
             return Result<TransitionExecutionContext>.Ok(context);
 
-        // 2) Reserved transitions — bypass lock or use an independent scope (subflow resume)
+        // 2) Reserved transitions — each acquires its own type-specific lock that is independent
+        //    of the main flow lock, so they can run even while a normal transition holds L1
+        //    (e.g., sync subflow resume triggered inside the parent's post-commit phase).
         if (_reservedTransitionResolver.IsReserved(context))
         {
-            if (_reservedTransitionResolver.RequiresOwnLock(context))
+            var reservedKey = _reservedTransitionResolver.GetOwnLockKey(context);
+            await using var ownLock = await _lockScopeFactory.AcquireAsync(reservedKey, cancellationToken);
+            if (!ownLock.IsAcquired)
             {
-                await using var ownLock = await _lockScopeFactory.AcquireAsync(context.LockKey, cancellationToken);
-                if (!ownLock.IsAcquired)
-                {
-                    _logger.InstanceLockFailed(context.InstanceId.ToString());
-                    return Result<TransitionExecutionContext>.Fail(
-                        WorkflowErrors.InstanceLockConflict(context.InstanceId));
-                }
-
-                await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
-                return await RunChainAsync(context, workflowContext, ownLock, cancellationToken);
+                _logger.InstanceLockFailed(context.InstanceId.ToString());
+                return Result<TransitionExecutionContext>.Fail(
+                    WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
 
-            _logger.LogDebug(
-                "Reserved transition {TransitionKey} for instance {InstanceId} — lock bypassed",
-                context.TransitionKey, context.InstanceId);
-            return await RunChainAsync(context, workflowContext, lockScope: null, cancellationToken);
+            // SubFlow Resume resumes an already-Busy instance; confirm the busy mark.
+            if (context.Directives.IsSubFlowResume)
+                await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
+
+            return await RunChainAsync(context, workflowContext, ownLock, cancellationToken);
         }
 
         // 3) Normal transitions — acquire single lock for the entire chain
