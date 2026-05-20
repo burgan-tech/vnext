@@ -108,6 +108,13 @@ public sealed class StandardTaskResponse
     /// Task type identifier.
     /// </summary>
     public string? TaskType { get; set; }
+
+    /// <summary>
+    /// Raw response body as a string. For SOAP/XML tasks this is the unparsed XML string;
+    /// for HTTP tasks it is the raw JSON/text payload. Use <c>ParseXml(Body)</c> in scripts
+    /// to convert to an <c>XmlDocument</c>.
+    /// </summary>
+    public string? Body { get; set; }
 }
 
 /// <summary>

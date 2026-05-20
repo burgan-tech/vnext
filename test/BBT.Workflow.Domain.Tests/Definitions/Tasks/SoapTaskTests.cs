@@ -77,6 +77,9 @@ public class SoapTaskTests
     {
         var config = MakeConfig(body: "<Envelope/>", soapVersion: "1.2");
         var original = SoapTask.Create(config.ToJsonElement());
+        original.SetKeyInternal("testSoapTask");
+        original.SetDomainInternal("test");
+        original.SetVersionInternal("1.0.0");
         original.AddHeader("Authorization", "Basic xxx");
 
         var clone = original.CloneTyped();
