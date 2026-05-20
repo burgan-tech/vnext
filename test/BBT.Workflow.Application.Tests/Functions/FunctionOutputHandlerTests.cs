@@ -139,4 +139,48 @@ public class FunctionOutputHandlerTests
         function.ShouldNotBeNull();
         function!.Output.ShouldNotBeNull();
     }
+
+    // ─── RawResponse ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void RawResponse_DefaultsFalse()
+    {
+        var function = new Function(TaskScope.Domain, CreateTask(1, TaskRef));
+        function.RawResponse.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Function_DeserializesFromJson_WithoutRawResponse_DefaultsFalse()
+    {
+        var json = """
+            {
+                "scope": "D",
+                "task": { "order": 1, "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "mapping": { "code": "" } }
+            }
+            """;
+
+        var function = JsonSerializer.Deserialize<Function>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        function.ShouldNotBeNull();
+        function!.RawResponse.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Function_DeserializesRawResponseTrueFromJson()
+    {
+        var json = """
+            {
+                "scope": "D",
+                "rawResponse": true,
+                "task": { "order": 1, "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "mapping": { "code": "" } }
+            }
+            """;
+
+        var function = JsonSerializer.Deserialize<Function>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        function.ShouldNotBeNull();
+        function!.RawResponse.ShouldBeTrue();
+    }
 }
