@@ -4,8 +4,9 @@ namespace BBT.Workflow.Execution;
 
 /// <summary>
 /// Identifies reserved transitions for instance locking behavior.
-/// Cancel, exit, updateData, and timeout transitions bypass locking; subflow resume
-/// is reserved but acquires an independent lock scope.
+/// All reserved transitions acquire their own type-specific lock key, independent of
+/// the main flow lock, so they can proceed even when the instance lock is held by a
+/// concurrent normal transition (e.g., sync subflow resume inside post-commit).
 /// </summary>
 public sealed class ReservedTransitionResolver : IReservedTransitionResolver
 {
@@ -20,6 +21,13 @@ public sealed class ReservedTransitionResolver : IReservedTransitionResolver
     }
 
     /// <inheritdoc />
-    public bool RequiresOwnLock(TransitionExecutionContext context)
-        => context.Directives.IsSubFlowResume;
+    public string GetOwnLockKey(TransitionExecutionContext context)
+    {
+        if (context.Directives.IsSubFlowResume)     return context.LockKey + ":resume";
+        if (context.IsCancelTransition())           return context.LockKey + ":cancel";
+        if (context.IsExitTransition())             return context.LockKey + ":exit";
+        if (context.IsUpdateDataTransition())       return context.LockKey + ":updatedata";
+        if (context.Directives.IsTimeoutTransition) return context.LockKey + ":timeout";
+        return context.LockKey + ":reserved";
+    }
 }

@@ -20,7 +20,7 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 
 /// <summary>
 /// Unit tests for TransitionPipeline.
-/// Validates request-scoped lock, reserved transition bypass, auto-chain under single lock,
+/// Validates request-scoped lock, reserved transition own lock, auto-chain under single lock,
 /// busy marking, and fault handling.
 /// </summary>
 public class TransitionPipelineTests
@@ -67,6 +67,11 @@ public class TransitionPipelineTests
         _mockReservedResolver
             .IsReserved(Arg.Any<TransitionExecutionContext>())
             .Returns(false);
+
+        // Default: own lock key = main lock key + ":reserved"
+        _mockReservedResolver
+            .GetOwnLockKey(Arg.Any<TransitionExecutionContext>())
+            .Returns(ctx => ctx.ArgAt<TransitionExecutionContext>(0).LockKey + ":reserved");
 
         // Default: busy marker succeeds silently
         _mockBusyMarker
@@ -184,11 +189,12 @@ public class TransitionPipelineTests
     #region Reserved Transition Tests
 
     [Fact]
-    public async Task RunAsync_WhenReservedTransition_ShouldBypassLockAndBusy()
+    public async Task RunAsync_WhenReservedTransition_ShouldAcquireOwnLockKeyNotMainLockKey()
     {
         // Arrange
         var context = CreateTransitionExecutionContext("cancel");
         var workflowContext = CreateWorkflowExecutionContext(context);
+        var expectedOwnKey = context.LockKey + ":reserved";
 
         SetupContextFactory(context);
         SetupStepsToSucceed();
@@ -203,13 +209,91 @@ public class TransitionPipelineTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
 
-        // Lock should NOT be acquired
-        await _mockLockScopeFactory.DidNotReceive()
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        // Must acquire the own (type-specific) key, not the main flow lock key
+        await _mockLockScopeFactory.Received(1)
+            .AcquireAsync(expectedOwnKey, Arg.Any<CancellationToken>());
 
-        // Busy should NOT be marked
+        await _mockLockScopeFactory.DidNotReceive()
+            .AcquireAsync(context.LockKey, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenReservedNonResume_ShouldNotMarkBusy()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext("cancel");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        _mockReservedResolver
+            .IsReserved(Arg.Any<TransitionExecutionContext>())
+            .Returns(true);
+
+        // Act
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert: busy NOT marked for non-subflow-resume reserved transitions
         await _mockBusyMarker.DidNotReceive()
             .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenSubFlowResume_ShouldAcquireResumeKeyAndMarkBusy()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext("resume");
+        context.Directives.MarkAsSubFlowResume();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var expectedOwnKey = context.LockKey + ":reserved"; // default mock returns :reserved
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        _mockReservedResolver
+            .IsReserved(Arg.Any<TransitionExecutionContext>())
+            .Returns(true);
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+
+        await _mockLockScopeFactory.Received(1)
+            .AcquireAsync(expectedOwnKey, Arg.Any<CancellationToken>());
+
+        // Busy MUST be marked for subflow resume
+        await _mockBusyMarker.Received(1)
+            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenReservedLockFails_ShouldReturnConflictError()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext("cancel");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        _mockReservedResolver
+            .IsReserved(Arg.Any<TransitionExecutionContext>())
+            .Returns(true);
+
+        var failedScope = CreateNotAcquiredLockScope();
+        _mockLockScopeFactory
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(failedScope);
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
     }
 
     #endregion
