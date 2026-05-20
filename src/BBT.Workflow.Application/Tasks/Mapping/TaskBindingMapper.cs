@@ -40,6 +40,7 @@ public static class TaskBindingMapper
             {
                 // Remote execution tasks
                 HttpTask http => (TaskTypes.Http, MapHttpTask(http)),
+                SoapTask soap => (TaskTypes.Soap, (object)MapSoapTask(soap)),
                 DaprServiceTask daprService => (TaskTypes.DaprService, MapDaprServiceTask(daprService)),
                 DaprBindingTask daprBinding => (TaskTypes.DaprBinding, MapDaprBindingTask(daprBinding)),
                 DaprHttpEndpointTask daprHttpEndpoint => (TaskTypes.DaprHttpEndpoint, MapDaprHttpEndpointTask(daprHttpEndpoint)),
@@ -170,6 +171,20 @@ public static class TaskBindingMapper
     };
 
     #endregion
+
+    /// <summary>
+    /// Maps SoapTask to SoapTaskBinding.
+    /// </summary>
+    private static SoapTaskBinding MapSoapTask(SoapTask task) => new()
+    {
+        Url = task.Url,
+        SoapAction = task.SoapAction,
+        SoapVersion = task.SoapVersion,
+        Body = task.Body,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds,
+        ValidateSSL = task.ValidateSSL
+    };
 
     /// <summary>
     /// Maps HttpTask to HttpTaskBinding.

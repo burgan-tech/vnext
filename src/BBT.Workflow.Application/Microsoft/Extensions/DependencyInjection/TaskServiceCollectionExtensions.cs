@@ -67,8 +67,9 @@ public static class TaskServiceCollectionExtensions
         // Human task executor (no remote - state change only)
         services.AddTaskExecutor<HumanTaskExecutor>();
 
-        // HTTP and Dapr remote executors
+        // HTTP, SOAP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
+        services.AddTaskExecutor<SoapTaskExecutor>();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
