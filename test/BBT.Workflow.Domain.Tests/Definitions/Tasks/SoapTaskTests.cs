@@ -149,9 +149,10 @@ public class SoapTaskTests
     {
         var task = SoapTask.Create(MakeConfig(
             url: "http://example.com",
+            soapAction: "",
             soapVersion: "1.2",
             timeoutSeconds: 60,
-            validateSsl: false));
+            validateSsl: false).ToJsonElement());
 
         task.Reset();
 

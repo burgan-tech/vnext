@@ -18,4 +18,11 @@ public sealed record SoapTaskBinding
 
     public int TimeoutSeconds { get; init; } = 30;
     public bool ValidateSSL { get; init; } = true;
+
+    /// <summary>
+    /// HTTP status codes treated as successful even when outside the 2xx range.
+    /// Supports exact codes ("500") and wildcard patterns ("5xx", "50x").
+    /// SOAP faults typically come back over HTTP 500, so ["500"] is a common value.
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; init; }
 }

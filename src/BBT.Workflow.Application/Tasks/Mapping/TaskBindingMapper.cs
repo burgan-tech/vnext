@@ -183,7 +183,8 @@ public static class TaskBindingMapper
         Body = task.Body,
         Headers = task.Headers?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
-        ValidateSSL = task.ValidateSSL
+        ValidateSSL = task.ValidateSSL,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>
