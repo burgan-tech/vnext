@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 
 namespace BBT.Workflow.Controllers.Instances;
@@ -12,4 +13,5 @@ public sealed record DomainFunctionRequest(
     string? Version,
     Dictionary<string, string?> Headers,
     Dictionary<string, string?> QueryParameters,
-    HttpContext HttpContext);
+    HttpContext HttpContext,
+    JsonElement? Body = null);

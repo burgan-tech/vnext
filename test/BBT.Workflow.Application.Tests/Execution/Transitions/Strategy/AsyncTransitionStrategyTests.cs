@@ -6,8 +6,9 @@ using BBT.Aether.BackgroundJob;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
-using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.BackgroundJobs.Options;
+using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Strategies;
@@ -16,6 +17,7 @@ using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -51,6 +53,8 @@ public class AsyncTransitionStrategyTests
         _mockInstanceCommandGateway = new Mock<IInstanceCommandGateway>();
         _mockLogger = new Mock<ILogger<AsyncTransitionStrategy>>();
 
+        var executionOptions = Options.Create(new WorkflowExecutionOptions());
+
         _mockInstanceCommandGateway
             .Setup(x => x.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
@@ -77,6 +81,7 @@ public class AsyncTransitionStrategyTests
             _mockValidationService.Object,
             _uowManager.Object,
             _mockInstanceCommandGateway.Object,
+            executionOptions,
             _mockLogger.Object);
     }
 
@@ -105,6 +110,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -126,9 +132,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, payload, _, _, _) => capturedPayload = payload)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, payload, _, _, _, _) => capturedPayload = payload)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -161,9 +168,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, _, _, metadata, _) => capturedMetadata = metadata)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, _, _, metadata, _, _) => capturedMetadata = metadata)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -196,9 +204,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, jobId, _, _, _, _) => jobIds.Add(jobId))
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, jobId, _, _, _, _, _) => jobIds.Add(jobId))
             .ReturnsAsync(It.IsAny<Guid>());
 
         await _strategy.ExecuteAsync(workflowContextOne, CancellationToken.None);
@@ -233,6 +242,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -255,6 +265,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Job service unavailable"));
 
@@ -283,9 +294,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, _, schedule, _, _) => capturedSchedule = schedule)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, _, schedule, _, _, _) => capturedSchedule = schedule)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -314,6 +326,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -359,9 +372,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, payload, _, _, _) => capturedPayload = payload)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, payload, _, _, _, _) => capturedPayload = payload)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -463,6 +477,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -486,6 +501,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(It.IsAny<Guid>());
 
@@ -544,6 +560,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
 

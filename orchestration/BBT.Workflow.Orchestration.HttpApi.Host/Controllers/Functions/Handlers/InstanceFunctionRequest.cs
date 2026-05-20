@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BBT.Aether.Users;
 using BBT.Workflow.Instances.DTOs;
 using Microsoft.AspNetCore.Http;
@@ -17,4 +18,5 @@ public sealed record InstanceFunctionRequest(
     Dictionary<string, string?> Headers,
     Dictionary<string, string?> QueryParameters,
     ICurrentUser CurrentUser,
-    HttpContext HttpContext);
+    HttpContext HttpContext,
+    JsonElement? Body = null);
