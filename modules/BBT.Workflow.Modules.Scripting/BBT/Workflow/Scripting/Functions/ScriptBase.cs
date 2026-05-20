@@ -4,6 +4,7 @@ using System.Dynamic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Xml;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -568,6 +569,41 @@ public abstract class ScriptBase
 
         return [];
     }
+
+    #endregion
+
+    #region XML Helper Functions
+
+    /// <summary>
+    /// Parses an XML string into an <see cref="XmlDocument"/>.
+    /// Returns <c>null</c> for null/whitespace input or any parse error — never throws.
+    /// </summary>
+    /// <param name="xmlString">Raw XML string to parse</param>
+    /// <returns>Parsed <see cref="XmlDocument"/>, or <c>null</c> on failure</returns>
+    protected static XmlDocument? ParseXml(string? xmlString)
+    {
+        if (string.IsNullOrWhiteSpace(xmlString))
+            return null;
+
+        try
+        {
+            var doc = new XmlDocument();
+            doc.LoadXml(xmlString);
+            return doc;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Serializes an <see cref="XmlDocument"/> to its XML string representation.
+    /// Returns <c>null</c> for a null input.
+    /// </summary>
+    /// <param name="xmlDoc">The document to serialize</param>
+    /// <returns>XML string, or <c>null</c> if <paramref name="xmlDoc"/> is null</returns>
+    protected static string? XmlToString(XmlDocument? xmlDoc) => xmlDoc?.OuterXml;
 
     #endregion
 
