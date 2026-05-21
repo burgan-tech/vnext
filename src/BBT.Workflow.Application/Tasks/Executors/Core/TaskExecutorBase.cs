@@ -295,6 +295,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         {
             IsSuccess = result?.IsSuccess == true,
             Data = result?.Data,
+            Body = result?.Body,
             StatusCode = result?.StatusCode,
             Headers = result?.Headers,
             ErrorMessage = result?.ErrorMessage,

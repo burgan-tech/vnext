@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml;
 
 namespace BBT.Workflow.Definitions;
 
@@ -64,6 +65,12 @@ public sealed class SoapTask : WorkflowTask
     public void SetBody(string? body)
     {
         Body = body;
+    }
+
+    /// <summary>Serializes <paramref name="xmlDoc"/> to its outer XML and sets it as the request body.</summary>
+    public void SetBody(XmlDocument? xmlDoc)
+    {
+        Body = xmlDoc?.OuterXml;
     }
 
     public void SetSoapAction(string soapAction)

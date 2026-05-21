@@ -49,9 +49,7 @@ public sealed class PipelineExecutionProfile
         LifecycleOrder.Preflight,
         LifecycleOrder.CheckParentUpdateDataTransition,
         LifecycleOrder.ForwardToActiveSubflow,
-        LifecycleOrder.ResourceLock,
-        LifecycleOrder.Auto,
-        LifecycleOrder.Schedule);
+        LifecycleOrder.ResourceLock);
 
     private static readonly PipelineExecutionProfile ManualInstance = new()
     {
@@ -89,7 +87,7 @@ public sealed class PipelineExecutionProfile
     {
         Name = "ErrorBoundary",
         ExcludedStepOrders = ErrorBoundaryExcluded,
-        AllowAutoChain = false,
+        AllowAutoChain = true,
         AllowSubFlow = false,
     };
 
