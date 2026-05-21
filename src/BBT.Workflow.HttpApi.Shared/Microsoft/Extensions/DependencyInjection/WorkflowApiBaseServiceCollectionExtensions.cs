@@ -162,8 +162,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
         });
-        
+
         services.AddDaprJobScheduler();
+
         return services;
     }
     
@@ -195,6 +196,18 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         var lockStoreName = configuration["DAPR_LOCK_STORE_NAME"]!;
         services.AddDaprDistributedLock(lockStoreName);
         services.AddResourceLock(lockStoreName);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers request-scoped transition lock scope and busy marker services.
+    /// </summary>
+    public static IServiceCollection AddTransitionLockScope(this IServiceCollection services)
+    {
+        services.AddScoped<BBT.Workflow.Execution.Pipeline.ITransitionLockScopeFactory,
+            BBT.Workflow.Infrastructure.Execution.Locks.TransitionLockScopeFactory>();
+        services.AddScoped<BBT.Workflow.Execution.Pipeline.IInstanceBusyMarker,
+            BBT.Workflow.Infrastructure.Execution.Locks.InstanceBusyMarker>();
         return services;
     }
 

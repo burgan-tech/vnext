@@ -120,6 +120,8 @@ public sealed class TransitionContextFactory(
             Stage = input.Data?.Stage,
 
             // Flags
+            Mode = input.Mode,
+            CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
 
@@ -140,6 +142,16 @@ public sealed class TransitionContextFactory(
             executionContext.Directives.MarkAsTimeoutTransition();
 
         return executionContext;
+    }
+
+    /// <inheritdoc />
+    public Result<TransitionExecutionContext> CreateFromPreloaded(
+        WorkflowExecutionContext input,
+        Definitions.Workflow workflow,
+        Instance instance)
+    {
+        return ResolveStateAndTransition((workflow, instance), input)
+            .Map(data => BuildExecutionContext(data, input));
     }
 
     /// <summary>

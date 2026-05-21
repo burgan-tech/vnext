@@ -106,7 +106,8 @@ public sealed class ViewContentResolutionService(
             Content = content,
             Type = view.Type.ToString(),
             Display = view.Display,
-            Label = string.Empty
+            Label = string.Empty,
+            Renderer = view.Renderer
         };
     }
 
@@ -128,7 +129,8 @@ public sealed class ViewContentResolutionService(
             Content = contentTyped,
             Type = viewType.ToString(),
             Display = attrs?.Display ?? string.Empty,
-            Label = attrs?.Label ?? string.Empty
+            Label = attrs?.Label ?? string.Empty,
+            Renderer = attrs?.Renderer
         };
     }
 

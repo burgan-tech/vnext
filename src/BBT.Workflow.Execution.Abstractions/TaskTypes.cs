@@ -12,7 +12,8 @@ public static class TaskTypes
     public const string DaprBinding = "daprbinding";
     public const string DaprHttpEndpoint = "daprhttpendpoint";
     public const string DaprPubSub = "daprpubsub";
-    public const string Notification = "notification";
+
+    public const string Soap = "soap";
 
     // Trigger tasks (for cross-domain execution)
     public const string StartTrigger = "starttrigger";

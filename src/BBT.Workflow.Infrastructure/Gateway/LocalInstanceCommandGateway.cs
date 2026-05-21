@@ -134,4 +134,32 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             return Result.Ok();
         }, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> FaultAsync(
+        SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Flow, input.Version, async (sp, ct) =>
+        {
+            var subflowFaultService = sp.GetRequiredService<ISubflowFaultService>();
+            await subflowFaultService.FaultAsync(input, ct);
+
+            return Result.Ok();
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version ?? string.Empty,
+            async (sp, ct) =>
+            {
+                var busyService = sp.GetRequiredService<IInstanceBusyPropagationService>();
+                await busyService.MarkBusyAsync(input, ct);
+                return Result.Ok();
+            }, cancellationToken);
+    }
 }

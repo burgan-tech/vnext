@@ -1,11 +1,16 @@
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.MultiSchema;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.BackgroundJobs.Recovery;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.BackgroundJobs.Handlers;
 
@@ -17,6 +22,9 @@ public sealed class TransitionJobHandler(
     IInstanceJobRepository jobRepository,
     IWorkflowExecutionService workflowExecutionService,
     ICurrentSchema currentSchema,
+    IJobTimeoutRecoveryService recoveryService,
+    IOptions<WorkflowExecutionOptions> executionOptions,
+    IHostApplicationLifetime hostLifetime,
     ILogger<TransitionJobHandler> logger) : IBackgroundJobHandler<TransitionJobPayload>
 {
     public const string HandlerName = "flow.transition";
@@ -37,6 +45,17 @@ public sealed class TransitionJobHandler(
                        [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey,
                        [TelemetryConstants.TagNames.JobName] = args.JobName
                    }))
+            {
+                var timeoutSeconds = executionOptions.Value.TransitionJobTimeoutSeconds;
+
+                // Separate execution budget CTS from the incoming Dapr/host cancellation token.
+                // This lets us distinguish: own timeout vs Dapr HTTP timeout vs host shutdown.
+                using var executionCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, executionCts.Token);
+
+                bool needsRecovery = false;
+
                 try
                 {
                     BackgroundJobActivityHelper.EnrichActivity(activity, args);
@@ -63,16 +82,43 @@ public sealed class TransitionJobHandler(
                         transitionInput.ToExecutionContext(args.InstanceId.ToString(), args.Version,
                             args.TransitionKey);
                     context.Actor = args.ExecutionActor;
+                    context.CallerMode = args.CallerSync ? ExecMode.Sync : ExecMode.Async;
 
                     // Use the background-specific method that handles pre-reserved instances
-                    var result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
+                    var result = await workflowExecutionService.ExecuteTransitionAsync(context, linkedCts.Token);
 
-                    activity?.SetStatus(ActivityStatusCode.Ok);
-                    logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
+                    if (!result.IsSuccess)
+                    {
+                        activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+                        logger.JobFailed(args.JobName, args.InstanceId, result.Error.Message ?? "Unknown error");
+                    }
+                    else
+                    {
+                        activity?.SetStatus(ActivityStatusCode.Ok);
+                        logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
+                    }
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (executionCts.IsCancellationRequested)
                 {
-                    activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
+                    // Own 300s execution budget exceeded
+                    needsRecovery = true;
+                    activity?.SetStatus(ActivityStatusCode.Error, "Job execution timeout");
+                    activity?.SetTag("timeout.layer", "job");
+                    logger.JobTimedOut(args.JobName, timeoutSeconds, args.TransitionKey, args.InstanceId);
+                }
+                catch (OperationCanceledException) when (
+                    !hostLifetime.ApplicationStopping.IsCancellationRequested)
+                {
+                    // Dapr HTTP response timeout or external cancellation (not host shutdown)
+                    needsRecovery = true;
+                    activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled by Dapr/external");
+                    activity?.SetTag("timeout.layer", "dapr-cancel");
+                    logger.JobCancelledByExternal(args.JobName, args.TransitionKey, args.InstanceId);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Host shutdown (SIGTERM) — recovery not feasible, host is going down
+                    activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled (host shutdown)");
                     logger.JobCancelled(args.JobName, args.TransitionKey, args.InstanceId);
                 }
                 catch (Exception e)
@@ -83,8 +129,15 @@ public sealed class TransitionJobHandler(
                 }
                 finally
                 {
+                    if (needsRecovery)
+                    {
+                        // CancellationToken.None: recovery must complete even if host is shutting down
+                        await recoveryService.FaultInstanceAsync(args, CancellationToken.None);
+                    }
+
                     await jobRepository.MarkAsProcessedAsync(args.InstanceId, args.JobName, CancellationToken.None);
                 }
+            }
         }
     }
 }

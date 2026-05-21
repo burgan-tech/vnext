@@ -184,6 +184,10 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("character varying(180)");
 
+                    b.Property<string>("Incidents")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("Key")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
@@ -328,15 +332,17 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("InstanceId");
 
-                    b.HasIndex("ParentInstanceId")
-                        .HasDatabaseName("IX_InstancesCorrelations_ActiveBlockingSubFlow")
-                        .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
-
-                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("ParentInstanceId"), new[] { "SubFlowType", "SubFlowInstanceId", "SubFlowDomain", "SubFlowName", "SubFlowVersion", "SubFlowCurrentState", "SubFlowStateChangedAt", "ParentState" });
-
                     b.HasIndex("SubFlowInstanceId")
                         .IsUnique()
                         .HasDatabaseName("UX_InstancesCorrelations_SubFlowInstanceId");
+
+                    b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveBlockingSubFlow")
+                        .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
+
+                    b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveByParent_Covering")
+                        .HasFilter("\"IsCompleted\" = false");
+
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveByParent_Covering"), new[] { "SubFlowType", "SubFlowInstanceId", "SubFlowDomain", "SubFlowName", "SubFlowVersion", "SubFlowCurrentState", "SubFlowStateChangedAt", "ParentState" });
 
                     b.ToTable("InstancesCorrelations", "public");
                 });
@@ -441,6 +447,10 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("JobId")
                         .IsUnique();
+
+                    b.HasIndex("InstanceId", "JobName")
+                        .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName")
+                        .HasFilter("\"IsActive\" = true");
 
                     b.ToTable("InstanceJobs", "public");
                 });

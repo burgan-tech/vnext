@@ -505,6 +505,98 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldIncludeSharedTransition_WhenAvailableInIsEmpty()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var state = State.Create("review", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(state);
+
+        var anotherState = State.Create("pending", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(anotherState);
+
+        var sharedTransition = Transition.Create("cancel", null, "cancelled", TriggerType.Manual, "Patch");
+        workflow.AddSharedTransition(sharedTransition);
+
+        // Act — should be available from any state when AvailableIn is empty
+        var resultReview = workflow.GetAvailableUserTransitionKeys(state);
+        var resultPending = workflow.GetAvailableUserTransitionKeys(anotherState);
+
+        // Assert
+        Assert.Contains("cancel", resultReview);
+        Assert.Contains("cancel", resultPending);
+    }
+
+    [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldExcludeSharedTransition_WhenAvailableInDoesNotContainCurrentState()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var reviewState = State.Create("review", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(reviewState);
+
+        var pendingState = State.Create("pending", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(pendingState);
+
+        var sharedTransition = Transition.Create("cancel", null, "cancelled", TriggerType.Manual, "Patch");
+        sharedTransition.AddAvailableIn("review");
+        workflow.AddSharedTransition(sharedTransition);
+
+        // Act
+        var resultReview = workflow.GetAvailableUserTransitionKeys(reviewState);
+        var resultPending = workflow.GetAvailableUserTransitionKeys(pendingState);
+
+        // Assert
+        Assert.Contains("cancel", resultReview);
+        Assert.DoesNotContain("cancel", resultPending);
+    }
+
+    [Fact]
+    public void GetAvailableSharedTransitionKeysOnly_ShouldReturnAll_WhenAvailableInIsEmpty()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var stateA = State.Create("state-a", StateType.Intermediate, StateSubType.None, "Patch");
+        var stateB = State.Create("state-b", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(stateA);
+        workflow.AddState(stateB);
+
+        var sharedTransition = Transition.Create("notes", null, "$self", TriggerType.Manual, "Patch");
+        workflow.AddSharedTransition(sharedTransition);
+
+        // Act
+        var resultA = workflow.GetAvailableSharedTransitionKeysOnly(stateA);
+        var resultB = workflow.GetAvailableSharedTransitionKeysOnly(stateB);
+
+        // Assert
+        Assert.Contains("notes", resultA);
+        Assert.Contains("notes", resultB);
+    }
+
+    [Fact]
+    public void GetAvailableSharedTransitionKeysOnly_ShouldFilterByAvailableIn_WhenPopulated()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var stateA = State.Create("state-a", StateType.Intermediate, StateSubType.None, "Patch");
+        var stateB = State.Create("state-b", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(stateA);
+        workflow.AddState(stateB);
+
+        var sharedTransition = Transition.Create("notes", null, "$self", TriggerType.Manual, "Patch");
+        sharedTransition.AddAvailableIn("state-a");
+        workflow.AddSharedTransition(sharedTransition);
+
+        // Act
+        var resultA = workflow.GetAvailableSharedTransitionKeysOnly(stateA);
+        var resultB = workflow.GetAvailableSharedTransitionKeysOnly(stateB);
+
+        // Assert
+        Assert.Contains("notes", resultA);
+        Assert.DoesNotContain("notes", resultB);
+    }
+
+    [Fact]
     public void FindTransitionInContext_ShouldSearchAllTransitions()
     {
         // Arrange

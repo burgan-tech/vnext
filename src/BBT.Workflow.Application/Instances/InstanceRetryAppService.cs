@@ -130,13 +130,34 @@ public sealed class InstanceRetryAppService(
 
     /// <summary>
     /// Retries a faulted instance by re-executing its incomplete transition.
+    /// If the instance has an active SubFlow correlation (fault propagated upward from SubFlow),
+    /// unfaults the parent and cascades retry to the SubFlow instead.
     /// </summary>
     private async Task<Result<RetryInstanceOutput>> RetryFaultedInstanceAsync(
         Instance instance,
         RetryInstanceInput input,
         CancellationToken cancellationToken)
     {
-        // Railway chain: Load workflow -> Find incomplete transition -> Unfault -> Execute
+        // Check if the fault originated from a SubFlow (correlation stays open on fault)
+        if (instance.HasActiveSubFlow)
+        {
+            var subflowCorrelation = instance.Subflow!;
+
+            // Unfault parent first
+            await using (var uow = await UnitOfWorkManager.BeginRequiresNew(cancellationToken))
+            {
+                instance.Unfault();
+                await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+                await uow.CommitAsync(cancellationToken);
+            }
+
+            logger.InstanceUnfaulted(instance.Id);
+
+            // Delegate retry to the SubFlow via existing gateway path
+            return await RetrySubFlowAsync(instance, subflowCorrelation, input, cancellationToken);
+        }
+
+        // Standard path: Load workflow -> Find incomplete transition -> Unfault -> Execute
         return await LoadWorkflowAsync(input, instance, cancellationToken)
             .BindAsync(data => FindIncompleteTransitionAsync(data.Instance, data.Workflow, cancellationToken))
             .BindAsync(data => UnfaultAndPersistAsync(data, cancellationToken))
@@ -230,6 +251,7 @@ public sealed class InstanceRetryAppService(
             TransitionKey = data.Transition.TransitionId,
             TriggerType = TriggerType.Manual, // Retry is always manual
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             Actor = Shared.ExecutionActor.User,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,

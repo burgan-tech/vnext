@@ -1,43 +1,27 @@
-using BBT.Workflow.Execution.Notification;
 using BBT.Workflow.Infrastructure.Dapr;
-using BBT.Workflow.Infrastructure.Dapr.Metadata;
 using BBT.Workflow.Infrastructure.Dapr.Notification;
+using BBT.Workflow.Tasks.Notification;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Extension methods for registering Dapr notification services.
+/// Extension methods for registering multi-channel Dapr notification services.
 /// </summary>
 public static class DaprNotificationServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds Dapr notification services including metadata provider, binding resolver,
-    /// and warmup hosted service.
+    /// Adds Dapr notification services: channel resolver and configuration options.
     /// </summary>
-    /// <param name="services">The service collection.</param>
-    /// <param name="configuration">The configuration instance.</param>
-    /// <returns>The service collection for chaining.</returns>
-    /// <remarks>
-    /// Requires DaprClient to be registered in the service collection.
-    /// Call <c>services.AddDaprClient()</c> before calling this method.
-    /// </remarks>
     public static IServiceCollection AddDaprNotification(
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // Bind options from configuration
         services.Configure<DaprNotificationOptions>(
             configuration.GetSection(DaprNotificationOptions.SectionName));
 
-        // Register core metadata provider (singleton - cached data, uses DaprClient)
-        services.AddSingleton<IDaprMetadataProvider, DaprMetadataProvider>();
-
-        // Register notification binding resolver (singleton - lazy resolution)
-        services.AddSingleton<INotificationBindingResolver, NotificationBindingResolver>();
-
-        // Register warmup hosted service
-        services.AddHostedService<DaprMetadataWarmupHostedService>();
+        services.AddNotificationChannelResolver();
 
         return services;
     }
@@ -45,29 +29,25 @@ public static class DaprNotificationServiceCollectionExtensions
     /// <summary>
     /// Adds Dapr notification services with custom options configuration.
     /// </summary>
-    /// <param name="services">The service collection.</param>
-    /// <param name="configureOptions">Action to configure notification options.</param>
-    /// <returns>The service collection for chaining.</returns>
-    /// <remarks>
-    /// Requires DaprClient to be registered in the service collection.
-    /// Call <c>services.AddDaprClient()</c> before calling this method.
-    /// </remarks>
     public static IServiceCollection AddDaprNotification(
         this IServiceCollection services,
         Action<DaprNotificationOptions> configureOptions)
     {
-        // Configure options
         services.Configure(configureOptions);
+        services.AddNotificationChannelResolver();
 
-        // Register core metadata provider (singleton - cached data, uses DaprClient)
-        services.AddSingleton<IDaprMetadataProvider, DaprMetadataProvider>();
+        return services;
+    }
 
-        // Register notification binding resolver (singleton - lazy resolution)
-        services.AddSingleton<INotificationBindingResolver, NotificationBindingResolver>();
-
-        // Register warmup hosted service
-        services.AddHostedService<DaprMetadataWarmupHostedService>();
-
+    /// <summary>
+    /// Registers the <see cref="INotificationChannelResolver"/> singleton.
+    /// Called from both <see cref="AddDaprNotification(IServiceCollection, IConfiguration)"/>
+    /// and <c>AddInfrastructureRuntimeServices</c> to ensure the resolver is available
+    /// in all host configurations (Orchestration, Execution, Workers).
+    /// </summary>
+    public static IServiceCollection AddNotificationChannelResolver(this IServiceCollection services)
+    {
+        services.TryAddSingleton<INotificationChannelResolver, NotificationChannelResolver>();
         return services;
     }
 }

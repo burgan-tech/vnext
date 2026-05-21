@@ -33,6 +33,7 @@ public sealed class FunctionAppService(
         string? version = null,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
+        JsonElement? body = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
@@ -41,7 +42,7 @@ public sealed class FunctionAppService(
             return await componentCacheStore
                 .GetFunctionAsync(domain, key, version, cancellationToken)
                 .BindAsync(function =>
-                    ExecuteFunctionAsync(function, null, null, headers, queryParameters, cancellationToken));
+                    ExecuteFunctionAsync(function, null, null, headers, queryParameters, body, cancellationToken));
         }
     }
 
@@ -53,6 +54,7 @@ public sealed class FunctionAppService(
         string instanceKey,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
+        JsonElement? body = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
@@ -65,7 +67,7 @@ public sealed class FunctionAppService(
             return await componentCacheStore
                 .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
                 .BindAsync(workflow =>
-                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, headers, queryParameters, cancellationToken));
+                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, headers, queryParameters, body, cancellationToken));
         }
     }
 
@@ -93,13 +95,14 @@ public sealed class FunctionAppService(
         Definitions.Workflow workflow,
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
+        JsonElement? body,
         CancellationToken cancellationToken)
     {
         var functionReference = workflow.FindFunction(key);
         return componentCacheStore
             .GetFunctionAsync(domain, key, functionReference?.Version, cancellationToken)
             .BindAsync(function =>
-                ExecuteFunctionAsync(function, instance, workflow, headers, queryParameters, cancellationToken));
+                ExecuteFunctionAsync(function, instance, workflow, headers, queryParameters, body, cancellationToken));
     }
 
     /// <summary>
@@ -111,6 +114,7 @@ public sealed class FunctionAppService(
         Definitions.Workflow? workflow,
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
+        JsonElement? body,
         CancellationToken cancellationToken)
     {
         if (instance != null &&
@@ -122,11 +126,15 @@ public sealed class FunctionAppService(
                 WorkflowErrors.FunctionNotInWorkflow(function.Key, workflow.Key));
         }
 
+        object scriptBody = body.HasValue
+            ? (object)body.Value
+            : new JsonData("{}");
+
         var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(workflow)
             .WithInstance(instance)
             .WithRuntime(runtimeInfoProvider)
-            .WithBody(instance?.LatestData?.Data ?? new JsonData("{}"))
+            .WithBody(scriptBody)
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
@@ -147,6 +155,7 @@ public sealed class FunctionAppService(
     /// <summary>
     /// Builds the final response: uses the <c>output</c> script when defined, otherwise falls back to
     /// legacy single-task extraction from <see cref="ScriptContext.OutputResponse"/>.
+    /// When <see cref="Function.RawResponse"/> is <c>true</c>, data is returned unwrapped.
     /// </summary>
     private async Task<Result<Dictionary<string, dynamic?>>> BuildResponseAsync(
         Function function,
@@ -158,11 +167,63 @@ public sealed class FunctionAppService(
             var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
                 function.Output.DecodedCode, cancellationToken: cancellationToken);
             var scriptResponse = await handler.OutputHandler(scriptContext);
+
+            if (function.RawResponse)
+                return Result<Dictionary<string, dynamic?>>.Ok(ToRawDictionary(scriptResponse.Data));
+
             return Result<Dictionary<string, dynamic?>>.Ok(
                 new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = scriptResponse.Data });
         }
 
+        if (function.RawResponse)
+            return Result<Dictionary<string, dynamic?>>.Ok(ExtractRawFunctionResponse(function, scriptContext));
+
         return Result<Dictionary<string, dynamic?>>.Ok(ExtractFunctionResponse(function, scriptContext));
+    }
+
+    /// <summary>
+    /// Converts an arbitrary object to a flat <c>Dictionary&lt;string, dynamic?&gt;</c> for raw responses.
+    /// </summary>
+    private static Dictionary<string, dynamic?> ToRawDictionary(object? data)
+    {
+        if (data is Dictionary<string, dynamic?> dict)
+            return dict;
+
+        var json = JsonSerializer.Serialize(data);
+        return JsonSerializer.Deserialize<Dictionary<string, dynamic?>>(json) ?? [];
+    }
+
+    /// <summary>
+    /// Raw variant of legacy single-task extraction: returns the task value directly
+    /// without wrapping it in the function-key dictionary.
+    /// </summary>
+    private static Dictionary<string, dynamic?> ExtractRawFunctionResponse(
+        Function function,
+        ScriptContext scriptContext)
+    {
+        var variableKeyTask = function.Task!.Task.Key.ToVariableName();
+
+        if (!scriptContext.OutputResponse.TryGetValue(variableKeyTask, out var value))
+            return [];
+
+        try
+        {
+            if (value is JsonElement jsonElement)
+            {
+                var target = jsonElement.TryGetProperty("data", out var dataProp)
+                    ? dataProp
+                    : jsonElement;
+
+                if (target.ValueKind == JsonValueKind.Object)
+                    return JsonSerializer.Deserialize<Dictionary<string, dynamic?>>(target.GetRawText()) ?? [];
+            }
+
+            if (value is Dictionary<string, dynamic?> d)
+                return d;
+        }
+        catch { /* ignore */ }
+
+        return [];
     }
 
     /// <summary>

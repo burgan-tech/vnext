@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BBT.Aether.Application;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
@@ -24,6 +25,7 @@ public interface IFunctionAppService : IApplicationService
         string? version = null,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
+        JsonElement? body = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -43,6 +45,7 @@ public interface IFunctionAppService : IApplicationService
         string instance,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
+        JsonElement? body = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

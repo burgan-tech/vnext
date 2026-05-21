@@ -22,7 +22,8 @@ public enum TaskType
     DirectTrigger = 12,
     GetInstanceData = 13,
     SubProcess = 14,
-    GetInstances = 15
+    GetInstances = 15,
+    Soap = 16
 }
 
 /// <summary>

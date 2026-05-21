@@ -113,6 +113,7 @@ public sealed class FlowTimeoutJobHandler(
                         TransitionKey = WellKnownTransitionKeys.Timeout,
                         TriggerType = TriggerType.Manual,
                         Mode = ExecMode.Resume,
+                        CallerMode = ExecMode.Async,
                         Headers = new Dictionary<string, string?>(),
                         Actor = ExecutionActor.System,
                         RequestedAt = DateTimeOffset.UtcNow,

@@ -1,3 +1,5 @@
+using BBT.Workflow.BackgroundJobs.Options;
+using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
@@ -46,6 +48,19 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskPersistence();
         services.AddScriptingServices();
 
+        // Background job recovery and execution options
+        services.AddBackgroundJobServices();
+
+        return services;
+    }
+
+    private static IServiceCollection AddBackgroundJobServices(this IServiceCollection services)
+    {
+        services.AddOptions<WorkflowExecutionOptions>()
+            .BindConfiguration(WorkflowExecutionOptions.SectionName);
+
+        services.AddScoped<IJobTimeoutRecoveryService, JobTimeoutRecoveryService>();
+
         return services;
     }
 
@@ -67,14 +82,16 @@ public static class TaskServiceCollectionExtensions
         // Human task executor (no remote - state change only)
         services.AddTaskExecutor<HumanTaskExecutor>();
 
-        // HTTP and Dapr remote executors
+        // HTTP, SOAP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
+        services.AddTaskExecutor<SoapTaskExecutor>();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
 
-        // Notification task executor (uses Dapr binding with runtime-resolved component)
+        // Notification task executor (multi-channel direct Dapr binding dispatch)
+        services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
         services.AddTaskExecutor<NotificationTaskExecutor>();
 
         // Trigger task executors (domain-aware: local or remote)

@@ -108,4 +108,48 @@ public class ViewGetContentAsTypedTests
         el.GetArrayLength().ShouldBe(3);
         el[0].GetInt32().ShouldBe(1);
     }
+
+    [Fact]
+    public void Deserialize_WithRenderer_RetainsRendererValue()
+    {
+        var json = """
+            {"type": 1, "content": "{}", "display": "test", "renderer": "flutter"}
+            """;
+        var view = JsonSerializer.Deserialize<View>(json, JsonSerializerConstants.JsonOptions);
+        view.ShouldNotBeNull();
+        view.Renderer.ShouldBe("flutter");
+    }
+
+    [Fact]
+    public void Deserialize_WithoutRenderer_HasNullRenderer()
+    {
+        var json = """
+            {"type": 1, "content": "{}", "display": "test"}
+            """;
+        var view = JsonSerializer.Deserialize<View>(json, JsonSerializerConstants.JsonOptions);
+        view.ShouldNotBeNull();
+        view.Renderer.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Deserialize_WithNullRenderer_HasNullRenderer()
+    {
+        var json = """
+            {"type": 1, "content": "{}", "display": "test", "renderer": null}
+            """;
+        var view = JsonSerializer.Deserialize<View>(json, JsonSerializerConstants.JsonOptions);
+        view.ShouldNotBeNull();
+        view.Renderer.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Deserialize_WithWellKnownRenderer_RetainsValue()
+    {
+        var json = $$"""
+            {"type": 1, "content": "{}", "display": "test", "renderer": "{{ViewRenderer.ReactNative}}"}
+            """;
+        var view = JsonSerializer.Deserialize<View>(json, JsonSerializerConstants.JsonOptions);
+        view.ShouldNotBeNull();
+        view.Renderer.ShouldBe(ViewRenderer.ReactNative);
+    }
 }

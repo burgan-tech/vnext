@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -17,11 +18,9 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 {
     private readonly DaprClient _daprClient;
     private readonly string _executionServiceAppId;
+    private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<RemoteInvokerService> _logger;
 
-    /// <summary>
-    /// Initializes a new instance of RemoteInvokerService.
-    /// </summary>
     public RemoteInvokerService(
         DaprClient daprClient,
         IConfiguration configuration,
@@ -29,6 +28,8 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
     {
         _daprClient = daprClient;
         _executionServiceAppId = configuration["ExecutionApi:AppId"] ?? "vnext-execution";
+        _invocationTimeoutSeconds = int.TryParse(
+            configuration["ExecutionApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
         _logger = logger;
     }
 
@@ -51,7 +52,12 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             TraceContext = traceContext
         };
 
-        var result = await ResultExtensions.TryAsync(async ct =>
+        // Per-invocation timeout: parent pipeline cancellation takes priority.
+        // If only our own timer fires → invocation timeout (timeout.layer=remote).
+        using var invocationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        invocationCts.CancelAfter(TimeSpan.FromSeconds(_invocationTimeoutSeconds));
+
+        try
         {
             var httpRequest = _daprClient.CreateInvokeMethodRequest(
                 _executionServiceAppId,
@@ -64,57 +70,59 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 traceContext.WorkflowVersion ?? "latest",
                 traceContext.InstanceId));
 
-            return await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(httpRequest, ct);
-        }, cancellationToken);
+            var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
+                httpRequest, invocationCts.Token);
 
-        stopwatch.Stop();
+            stopwatch.Stop();
 
-        if (!result.IsSuccess)
+            var remoteResult = new TaskInvocationResult
+            {
+                IsSuccess = response.Result!.IsSuccess,
+                StatusCode = response.Result.StatusCode,
+                Body = response.Result.Body,
+                Data = response.Result.Data,
+                ErrorMessage = response.Result.ErrorMessage,
+                Headers = response.Result.Headers,
+                TaskType = response.Result.TaskType,
+                Metadata = response.Result.Metadata,
+                ExecutionDurationMs = stopwatch.ElapsedMilliseconds
+            };
+
+            return Result<TaskInvocationResult>.Ok(remoteResult);
+        }
+        catch (OperationCanceledException) when (
+            invocationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            _logger.LogError("Failed to invoke remote task {TaskKey}: {Error}",
-                taskKey, result.Error.Message);
+            // Own per-invocation timeout — not caused by parent pipeline cancellation
+            stopwatch.Stop();
+            _logger.LogError(
+                "Dapr invocation timeout after {Seconds}s. TaskType: {TaskType}, TaskKey: {TaskKey} [timeout.layer=remote]",
+                _invocationTimeoutSeconds, taskType, taskKey);
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                error: result.Error.Message ?? "Remote invocation failed",
+                error: $"Dapr invocation timeout after {_invocationTimeoutSeconds}s",
+                statusCode: 408,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: taskType));
+        }
+        catch (OperationCanceledException)
+        {
+            // Parent pipeline cancelled — propagate so the pipeline handles it correctly
+            stopwatch.Stop();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.LogError("Failed to invoke remote task {TaskKey}: {Error}",
+                taskKey, ex.Message);
+
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+                error: ex.Message,
                 statusCode: 500,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: taskType));
         }
-        
-        if (!result.IsSuccess)
-        {
-            _logger.LogWarning("Remote task {TaskKey} execution failed: {Error}",
-                taskKey, result.Error.Message ?? "Unknown error");
-
-            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                error: result.Error.Message ?? "Remote execution failed",
-                statusCode: 500,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
-                taskType: taskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["RemoteSuccess"] = false,
-                    ["TaskKey"] = taskKey
-                }));
-        }
-
-        var response = result.Value!;
-        
-        // Update execution duration to include network time
-        var remoteResult = new TaskInvocationResult
-        {
-            IsSuccess = response.Result!.IsSuccess,
-            StatusCode = response.Result.StatusCode,
-            Body = response.Result.Body,
-            Data = response.Result.Data,
-            ErrorMessage = response.Result.ErrorMessage,
-            Headers = response.Result.Headers,
-            TaskType = response.Result.TaskType,
-            Metadata = response.Result.Metadata,
-            ExecutionDurationMs = stopwatch.ElapsedMilliseconds
-        };
-
-        return Result<TaskInvocationResult>.Ok(remoteResult);
     }
 
     /// <inheritdoc />
@@ -130,7 +138,10 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             instanceId: instance?.Id ?? Guid.Empty,
             domain: domain,
             workflowKey: workflow?.Key ?? string.Empty,
-            workflowVersion: workflow?.Version ?? string.Empty);
+            workflowVersion: workflow?.Version ?? string.Empty,
+            headers: scriptContext.Headers != null
+                ? scriptContext.GetHeadersAsDictionary()
+                : null,
+            instanceDataJson: instance?.LatestData?.Data?.Json);
     }
 }
-

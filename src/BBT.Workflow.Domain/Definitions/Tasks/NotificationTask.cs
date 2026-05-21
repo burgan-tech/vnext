@@ -4,8 +4,10 @@ using System.Text.Json.Serialization;
 namespace BBT.Workflow.Definitions;
 
 /// <summary>
-/// Notification Task Definition for sending notifications through various channels
-/// (SignalR, MQTT, Kafka, HTTP webhook, etc.)
+/// Notification task definition for multi-channel notification dispatch.
+/// Each channel maps to a <c>vnext-notification-{channel}</c> Dapr binding.
+/// An <c>INotificationMapping</c> script produces per-channel messages and metadata.
+/// The platform-managed <c>state</c> channel sends State Function data automatically.
 /// </summary>
 public sealed class NotificationTask : WorkflowTask
 {
@@ -17,153 +19,87 @@ public sealed class NotificationTask : WorkflowTask
     private NotificationTask(
         JsonElement config) : base(config)
     {
-         Type = ((int)TaskType.Notification).ToString();
+        Type = ((int)TaskType.Notification).ToString();
     }
 
     /// <summary>
-    /// The notification message body/payload. Set by mapping during execution.
+    /// Target channel list: "sms", "email", "push", "hub", "state", etc.
+    /// Each channel is resolved to a <c>vnext-notification-{channel}</c> Dapr binding.
     /// </summary>
-    public object? Body { get; private set; }
+    public IReadOnlyList<string> Channels { get; private set; } = [];
 
     /// <summary>
-    /// The notification subject/title. Set by mapping during execution.
+    /// When <c>true</c>, the platform-managed <c>state</c> channel is automatically
+    /// included in the dispatch list (uses State Function data, no mapping needed).
     /// </summary>
-    public string? Subject { get; private set; }
-
-    /// <summary>
-    /// The recipients of the notification. Set by mapping during execution.
-    /// Can be user IDs, email addresses, topic names, etc. depending on the binding type.
-    /// </summary>
-    public string[]? To { get; private set; }
-
-    /// <summary>
-    /// Additional metadata for notification sending (e.g., componentName, topic, headers).
-    /// Configured in workflow definition.
-    /// </summary>
-    public JsonElement? Metadata { get; private set; }
-
-    /// <summary>
-    /// Sets the notification body/payload. Called by mapping during execution.
-    /// </summary>
-    /// <param name="body">The notification body object.</param>
-    public void SetBody(object? body) => Body = body;
-
-    /// <summary>
-    /// Sets the notification subject/title. Called by mapping during execution.
-    /// </summary>
-    /// <param name="subject">The notification subject.</param>
-    public void SetSubject(string? subject) => Subject = subject;
-
-    /// <summary>
-    /// Sets the notification recipients. Called by mapping during execution.
-    /// </summary>
-    /// <param name="to">The recipients array.</param>
-    public void SetTo(string[]? to) => To = to;
-
-    /// <summary>
-    /// Sets a single recipient. Called by mapping during execution.
-    /// </summary>
-    /// <param name="to">The single recipient.</param>
-    public void SetTo(string? to) => To = string.IsNullOrEmpty(to) ? null : new[] { to };
-
-    /// <summary>
-    /// Internal property setters for object pooling
-    /// </summary>
-    internal void SetMetadataInternal(JsonElement? metadata) => Metadata = metadata;
-    internal void SetBodyInternal(object? body) => Body = body;
-    internal void SetSubjectInternal(string? subject) => Subject = subject;
-    internal void SetToInternal(string[]? to) => To = to;
+    public bool IncludeStateChannel { get; private set; } = true;
 
     protected override void Configure(JsonElement config)
     {
         base.Configure(config);
 
-        if (config.TryGetProperty("metadata", out var metadataElement))
+        if (config.TryGetProperty("channels", out var channelsEl)
+            && channelsEl.ValueKind == JsonValueKind.Array)
         {
-            var metadataRaw = metadataElement.GetRawText();
-            Metadata = string.IsNullOrWhiteSpace(metadataRaw) ? null : metadataElement;
+            Channels = channelsEl.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(s => !string.IsNullOrEmpty(s))
+                .ToList()!;
         }
 
-        // Subject and To can be configured statically in workflow definition
-        if (config.TryGetProperty("subject", out var subjectElement))
+        if (config.TryGetProperty("includeStateChannel", out var stateEl)
+            && stateEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
-            Subject = subjectElement.GetString();
-        }
-
-        if (config.TryGetProperty("to", out var toElement))
-        {
-            if (toElement.ValueKind == JsonValueKind.Array)
-            {
-                To = toElement.EnumerateArray()
-                    .Select(e => e.GetString())
-                    .Where(s => !string.IsNullOrEmpty(s))
-                    .ToArray()!;
-            }
-            else if (toElement.ValueKind == JsonValueKind.String)
-            {
-                var toValue = toElement.GetString();
-                To = string.IsNullOrEmpty(toValue) ? null : new[] { toValue };
-            }
+            IncludeStateChannel = stateEl.GetBoolean();
         }
     }
 
-    public static NotificationTask Create(
-        JsonElement config)
+    /// <summary>
+    /// Creates a new <see cref="NotificationTask"/> from a JSON configuration element.
+    /// </summary>
+    public static NotificationTask Create(JsonElement config)
     {
         return new NotificationTask(config);
     }
 
-    /// <summary>
-    /// Creates a deep copy of the current SignalRTask instance.
-    /// </summary>
+    /// <inheritdoc />
     public override WorkflowTask Clone()
     {
         return CloneTyped();
     }
 
     /// <summary>
-    /// Creates a typed deep copy of the current NotificationTask instance.
+    /// Creates a typed deep copy of the current instance.
     /// </summary>
     public NotificationTask CloneTyped()
     {
         var cloned = new NotificationTask();
         CopyBaseTo(cloned);
-
-        cloned.Metadata = Metadata;
-        cloned.Body = Body;
-        cloned.Subject = Subject;
-        cloned.To = To;
-
+        cloned.Channels = Channels;
+        cloned.IncludeStateChannel = IncludeStateChannel;
         return cloned;
     }
 
     /// <summary>
-    /// Internal method for object pooling - copies all properties efficiently
+    /// Copies all properties from <paramref name="source"/> for object pooling.
     /// </summary>
-    /// <param name="source">Source task to copy from</param>
     public void CopyFromInternal(NotificationTask source)
     {
         source.CopyBaseToInternal(this);
-        SetMetadataInternal(source.Metadata);
-        SetBodyInternal(source.Body);
-        SetSubjectInternal(source.Subject);
-        SetToInternal(source.To);
+        Channels = source.Channels;
+        IncludeStateChannel = source.IncludeStateChannel;
     }
 
-    /// <summary>
-    /// Resets the task instance to a clean state for object pooling
-    /// </summary>
+    /// <inheritdoc />
     public override void Reset()
     {
         base.Reset();
-        Metadata = null;
-        Body = null;
-        Subject = null;
-        To = null;
+        Channels = [];
+        IncludeStateChannel = false;
     }
 
     /// <summary>
-    /// Creates a new instance for object pooling - internal use only
+    /// Creates a new empty instance for object pooling.
     /// </summary>
     public static NotificationTask CreateEmpty()
     {

@@ -56,6 +56,20 @@ public class ExpandoObjectJsonConverter : JsonConverter<ExpandoObject>
 
     public override void Write(Utf8JsonWriter writer, ExpandoObject value, JsonSerializerOptions options)
     {
-        JsonSerializer.Serialize(writer, value as IDictionary<string, object>, options);
+        // When DictionaryKeyPolicy is set, two differently-cased ExpandoObject keys (e.g. "IsSuccess"
+        // and "isSuccess") can collapse to the same JSON key. Pre-normalize with last-wins to avoid
+        // producing duplicate-key JSON that breaks canonicalization and RFC-compliant parsers.
+        if (options.DictionaryKeyPolicy is not null)
+        {
+            var source = (IDictionary<string, object?>)(value as IDictionary<string, object>)!;
+            var normalized = new Dictionary<string, object?>(source.Count, StringComparer.Ordinal);
+            foreach (var kvp in source)
+                normalized[options.DictionaryKeyPolicy.ConvertName(kvp.Key)] = kvp.Value;
+            JsonSerializer.Serialize(writer, normalized, options);
+        }
+        else
+        {
+            JsonSerializer.Serialize(writer, value as IDictionary<string, object>, options);
+        }
     }
 }

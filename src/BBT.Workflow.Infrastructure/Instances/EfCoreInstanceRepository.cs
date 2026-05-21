@@ -68,6 +68,18 @@ public sealed class EfCoreInstanceRepository(
             .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindWithActiveSubFlowAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .Include(i => i.ChildCorrelations
+                .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+    }
+
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>
@@ -587,7 +599,8 @@ public sealed class EfCoreInstanceRepository(
                         }
                         summary.Name = string.Join("_", keyValues);
                     }
-
+                    if (group.Keys.Count > 0)
+                    summary.Keys = new Dictionary<string, object?>(group.Keys);
                     // Map aggregations
                     if (group.Aggregations != null)
                     {
@@ -838,7 +851,8 @@ public sealed class EfCoreInstanceRepository(
                     }
                     summary.Name = string.Join("_", keyValues);
                 }
-
+                if (group.Keys.Count > 0)
+                    summary.Keys = new Dictionary<string, object?>(group.Keys);
                 // Map aggregations
                 if (group.Aggregations != null)
                 {

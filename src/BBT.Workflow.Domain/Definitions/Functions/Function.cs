@@ -21,7 +21,8 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         OnExecuteTask? task,
         List<OnExecuteTask>? onExecutionTasks = null,
         ScriptCode? output = null,
-        List<RoleGrant>? roles = null
+        List<RoleGrant>? roles = null,
+        bool rawResponse = false
     ) : this()
     {
         Scope = scope;
@@ -29,6 +30,7 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         this.onExecutionTasks = onExecutionTasks ?? [];
         Output = output;
         this.roles = roles ?? [];
+        RawResponse = rawResponse;
     }
 
     /// <summary>
@@ -71,6 +73,14 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     /// </summary>
     [JsonInclude] [JsonPropertyName("output")]
     public ScriptCode? Output { get; private set; }
+
+    /// <summary>
+    /// When <c>true</c>, the response data is returned as-is without wrapping it in
+    /// <c>{ "functionKey": data }</c>. Use this for BFF functions that already return
+    /// the desired response shape. Defaults to <c>false</c> (current behaviour preserved).
+    /// </summary>
+    [JsonPropertyName("rawResponse")]
+    public bool RawResponse { get; private set; }
 
     [JsonInclude] [JsonPropertyName("roles")]
     private List<RoleGrant> roles = new();
