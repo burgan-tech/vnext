@@ -108,10 +108,9 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
             LifecycleOrder.ForwardToActiveSubflow,
             LifecycleOrder.ResourceLock,
             LifecycleOrder.Schedule,
-            LifecycleOrder.Auto,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected);
-        profile.ExcludedStepOrders.Count.ShouldBe(6);
+        profile.ExcludedStepOrders.Count.ShouldBe(5);
     }
 
     [Fact]
@@ -119,7 +118,7 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
     {
         var profile = PipelineExecutionProfile.ForErrorBoundary();
         profile.Name.ShouldBe("ErrorBoundary");
-        profile.AllowAutoChain.ShouldBeFalse();
+        profile.AllowAutoChain.ShouldBeTrue();
         profile.AllowSubFlow.ShouldBeFalse();
     }
 }
