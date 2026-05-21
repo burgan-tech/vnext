@@ -21,7 +21,7 @@ public sealed class MonitorGetComponentsInput
     public string ComponentType { get; set; } = string.Empty;
 
     /// <summary>
-    /// Optional component key. When provided, returns the specific component instead of a list.
+    /// Optional component key. When provided, returns that component only (404 if missing).
     /// </summary>
     public string? Key { get; set; }
 

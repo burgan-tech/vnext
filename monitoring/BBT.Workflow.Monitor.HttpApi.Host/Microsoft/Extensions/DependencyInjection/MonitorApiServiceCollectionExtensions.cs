@@ -36,6 +36,9 @@ public static class MonitorApiServiceCollectionExtensions
             .AddWorkflowAspNetCore(configuration)
             .AddWorkflowMapper();
 
+        // Dapr client: required by AddWorkflowDistributedCache (Dapr-backed cache)
+        services.AddWorkflowDapr();
+
         // Database, caching, locking, telemetry
         services
             .AddWorkflowDbContext(configuration)

@@ -22,7 +22,8 @@ namespace BBT.Workflow.Monitor.Controllers;
 public sealed class MonitorInstanceController(
     IMonitorInstanceQueryService queryService,
     IPaginationLinkGenerator linkGenerator,
-    IUrlTemplateBuilder urlTemplateBuilder) : AetherControllerBase
+    IUrlTemplateBuilder urlTemplateBuilder
+) : AetherControllerBase
 {
     /// <summary>
     /// Returns a paged list of instances with optional GraphQL filter and sorting.
@@ -34,12 +35,13 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromQuery] string? filter = null,
-        [FromQuery][Range(1, 1000)] int page = 1,
-        [FromQuery][Range(1, 100)] int pageSize = 10,
+        [FromQuery] [Range(1, 1000)] int page = 1,
+        [FromQuery] [Range(1, 100)] int pageSize = 10,
         [FromQuery] string? sort = null,
         [FromQuery] string? groupBy = null,
         [FromQuery] string? aggregations = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var route = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow);
 
@@ -53,22 +55,27 @@ public sealed class MonitorInstanceController(
             Sort = sort,
             PageUrl = route,
             GroupBy = groupBy,
-            Aggregations = aggregations
+            Aggregations = aggregations,
         };
 
         var result = await queryService.GetInstancesAsync(input, cancellationToken);
 
         if (!result.IsSuccess)
             return FromResult(result);
- 
+
         var response = result.Value!;
         var tempList = new HateoasPagedList<MonitorInstanceResponse>(
             response.Items.OfType<MonitorInstanceResponse>().ToList(),
             page,
             pageSize,
-            response.Items.Count == pageSize);
+            response.Items.Count == pageSize
+        );
 
-        var hateoasResult = linkGenerator.CreateHateoasResult(tempList, (IReadOnlyList<MonitorInstanceResponse>)tempList.Items, route);
+        var hateoasResult = linkGenerator.CreateHateoasResult(
+            tempList,
+            (IReadOnlyList<MonitorInstanceResponse>)tempList.Items,
+            route
+        );
         response.Links = hateoasResult.Links;
 
         return result.ToActionResult(HttpContext);
@@ -86,13 +93,14 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var input = new MonitorGetInstanceInput
         {
             Domain = domain,
             Workflow = workflow,
-            Instance = instance
+            Instance = instance,
         };
 
         var result = await queryService.GetInstanceAsync(input, cancellationToken);
@@ -111,13 +119,14 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var input = new MonitorGetInstanceDataInput
         {
             Domain = domain,
             Workflow = workflow,
-            Instance = instance
+            Instance = instance,
         };
 
         var result = await queryService.GetInstanceDataAsync(input, cancellationToken);
@@ -137,13 +146,14 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var input = new MonitorGetInstanceHistoryInput
         {
             Domain = domain,
             Workflow = workflow,
-            Instance = instance
+            Instance = instance,
         };
 
         var result = await queryService.GetInstanceHistoryAsync(input, cancellationToken);
@@ -165,15 +175,16 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        [FromQuery][Required] Guid transitionId,
-        CancellationToken cancellationToken = default)
+        [FromQuery] [Required] Guid transitionId,
+        CancellationToken cancellationToken = default
+    )
     {
         var input = new MonitorGetInstanceTaskInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            TransitionId = transitionId
+            TransitionId = transitionId,
         };
 
         var result = await queryService.GetInstanceTaskAsync(input, cancellationToken);

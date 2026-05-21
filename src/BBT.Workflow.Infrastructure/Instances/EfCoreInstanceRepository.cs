@@ -24,9 +24,10 @@ public sealed class EfCoreInstanceRepository(
     IWorkflowMetrics workflowMetrics,
     IRuntimeInfoProvider runtimeInfoProvider,
     IDataSinkManager dataSinkManager,
-     ICurrentSchema currentSchema,
+    ICurrentSchema currentSchema,
     ISchemaValidator schemaValidator,
-    ILogger<EfCoreInstanceRepository> logger)
+    ILogger<EfCoreInstanceRepository> logger
+)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
 {
@@ -40,8 +41,11 @@ public sealed class EfCoreInstanceRepository(
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>
-    public override async Task<Instance> InsertAsync(Instance entity, bool autoSave = false,
-        CancellationToken cancellationToken = default)
+    public override async Task<Instance> InsertAsync(
+        Instance entity,
+        bool autoSave = false,
+        CancellationToken cancellationToken = default
+    )
     {
         var result = await base.InsertAsync(entity, autoSave, cancellationToken);
 
@@ -66,8 +70,11 @@ public sealed class EfCoreInstanceRepository(
     /// <summary>
     /// Updates an instance and automatically records status change metrics
     /// </summary>
-    public override async Task<Instance> UpdateAsync(Instance entity, bool autoSave = false,
-        CancellationToken cancellationToken = default)
+    public override async Task<Instance> UpdateAsync(
+        Instance entity,
+        bool autoSave = false,
+        CancellationToken cancellationToken = default
+    )
     {
         // Get the original entity to compare status changes
         var originalEntity = await FindAsync(entity.Id, includeDetails: false, cancellationToken);
@@ -101,52 +108,46 @@ public sealed class EfCoreInstanceRepository(
 
     public async Task<Instance?> FindByIdentifierAsync(
         string? identifier,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        var query = (await WithDetailsAsync())
-            .AsSplitQuery();
+        var query = (await WithDetailsAsync()).AsSplitQuery();
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
-            var response = await query
-               .FirstOrDefaultAsync(
-                   p => p.Id == instanceId,
-                   cancellationToken);
+            var response = await query.FirstOrDefaultAsync(
+                p => p.Id == instanceId,
+                cancellationToken
+            );
             if (response != null)
             {
                 return response;
             }
         }
 
-        return await query
-            .FirstOrDefaultAsync(
-                p => p.Key == identifier,
-                cancellationToken);
+        return await query.FirstOrDefaultAsync(p => p.Key == identifier, cancellationToken);
     }
 
-    public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
-        CancellationToken cancellationToken = default)
+    public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(
+        string identifier,
+        CancellationToken cancellationToken = default
+    )
     {
-        var query = (await WithDetailsAsync())
-            .AsNoTracking()
-            .AsSplitQuery();
+        var query = (await WithDetailsAsync()).AsNoTracking().AsSplitQuery();
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
-            var response = await query
-                .FirstOrDefaultAsync(
-                    p => p.Id == instanceId,
-                    cancellationToken);
+            var response = await query.FirstOrDefaultAsync(
+                p => p.Id == instanceId,
+                cancellationToken
+            );
             if (response != null)
             {
                 return response;
             }
         }
 
-        return await query
-            .FirstOrDefaultAsync(
-                p => p.Key == identifier,
-                cancellationToken);
+        return await query.FirstOrDefaultAsync(p => p.Key == identifier, cancellationToken);
     }
 
     /// <summary>
@@ -162,37 +163,36 @@ public sealed class EfCoreInstanceRepository(
     /// </param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>The matched instance and data model, or null if not found</returns>
-    public async Task<InstanceAndDataModel?> FindActiveDataAsync(string key, string version,
-        CancellationToken cancellationToken = default)
+    public async Task<InstanceAndDataModel?> FindActiveDataAsync(
+        string key,
+        string version,
+        CancellationToken cancellationToken = default
+    )
     {
         var context = await GetDbContextAsync();
 
         // If full version → exact match (optimized query)
         if (InstanceDataVersionComparer.IsFullVersion(version))
         {
-            return await (from instance in context.Instances
-                          where instance.Status == InstanceStatus.Active
-                          join data in context.InstancesData on instance.Id equals data.InstanceId
-                          where instance.Key == key && data.Version == version
-                          select new InstanceAndDataModel
-                          {
-                              Instance = instance,
-                              InstanceData = data
-                          })
+            return await (
+                from instance in context.Instances
+                where instance.Status == InstanceStatus.Active
+                join data in context.InstancesData on instance.Id equals data.InstanceId
+                where instance.Key == key && data.Version == version
+                select new InstanceAndDataModel { Instance = instance, InstanceData = data }
+            )
                 .AsNoTracking()
                 .AsSplitQuery()
                 .FirstOrDefaultAsync(cancellationToken);
         }
 
         // For artifact or partial version → load all matching versions and use smart matching
-        var candidates = await (from instance in context.Instances
-                                where instance.Status == InstanceStatus.Active && instance.Key == key
-                                join data in context.InstancesData on instance.Id equals data.InstanceId
-                                select new InstanceAndDataModel
-                                {
-                                    Instance = instance,
-                                    InstanceData = data
-                                })
+        var candidates = await (
+            from instance in context.Instances
+            where instance.Status == InstanceStatus.Active && instance.Key == key
+            join data in context.InstancesData on instance.Id equals data.InstanceId
+            select new InstanceAndDataModel { Instance = instance, InstanceData = data }
+        )
             .AsNoTracking()
             .AsSplitQuery()
             .ToListAsync(cancellationToken);
@@ -208,59 +208,59 @@ public sealed class EfCoreInstanceRepository(
             return null;
 
         return candidates.FirstOrDefault(c =>
-            string.Equals(c.InstanceData.Version, bestMatchVersion, StringComparison.OrdinalIgnoreCase));
+            string.Equals(
+                c.InstanceData.Version,
+                bestMatchVersion,
+                StringComparison.OrdinalIgnoreCase
+            )
+        );
     }
 
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         // Apply PostgreSQL native JSON filters if provided
         if (!string.IsNullOrWhiteSpace(filter))
         {
             try
             {
-                var filteredInstances = (await GetDbSetAsync())
-                    .ApplyFilters(
-                        filter,
-                        jsonColumnName: "Data",
-                        tableName: "InstancesData",
-                        schema: currentSchema.Name ?? "public",
-                        schemaValidator: schemaValidator
-                    );
+                var filteredInstances = (await GetDbSetAsync()).ApplyFilters(
+                    filter,
+                    jsonColumnName: "Data",
+                    tableName: "InstancesData",
+                    schema: currentSchema.Name ?? "public",
+                    schemaValidator: schemaValidator
+                );
 
-                return filteredInstances
-                    .Include(i => i.DataList);
+                return filteredInstances.Include(i => i.DataList);
             }
             catch (ArgumentException)
             {
                 var dbSet = await GetDbSetAsync();
-                var query = dbSet
-                    .Include(i => i.DataList);
+                var query = dbSet.Include(i => i.DataList);
                 var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
             catch (FormatException)
             {
                 var dbSet = await GetDbSetAsync();
-                var query = dbSet
-                    .Include(i => i.DataList);
+                var query = dbSet.Include(i => i.DataList);
                 var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
             catch (Microsoft.EntityFrameworkCore.DbUpdateException)
             {
                 var dbSet = await GetDbSetAsync();
-                var query = dbSet
-                    .Include(i => i.DataList);
+                var query = dbSet.Include(i => i.DataList);
                 var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
         }
 
         var standardDbSet = await GetDbSetAsync();
-        return standardDbSet
-            .Include(i => i.DataList);
+        return standardDbSet.Include(i => i.DataList);
     }
 
     public async Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
@@ -269,7 +269,8 @@ public sealed class EfCoreInstanceRepository(
         string? filter,
         string? groupBy = null,
         string? aggregations = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         // If groupBy or aggregations are provided, use ApplyFilterWithAggregationsAsync
         if (!string.IsNullOrWhiteSpace(groupBy) || !string.IsNullOrWhiteSpace(aggregations))
@@ -282,24 +283,33 @@ public sealed class EfCoreInstanceRepository(
             {
                 if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
                 {
-                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
+                    if (
+                        GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest)
+                        && parsedRequest?.Filter != null
+                    )
                     {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(
+                            parsedRequest.Filter,
+                            new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false,
+                            }
+                        );
                     }
                     else
                     {
                         var combinedNode = FilterFormatDetector.CombineFilters(filter);
                         if (combinedNode != null)
                         {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                WriteIndented = false
-                            });
+                            combinedFilter = JsonSerializer.Serialize(
+                                combinedNode,
+                                new JsonSerializerOptions
+                                {
+                                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                    WriteIndented = false,
+                                }
+                            );
                         }
                     }
                 }
@@ -308,11 +318,14 @@ public sealed class EfCoreInstanceRepository(
                     var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
                     if (legacyNode != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(
+                            legacyNode,
+                            new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false,
+                            }
+                        );
                     }
                 }
             }
@@ -327,17 +340,14 @@ public sealed class EfCoreInstanceRepository(
                 currentSchema.Name ?? "public",
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
-                cancellationToken);
+                cancellationToken
+            );
 
             // If response has groups or aggregations, return empty paged list
             // (groups and aggregations are handled separately in the response)
             if (response.Groups != null || response.Aggregations != null)
             {
-                return new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
+                return new HateoasPagedList<Instance>(new List<Instance>(), page, pageSize, false);
             }
 
             // If response has data, convert to HateoasPagedList
@@ -352,11 +362,7 @@ public sealed class EfCoreInstanceRepository(
             }
 
             // Fallback to empty list
-            return new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false);
+            return new HateoasPagedList<Instance>(new List<Instance>(), page, pageSize, false);
         }
 
         // Normal flow without groupBy/aggregations
@@ -379,14 +385,18 @@ public sealed class EfCoreInstanceRepository(
         return new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
     }
 
-    public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+    public async Task<(
+        HateoasPagedList<Instance> PagedList,
+        List<GroupSummary>? Groups
+    )> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
         string? filter,
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         // If groupBy is provided, use ApplyFilterWithAggregationsAsync
         if (!string.IsNullOrWhiteSpace(groupBy))
@@ -399,24 +409,33 @@ public sealed class EfCoreInstanceRepository(
             {
                 if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
                 {
-                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
+                    if (
+                        GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest)
+                        && parsedRequest?.Filter != null
+                    )
                     {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(
+                            parsedRequest.Filter,
+                            new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false,
+                            }
+                        );
                     }
                     else
                     {
                         var combinedNode = FilterFormatDetector.CombineFilters(filter);
                         if (combinedNode != null)
                         {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                WriteIndented = false
-                            });
+                            combinedFilter = JsonSerializer.Serialize(
+                                combinedNode,
+                                new JsonSerializerOptions
+                                {
+                                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                    WriteIndented = false,
+                                }
+                            );
                         }
                     }
                 }
@@ -425,11 +444,14 @@ public sealed class EfCoreInstanceRepository(
                     var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
                     if (legacyNode != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(
+                            legacyNode,
+                            new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false,
+                            }
+                        );
                     }
                 }
             }
@@ -444,7 +466,8 @@ public sealed class EfCoreInstanceRepository(
                 currentSchema.Name ?? "public",
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
-                cancellationToken);
+                cancellationToken
+            );
 
             // Convert GroupByResponse to GroupSummary
             List<GroupSummary>? groups = null;
@@ -488,11 +511,10 @@ public sealed class EfCoreInstanceRepository(
             }
 
             // Return empty paged list with groups
-            return (new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false), groups);
+            return (
+                new HateoasPagedList<Instance>(new List<Instance>(), page, pageSize, false),
+                groups
+            );
         }
 
         // If only aggregations (no groupBy), return empty groups
@@ -509,11 +531,14 @@ public sealed class EfCoreInstanceRepository(
                     var combinedNode = FilterFormatDetector.CombineFilters(filter);
                     if (combinedNode != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(
+                            combinedNode,
+                            new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                WriteIndented = false,
+                            }
+                        );
                     }
                 }
                 else
@@ -532,7 +557,8 @@ public sealed class EfCoreInstanceRepository(
                 currentSchema.Name ?? "public",
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
-                cancellationToken);
+                cancellationToken
+            );
 
             // Aggregations without groupBy - return empty groups
             HateoasPagedList<Instance> pagedList;
@@ -551,7 +577,8 @@ public sealed class EfCoreInstanceRepository(
                     new List<Instance>(),
                     page,
                     pageSize,
-                    false);
+                    false
+                );
             }
 
             return (pagedList, null);
@@ -559,7 +586,13 @@ public sealed class EfCoreInstanceRepository(
 
         // Normal flow without groupBy/aggregations
         var orderBy = GraphQLFilterParser.ParseOrderBy(sort);
-        var hasAttributesOrderBy = orderBy != null && orderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
+        var hasAttributesOrderBy =
+            orderBy != null
+            && orderBy
+                .GetEntries()
+                .Any(e =>
+                    e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase)
+                );
         var schema = currentSchema.Name ?? "public";
 
         var skipCount = (page - 1) * pageSize;
@@ -573,7 +606,8 @@ public sealed class EfCoreInstanceRepository(
             if (!string.IsNullOrEmpty(orderByClause))
             {
                 var dbSet = await GetDbSetAsync();
-                var rawSql = $"SELECT s.* FROM \"{schema}\".\"Instances\" s ORDER BY {orderByClause} OFFSET {skipCount} LIMIT {pageSize + 1}";
+                var rawSql =
+                    $"SELECT s.* FROM \"{schema}\".\"Instances\" s ORDER BY {orderByClause} OFFSET {skipCount} LIMIT {pageSize + 1}";
                 var orderedInstances = await dbSet
                     .FromSqlRaw(rawSql)
                     .AsNoTracking()
@@ -583,7 +617,10 @@ public sealed class EfCoreInstanceRepository(
                 if (hasNextPage)
                     orderedInstances = orderedInstances.Take(pageSize).ToList();
 
-                items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
+                items = await LoadDataListAndPreserveOrderAsync(
+                    orderedInstances,
+                    cancellationToken
+                );
             }
             else
             {
@@ -609,7 +646,15 @@ public sealed class EfCoreInstanceRepository(
                 var filterNode = GraphQLFilterParser.ParseFilter(combinedFilter);
                 if (filterNode != null && filterNode.NodeType != FilterNodeType.Empty)
                 {
-                    var query = dbSet.ApplyGraphQLFilter(filterNode, "Data", "InstancesData", schema, schemaValidator, null, orderByClause);
+                    var query = dbSet.ApplyGraphQLFilter(
+                        filterNode,
+                        "Data",
+                        "InstancesData",
+                        schema,
+                        schemaValidator,
+                        null,
+                        orderByClause
+                    );
                     var orderedInstances = await query
                         .Skip(skipCount)
                         .Take(pageSize + 1)
@@ -619,7 +664,10 @@ public sealed class EfCoreInstanceRepository(
                     if (hasNextPage)
                         orderedInstances = orderedInstances.Take(pageSize).ToList();
 
-                    items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
+                    items = await LoadDataListAndPreserveOrderAsync(
+                        orderedInstances,
+                        cancellationToken
+                    );
                 }
                 else
                 {
@@ -654,10 +702,7 @@ public sealed class EfCoreInstanceRepository(
             var query = await GetFilteredQueryAsync(filter, cancellationToken);
             if (orderBy != null)
                 query = InstanceOrderByApplicator.Apply(query, orderBy);
-            items = await query
-                .Skip(skipCount)
-                .Take(pageSize + 1)
-                .ToListAsync(cancellationToken);
+            items = await query.Skip(skipCount).Take(pageSize + 1).ToListAsync(cancellationToken);
             hasNextPage = items.Count > pageSize;
             if (hasNextPage)
                 items = items.Take(pageSize).ToList();
@@ -670,11 +715,15 @@ public sealed class EfCoreInstanceRepository(
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
     /// </summary>
-    public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+    public async Task<(
+        HateoasPagedList<Instance> PagedList,
+        List<GroupSummary>? Groups
+    )> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
         Definitions.GraphQL.GraphQLFilterRequest? request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var context = await GetDbContextAsync();
         var dbSet = await GetDbSetAsync();
@@ -687,18 +736,24 @@ public sealed class EfCoreInstanceRepository(
             "Data",
             schema,
             query => query.Include(i => i.DataList).AsSplitQuery(),
-            applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
+            applyOrderBy: (q, orderBy) =>
+                InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
             applyOrderByRaw: (ctx, sch, orderBy) =>
             {
-                if (orderBy == null) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
+                if (orderBy == null)
+                    return ((WorkflowDbContext)ctx).Instances.AsQueryable();
                 var clause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, sch);
-                if (string.IsNullOrEmpty(clause)) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
-                return ((WorkflowDbContext)ctx).Instances
-                    .FromSqlRaw($"SELECT s.* FROM \"{sch}\".\"Instances\" s ORDER BY {clause}")
+                if (string.IsNullOrEmpty(clause))
+                    return ((WorkflowDbContext)ctx).Instances.AsQueryable();
+                return ((WorkflowDbContext)ctx)
+                    .Instances.FromSqlRaw(
+                        $"SELECT s.* FROM \"{sch}\".\"Instances\" s ORDER BY {clause}"
+                    )
                     .AsNoTracking();
             },
             schemaValidator,
-            cancellationToken);
+            cancellationToken
+        );
 
         // Handle GroupBy response
         if (response.Groups != null && response.Groups.Count > 0)
@@ -737,11 +792,10 @@ public sealed class EfCoreInstanceRepository(
                 groups.Add(summary);
             }
 
-            return (new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false), groups);
+            return (
+                new HateoasPagedList<Instance>(new List<Instance>(), page, pageSize, false),
+                groups
+            );
         }
 
         // Handle aggregations without groupBy
@@ -763,7 +817,8 @@ public sealed class EfCoreInstanceRepository(
                     new List<Instance>(),
                     page,
                     pageSize,
-                    false);
+                    false
+                );
             }
 
             return (pagedList, null);
@@ -786,16 +841,23 @@ public sealed class EfCoreInstanceRepository(
                 new List<Instance>(),
                 page,
                 pageSize,
-                false);
+                false
+            );
         }
 
         return (resultPagedList, null);
     }
 
-
-    public async Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default)
+    public async Task<Result<Instance>> GetActiveAsync(
+        string identifier,
+        CancellationToken cancellationToken = default
+    )
     {
-        var instanceResult = await GetResultAsync(identifier, includeDetails: true, cancellationToken);
+        var instanceResult = await GetResultAsync(
+            identifier,
+            includeDetails: true,
+            cancellationToken
+        );
 
         if (!instanceResult.IsSuccess)
         {
@@ -806,10 +868,13 @@ public sealed class EfCoreInstanceRepository(
 
         if (instance.IsCompleted)
         {
-            return Result<Instance>.Fail(Error.Validation(
-                WorkflowErrorCodes.InstanceCompleted,
-                $"Instance {identifier} is already completed with status: {instance.Status.Code}",
-                identifier));
+            return Result<Instance>.Fail(
+                Error.Validation(
+                    WorkflowErrorCodes.InstanceCompleted,
+                    $"Instance {identifier} is already completed with status: {instance.Status.Code}",
+                    identifier
+                )
+            );
         }
 
         return Result<Instance>.Ok(instance);
@@ -819,54 +884,61 @@ public sealed class EfCoreInstanceRepository(
     /// Gets an instance by ID using Result pattern.
     /// Returns Result.NotFound if instance doesn't exist.
     /// </summary>
-    public async Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
-        CancellationToken cancellationToken = default)
+    public async Task<Result<Instance>> GetResultAsync(
+        string identifier,
+        bool includeDetails = true,
+        CancellationToken cancellationToken = default
+    )
     {
         var instance = await FindByIdentifierAsync(identifier, cancellationToken);
 
         if (instance is null)
         {
-            return Result<Instance>.Fail(Error.NotFound(
-                WorkflowErrorCodes.InstanceNotFound,
-                $"Instance with ID {identifier} not found",
-                identifier));
+            return Result<Instance>.Fail(
+                Error.NotFound(
+                    WorkflowErrorCodes.InstanceNotFound,
+                    $"Instance with ID {identifier} not found",
+                    identifier
+                )
+            );
         }
 
         return Result<Instance>.Ok(instance);
     }
 
-    public async Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default)
+    public async Task<List<InstanceAndDataModel>> GetActiveDataListAsync(
+        CancellationToken cancellationToken = default
+    )
     {
         var context = await GetDbContextAsync();
 
         // Optimize query with proper indexing and reduced data transfer
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
+        return await (
+            from instance in context.Instances
+            where instance.Status == InstanceStatus.Active
+            join data in context.InstancesData on instance.Id equals data.InstanceId
+            select new InstanceAndDataModel { Instance = instance, InstanceData = data }
+        )
             .AsNoTracking() // Don't track changes for read-only operations
             .AsSplitQuery() // Use split queries for better performance with joins
             .ToListAsync(cancellationToken);
     }
 
     public async Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(
-        int skip, int take, CancellationToken cancellationToken = default)
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default
+    )
     {
         var context = await GetDbContextAsync();
 
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                      orderby instance.Id
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
+        return await (
+            from instance in context.Instances
+            where instance.Status == InstanceStatus.Active
+            orderby instance.Id
+            join data in context.InstancesData on instance.Id equals data.InstanceId
+            select new InstanceAndDataModel { Instance = instance, InstanceData = data }
+        )
             .AsNoTracking()
             .AsSplitQuery()
             .Skip(skip)
@@ -875,20 +947,23 @@ public sealed class EfCoreInstanceRepository(
     }
 
     public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
-        DateTime since, int skip, int take, CancellationToken cancellationToken = default)
+        DateTime since,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default
+    )
     {
         var context = await GetDbContextAsync();
 
-        return await (from instance in context.Instances
-                      where instance.Status == InstanceStatus.Active
-                            && (instance.ModifiedAt ?? instance.CreatedAt) >= since
-                      orderby instance.Id
-                      join data in context.InstancesData on instance.Id equals data.InstanceId
-                      select new InstanceAndDataModel
-                      {
-                          Instance = instance,
-                          InstanceData = data
-                      })
+        return await (
+            from instance in context.Instances
+            where
+                instance.Status == InstanceStatus.Active
+                && (instance.ModifiedAt ?? instance.CreatedAt) >= since
+            orderby instance.Id
+            join data in context.InstancesData on instance.Id equals data.InstanceId
+            select new InstanceAndDataModel { Instance = instance, InstanceData = data }
+        )
             .AsNoTracking()
             .AsSplitQuery()
             .Skip(skip)
@@ -897,22 +972,27 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
-    public async Task<bool> AnyActiveByKeyAsync(string key, Guid excludeInstanceId,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> AnyActiveByKeyAsync(
+        string key,
+        Guid excludeInstanceId,
+        CancellationToken cancellationToken = default
+    )
     {
         return await (await GetDbSetAsync())
             .AsNoTracking()
             .AnyAsync(
-                i => i.Key == key
-                     && i.Id != excludeInstanceId
-                     && i.Status == InstanceStatus.Active,
-                cancellationToken);
+                i => i.Key == key && i.Id != excludeInstanceId && i.Status == InstanceStatus.Active,
+                cancellationToken
+            );
     }
 
     /// <summary>
     /// Loads DataList for instances (ordered by id list) and returns list in the same order. Used when ORDER BY must be preserved (EF Include breaks order).
     /// </summary>
-    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(List<Instance> orderedInstances, CancellationToken cancellationToken)
+    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(
+        List<Instance> orderedInstances,
+        CancellationToken cancellationToken
+    )
     {
         if (orderedInstances.Count == 0)
             return [];
@@ -936,22 +1016,31 @@ public sealed class EfCoreInstanceRepository(
             return null;
         if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
         {
-            if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
+            if (
+                GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest)
+                && parsedRequest?.Filter != null
+            )
             {
-                return JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = false
-                });
+                return JsonSerializer.Serialize(
+                    parsedRequest.Filter,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        WriteIndented = false,
+                    }
+                );
             }
             var combinedNode = FilterFormatDetector.CombineFilters(filter);
             if (combinedNode != null)
             {
-                return JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = false
-                });
+                return JsonSerializer.Serialize(
+                    combinedNode,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        WriteIndented = false,
+                    }
+                );
             }
         }
         else
@@ -959,11 +1048,14 @@ public sealed class EfCoreInstanceRepository(
             var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
             if (legacyNode != null)
             {
-                return JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = false
-                });
+                return JsonSerializer.Serialize(
+                    legacyNode,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                        WriteIndented = false,
+                    }
+                );
             }
         }
         return null;
@@ -972,7 +1064,11 @@ public sealed class EfCoreInstanceRepository(
     /// <summary>
     /// Handles metrics recording for instance status changes
     /// </summary>
-    private async Task HandleStatusChangeMetrics(Instance entity, InstanceStatus oldStatus, InstanceStatus newStatus)
+    private async Task HandleStatusChangeMetrics(
+        Instance entity,
+        InstanceStatus oldStatus,
+        InstanceStatus newStatus
+    )
     {
         // Update status transition metrics (handles all status gauge changes)
         workflowMetrics.UpdateInstanceStatusMetrics(entity.Flow, oldStatus.Code, newStatus.Code);
@@ -981,7 +1077,11 @@ public sealed class EfCoreInstanceRepository(
         if (newStatus.Equals(InstanceStatus.Completed))
         {
             var durationSeconds = entity.Duration?.TotalSeconds;
-            workflowMetrics.RecordInstanceCompleted(entity.Flow, runtimeInfoProvider.Domain, durationSeconds);
+            workflowMetrics.RecordInstanceCompleted(
+                entity.Flow,
+                runtimeInfoProvider.Domain,
+                durationSeconds
+            );
         }
 
         // Record specific error events with duration
@@ -993,7 +1093,11 @@ public sealed class EfCoreInstanceRepository(
             // Record duration for faulted instances
             if (durationSeconds.HasValue)
             {
-                workflowMetrics.RecordInstanceDuration(entity.Flow, "Faulted", durationSeconds.Value);
+                workflowMetrics.RecordInstanceDuration(
+                    entity.Flow,
+                    "Faulted",
+                    durationSeconds.Value
+                );
             }
         }
 

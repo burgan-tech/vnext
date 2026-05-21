@@ -1,18 +1,29 @@
 using System.Text.Json;
 using BBT.Aether.Application.Services;
+using BBT.Aether.Domain.Entities;
 using BBT.Aether.Results;
+using BBT.Workflow;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Monitor.Components.DTOs;
+using BBT.Workflow.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BBT.Workflow.Monitor.Components;
 
 /// <summary>
 /// Read-only query service for workflow component definitions.
-/// Dispatches to <see cref="IComponentCacheStore"/> based on the requested component type.
+/// Resolution follows the vNext caching strategy: in-memory snapshot (<see cref="IDomainCacheContext"/>),
+/// distributed + backend hydration via <see cref="IComponentCacheStore"/> / <see cref="IRuntimeService"/>.
+/// Full-list DB loads are performed in an isolated DI scope (same pattern as <see cref="RuntimeCacheInitializer"/> and RuntimeCacheBackend).
+/// so the request-scoped <see cref="ICurrentSchema"/> cannot leak the wrong PostgreSQL schema into definition queries.
 /// </summary>
 public sealed class MonitorComponentQueryService(
     IServiceProvider serviceProvider,
-    IComponentCacheStore componentCacheStore)
+    IComponentCacheStore componentCacheStore,
+    IDomainCacheContext domainCacheContext,
+    IServiceScopeFactory serviceScopeFactory,
+    IRuntimeInfoProvider runtimeInfoProvider)
     : ApplicationService(serviceProvider), IMonitorComponentQueryService
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
@@ -25,33 +36,57 @@ public sealed class MonitorComponentQueryService(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default)
     {
-        return input.ComponentType switch
+        var canonicalType = NormalizeComponentType(input.ComponentType);
+        if (canonicalType is null)
         {
-            MonitorComponentTypes.Flows => await GetSingleOrListAsync(
+            return Result<MonitorComponentResponse>.Fail(
+                Error.Validation("component.unknownType",
+                    $"Unknown component type '{input.ComponentType}'. " +
+                    $"Supported: {string.Join(", ", MonitorComponentTypes.Flows, MonitorComponentTypes.Tasks, MonitorComponentTypes.Schemas, MonitorComponentTypes.Extensions, MonitorComponentTypes.Functions, MonitorComponentTypes.Views)}."));
+        }
+
+        return canonicalType switch
+        {
+            MonitorComponentTypes.Flows => await ResolveAsync<Workflow>(
                 input,
-                (key, version, ct) => componentCacheStore.GetFlowAsync(input.Domain, key, version, ct),
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetFlowAsync(d, k, v, ct),
+                ct => domainCacheContext.Workflows.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
-            MonitorComponentTypes.Tasks => await GetSingleOrListAsync(
+            MonitorComponentTypes.Tasks => await ResolveAsync<WorkflowTask>(
                 input,
-                (key, version, ct) => componentCacheStore.GetTaskAsync(input.Domain, key, version, ct),
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetTaskAsync(d, k, v, ct),
+                ct => domainCacheContext.Tasks.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
-            MonitorComponentTypes.Schemas => await GetSingleOrListAsync(
+            MonitorComponentTypes.Schemas => await ResolveAsync<SchemaDefinition>(
                 input,
-                (key, version, ct) => componentCacheStore.GetSchemaAsync(input.Domain, key, version, ct),
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetSchemaAsync(d, k, v, ct),
+                ct => domainCacheContext.Schemas.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
-            MonitorComponentTypes.Extensions => await GetExtensionsAsync(input, cancellationToken),
-
-            MonitorComponentTypes.Functions => await GetSingleOrListAsync(
+            MonitorComponentTypes.Extensions => await ResolveAsync<Extension>(
                 input,
-                (key, version, ct) => componentCacheStore.GetFunctionAsync(input.Domain, key, version, ct),
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetExtensionAsync(d, k, v, ct),
+                ct => domainCacheContext.Extensions.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
-            MonitorComponentTypes.Views => await GetSingleOrListAsync(
+            MonitorComponentTypes.Functions => await ResolveAsync<Function>(
                 input,
-                (key, version, ct) => componentCacheStore.GetViewAsync(input.Domain, key, version, ct),
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetFunctionAsync(d, k, v, ct),
+                ct => domainCacheContext.Functions.GetAllByDomainAsync(input.Domain, ct),
+                cancellationToken),
+
+            MonitorComponentTypes.Views => await ResolveAsync<View>(
+                input,
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetViewAsync(d, k, v, ct),
+                ct => domainCacheContext.Views.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             _ => Result<MonitorComponentResponse>.Fail(
@@ -61,58 +96,117 @@ public sealed class MonitorComponentQueryService(
         };
     }
 
-    private async Task<Result<MonitorComponentResponse>> GetSingleOrListAsync<T>(
+    private static string? NormalizeComponentType(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var t = raw.Trim();
+        if (t.Equals(MonitorComponentTypes.Flows, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Flows;
+        if (t.Equals(MonitorComponentTypes.Tasks, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Tasks;
+        if (t.Equals(MonitorComponentTypes.Schemas, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Schemas;
+        if (t.Equals(MonitorComponentTypes.Extensions, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Extensions;
+        if (t.Equals(MonitorComponentTypes.Functions, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Functions;
+        if (t.Equals(MonitorComponentTypes.Views, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Views;
+
+        return null;
+    }
+
+    private async Task<Result<MonitorComponentResponse>> ResolveAsync<T>(
         MonitorGetComponentsInput input,
-        Func<string, string?, CancellationToken, Task<Result<T>>> getByKey,
+        string canonicalComponentType,
+        Func<string, string, string?, CancellationToken, Task<Result<T>>> getByKey,
+        Func<CancellationToken, Task<Result<List<T>>>> getSnapshotAllByDomain,
         CancellationToken cancellationToken)
-        where T : class
+        where T : class, IDomainEntity, IReferenceSetter
     {
         if (!string.IsNullOrWhiteSpace(input.Key))
         {
-            var result = await getByKey(input.Key, input.Version, cancellationToken);
-            if (!result.IsSuccess)
-                return Result<MonitorComponentResponse>.Fail(result.Error);
+            var one = await getByKey(input.Domain, input.Key, input.Version, cancellationToken);
+            if (!one.IsSuccess)
+                return Result<MonitorComponentResponse>.Fail(one.Error);
 
             return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
             {
-                ComponentType = input.ComponentType,
-                Items = [Serialize(result.Value!)]
+                ComponentType = canonicalComponentType,
+                Items = [Serialize(one.Value!)]
             });
         }
 
+        return await GetFullListWithSnapshotThenBackendAsync<T>(
+            canonicalComponentType,
+            input.Domain,
+            getSnapshotAllByDomain,
+            cancellationToken);
+    }
+
+    private async Task<Result<MonitorComponentResponse>> GetFullListWithSnapshotThenBackendAsync<T>(
+        string componentType,
+        string domain,
+        Func<CancellationToken, Task<Result<List<T>>>> getSnapshotAllByDomain,
+        CancellationToken cancellationToken)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var snapResult = await getSnapshotAllByDomain(cancellationToken);
+        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
+        {
+            return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
+            {
+                ComponentType = componentType,
+                Items = snapResult.Value!.Select(Serialize).ToList()
+            });
+        }
+
+        var loadResult = await LoadLatestPerKeyFromRuntimeAndWarmCacheAsync<T>(domain, cancellationToken);
+        if (!loadResult.IsSuccess)
+            return Result<MonitorComponentResponse>.Fail(loadResult.Error);
+
         return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
         {
-            ComponentType = input.ComponentType,
-            Items = []
+            ComponentType = componentType,
+            Items = loadResult.Value!.Select(Serialize).ToList()
         });
     }
 
-    private async Task<Result<MonitorComponentResponse>> GetExtensionsAsync(
-        MonitorGetComponentsInput input,
+    private async Task<Result<List<T>>> LoadLatestPerKeyFromRuntimeAndWarmCacheAsync<T>(
+        string requestDomain,
         CancellationToken cancellationToken)
+        where T : class, IDomainEntity, IReferenceSetter
     {
-        if (!string.IsNullOrWhiteSpace(input.Key))
-        {
-            var single = await componentCacheStore.GetExtensionAsync(input.Domain, input.Key, input.Version, cancellationToken);
-            if (!single.IsSuccess)
-                return Result<MonitorComponentResponse>.Fail(single.Error);
+        runtimeInfoProvider.Check(requestDomain);
 
-            return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
-            {
-                ComponentType = MonitorComponentTypes.Extensions,
-                Items = [Serialize(single.Value!)]
-            });
+        // Isolated scope: matches RuntimeCacheInitializer / RuntimeCacheBackend so ICurrentSchema and DbContext
+        // are not affected by whichever workflow schema the HTTP pipeline last selected.
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
+
+        var fromDb = (await runtimeService.GetAsync<T>(cancellationToken)).ToList();
+        var filtered = fromDb
+            .Where(e => e is not null
+                        && !string.IsNullOrWhiteSpace(e.Key)
+                        && string.Equals(e.Domain, requestDomain, StringComparison.OrdinalIgnoreCase))
+            .Cast<T>()
+            .ToList();
+
+        var latest = filtered
+            .GroupBy(e => e.Key!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(e => e.Version, new SemVersionComparer()).First())
+            .ToList();
+
+        foreach (var entity in latest)
+        {
+            var setResult = await componentCacheStore.SetAsync(entity, cancellationToken);
+            if (!setResult.IsSuccess)
+                return Result<List<T>>.Fail(setResult.Error);
         }
 
-        var all = await componentCacheStore.GetAllExtensionsAsync(input.Domain, cancellationToken);
-        if (!all.IsSuccess)
-            return Result<MonitorComponentResponse>.Fail(all.Error);
-
-        return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
-        {
-            ComponentType = MonitorComponentTypes.Extensions,
-            Items = all.Value!.Select(Serialize).ToList()
-        });
+        return Result<List<T>>.Ok(latest);
     }
 
     private static JsonElement Serialize<T>(T value) where T : class
