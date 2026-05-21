@@ -410,22 +410,22 @@ public sealed class TransitionAuthorizationManager(
         if (string.IsNullOrEmpty(actorUserName))
             return false;
 
-        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal)
-                                      && string.Equals(actorUserName, instance.CreatedBy?.Trim(), StringComparison.Ordinal)))
-            return false;
-        
-        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.InstanceBehalfOfStarter, StringComparison.Ordinal)
-                                      && string.Equals(actorUserName, instance.CreatedByBehalfOf?.Trim(), StringComparison.Ordinal)))
-            return false;
-
         string? previousUserCreatedBy = null;
         string? previousBehalfOf = null;
+        InstanceTransition? previousTransition = null;
+        if(predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal))
+        || predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal)))
+        {
+            previousTransition = await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken);
+            if(previousTransition is null)
+                return false;
+        }
 
         if (predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)))
-            previousUserCreatedBy = (await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken))?.CreatedBy?.Trim();
+            previousUserCreatedBy = previousTransition?.CreatedBy?.Trim();
 
         if (predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal)))
-            previousBehalfOf = (await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken))?.CreatedByBehalfOf?.Trim();
+            previousBehalfOf = previousTransition?.CreatedByBehalfOf?.Trim();
 
         if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)
                                       && !string.IsNullOrEmpty(previousUserCreatedBy)

@@ -1439,35 +1439,47 @@ public sealed class InstanceQueryAppService(
         if (workflowSchemas.Count == 0)
             return Result<List<HumanTaskItemOutput>>.Ok([]);
 
-        var allItems = new List<HumanTaskItemOutput>();
-        
-        foreach (var schema in workflowSchemas)
+        const int humanTaskFanoutParallelism = 10;
+
+        var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
+        var userRoles = currentUser.Roles ?? [];
+        var allItems = new System.Collections.Concurrent.ConcurrentBag<HumanTaskItemOutput>();
+
+        var parallelOptions = new ParallelOptions
         {
-            var flowResult = await componentCacheStore.GetFlowAsync(domain, schema.Key, schema.Version, cancellationToken);
+            MaxDegreeOfParallelism = humanTaskFanoutParallelism,
+            CancellationToken = cancellationToken
+        };
+
+        await Parallel.ForEachAsync(workflowSchemas, parallelOptions, async (schema, ct) =>
+        {
+            var flowResult = await scopeFactory.ExecuteInScopeRawAsync(async (sp, innerCt) =>
+            {
+                var cacheStore = sp.GetRequiredService<IComponentCacheStore>();
+                return await cacheStore.GetFlowAsync(domain, schema.Key, schema.Version, innerCt);
+            }, ct);
+
             if (!flowResult.IsSuccess || flowResult.Value == null)
-                continue;
+                return;
 
             var currentWorkflow = flowResult.Value;
-            
-            var scopeFactory = serviceProvider.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>();
-            var instances = await scopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
+
+            var instances = await scopeFactory.ExecuteInScopeRawAsync(async (sp, innerCt) =>
             {
                 var scopedSchema = sp.GetRequiredService<ICurrentSchema>();
                 var scopedRepo = sp.GetRequiredService<IInstanceRepository>();
 
                 using (scopedSchema.Use(schema.Key))
                 {
-                    return await scopedRepo.GetHumanTaskInstancesAsync(ct);
+                    return await scopedRepo.GetHumanTaskInstancesAsync(innerCt);
                 }
-            }, cancellationToken);
+            }, ct);
 
             if (instances.Count == 0)
-                continue;
-
-            var userRoles = currentUser.Roles ?? [];
+                return;
 
             var filtered = await FilterAuthorizedInstancesAsync(
-                instances, currentWorkflow, domain, userRoles, cancellationToken);
+                instances, currentWorkflow, domain, userRoles, ct);
 
             foreach (var instance in filtered)
             {
@@ -1496,10 +1508,10 @@ public sealed class InstanceQueryAppService(
                     VNext = true
                 });
             }
-        }
+        });
 
-        allItems.Sort((a, b) => b.CreatedAt.CompareTo(a.CreatedAt));
-        return Result<List<HumanTaskItemOutput>>.Ok(allItems);
+        var ordered = allItems.OrderByDescending(x => x.CreatedAt).ToList();
+        return Result<List<HumanTaskItemOutput>>.Ok(ordered);
     }
 
     /// <summary>
