@@ -410,16 +410,9 @@ public sealed class TransitionAuthorizationManager(
         if (string.IsNullOrEmpty(actorUserName))
             return false;
 
-        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal)
-                                      && string.Equals(actorUserName, instance.CreatedBy?.Trim(), StringComparison.Ordinal)))
-            return false;
-        
-        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.InstanceBehalfOfStarter, StringComparison.Ordinal)
-                                      && string.Equals(actorUserName, instance.CreatedByBehalfOf?.Trim(), StringComparison.Ordinal)))
-            return false;
-
         string? previousUserCreatedBy = null;
         string? previousBehalfOf = null;
+
 
         var needsPreviousUser = predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal));
         var needsPreviousBehalfOf = predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal));
@@ -434,6 +427,7 @@ public sealed class TransitionAuthorizationManager(
             if (needsPreviousBehalfOf)
                 previousBehalfOf = lastTransition?.CreatedByBehalfOf?.Trim();
         }
+
 
         if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)
                                       && !string.IsNullOrEmpty(previousUserCreatedBy)
