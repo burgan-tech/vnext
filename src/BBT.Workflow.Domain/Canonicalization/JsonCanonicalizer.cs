@@ -203,7 +203,7 @@ public sealed class JsonCanonicalizer : IJsonCanonicalizer
                 ScanFor(Quote);
                 var name = ParseQuotedString();
                 ScanFor(Colon);
-                dict.Add(name, ParseElement()!);
+                dict[name] = ParseElement()!;
             }
             Scan();
             return dict;
