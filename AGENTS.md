@@ -1,25 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Rules (always apply)
-
-These rules are authoritative for all work in this repo. Read them before writing code:
-
-- [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, domain-event dual processing, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
-- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
-
-## Project Skills
-
-On-demand skills live under `.claude/skills/`. Invoke via the `Skill` tool when the trigger phrase matches:
-
-- **vnext-docs-generator** — "döküman oluştur" / "create docs"
-- **vnext-meta-validator** — "validate meta" / "meta kontrol" (also after any `vnext-meta/` edit)
-- **vnext-meta-matrix** — "meta matrix" / "meta rapor"
-- **workflow-code-review** — "code review" / "review et" / "incele"
-- **create-github-issue** — "issue aç" / "open issue" / "projeyi tara"
-- **create-github-pr** — "PR oluştur" / "open PR" / "pull request"
-- **git-commit-message** — "commit mesajı" / "git commit"
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## First-Time Setup
 
