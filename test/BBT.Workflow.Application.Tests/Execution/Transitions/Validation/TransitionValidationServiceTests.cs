@@ -160,6 +160,41 @@ public class TransitionValidationServiceTests
         // Obsolete - logging is now tested in specification unit tests
     }
 
+    [Fact]
+    public async Task ValidateAsync_WithAcceptLanguageHeader_ShouldPassCultureToSchemaValidator()
+    {
+        // Arrange
+        var schemaRef = new Reference("test-schema", "test-domain", "sys-schemas", "1.0.0");
+        var context = CreateTransitionContextWithSchema(schemaRef, new Dictionary<string, string?>
+        {
+            ["accept-language"] = "tr-TR,tr;q=0.9,en-US;q=0.8"
+        });
+        var schemaDefinition = CreateMockSchemaDefinition("test-schema");
+        SchemaValidationOptions? capturedOptions = null;
+
+        _mockComponentCacheStore
+            .Setup(x => x.GetSchemaAsync(schemaRef.Domain, schemaRef.Key, schemaRef.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<SchemaDefinition>.Ok(schemaDefinition));
+
+        _mockSchemaValidator
+            .Setup(x => x.Validate(
+                schemaDefinition.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()))
+            .Callback<JsonElement, JsonElement?, SchemaValidationOptions>((_, _, options) => capturedOptions = options)
+            .Returns(Result.Ok());
+
+        // Act
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        capturedOptions.ShouldNotBeNull();
+        capturedOptions!.Culture.ShouldBe("tr-TR");
+        capturedOptions.IncludeVocabularyDetails.ShouldBeTrue();
+        capturedOptions.CustomValidationEnabled.ShouldBeTrue();
+    }
+
     [Fact(Skip = "Extension methods cannot be mocked")]
     public async Task ValidateAsync_WithValidationErrors_ShouldIncludeTransitionKey()
     {
@@ -497,7 +532,8 @@ public class TransitionValidationServiceTests
         // Skipping policy validation tests as they're covered by specification unit tests
     }
 
-    private TransitionExecutionContext CreateValidTransitionContext()
+    private TransitionExecutionContext CreateValidTransitionContext(
+        IReadOnlyDictionary<string, string?>? headers = null)
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -526,13 +562,16 @@ public class TransitionValidationServiceTests
             Instance = instance,
             Data = new { test = "data" },
             TraceId = Guid.NewGuid().ToString("N"),
-            SpanId = Guid.NewGuid().ToString("N")[..16]
+            SpanId = Guid.NewGuid().ToString("N")[..16],
+            Headers = headers ?? new Dictionary<string, string?>()
         };
     }
 
-    private TransitionExecutionContext CreateTransitionContextWithSchema(Reference schemaRef)
+    private TransitionExecutionContext CreateTransitionContextWithSchema(
+        Reference schemaRef,
+        IReadOnlyDictionary<string, string?>? headers = null)
     {
-        var context = CreateValidTransitionContext();
+        var context = CreateValidTransitionContext(headers);
         typeof(Transition)
             .GetProperty(nameof(Transition.Schema))!
             .SetValue(context.Transition, schemaRef);
