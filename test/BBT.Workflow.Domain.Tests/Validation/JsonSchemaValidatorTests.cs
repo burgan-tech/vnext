@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace BBT.Workflow.Validation;
@@ -305,5 +306,234 @@ public class JsonSchemaValidatorTests: DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.True(validResult.IsSuccess);
         Assert.False(invalidResult.IsSuccess);
+    }
+
+    [Fact]
+    public void Validate_WithLocalizedVocabularyDetails_UsesRequestedCulture()
+    {
+        // Arrange
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "customer": {
+                        "type": "object",
+                        "properties": {
+                            "identityNumber": {
+                                "type": "string",
+                                "minLength": 11,
+                                "x-labels": {
+                                    "tr-TR": "TCKN",
+                                    "en-US": "Identity number"
+                                },
+                                "x-errorMessages": {
+                                    "minLength": {
+                                        "tr-TR": "TCKN 11 karakter olmalıdır.",
+                                        "en-US": "Identity number must be 11 characters."
+                                    }
+                                }
+                            }
+                        },
+                        "required": ["identityNumber"]
+                    }
+                }
+            }
+            """).RootElement;
+        var data = JsonDocument.Parse("""
+            {
+                "customer": {
+                    "identityNumber": "123"
+                }
+            }
+            """).RootElement;
+
+        // Act
+        var result = _validator.Validate(
+            schema,
+            data,
+            new SchemaValidationOptions(Culture: "tr-TR", IncludeVocabularyDetails: true));
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        var validationError = Assert.Single(result.Error.ValidationErrors!);
+        Assert.Equal("TCKN 11 karakter olmalıdır.", validationError.ErrorMessage);
+        Assert.Contains("customer.identityNumber", validationError.MemberNames);
+
+        var details = JsonSerializer.Deserialize<SchemaValidationProblemDetails>(result.Error.Detail!);
+        Assert.NotNull(details);
+        Assert.Equal("tr-TR", details!.Culture);
+        var error = Assert.Single(details.Errors);
+        Assert.Equal("customer.identityNumber", error.Path);
+        Assert.Equal("minLength", error.Keyword);
+        Assert.Equal("schema.minLength", error.Code);
+        Assert.Equal("TCKN", error.Label);
+        Assert.Equal("TCKN 11 karakter olmalıdır.", error.Message);
+        Assert.Equal(11, error.Parameters["minLength"].GetInt32());
+    }
+
+    [Fact]
+    public void Validate_WithUnsupportedCulture_FallsBackToEnglishVocabulary()
+    {
+        // Arrange
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 5,
+                        "x-labels": {
+                            "tr-TR": "Ad",
+                            "en-US": "Name"
+                        },
+                        "x-errorMessages": {
+                            "minLength": {
+                                "tr-TR": "Ad en az 5 karakter olmalıdır.",
+                                "en-US": "Name must be at least 5 characters."
+                            }
+                        }
+                    }
+                }
+            }
+            """).RootElement;
+        var data = JsonDocument.Parse("""{"name":"abc"}""").RootElement;
+
+        // Act
+        var result = _validator.Validate(
+            schema,
+            data,
+            new SchemaValidationOptions(Culture: "de-DE", IncludeVocabularyDetails: true));
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        var validationError = Assert.Single(result.Error.ValidationErrors!);
+        Assert.Equal("Name must be at least 5 characters.", validationError.ErrorMessage);
+
+        var details = JsonSerializer.Deserialize<SchemaValidationProblemDetails>(result.Error.Detail!);
+        Assert.NotNull(details);
+        Assert.Equal("de-DE", details!.Culture);
+        Assert.Equal("Name", Assert.Single(details.Errors).Label);
+    }
+
+    [Fact]
+    public void Validate_WithBusinessPropertyNamedLabels_DoesNotStripPropertySchema()
+    {
+        // Arrange
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "labels": {
+                        "type": "string",
+                        "minLength": 3
+                    }
+                }
+            }
+            """).RootElement;
+        var data = JsonDocument.Parse("""{"labels":"ab"}""").RootElement;
+
+        // Act
+        var result = _validator.Validate(
+            schema,
+            data,
+            new SchemaValidationOptions(Culture: "en-US", IncludeVocabularyDetails: true));
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        var details = JsonSerializer.Deserialize<SchemaValidationProblemDetails>(result.Error.Detail!);
+        var error = Assert.Single(details!.Errors);
+        Assert.Equal("labels", error.Path);
+        Assert.Equal("minLength", error.Keyword);
+    }
+
+    [Fact]
+    public void Validate_WithRegisteredCustomValidationRule_ReturnsLocalizedRuleError()
+    {
+        // Arrange
+        var validator = new CachedJsonSchemaValidator(
+            [new BlockedValueSchemaValidationRule()],
+            NullLogger<CachedJsonSchemaValidator>.Instance);
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "x-validation": {
+                            "rule": "blockedValue",
+                            "parameters": { "blocked": "BLOCKED" },
+                            "errorMessages": {
+                                "tr-TR": "Bu değer kullanılamaz.",
+                                "en-US": "This value cannot be used."
+                            }
+                        }
+                    }
+                }
+            }
+            """).RootElement;
+        var data = JsonDocument.Parse("""{"code":"BLOCKED"}""").RootElement;
+
+        // Act
+        var result = validator.Validate(
+            schema,
+            data,
+            new SchemaValidationOptions(Culture: "tr-TR", IncludeVocabularyDetails: true, CustomValidationEnabled: true));
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Bu değer kullanılamaz.", Assert.Single(result.Error.ValidationErrors!).ErrorMessage);
+        var details = JsonSerializer.Deserialize<SchemaValidationProblemDetails>(result.Error.Detail!);
+        var error = Assert.Single(details!.Errors);
+        Assert.Equal("code", error.Path);
+        Assert.Equal("x-validation", error.Keyword);
+        Assert.Equal("schema.x-validation.blockedValue", error.Code);
+    }
+
+    [Fact]
+    public void Validate_WithUnknownCustomValidationRule_SkipsRule()
+    {
+        // Arrange
+        var validator = new CachedJsonSchemaValidator([], NullLogger<CachedJsonSchemaValidator>.Instance);
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "x-validation": {
+                            "rule": "missingRule",
+                            "errorMessages": {
+                                "en-US": "This should not be returned."
+                            }
+                        }
+                    }
+                }
+            }
+            """).RootElement;
+        var data = JsonDocument.Parse("""{"code":"BLOCKED"}""").RootElement;
+
+        // Act
+        var result = validator.Validate(
+            schema,
+            data,
+            new SchemaValidationOptions(Culture: "en-US", IncludeVocabularyDetails: true, CustomValidationEnabled: true));
+
+        // Assert
+        Assert.True(result.IsSuccess);
+    }
+
+    private sealed class BlockedValueSchemaValidationRule : IJsonSchemaCustomValidationRule
+    {
+        public string Name => "blockedValue";
+
+        public bool IsValid(JsonElement value, JsonElement? parameters)
+        {
+            var blocked = parameters is { ValueKind: JsonValueKind.Object } p &&
+                          p.TryGetProperty("blocked", out var blockedElement)
+                ? blockedElement.GetString()
+                : null;
+
+            return value.ValueKind != JsonValueKind.String || value.GetString() != blocked;
+        }
     }
 }
