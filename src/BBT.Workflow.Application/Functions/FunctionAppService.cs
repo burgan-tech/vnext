@@ -173,7 +173,7 @@ public sealed class FunctionAppService(
                 return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
                     function,
                     scriptContext,
-                    ToRawDictionary(scriptResponse.Data)));
+                    scriptResponse.Data));
 
             return Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput
             {
@@ -280,7 +280,7 @@ public sealed class FunctionAppService(
     internal static FunctionResponseOutput CreateRawResponse(
         Function function,
         ScriptContext scriptContext,
-        Dictionary<string, dynamic?> data)
+        object? data)
     {
         var (statusCode, headers) = ExtractSingleTaskHttpMetadata(function, scriptContext);
 
@@ -349,7 +349,7 @@ public sealed class FunctionAppService(
             return value switch
             {
                 int statusCode => statusCode,
-                long statusCode => checked((int)statusCode),
+                long statusCode when statusCode is >= int.MinValue and <= int.MaxValue => (int)statusCode,
                 string statusCode when int.TryParse(statusCode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
                 _ => null
             };
@@ -374,14 +374,21 @@ public sealed class FunctionAppService(
         if (response is IDictionary<string, object?> dictionary &&
             TryGetDictionaryValue(dictionary, "headers", out var value))
         {
-            return value switch
+            try
             {
-                Dictionary<string, string> typedHeaders => typedHeaders,
-                IDictionary<string, object?> objectHeaders => objectHeaders
-                    .Where(header => header.Value != null)
-                    .ToDictionary(header => header.Key, header => Convert.ToString(header.Value, CultureInfo.InvariantCulture) ?? string.Empty),
-                _ => JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(value))
-            };
+                return value switch
+                {
+                    Dictionary<string, string> typedHeaders => typedHeaders,
+                    IDictionary<string, object?> objectHeaders => objectHeaders
+                        .Where(header => header.Value != null)
+                        .ToDictionary(header => header.Key, header => Convert.ToString(header.Value, CultureInfo.InvariantCulture) ?? string.Empty),
+                    _ => JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(value))
+                };
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         return null;

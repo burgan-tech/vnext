@@ -5,7 +5,7 @@ namespace BBT.Workflow.Functions;
 /// </summary>
 public sealed class FunctionResponseOutput
 {
-    public Dictionary<string, dynamic?> Data { get; init; } = [];
+    public object? Data { get; init; }
 
     public int? StatusCode { get; init; }
 

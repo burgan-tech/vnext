@@ -212,8 +212,8 @@ public class FunctionOutputHandlerTests
         response.StatusCode.ShouldBe(400);
         response.Headers.ShouldNotBeNull();
         response.Headers!["x-validation-source"].ShouldBe("schema");
-        ((object?)response.Data["title"]).ShouldBe("Validation failed");
-        ((object?)response.Data["status"]).ShouldBe(400L);
+        ((object?)((Dictionary<string, dynamic?>)response.Data)["title"]).ShouldBe("Validation failed");
+        ((object?)((Dictionary<string, dynamic?>)response.Data)["status"]).ShouldBe(400L);
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class FunctionOutputHandlerTests
 
         response.StatusCode.ShouldBeNull();
         response.Headers.ShouldBeNull();
-        response.Data.ShouldContainKey(function.Key.ToVariableName());
+        ((Dictionary<string, dynamic?>)response.Data).ShouldContainKey(function.Key.ToVariableName());
     }
 
     private static Function CreateFunction(bool rawResponse)

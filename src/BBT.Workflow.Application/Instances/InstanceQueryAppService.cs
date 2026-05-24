@@ -710,12 +710,12 @@ public sealed class InstanceQueryAppService(
             return WellKnownTransitionKeys.Timeout;
 
         if (currentState.FindTransition(transitionKey) != null)
-            return "state-transition";
+            return "stateTransition";
 
         if (workflow.FindSharedTransition(transitionKey) != null)
-            return "shared-transition";
+            return "sharedTransition";
 
-        return "state-transition";
+        return "stateTransition";
     }
 
     private static bool IsTransitionKey(Transition? transition, string transitionKey) =>
