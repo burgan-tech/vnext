@@ -336,7 +336,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             ExtraProperties = BuildExtraPropertiesAsDictionary(context.ScriptContext, task),
             Headers = binding.Headers,
             BaseUrl = endpoint.BaseUrl.ToString(),
-            DaprAppId = endpoint.DaprAppId
+            DaprAppId = endpoint.DaprAppId,
+            AcceptedStatusCodes = binding.AcceptedStatusCodes
         };
 
         return Result.Ok(new TaskEnvelope

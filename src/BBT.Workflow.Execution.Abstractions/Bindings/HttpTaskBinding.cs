@@ -34,5 +34,10 @@ public sealed class HttpTaskBinding
     /// Whether to validate SSL certificates.
     /// </summary>
     public bool ValidateSSL { get; init; } = true;
-}
 
+    /// <summary>
+    /// HTTP status codes that should be treated as successful task invocation results.
+    /// Supports exact codes such as "400" and wildcard patterns such as "4xx".
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; init; }
+}

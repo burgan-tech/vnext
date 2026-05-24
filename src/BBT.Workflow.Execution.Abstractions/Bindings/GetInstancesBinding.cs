@@ -65,4 +65,10 @@ public sealed class GetInstancesBinding
     /// Dapr application ID for service invocation.
     /// </summary>
     public string? DaprAppId { get; init; }
+
+    /// <summary>
+    /// HTTP status codes that should be treated as successful task invocation results.
+    /// Supports exact codes such as "400" and wildcard patterns such as "4xx".
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; init; }
 }

@@ -118,7 +118,8 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Version = input.Version,
                     Instance = input.Instance,
                     Headers = input.Headers,
-                    QueryParameters = input.QueryParams
+                    QueryParameters = input.QueryParams,
+                    Role = input.Role
                 };
                 return await queryService.GetViewAsync(viewInput, transitionKey, ct);
             }, cancellationToken);

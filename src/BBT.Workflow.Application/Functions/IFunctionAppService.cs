@@ -19,7 +19,7 @@ public interface IFunctionAppService : IApplicationService
     /// <param name="headers">Request Headers</param>
     /// <param name="queryParameters">Request Query Params</param>
     /// <param name="cancellationToken">Cancellation Token</param>
-    Task<Result<Dictionary<string, dynamic?>>> GetFunctionByKeyAsync(
+    Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
         string key,
         string domain,
         string? version = null,
@@ -38,7 +38,7 @@ public interface IFunctionAppService : IApplicationService
     /// <param name="headers">Request Headers</param>
     /// <param name="queryParameters">Request Query Params</param>
     /// <param name="cancellationToken">Cancellation Token</param>
-    Task<Result<Dictionary<string, dynamic?>>> GetFunctionByInstanceAsync(
+    Task<Result<FunctionResponseOutput>> GetFunctionByInstanceAsync(
         string key,
         string flow,
         string domain,

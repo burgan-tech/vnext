@@ -25,6 +25,11 @@ public sealed class TransitionItem : HrefBase
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
+    /// Transition category for client behavior, e.g. stateTransition, sharedTransition, cancel, exit, updateData, timeout.
+    /// </summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>
     /// View href for this transition. When HasView is true, the view endpoint returns meaningful content when called with this transition key.
     /// </summary>
     public ViewHref? View { get; set; }

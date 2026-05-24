@@ -369,6 +369,7 @@ public sealed class InstanceQueryAppService(
                 return new SubFlowStateInfo(
                     AvailableTransitions: availableTransitions,
                     CurrentState: subFlowValue.State,
+                    StateType: subFlowValue.StateType,
                     Status: subFlowValue.Status,
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
@@ -444,6 +445,7 @@ public sealed class InstanceQueryAppService(
         return new SubFlowStateInfo(
             AvailableTransitions: availableTransitions,
             CurrentState: currentState,
+            StateType: null,
             Status: status);
     }
 
@@ -639,11 +641,11 @@ public sealed class InstanceQueryAppService(
     /// Gets the view definition for rule-based view selection.
     /// Returns the view definition from the transition (if transitionKey is provided) or from the state.
     /// </summary>
-    private ViewDefinition? GetViewDefinition(
-        Instance instance,
+    private static ViewDefinition? GetViewDefinition(
         Definitions.Workflow currentWorkflow,
         State currentState,
-        string? transitionKey = null)
+        string? transitionKey,
+        IReadOnlyList<string>? authorizedAvailableTransitionKeys)
     {
         if (!transitionKey.IsNullOrWhiteSpace())
         {
@@ -651,31 +653,92 @@ public sealed class InstanceQueryAppService(
             return transition?.View;
         }
 
-        bool isWizardState = currentState is { StateType: StateType.Wizard };
+        return ResolveWizardViewSelection(currentState, authorizedAvailableTransitionKeys ?? [])
+            .ViewDefinition ?? currentState.View;
+    }
 
-        // Get available transitions
-        var availableTransitions = new List<string>();
+    private static WizardViewSelection ResolveWizardViewSelection(
+        State currentState,
+        IReadOnlyList<string> authorizedAvailableTransitionKeys)
+    {
+        if (currentState.StateType != StateType.Wizard)
+            return new WizardViewSelection(null, null);
 
-        if (instance.Status.Equals(InstanceStatus.Active))
+        var stateTransitions = authorizedAvailableTransitionKeys
+            .Select(currentState.FindTransition)
+            .Where(transition => transition != null)
+            .Cast<Transition>()
+            .ToList();
+
+        if (stateTransitions.Count == 1)
         {
-            availableTransitions = currentWorkflow.GetAvailableUserTransitionKeys(currentState);
+            var transition = stateTransitions[0];
+            if (transition.View is { Views.Count: > 0 })
+                return new WizardViewSelection(transition.View, transition.Key);
         }
 
-        ViewDefinition? viewDefinition = null;
+        return new WizardViewSelection(currentState.View, null);
+    }
 
-        // If there's exactly one transition, get its view
-        if (isWizardState)
-        {
-            var transition = currentState.FindTransition(availableTransitions[0]);
-            viewDefinition = transition?.View;
-        }
-        // If there are multiple transitions or no transitions, get the state view
-        else if (!string.IsNullOrEmpty(instance.CurrentState) && currentState.View != null)
-        {
-            viewDefinition = currentState.View;
-        }
+    private static string ToCamelCaseName<TEnum>(TEnum value) where TEnum : struct, Enum
+    {
+        var name = value.ToString();
+        return string.IsNullOrEmpty(name)
+            ? string.Empty
+            : char.ToLowerInvariant(name[0]) + name[1..];
+    }
 
-        return viewDefinition;
+    private static string ResolveTransitionKind(
+        Definitions.Workflow workflow,
+        State currentState,
+        string transitionKey)
+    {
+        if (IsTransitionKey(workflow.Cancel, transitionKey) ||
+            transitionKey.Equals(WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase))
+            return WellKnownTransitionKeys.Cancel;
+
+        if (IsTransitionKey(workflow.Exit, transitionKey) ||
+            transitionKey.Equals(WellKnownTransitionKeys.Exit, StringComparison.OrdinalIgnoreCase))
+            return WellKnownTransitionKeys.Exit;
+
+        if (IsTransitionKey(workflow.UpdateData, transitionKey) ||
+            transitionKey.Equals(WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase))
+            return WellKnownTransitionKeys.UpdateData;
+
+        if (workflow.Timeout?.Key.Equals(transitionKey, StringComparison.OrdinalIgnoreCase) == true ||
+            transitionKey.Equals(WellKnownTransitionKeys.Timeout, StringComparison.OrdinalIgnoreCase))
+            return WellKnownTransitionKeys.Timeout;
+
+        if (currentState.FindTransition(transitionKey) != null)
+            return "state-transition";
+
+        if (workflow.FindSharedTransition(transitionKey) != null)
+            return "shared-transition";
+
+        return "state-transition";
+    }
+
+    private static bool IsTransitionKey(Transition? transition, string transitionKey) =>
+        transition?.Key.Equals(transitionKey, StringComparison.OrdinalIgnoreCase) == true;
+
+    private async Task<IReadOnlyList<string>> GetAuthorizedAvailableTransitionKeysAsync(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        State currentState,
+        string? role,
+        CancellationToken cancellationToken)
+    {
+        if (!instance.Status.Equals(InstanceStatus.Active))
+            return [];
+
+        var availableTransitionKeys = currentWorkflow.GetAvailableUserTransitionKeys(currentState);
+        return await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
+            currentWorkflow,
+            currentState,
+            instance,
+            availableTransitionKeys,
+            role,
+            cancellationToken);
     }
 
     public async Task<ConditionalResult<GetInstanceStateOutput>> GetInstanceStateAsync(
@@ -830,6 +893,8 @@ public sealed class InstanceQueryAppService(
             }
         }
 
+        var wizardViewSelection = ResolveWizardViewSelection(currentStateValue, keysForTransitions);
+
         List<TransitionItem> transitionItems;
         if (subFlowStateInfo.SubFlowTransitionItems != null)
         {
@@ -856,9 +921,15 @@ public sealed class InstanceQueryAppService(
                         hasSchema = transition?.Schema != null;
                         annotations = transition?.Annotations;
                     }
+                    if (key.Equals(wizardViewSelection.TransitionViewKey, StringComparison.Ordinal))
+                        hasView = false;
+
                     return new TransitionItem
                     {
                         Name = key,
+                        Kind = !string.IsNullOrWhiteSpace(subFlowItem?.Kind)
+                            ? subFlowItem.Kind
+                            : ResolveTransitionKind(currentWorkflow, currentStateValue, key),
                         Href = urlTemplateBuilder.BuildTransitionUrl(input.Domain, input.Workflow,
                             instance.Id.ToString(), key),
                         View = new ViewHref
@@ -889,13 +960,14 @@ public sealed class InstanceQueryAppService(
                 return new TransitionItem
                 {
                     Name = transitionKey,
+                    Kind = ResolveTransitionKind(currentWorkflow, currentStateValue, transitionKey),
                     Href = urlTemplateBuilder.BuildTransitionUrl(input.Domain, input.Workflow, instance.Id.ToString(),
                         transitionKey),
                     View = new ViewHref
                     {
                         Href = urlTemplateBuilder.BuildViewUrl(input.Domain, input.Workflow, instance.Id.ToString(),
                             transitionKey),
-                        HasView = hasView
+                        HasView = !transitionKey.Equals(wizardViewSelection.TransitionViewKey, StringComparison.Ordinal) && hasView
                     },
                     Schema = new SchemaHref
                     {
@@ -908,7 +980,7 @@ public sealed class InstanceQueryAppService(
             }).ToList();
         }
 
-        var viewDefinition = GetViewDefinition(instance, currentWorkflow, currentStateValue);
+        var viewDefinition = wizardViewSelection.ViewDefinition ?? currentStateValue.View;
         var firstViewEntry = viewDefinition?.Views.FirstOrDefault();
         var viewExtensions = firstViewEntry?.Extensions ?? [];
         var viewLoadData = firstViewEntry?.LoadData ?? false;
@@ -955,6 +1027,9 @@ public sealed class InstanceQueryAppService(
             Data = dataHref,
             View = viewHref,
             State = subFlowStateInfo.CurrentState ?? string.Empty,
+            StateType = subFlowStateInfo.StateType.IsNullOrWhiteSpace()
+                ? ToCamelCaseName(currentStateValue.StateType)
+                : subFlowStateInfo.StateType!,
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
             Transitions = transitionItems
@@ -1239,6 +1314,7 @@ public sealed class InstanceQueryAppService(
                 currentState,
                 input.Domain,
                 transitionKey,
+                input.Role,
                 input.Headers,
                 input.QueryParameters,
                 cancellationToken);
@@ -1249,8 +1325,21 @@ public sealed class InstanceQueryAppService(
             }
         }
 
+        var authorizedAvailableTransitionKeys = transitionKey.IsNullOrWhiteSpace()
+            ? await GetAuthorizedAvailableTransitionKeysAsync(
+                instance,
+                currentWorkflow,
+                currentState,
+                input.Role,
+                cancellationToken)
+            : [];
+
         // Get view definition
-        var viewDefinition = GetViewDefinition(instance, currentWorkflow, currentState, transitionKey);
+        var viewDefinition = GetViewDefinition(
+            currentWorkflow,
+            currentState,
+            transitionKey,
+            authorizedAvailableTransitionKeys);
 
         if (viewDefinition == null || viewDefinition.Views.Count == 0)
         {
@@ -1338,6 +1427,7 @@ public sealed class InstanceQueryAppService(
         State currentState,
         string requestDomain,
         string? transitionKey = null,
+        string? role = null,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParams = null,
         CancellationToken cancellationToken = default)
@@ -1350,7 +1440,8 @@ public sealed class InstanceQueryAppService(
                 Workflow = instance.Subflow!.SubFlowName,
                 Version = instance.Subflow!.SubFlowVersion,
                 Headers = headers ?? new Dictionary<string, string?>(),
-                QueryParams = queryParams ?? new Dictionary<string, string?>()
+                QueryParams = queryParams ?? new Dictionary<string, string?>(),
+                Role = role
             },
             transitionKey,
             cancellationToken);
@@ -1740,6 +1831,7 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     /// <param name="AvailableTransitions">Available transitions from the flow</param>
     /// <param name="CurrentState">Current state of the flow</param>
+    /// <param name="StateType">State type from the active SubFlow response, when applicable</param>
     /// <param name="Status">Status of the instance (always from main instance)</param>
     /// <param name="SubFlowData">Data href from SubFlow (contains extensions info) - null for main flow</param>
     /// <param name="SubFlowView">View href from SubFlow - null for main flow</param>
@@ -1748,11 +1840,16 @@ public sealed class InstanceQueryAppService(
     private sealed record SubFlowStateInfo(
         List<string> AvailableTransitions,
         string? CurrentState,
+        string? StateType,
         InstanceStatus? Status,
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
         List<TransitionItem>? SubFlowTransitionItems = null);
+
+    private sealed record WizardViewSelection(
+        ViewDefinition? ViewDefinition,
+        string? TransitionViewKey);
 
     private static Dictionary<string, SubFlowTransitionOverride>? TryGetParentTransitionRoleOverrides(Instance instance)
     {

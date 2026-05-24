@@ -79,8 +79,13 @@ public sealed class DirectTriggerBinding
     public string? DaprAppId { get; init; }
 
     /// <summary>
+    /// HTTP status codes that should be treated as successful task invocation results.
+    /// Supports exact codes such as "400" and wildcard patterns such as "4xx".
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; init; }
+
+    /// <summary>
     /// Identifier of the target workflow instance.
     /// </summary>
     public string? Identifier => InstanceId.HasValue ? InstanceId.Value.ToString() : Key;
 }
-

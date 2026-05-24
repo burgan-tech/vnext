@@ -1,4 +1,3 @@
-using BBT.Aether.AspNetCore.Results;
 using BBT.Workflow.Functions;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,6 +24,6 @@ public sealed class DefaultDomainFunctionHandler(
             request.Body,
             cancellationToken);
 
-        return result.ToActionResult(request.HttpContext);
+        return FunctionResponseActionResultMapper.ToActionResult(result, request.HttpContext);
     }
 }
