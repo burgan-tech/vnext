@@ -1,6 +1,9 @@
+using System.Collections.Generic;
 using System.Text.Json;
+using System.Text;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -183,4 +186,65 @@ public class FunctionOutputHandlerTests
         function.ShouldNotBeNull();
         function!.RawResponse.ShouldBeTrue();
     }
+
+    [Fact]
+    public void CreateRawResponse_UsesSingleTaskStatusCodeAndHeaders()
+    {
+        var function = CreateFunction(rawResponse: true);
+        var context = CreateScriptContext();
+        var taskKey = TaskRef.Key.ToVariableName();
+        var payload = new Dictionary<string, object?>
+        {
+            ["title"] = "Validation failed",
+            ["status"] = 400
+        };
+        context.SetStandardResponse(new StandardTaskResponse
+        {
+            Data = payload,
+            StatusCode = 400,
+            Headers = new Dictionary<string, string> { ["x-validation-source"] = "schema" }
+        }, taskKey);
+        context.SetOutputResponse(payload, taskKey);
+
+        var rawData = FunctionAppService.ExtractRawFunctionResponse(function, context);
+        var response = FunctionAppService.CreateRawResponse(function, context, rawData);
+
+        response.StatusCode.ShouldBe(400);
+        response.Headers.ShouldNotBeNull();
+        response.Headers!["x-validation-source"].ShouldBe("schema");
+        ((object?)((Dictionary<string, dynamic?>)response.Data)["title"]).ShouldBe("Validation failed");
+        ((object?)((Dictionary<string, dynamic?>)response.Data)["status"]).ShouldBe(400L);
+    }
+
+    [Fact]
+    public void CreateWrappedResponse_DoesNotForwardTaskStatusCode()
+    {
+        var function = CreateFunction(rawResponse: false);
+        var context = CreateScriptContext();
+        var taskKey = TaskRef.Key.ToVariableName();
+        var payload = new Dictionary<string, object?> { ["title"] = "Validation failed" };
+        context.SetStandardResponse(new StandardTaskResponse
+        {
+            Data = payload,
+            StatusCode = 400,
+            Headers = new Dictionary<string, string> { ["x-validation-source"] = "schema" }
+        }, taskKey);
+        context.SetOutputResponse(payload, taskKey);
+
+        var response = FunctionAppService.CreateWrappedResponse(function, context);
+
+        response.StatusCode.ShouldBeNull();
+        response.Headers.ShouldBeNull();
+        ((Dictionary<string, dynamic?>)response.Data).ShouldContainKey(function.Key.ToVariableName());
+    }
+
+    private static Function CreateFunction(bool rawResponse)
+    {
+        var function = new Function(TaskScope.Domain, CreateTask(1, TaskRef), rawResponse: rawResponse);
+        function.SetReference(new Reference("send-otp", "test-domain", "sys-functions", "1.0.0"));
+        return function;
+    }
+
+    private static ScriptContext CreateScriptContext() =>
+        new(NullLogger<ScriptContext>.Instance);
 }

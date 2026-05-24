@@ -245,7 +245,8 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
             TimeoutSeconds = binding.TimeoutSeconds,
             Headers = binding.Headers,
             BaseUrl = endpoint.BaseUrl.ToString(),
-            DaprAppId = endpoint.DaprAppId
+            DaprAppId = endpoint.DaprAppId,
+            AcceptedStatusCodes = binding.AcceptedStatusCodes
         };
 
         return Result.Ok(new TaskEnvelope

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
@@ -41,6 +42,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IRepresentationEtagService _representationEtagService;
     private readonly IUrlTemplateBuilder _urlTemplateBuilder;
+    private readonly IViewContentResolutionService _viewContentResolutionService;
+    private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -58,6 +61,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceQueryGateway = Substitute.For<IInstanceQueryGateway>();
         _representationEtagService = Substitute.For<IRepresentationEtagService>();
         _urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
+        _viewContentResolutionService = Substitute.For<IViewContentResolutionService>();
+        _transitionAuthorizationManager = Substitute.For<ITransitionAuthorizationManager>();
 
         // Set up AmbientServiceProvider.Current needed by PostSharp UnitOfWorkAttribute
         var mockUoW = Substitute.For<IUnitOfWork>();
@@ -83,11 +88,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
-            viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
+            viewContentResolutionService: _viewContentResolutionService,
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: _urlTemplateBuilder,
             currentSchema: Substitute.For<ICurrentSchema>(),
-            transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
+            transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: _representationEtagService,
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
             currentUser: Substitute.For<ICurrentUser>(),
@@ -197,6 +202,212 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.State.ShouldBe("sub-review");
     }
 
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenCurrentStateIsWizard_ReturnsStateTypeAsCamelCase()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Wizard, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.StateType.ShouldBe("wizard");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenTransitionsAreAvailable_ReturnsTransitionKind()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var stateTransition = Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        state.AddTransition(stateTransition);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        workflow.AddSharedTransition(Transition.Create("add-note", null, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        workflow.SetCancel(Transition.Create("cancel-request", null, "cancelled", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var transitions = result.Result.Value!.Transitions.ToDictionary(t => t.Name);
+        transitions["approve"].Kind.ShouldBe("stateTransition");
+        transitions["add-note"].Kind.ShouldBe("sharedTransition");
+        transitions["cancel-request"].Kind.ShouldBe("cancel");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasView_ReturnsStateHasViewAndHidesTransitionView()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Wizard, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var transition = Transition.Create("continue", TestState, "next", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetView(ViewDefinition.CreateDefault(
+            new Reference("transition-view", TestDomain, "sys-views", TestVersion),
+            loadData: true));
+        state.AddTransition(transition);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var output = result.Result.Value!;
+        output.View.HasView.ShouldBeTrue();
+        output.View.LoadData.ShouldBeTrue();
+        output.Transitions.Single().View!.HasView.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasNoView_FallsBackToStateView()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Wizard, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.SetView(ViewDefinition.CreateDefault(
+            new Reference("state-view", TestDomain, "sys-views", TestVersion),
+            loadData: false));
+        state.AddTransition(Transition.Create("continue", TestState, "next", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var output = result.Result.Value!;
+        output.View.HasView.ShouldBeTrue();
+        output.View.LoadData.ShouldBeFalse();
+        output.Transitions.Single().View!.HasView.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WhenWizardStateTransitionHasView_ReturnsTransitionView()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Wizard, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var transitionViewRef = new Reference("transition-view", TestDomain, "sys-views", TestVersion);
+        var stateViewRef = new Reference("state-view", TestDomain, "sys-views", TestVersion);
+        var transition = Transition.Create("continue", TestState, "next", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetView(ViewDefinition.CreateDefault(transitionViewRef));
+        state.SetView(ViewDefinition.CreateDefault(stateViewRef));
+        state.AddTransition(transition);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _viewContentResolutionService
+            .ResolveViewContentAsync(transitionViewRef, TestDomain, Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<GetViewOutput>.Ok(new GetViewOutput
+            {
+                Key = "transition-view",
+                Type = "Json",
+                Display = "Page",
+                Label = string.Empty
+            }));
+
+        // Act
+        var result = await _service.GetViewAsync(new GetViewInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString(),
+            Headers = new Dictionary<string, string?>(),
+            QueryParameters = new Dictionary<string, string?>()
+        }, transitionKey: null, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Key.ShouldBe("transition-view");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WhenWizardStateTransitionHasNoView_ReturnsStateView()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Wizard, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var stateViewRef = new Reference("state-view", TestDomain, "sys-views", TestVersion);
+        state.SetView(ViewDefinition.CreateDefault(stateViewRef));
+        state.AddTransition(Transition.Create("continue", TestState, "next", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _viewContentResolutionService
+            .ResolveViewContentAsync(stateViewRef, TestDomain, Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<GetViewOutput>.Ok(new GetViewOutput
+            {
+                Key = "state-view",
+                Type = "Json",
+                Display = "Page",
+                Label = string.Empty
+            }));
+
+        // Act
+        var result = await _service.GetViewAsync(new GetViewInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString(),
+            Headers = new Dictionary<string, string?>(),
+            QueryParameters = new Dictionary<string, string?>()
+        }, transitionKey: null, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Key.ShouldBe("state-view");
+    }
+
     /// <summary>
     /// When there is no active SubFlow correlation, the parent's own status is used normally.
     /// </summary>
@@ -260,6 +471,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = Definitions.Workflow.Create();
         workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
         workflow.SetType("F");
+        workflow.SetStartTransition(Transition.Create("start", null, state.Key, TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
         workflow.AddState(state);
         return workflow;
     }
@@ -278,6 +491,22 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns("https://data-url");
         _urlTemplateBuilder.BuildViewUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
             .Returns("https://view-url");
+        _urlTemplateBuilder.BuildViewUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://transition-view-url");
+        _urlTemplateBuilder.BuildTransitionUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://transition-url");
+        _urlTemplateBuilder.BuildSchemaUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://schema-url");
+
+        _transitionAuthorizationManager
+            .FilterAuthorizedTransitionKeysAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<State>(),
+                Arg.Any<Instance?>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult(callInfo.ArgAt<IReadOnlyList<string>>(3)));
 
         _representationEtagService.Generate(Arg.Any<object>()).Returns((string?)null);
     }

@@ -81,9 +81,11 @@ public sealed class FunctionController(
             return await handler.HandleAsync(request, cancellationToken);
         }
 
-        return FromResult(await functionAppService.GetFunctionByInstanceAsync(
+        var result = await functionAppService.GetFunctionByInstanceAsync(
             function, workflow, domain, instance,
-            requestContext.Headers, requestContext.QueryParameters, null, cancellationToken));
+            requestContext.Headers, requestContext.QueryParameters, null, cancellationToken);
+
+        return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [HttpPost("{domain}/functions/{function}")]
@@ -144,8 +146,10 @@ public sealed class FunctionController(
             return await handler.HandleAsync(request, cancellationToken);
         }
 
-        return FromResult(await functionAppService.GetFunctionByInstanceAsync(
+        var result = await functionAppService.GetFunctionByInstanceAsync(
             function, workflow, domain, instance,
-            requestContext.Headers, requestContext.QueryParameters, body, cancellationToken));
+            requestContext.Headers, requestContext.QueryParameters, body, cancellationToken);
+
+        return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 }

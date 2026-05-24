@@ -95,6 +95,7 @@ public static class TaskBindingMapper
         ValidateSSL = task.ValidateSSL,
         Headers = task.Headers?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
     
     /// <summary>
@@ -113,7 +114,8 @@ public static class TaskBindingMapper
         UseDapr = task.UseDapr,
         ValidateSSL = task.ValidateSSL,
         Headers = task.Headers?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds
+        TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
     
     /// <summary>
@@ -133,7 +135,8 @@ public static class TaskBindingMapper
         UseDapr = task.UseDapr,
         ValidateSSL = task.ValidateSSL,
         Headers = task.Headers?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds
+        TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
     
     /// <summary>
@@ -150,7 +153,8 @@ public static class TaskBindingMapper
         ValidateSSL = task.ValidateSSL,
         UseDapr = task.UseDapr,
         Headers = task.Headers?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds
+        TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>
@@ -167,7 +171,8 @@ public static class TaskBindingMapper
         UseDapr = task.UseDapr,
         Headers = task.Headers?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
-        ETag = null
+        ETag = null,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     #endregion
@@ -197,7 +202,8 @@ public static class TaskBindingMapper
         Headers = task.Headers?.GetRawText(),
         Body = task.Body?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
-        ValidateSSL = task.ValidateSSL
+        ValidateSSL = task.ValidateSSL,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>
@@ -211,7 +217,8 @@ public static class TaskBindingMapper
         Method = task.HttpVerb,  // HttpVerb → Method
         QueryString = task.QueryString,
         Headers = task.Headers?.GetRawText(),
-        Body = task.Body?.GetRawText()
+        Body = task.Body?.GetRawText(),
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>

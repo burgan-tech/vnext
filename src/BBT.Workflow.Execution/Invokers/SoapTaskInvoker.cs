@@ -117,7 +117,7 @@ public sealed class SoapTaskInvoker(
             }
 
             var isSuccess = response.IsSuccessStatusCode
-                || IsAcceptedStatusCode((int)response.StatusCode, binding.AcceptedStatusCodes);
+                || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
             return isSuccess
                 ? TaskInvocationResult.Success(
@@ -283,41 +283,6 @@ public sealed class SoapTaskInvoker(
         }
 
         return dict;
-    }
-
-    /// <summary>
-    /// Returns true when <paramref name="statusCode"/> matches any entry in <paramref name="acceptedCodes"/>.
-    /// Supports exact matches ("500") and single-character wildcards ("5xx", "50x").
-    /// </summary>
-    private static bool IsAcceptedStatusCode(int statusCode, IReadOnlyList<string>? acceptedCodes)
-    {
-        if (acceptedCodes == null || acceptedCodes.Count == 0)
-            return false;
-
-        var codeStr = statusCode.ToString();
-
-        foreach (var pattern in acceptedCodes)
-        {
-            if (string.IsNullOrWhiteSpace(pattern) || pattern.Length != codeStr.Length)
-                continue;
-
-            var matched = true;
-            for (var i = 0; i < pattern.Length; i++)
-            {
-                if (pattern[i] == 'x' || pattern[i] == 'X')
-                    continue;
-
-                if (pattern[i] != codeStr[i])
-                {
-                    matched = false;
-                    break;
-                }
-            }
-
-            if (matched) return true;
-        }
-
-        return false;
     }
 
     private HttpClient CreateHttpClient(SoapTaskBinding binding, string? taskKey)
