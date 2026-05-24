@@ -11,9 +11,13 @@ internal static class FunctionResponseActionResultMapper
     {
         "connection",
         "content-length",
+        "content-type",         // ObjectResult negotiates this via output formatters
+        "date",                 // server writes its own
+        "host",                 // upstream internal hostname must not leak
         "keep-alive",
         "proxy-authenticate",
         "proxy-authorization",
+        "server",               // orchestrator sets its own Server header
         "te",
         "trailer",
         "transfer-encoding",
