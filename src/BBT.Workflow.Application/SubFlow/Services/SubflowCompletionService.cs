@@ -1,5 +1,3 @@
-using System.Text.Json;
-using BBT.Aether.Guids;
 using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
@@ -8,7 +6,6 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
@@ -21,11 +18,9 @@ public sealed class SubflowCompletionService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
-    IScriptEngine scriptEngine,
-    IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IGuidGenerator guidGenerator,
     IWorkflowExecutionService workflowExecutionService,
+    ISubflowOutputMappingService outputMappingService,
     ILogger<SubflowCompletionService> logger)
     : ISubflowCompletionService
 {
@@ -130,26 +125,12 @@ public sealed class SubflowCompletionService(
 
                     parentWorkflow = parentWorkflowResult.Value!;
 
-                    // Apply output mapping if configured (still within Phase 1 UoW)
-                    var parentStateResult = parentWorkflow.GetState(correlation.ParentState);
-                    if (parentStateResult.IsSuccess && parentStateResult.Value!.SubFlow?.Mapping != null)
-                    {
-                        logger.SubFlowOutputMappingStarted(parentInstance.Id);
-
-                        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
-                            .WithWorkflow(parentWorkflow)
-                            .WithInstance(parentInstance)
-                            .WithRuntime(runtimeInfoProvider)
-                            .WithBody(completedInput.InstanceData?.Deserialize<Dictionary<string, object>>() ??
-                                      new Dictionary<string, object>())
-                            .BuildAsync(cancellationToken);
-
-                        await ProcessSubFlowOutputMappingAsync(
-                            parentInstance,
-                            parentStateResult.Value!,
-                            scriptContext,
-                            cancellationToken);
-                    }
+                    await outputMappingService.ApplyAsync(
+                        parentInstance,
+                        parentWorkflow,
+                        correlation.ParentState,
+                        completedInput.InstanceData,
+                        cancellationToken);
                     
                     await correlationUow.CommitAsync(cancellationToken);
                 }
@@ -173,70 +154,6 @@ public sealed class SubflowCompletionService(
 
                 throw;
             }
-        }
-    }
-
-    /// <summary>
-    /// Processes SubFlow output mapping by executing the mapping script and merging results into parent instance data.
-    /// Also applies any <see cref="InstanceMutations"/> (e.g. Stage) that the script recorded on <see cref="ScriptContext.Mutations"/>.
-    /// </summary>
-    private async Task ProcessSubFlowOutputMappingAsync(
-        Instance parentInstance,
-        State parentState,
-        ScriptContext scriptContext,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var subFlowConfig = parentState.SubFlow;
-            if (subFlowConfig == null)
-            {
-                return;
-            }
-
-            var mappingCode = subFlowConfig.Mapping.DecodedCode;
-
-            // Compile the mapping script to the appropriate interface
-            var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-                mappingCode,
-                cancellationToken: cancellationToken);
-
-            ScriptResponse? outputMappingResult = null;
-
-            // Execute OutputHandler for SubFlow (SubProcess doesn't have OutputHandler)
-            if (subFlowConfig.Type.Equals(SubFlowType.SubFlow) && mappingInstance is ISubFlowMapping subFlowMapping)
-            {
-                outputMappingResult = await subFlowMapping.OutputHandler(scriptContext);
-            }
-
-            var hasData = outputMappingResult?.Data != null;
-
-            if (hasData)
-            {
-                parentInstance.AddData(
-                    guidGenerator.Create(),
-                    new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
-                    parentState.VersionStrategy);
-            }
-
-            if (scriptContext.Mutations.HasChanges)
-            {
-                scriptContext.Mutations.ApplyTo(parentInstance);
-            }
-
-            if (hasData || scriptContext.Mutations.HasChanges)
-            {
-                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.SubFlowCompletionFailed(
-                ex,
-                Guid.Empty,
-                parentInstance.Id);
-
-            // Don't throw - we still want to resume automatic processes even if mapping fails
         }
     }
 

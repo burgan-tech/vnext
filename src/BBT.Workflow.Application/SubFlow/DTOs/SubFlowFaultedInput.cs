@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace BBT.Workflow.SubFlow;
 
 /// <summary>
@@ -37,6 +39,21 @@ public record SubFlowFaultedInput
     public required string FaultedState { get; init; }
 
     /// <summary>
+    /// The state type the SubFlow was in when it faulted.
+    /// </summary>
+    public int? FaultedStateType { get; init; }
+
+    /// <summary>
+    /// The state subtype the SubFlow was in when it faulted.
+    /// </summary>
+    public int? FaultedStateSubType { get; init; }
+
+    /// <summary>
+    /// The latest instance data of the faulted SubFlow.
+    /// </summary>
+    public JsonElement? InstanceData { get; init; }
+
+    /// <summary>
     /// When the SubFlow faulted
     /// </summary>
     public required DateTime FaultedAt { get; init; }
@@ -60,6 +77,11 @@ public record SubFlowFaultedInput
     /// Error layer from the SubFlow's active incident
     /// </summary>
     public string? IncidentErrorLayer { get; init; }
+
+    /// <summary>
+    /// HTTP status code from the SubFlow's active incident, when available.
+    /// </summary>
+    public int? IncidentStatusCode { get; init; }
 
     /// <summary>
     /// OpenTelemetry trace ID from the SubFlow's active incident

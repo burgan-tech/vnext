@@ -397,6 +397,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         if (IsSubFlow)
         {
             var activeIncident = _incidents.LastOrDefault(i => !i.IsResolved);
+            var latestData = LatestData;
             var contractInfo = ExtraProperties.ToSubFlowContractInfo();
             if (contractInfo.Id != Guid.Empty)
             {
@@ -408,11 +409,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     Flow = contractInfo.Flow,
                     Version = contractInfo.Version,
                     FaultedState = GetCurrentState,
+                    FaultedStateType = CurrentStateType.HasValue ? (int)CurrentStateType.Value : null,
+                    FaultedStateSubType = CurrentStateSubType.HasValue ? (int)CurrentStateSubType.Value : null,
+                    InstanceData = latestData?.Data.JsonElement,
                     FaultedAt = CompletedAt.Value,
                     SubFlowName = Flow,
                     IncidentMessage = activeIncident?.Message,
                     IncidentErrorCode = activeIncident?.ErrorCode,
                     IncidentErrorLayer = activeIncident?.ErrorLayer,
+                    IncidentStatusCode = activeIncident?.StatusCode,
                     IncidentTraceId = activeIncident?.TraceId,
                     IncidentTaskKey = activeIncident?.Task,
                     IncidentTransition = activeIncident?.Transition,
