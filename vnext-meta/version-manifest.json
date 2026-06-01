@@ -1,5 +1,25 @@
 {
   "versions": {
+    "0.0.58": {
+      "schemaVersion": "0.0.43",
+      "releasedAt": "2026-06-02",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.57": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.56": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.55": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
     "0.0.54": {
       "schemaVersion": "0.0.42",
       "releasedAt": "2026-05-08",
