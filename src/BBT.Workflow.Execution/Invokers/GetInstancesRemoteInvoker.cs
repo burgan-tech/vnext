@@ -188,10 +188,12 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
         var content = await response.ReadDecompressedContentAsync(cancellationToken);
         var responseData = InvokerHelpers.TryParseJson(content);
         var metadata = CreateMetadata(binding, reasonPhrase: response.ReasonPhrase);
+        var isSuccess = response.IsSuccessStatusCode
+            || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
-        _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
 
-        return response.IsSuccessStatusCode
+        return isSuccess
             ? TaskInvocationResult.Success(
                 data: responseData,
                 body: content,

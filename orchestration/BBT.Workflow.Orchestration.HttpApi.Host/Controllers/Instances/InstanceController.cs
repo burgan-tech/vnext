@@ -4,6 +4,7 @@ using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -66,7 +67,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -104,7 +105,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -233,7 +234,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
         
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     /// <summary>
@@ -280,7 +281,7 @@ public sealed class InstanceController(
         };
 
         var result = await retryAppService.RetryAsync(input, cancellationToken);
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
     
     /// <summary>
@@ -430,4 +431,4 @@ public sealed class InstanceController(
 
         return FromResult(result.Result);
     }
-} 
+}

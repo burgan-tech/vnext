@@ -7,6 +7,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
@@ -21,8 +22,11 @@ namespace BBT.Workflow.Execution.Strategies;
 /// Asynchronous transition execution strategy.
 /// Executes transitions as background jobs for better scalability and fault tolerance.
 /// Acquires a distributed lock before processing to prevent concurrent enqueuing for
-/// the same instance. Under the lock, checks if an active job already exists and returns
-/// 409 if so. Sets the instance to Busy before enqueueing so callers immediately see
+/// the same instance. Reserved transitions (cancel, exit, updateData, timeout, subflow
+/// resume, shared) lock on their own type-scoped key independent of the base instance
+/// lock — so they are accepted and enqueued even while the main flow is Busy, mirroring
+/// the sync <see cref="Pipeline.TransitionPipeline"/>. Under the lock, checks if an active
+/// job already exists and returns 409 if so. Sets the instance to Busy before enqueueing so callers immediately see
 /// the correct in-progress status. The UoW boundary in TransitionRunner guarantees
 /// atomicity: if the Dapr enqueue fails the UoW rolls back and the instance stays Active.
 /// </summary>
@@ -32,6 +36,7 @@ public sealed class AsyncTransitionStrategy(
     IInstanceJobRepository jobRepository,
     IInstanceRepository instanceRepository,
     IDistributedLockService distributedLockService,
+    IReservedTransitionResolver reservedTransitionResolver,
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
     IInstanceCommandGateway instanceCommandGateway,
@@ -102,8 +107,17 @@ public sealed class AsyncTransitionStrategy(
         Result<TransitionExecutionContext> lockScopeResult =
             Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
 
+        // Reserved transitions (cancel, exit, updateData, timeout, subflow resume, shared)
+        // lock on their own type-scoped key — independent of the base instance lock — so the
+        // request is accepted and enqueued even while the main flow holds the instance lock.
+        // Mirrors TransitionPipeline.RunAsync; execution safety is enforced when the job runs
+        // through the sync pipeline.
+        var lockKey = reservedTransitionResolver.IsReserved(ctx)
+            ? reservedTransitionResolver.GetOwnLockKey(ctx)
+            : ctx.LockKey;
+
         var lockAcquired = await distributedLockService.ExecuteWithLockAsync(
-            ctx.LockKey,
+            lockKey,
             async () =>
             {
                 if (await jobRepository.AnyActiveByJobNameAsync(ctx.InstanceId, jobName, cancellationToken))

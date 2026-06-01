@@ -107,15 +107,18 @@ public sealed class DaprServiceTaskInvoker(
                 ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty
             };
 
+            var isSuccess = response.IsSuccessStatusCode
+                || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
+
             // Record metrics based on success/failure
             _metrics.RecordDaprServiceInvocation(
                 binding.AppId, 
                 binding.MethodName, 
-                response.IsSuccessStatusCode ? "success" : "failure");
+                isSuccess ? "success" : "failure");
             
             // Always return result with full response details - let output mapping handle error scenarios
             // All HTTP responses (2xx, 4xx, 5xx) include headers, body, and parsed data
-            return response.IsSuccessStatusCode
+            return isSuccess
                 ? TaskInvocationResult.Success(
                     data: responseData,
                     body: content,

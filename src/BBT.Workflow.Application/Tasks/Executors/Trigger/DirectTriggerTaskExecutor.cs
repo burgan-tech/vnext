@@ -348,7 +348,8 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             TimeoutSeconds = binding.TimeoutSeconds,
             Headers = binding.Headers,
             BaseUrl = endpoint.BaseUrl.ToString(),
-            DaprAppId = endpoint.DaprAppId
+            DaprAppId = endpoint.DaprAppId,
+            AcceptedStatusCodes = binding.AcceptedStatusCodes
         };
 
         return Result.Ok(new TaskEnvelope

@@ -1,5 +1,6 @@
 using BBT.Aether;
 using BBT.Aether.Domain.Entities;
+using BBT.Aether.Domain.Entities.Auditing;
 using BBT.Workflow.Definitions;
 
 namespace BBT.Workflow.Instances;
@@ -7,7 +8,7 @@ namespace BBT.Workflow.Instances;
 /// <summary>
 /// Instance Correlation
 /// </summary>
-public sealed class InstanceCorrelation : Entity<Guid>
+public sealed class InstanceCorrelation : AuditedEntity<Guid>
 {
     private InstanceCorrelation()
     {
@@ -32,6 +33,8 @@ public sealed class InstanceCorrelation : Entity<Guid>
         SubFlowDomain = Check.NotNullOrWhiteSpace(subFlowDomain, nameof(subFlowDomain), WorkflowConstants.MaxDomainLength);
         SubFlowName = Check.NotNullOrWhiteSpace(subFlowName, nameof(subFlowName), WorkflowConstants.MaxKeyLength);
         SubFlowVersion = Check.Length(subFlowVersion, nameof(subFlowVersion), WorkflowConstants.MaxVersionLength);
+        CreatedAt = DateTime.UtcNow;
+        ModifiedAt = DateTime.UtcNow;
     }
 
     public static InstanceCorrelation Create(

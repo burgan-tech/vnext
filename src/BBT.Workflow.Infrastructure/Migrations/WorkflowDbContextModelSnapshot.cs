@@ -252,6 +252,10 @@ namespace BBT.Workflow.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("CreatedAt");
+
                     b.Property<TimeSpan?>("Duration")
                         .HasColumnType("interval");
 
@@ -284,11 +288,39 @@ namespace BBT.Workflow.Migrations
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("CreatedAt");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("CreatedBy");
+
+                    b.Property<string>("CreatedByBehalfOf")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("CreatedByBehalfOf");
+
                     b.Property<Guid?>("InstanceId")
                         .HasColumnType("uuid");
 
                     b.Property<bool>("IsCompleted")
                         .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("ModifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ModifiedAt");
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("ModifiedBy");
+
+                    b.Property<string>("ModifiedByBehalfOf")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("ModifiedByBehalfOf");
 
                     b.Property<Guid>("ParentInstanceId")
                         .HasColumnType("uuid");
@@ -462,6 +494,10 @@ namespace BBT.Workflow.Migrations
 
                     b.Property<int>("BusinessStatus")
                         .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("CreatedAt");
 
                     b.Property<TimeSpan?>("Duration")
                         .HasColumnType("interval");

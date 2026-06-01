@@ -114,14 +114,13 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+
         var mapping = context.OnExecuteTask.Mapping;
         if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
         {
             return Result<object?>.Ok(invocationResult.Data);
         }
-
-        // Update script context with response for output handler
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
@@ -147,4 +146,3 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         return result;
     }
 }
-

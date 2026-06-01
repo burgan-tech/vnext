@@ -13,6 +13,7 @@ public static class InstanceFieldDiscriminator
     /// </summary>
     private static readonly HashSet<string> InstanceColumns = new(StringComparer.OrdinalIgnoreCase)
     {
+        "Id",
         "Key",
         "Flow",
         "CurrentState",

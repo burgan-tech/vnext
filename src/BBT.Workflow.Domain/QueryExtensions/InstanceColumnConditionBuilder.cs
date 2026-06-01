@@ -286,6 +286,7 @@ public static class InstanceColumnConditionBuilder
     {
         return columnName switch
         {
+            "Id" => ColumnType.String,
             "Key" => ColumnType.String,
             "Flow" => ColumnType.String,
             "CurrentState" => ColumnType.String,

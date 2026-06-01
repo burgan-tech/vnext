@@ -35,6 +35,7 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IInstanceJobRepository> _mockJobRepository;
     private readonly Mock<IInstanceRepository> _mockInstanceRepository;
     private readonly Mock<IDistributedLockService> _mockDistributedLockRepository;
+    private readonly ReservedTransitionResolver _reservedTransitionResolver;
     private readonly Mock<ITransitionValidationService> _mockValidationService;
     private readonly Mock<IUnitOfWorkManager> _uowManager;
     private readonly Mock<IInstanceCommandGateway> _mockInstanceCommandGateway;
@@ -48,6 +49,7 @@ public class AsyncTransitionStrategyTests
         _mockJobRepository = new Mock<IInstanceJobRepository>();
         _mockInstanceRepository = new Mock<IInstanceRepository>();
         _mockDistributedLockRepository = new Mock<IDistributedLockService>();
+        _reservedTransitionResolver = new ReservedTransitionResolver();
         _mockValidationService = new Mock<ITransitionValidationService>();
         _uowManager = new Mock<IUnitOfWorkManager>();
         _mockInstanceCommandGateway = new Mock<IInstanceCommandGateway>();
@@ -78,6 +80,7 @@ public class AsyncTransitionStrategyTests
             _mockJobRepository.Object,
             _mockInstanceRepository.Object,
             _mockDistributedLockRepository.Object,
+            _reservedTransitionResolver,
             _mockValidationService.Object,
             _uowManager.Object,
             _mockInstanceCommandGateway.Object,
@@ -484,7 +487,66 @@ public class AsyncTransitionStrategyTests
 
     #endregion
 
+    #region Reserved transition lock key
+
+    [Fact]
+    public async Task ExecuteAsync_WithNormalTransition_ShouldLockOnBaseInstanceKey()
+    {
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var capturedKey = CaptureLockKey();
+
+        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        capturedKey().ShouldBe(transitionContext.LockKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithReservedTransition_ShouldLockOnOwnTypeScopedKey()
+    {
+        // A reserved transition (cancel) must lock on its own type-scoped key — independent of
+        // the base instance lock — so the async request is accepted even while the parent is Busy.
+        var workflowContext = CreateWorkflowExecutionContext();
+        workflowContext.TransitionKey = "cancel";
+        var transitionContext = CreateTransitionExecutionContext(transitionKey: "cancel");
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var capturedKey = CaptureLockKey();
+
+        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        _reservedTransitionResolver.IsReserved(transitionContext).ShouldBeTrue();
+        capturedKey().ShouldBe(transitionContext.LockKey + ":cancel");
+        capturedKey().ShouldNotBe(transitionContext.LockKey);
+    }
+
+    #endregion
+
     #region Helper Methods
+
+    /// <summary>
+    /// Overrides the lock service setup to capture the lock key passed to ExecuteWithLockAsync
+    /// while still executing the inner action and reporting acquisition success.
+    /// </summary>
+    private Func<string?> CaptureLockKey()
+    {
+        string? captured = null;
+        _mockDistributedLockRepository
+            .Setup(x => x.ExecuteWithLockAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<Task>>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task>, int, CancellationToken>(async (key, action, _, _) =>
+            {
+                captured = key;
+                await action();
+                return true;
+            });
+        return () => captured;
+    }
 
     private void SetupSuccessfulExecution(WorkflowExecutionContext workflowContext, TransitionExecutionContext transitionContext)
     {
@@ -597,7 +659,7 @@ public class AsyncTransitionStrategyTests
         };
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext()
+    private TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -606,14 +668,14 @@ public class AsyncTransitionStrategyTests
         var workflow = CreateMockWorkflow(workflowKey, domain);
         var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
-        var transition = Transition.Create("test-transition", null, "state1", TriggerType.Manual, "Patch");
+        var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
 
         return new TransitionExecutionContext
         {
             InstanceId = instanceId,
             Domain = domain,
             WorkflowKey = workflowKey,
-            TransitionKey = "test-transition",
+            TransitionKey = transitionKey,
             Trigger = TriggerType.Manual,
             Actor = ExecutionActor.User,
             CorrelationId = Guid.NewGuid().ToString("N"),
