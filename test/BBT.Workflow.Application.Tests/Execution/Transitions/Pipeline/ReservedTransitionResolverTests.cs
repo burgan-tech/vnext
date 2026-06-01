@@ -45,6 +45,13 @@ public class ReservedTransitionResolverTests
     }
 
     [Fact]
+    public void IsReserved_WithSharedTransition_ShouldReturnTrue()
+    {
+        var ctx = CreateContext(sharedTransitionKey: "shared-approve", transitionKey: "shared-approve");
+        _resolver.IsReserved(ctx).ShouldBeTrue();
+    }
+
+    [Fact]
     public void IsReserved_WithTimeoutTransition_ShouldReturnTrue()
     {
         var ctx = CreateContext(transitionKey: "$timeout");
@@ -115,6 +122,20 @@ public class ReservedTransitionResolverTests
     }
 
     [Fact]
+    public void GetOwnLockKey_WithSharedTransition_ShouldUseSharedLabel()
+    {
+        var ctx = CreateContext(sharedTransitionKey: "shared-approve", transitionKey: "shared-approve");
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":shared");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithSharedTransition_ShouldDifferFromMainFlowLockKey()
+    {
+        var ctx = CreateContext(sharedTransitionKey: "shared-approve", transitionKey: "shared-approve");
+        _resolver.GetOwnLockKey(ctx).ShouldNotBe(ctx.LockKey);
+    }
+
+    [Fact]
     public void GetOwnLockKey_AllReservedTypes_ShouldDifferFromMainFlowLockKey()
     {
         var ctxCancel = CreateContext(cancelKey: "cancel", transitionKey: "cancel");
@@ -133,8 +154,13 @@ public class ReservedTransitionResolverTests
         string transitionKey = "test",
         string? cancelKey = null,
         string? exitKey = null,
-        string? updateDataKey = null)
+        string? updateDataKey = null,
+        string? sharedTransitionKey = null)
     {
+        var sharedTransitionsJson = sharedTransitionKey is not null
+            ? $"{{\"key\": \"{sharedTransitionKey}\", \"from\": null, \"target\": \"state1\", \"triggerType\": \"Manual\", \"versionStrategy\": \"Patch\", \"labels\": [], \"onExecutionTasks\": [], \"view\": null}}"
+            : string.Empty;
+
         var json = $$"""
         {
             "type": "F",
@@ -150,7 +176,7 @@ public class ReservedTransitionResolverTests
                 {"key": "cancelled", "type": "Q", "transitions": []},
                 {"key": "exited", "type": "Q", "transitions": []}
             ],
-            "sharedTransitions": [],
+            "sharedTransitions": [{{sharedTransitionsJson}}],
             "extensions": [],
             "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
         }

@@ -8,7 +8,8 @@ namespace BBT.Workflow.Execution.Pipeline;
 public interface IReservedTransitionResolver
 {
     /// <summary>
-    /// Returns <c>true</c> if the transition is reserved (cancel, exit, updateData, timeout transition, or subflow resume).
+    /// Returns <c>true</c> if the transition is reserved (cancel, exit, updateData, timeout transition,
+    /// subflow resume, or shared transition).
     /// </summary>
     /// <param name="context">The transition execution context.</param>
     bool IsReserved(TransitionExecutionContext context);
