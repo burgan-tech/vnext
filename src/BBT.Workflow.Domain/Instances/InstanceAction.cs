@@ -1,9 +1,10 @@
 using BBT.Aether;
+using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
 
 namespace BBT.Workflow.Instances;
 
-public sealed class InstanceAction : Entity<Guid>
+public sealed class InstanceAction : Entity<Guid>, IHasCreatedAt
 {
     private InstanceAction()
     {
@@ -20,6 +21,7 @@ public sealed class InstanceAction : Entity<Guid>
         TaskId = taskId;
         Detail = detail ?? JsonData.Empty;
         StartedAt = DateTime.UtcNow;
+        CreatedAt = DateTime.UtcNow;
         SetStatus(status);
     }
 
@@ -32,9 +34,11 @@ public sealed class InstanceAction : Entity<Guid>
     public DateTime? FinishedAt { get; private set; }
     public TimeSpan? Duration { get; private set; }
     public string Status { get; private set; }
-    
+    public DateTime CreatedAt { get; set; }
     private void SetStatus(string status)
     {
         Status = Check.NotNullOrWhiteSpace(status, nameof(status), InstanceActionConstants.MaxStatusLength);
     }
+
+    
 }

@@ -43,5 +43,19 @@ public static class TransitionExecutionContextExtensions
         return key.Equals(Definitions.WellKnownTransitionKeys.Exit, StringComparison.OrdinalIgnoreCase)
             || ctx.Workflow.Exit?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true;
     }
+
+    /// <summary>
+    /// Determines whether the current transition is a shared transition.
+    /// Shared transitions are triggered against the parent (main) flow — e.g. from an
+    /// active subflow — and are reserved relative to instance locking so they can proceed
+    /// even while the main flow holds the base instance lock.
+    /// </summary>
+    public static bool IsSharedTransition(this TransitionExecutionContext ctx)
+    {
+        var key = ctx.Transition?.Key;
+        if (key is null) return false;
+
+        return ctx.Workflow.FindSharedTransition(key) != null;
+    }
 }
 

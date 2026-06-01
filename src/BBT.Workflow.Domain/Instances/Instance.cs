@@ -260,11 +260,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     /// <summary>
     /// Child Correlations
-    /// </summary>
+    /// </summary> 
     public IReadOnlyCollection<InstanceCorrelation> ChildCorrelations => _childCorrelations.AsReadOnly();
 
     public IReadOnlyCollection<InstanceCorrelation> ActiveCorrelations =>
-        _childCorrelations.Where(p => !p.IsCompleted).ToList();
+        _childCorrelations.Where(p => !p.IsCompleted).OrderBy(o => o.CreatedAt).ToList();
 
     public InstanceCorrelation? Subflow =>
         ChildCorrelations.FirstOrDefault(p => !p.IsCompleted && p.SubFlowType.Equals(SubFlowType.SubFlow));

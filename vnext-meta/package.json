@@ -17,7 +17,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/burgan-tech/vnext.git",
+    "url": "git+https://github.com/burgan-tech/vnext.git",
     "directory": "vnext-meta"
   },
   "publishConfig": {

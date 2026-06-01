@@ -784,7 +784,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
+          always-auth: false
+          cache: 'npm'
 
       - name: Set package version
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
@@ -802,6 +804,12 @@ jobs:
           else
             echo "tag=latest" >> $GITHUB_OUTPUT
           fi
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Verify npm version
+        run: npm -v 
 
       - name: Publish to npm (OIDC)
         run: npm publish --provenance --access public --tag ${{ steps.dist_tag.outputs.tag }}
