@@ -78,6 +78,9 @@ public sealed class ChangeStateStep(
 
         // Sync context to reflect the applied state (mirrors UpdateTargetStateInContext)
         context.Current = context.Target;
+        // The state has changed; re-base any cached ScriptContext snapshot so that
+        // OnEntry tasks (and state-level error boundary resolution) see the new state.
+        context.RefreshScriptContextInstance();
 
         RecordStateEntryMetric(context);
 
@@ -151,6 +154,9 @@ public sealed class ChangeStateStep(
             {
                 context.Current = state;
                 context.Target = state;
+                // The state has changed; re-base any cached ScriptContext snapshot so that
+                // OnEntry tasks (and state-level error boundary resolution) see the new state.
+                context.RefreshScriptContextInstance();
                 return context;
             });
         return Task.FromResult(result);

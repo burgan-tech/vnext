@@ -481,6 +481,31 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     }
 
     /// <summary>
+    /// Re-bases the frozen <see cref="Instance"/> snapshot onto the supplied live instance.
+    /// Used after a state change within the same transition so that downstream steps
+    /// (e.g. OnEntry tasks and state-level error boundary resolution) observe the new
+    /// <c>CurrentState</c> instead of the stale snapshot captured before the change.
+    /// Mirrors <c>Builder.SetInstance</c>: takes a fresh snapshot and recomputes the
+    /// <see cref="Incident"/> projection. Accumulated <see cref="TaskResponse"/>,
+    /// <see cref="OutputResponse"/> and <see cref="MetaData"/> are intentionally preserved.
+    /// </summary>
+    /// <param name="instance">The live instance whose current state should be reflected.</param>
+    public void RefreshInstance(Instance instance)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(instance);
+
+        var snapshot = instance.CreateSnapshot();
+        Instance = snapshot;
+        Incident = new ScriptIncidentInfo
+        {
+            HasActiveIncident = snapshot.HasActiveIncident,
+            ActiveIncident = snapshot.Incidents.LastOrDefault(i => !i.IsResolved),
+            TotalIncidentCount = snapshot.Incidents.Count
+        };
+    }
+
+    /// <summary>
     /// Sets the standardized response body for the script context.
     /// </summary>
     /// <param name="response">The standardized task response.</param>
