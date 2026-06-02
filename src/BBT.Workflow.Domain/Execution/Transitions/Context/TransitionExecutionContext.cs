@@ -164,6 +164,23 @@ public sealed class TransitionExecutionContext
     }
 
     /// <summary>
+    /// Re-bases the cached <see cref="ScriptContext"/>'s instance snapshot onto the current
+    /// (live) <see cref="Instance"/>. Call this after a state change so that subsequent steps
+    /// reusing the cached ScriptContext (e.g. OnEntry tasks and state-level error boundary
+    /// resolution) observe the new <c>CurrentState</c> rather than the snapshot frozen before
+    /// the change. No-op when no ScriptContext has been built yet, so the lazy-build behavior
+    /// of <see cref="GetOrBuildScriptContextAsync"/> is preserved.
+    /// </summary>
+    public void RefreshScriptContextInstance()
+    {
+        if (Instance is null)
+            return;
+
+        if (Cache.TryGetValue("ScriptContext", out var cached) && cached is ScriptContext scriptContext)
+            scriptContext.RefreshInstance(Instance);
+    }
+
+    /// <summary>
     /// Extracts pending distributed events from the Instance aggregate and defers them
     /// in <see cref="Directives"/> for explicit publishing after UoW commit.
     /// Clears the aggregate's event list so they won't be dispatched automatically via IDomainEventSink/SaveChanges.

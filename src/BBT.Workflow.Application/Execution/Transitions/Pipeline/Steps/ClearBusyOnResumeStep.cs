@@ -50,6 +50,9 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
             .Map(state =>
             {
                 context.Target = state;
+                // Resume sets the target state here (ChangeStateStep is skipped for resume);
+                // re-base any cached ScriptContext snapshot so it reflects the resumed state.
+                context.RefreshScriptContextInstance();
                 return context;
             });
     }
