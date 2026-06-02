@@ -476,5 +476,101 @@ public class StateTests
         // Act & Assert
         Assert.False(state.HasOnlyManualOrEventTransitions);
     }
+
+    [Fact]
+    public void Create_ShouldInitializeEmptyAliases()
+    {
+        // Arrange & Act
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+
+        // Assert
+        Assert.NotNull(state.Aliases);
+        Assert.Empty(state.Aliases);
+    }
+
+    [Fact]
+    public void AddAlias_ShouldAddAlias()
+    {
+        // Arrange
+        var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
+
+        // Act
+        state.AddAlias(StateAlias.Create("Değerlendirme Aşamasında"));
+
+        // Assert
+        Assert.Single(state.Aliases);
+        Assert.Equal("Değerlendirme Aşamasında", state.Aliases.First().Name);
+        Assert.Empty(state.Aliases.First().Roles);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldPopulateAliases_WithNamesAndRoles()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "fraud-check",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "alias": [
+                {
+                    "name": "Operasyon İncelemesinde",
+                    "roles": [ { "role": "backoffice.operator", "grant": "allow" } ]
+                },
+                {
+                    "name": "Değerlendirme Aşamasında",
+                    "roles": []
+                }
+            ]
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(
+            json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Equal(2, state!.Aliases.Count);
+
+        var first = state.Aliases.First();
+        Assert.Equal("Operasyon İncelemesinde", first.Name);
+        Assert.Single(first.Roles);
+        Assert.Equal("backoffice.operator", first.Roles.First().Role);
+        Assert.True(first.Roles.First().IsAllow);
+
+        var second = state.Aliases.Last();
+        Assert.Equal("Değerlendirme Aşamasında", second.Name);
+        Assert.Empty(second.Roles);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldHaveEmptyAliases_WhenAliasOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "fraud-check",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch"
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(
+            json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Empty(state!.Aliases);
+    }
+
+    private static System.Text.Json.JsonSerializerOptions EnumNamingSerializerOptions => new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
 }
 

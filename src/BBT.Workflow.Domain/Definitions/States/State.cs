@@ -43,6 +43,7 @@ public sealed class State : IHasKey
         this.onEntries = onEntries ?? [];
         this.onExits = onExits ?? [];
         this.queryRoles = queryRoles ?? [];
+        // aliases field is populated directly by System.Text.Json via [JsonInclude] (see `transitions` pattern)
         // view property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
 
@@ -81,6 +82,9 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("queryRoles")]
     private List<RoleGrant> queryRoles = new();
 
+    [JsonInclude] [JsonPropertyName("alias")]
+    private List<StateAlias> aliases = new();
+
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
@@ -105,6 +109,14 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<RoleGrant> QueryRoles => queryRoles.AsReadOnly();
+
+    /// <summary>
+    /// Role-aware display aliases for this state. When present, the state function returns the
+    /// name of the first alias whose roles resolve to the caller instead of the raw state key.
+    /// Evaluated in declaration order, first match wins.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<StateAlias> Aliases => aliases.AsReadOnly();
 
     /// <summary>
     /// Languages
@@ -163,6 +175,11 @@ public sealed class State : IHasKey
     public void AddOnExit(OnExecuteTask task)
     {
         onExits.Add(task);
+    }
+
+    public void AddAlias(StateAlias alias)
+    {
+        aliases.Add(alias);
     }
 
     public void SetView(ViewDefinition viewDefinition)

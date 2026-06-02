@@ -36,6 +36,41 @@ Application services own domain behavior and result construction.
 | `hierarchy` | `HierarchyFunctionHandler` | Returns instance hierarchy. |
 | `humanTask` | `HumanTaskFunctionHandler` | Returns human task state for clients. |
 
+## State Alias (Role-Based State Visibility)
+
+A state may declare an `alias` array so the same internal state is presented under
+different, role-appropriate labels without changing the workflow's real state identity.
+This lets internal evaluation states (fraud check, KPS, limit checks, …) stay hidden from
+the end customer while back-office actors see a more detailed label.
+
+```json
+{
+  "key": "fraud-check",
+  "stateType": "Intermediate",
+  "alias": [
+    { "name": "Operasyon İncelemesinde", "roles": [ { "role": "backoffice.operator", "grant": "allow" } ] },
+    { "name": "Değerlendirme Aşamasında", "roles": [] }
+  ]
+}
+```
+
+Resolution in the `state` function:
+
+- When the current (main-flow) state defines aliases, `StateFunctionHandler` →
+  `InstanceQueryAppService.BuildInstanceStateOutputAsync` resolves them using the same
+  role evaluator as transition filtering (`ITransitionAuthorizationManager.IsRoleAllowedForGrantsAsync`):
+  static roles, predefined roles (`$InstanceStarter`, `$PreviousUser`, …) and dynamic roles.
+- Aliases are evaluated in declaration order; the **first** alias whose `roles` resolve to
+  the caller wins, and its `name` is returned in the response `state` field.
+- An alias with an empty `roles` list matches everyone, acting as a default/fallback — place it last.
+- If the state defines no aliases, or none resolves for the caller, the response `state`
+  field returns the raw state key (current behavior).
+- Only the `state` representation changes; `stateType`, status, transitions, and all internal
+  workflow logic continue to use the real state identity (`instance.CurrentState`). Because the
+  resolved value participates in the representation, different roles get different `ETag`s.
+- Aliasing applies only to the main-flow current state. While a non-terminal subflow is
+  borrowing the displayed state, the value is left untouched.
+
 ## Failure Modes
 
 - Unknown function falls back to generic function lookup.
@@ -61,4 +96,6 @@ client polling status.
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/FunctionController.cs`
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/Handlers/`
 - `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs`
+- `src/BBT.Workflow.Domain/Definitions/States/StateAlias.cs` (state alias model)
+- `src/BBT.Workflow.Application/Instances/InstanceQueryAppService.cs` (`ResolveStateAliasNameAsync`)
 

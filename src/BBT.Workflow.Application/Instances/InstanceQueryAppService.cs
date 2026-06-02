@@ -1022,11 +1022,25 @@ public sealed class InstanceQueryAppService(
             ? mainFlowCorrelationHrefs.Concat(subFlowStateInfo.SubFlowActiveCorrelations).ToList()
             : mainFlowCorrelationHrefs;
 
+        // Role-aware state alias: when the displayed state is the main-flow current state and that
+        // state defines aliases, return the alias name resolved for the caller's role instead of the
+        // raw state key. Internal workflow logic is unaffected — it always uses instance.CurrentState.
+        var displayedState = subFlowStateInfo.CurrentState;
+        if (currentStateValue.Aliases.Count > 0 &&
+            string.Equals(displayedState, instance.CurrentState, StringComparison.Ordinal))
+        {
+            var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
+            var aliasName = await ResolveStateAliasNameAsync(
+                currentStateValue, instance, input.Role, requestContext, cancellationToken);
+            if (!string.IsNullOrEmpty(aliasName))
+                displayedState = aliasName;
+        }
+
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
             Data = dataHref,
             View = viewHref,
-            State = subFlowStateInfo.CurrentState ?? string.Empty,
+            State = displayedState ?? string.Empty,
             StateType = subFlowStateInfo.StateType.IsNullOrWhiteSpace()
                 ? ToCamelCaseName(currentStateValue.StateType)
                 : subFlowStateInfo.StateType!,
@@ -1034,6 +1048,30 @@ public sealed class InstanceQueryAppService(
             ActiveCorrelations = allActiveCorrelations,
             Transitions = transitionItems
         });
+    }
+
+    /// <summary>
+    /// Resolves the role-appropriate display alias for a state. Aliases are evaluated in declaration
+    /// order; the first whose role grants resolve to the caller wins. An alias with no role grants
+    /// matches everyone (default/fallback). Returns null when the state defines no matching alias,
+    /// in which case the caller falls back to the raw state key.
+    /// </summary>
+    private async Task<string?> ResolveStateAliasNameAsync(
+        State state,
+        Instance instance,
+        string? role,
+        AuthorizationRequestContext requestContext,
+        CancellationToken cancellationToken)
+    {
+        foreach (var alias in state.Aliases)
+        {
+            var allowed = await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(
+                role, alias.Roles, instance, requestContext, cancellationToken);
+            if (allowed)
+                return alias.Name;
+        }
+
+        return null;
     }
 
     /// <summary>
