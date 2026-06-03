@@ -516,7 +516,11 @@ public class StateTests
             "alias": [
                 {
                     "name": "Operasyon İncelemesinde",
-                    "roles": [ { "role": "backoffice.operator", "grant": "allow" } ]
+                    "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+                    "labels": [
+                        { "label": "Operasyon İncelemesinde", "language": "tr" },
+                        { "label": "Under Operational Review", "language": "en" }
+                    ]
                 },
                 {
                     "name": "Değerlendirme Aşamasında",
@@ -539,10 +543,14 @@ public class StateTests
         Assert.Single(first.Roles);
         Assert.Equal("backoffice.operator", first.Roles.First().Role);
         Assert.True(first.Roles.First().IsAllow);
+        Assert.Equal(2, first.Labels.Count);
+        Assert.Equal("Under Operational Review", first.Labels.ResolveLabel("en-US"));
+        Assert.Equal("Operasyon İncelemesinde", first.Labels.ResolveLabel("tr-TR"));
 
         var second = state.Aliases.Last();
         Assert.Equal("Değerlendirme Aşamasında", second.Name);
         Assert.Empty(second.Roles);
+        Assert.Empty(second.Labels);
     }
 
     [Fact]

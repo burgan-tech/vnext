@@ -48,7 +48,14 @@ the end customer while back-office actors see a more detailed label.
   "key": "fraud-check",
   "stateType": "Intermediate",
   "alias": [
-    { "name": "Operasyon İncelemesinde", "roles": [ { "role": "backoffice.operator", "grant": "allow" } ] },
+    {
+      "name": "Operasyon İncelemesinde",
+      "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+      "labels": [
+        { "label": "Operasyon İncelemesinde", "language": "tr" },
+        { "label": "Under Operational Review", "language": "en" }
+      ]
+    },
     { "name": "Değerlendirme Aşamasında", "roles": [] }
   ]
 }
@@ -61,15 +68,24 @@ Resolution in the `state` function:
   role evaluator as transition filtering (`ITransitionAuthorizationManager.IsRoleAllowedForGrantsAsync`):
   static roles, predefined roles (`$InstanceStarter`, `$PreviousUser`, …) and dynamic roles.
 - Aliases are evaluated in declaration order; the **first** alias whose `roles` resolve to
-  the caller wins, and its `name` is returned in the response `state` field.
+  the caller wins.
 - An alias with an empty `roles` list matches everyone, acting as a default/fallback — place it last.
-- If the state defines no aliases, or none resolves for the caller, the response `state`
-  field returns the raw state key (current behavior).
+- The winning alias's display value for the response `state` field is resolved as:
+  1. **Localized label** — if the alias has `labels`, the label for the caller's current
+     language is returned. Language comes from the `Accept-Language` header (`LanguageResolver`);
+     match order is exact culture (`tr-TR`) → neutral language (`tr`, incl. `tr-*`) →
+     English (`en-US`/`en`) → first label (`LanguageLabelExtensions.ResolveLabel`).
+  2. **Alias `name`** — when the alias has no `labels`.
+  3. **Raw state key** — when the state defines no aliases, or none resolves for the caller
+     (current behavior).
 - Only the `state` representation changes; `stateType`, status, transitions, and all internal
   workflow logic continue to use the real state identity (`instance.CurrentState`). Because the
-  resolved value participates in the representation, different roles get different `ETag`s.
+  resolved value participates in the representation, different roles/languages get different `ETag`s.
 - Aliasing applies only to the main-flow current state. While a non-terminal subflow is
   borrowing the displayed state, the value is left untouched.
+- `ICurrentLanguage` (registered scoped, `HttpContext`-based) is the reusable per-request handle
+  for the same culture resolution; the state function resolves from the request headers it already
+  receives so it stays correct under forwarded/subflow contexts.
 
 ## Failure Modes
 
@@ -96,6 +112,9 @@ client polling status.
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/FunctionController.cs`
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/Handlers/`
 - `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs`
-- `src/BBT.Workflow.Domain/Definitions/States/StateAlias.cs` (state alias model)
-- `src/BBT.Workflow.Application/Instances/InstanceQueryAppService.cs` (`ResolveStateAliasNameAsync`)
+- `src/BBT.Workflow.Domain/Definitions/States/StateAlias.cs` (state alias model + localized labels)
+- `src/BBT.Workflow.Application/Instances/InstanceQueryAppService.cs` (`ResolveStateAliasDisplayAsync`)
+- `src/BBT.Workflow.Domain/Localization/LanguageResolver.cs` (`Accept-Language` → culture)
+- `src/BBT.Workflow.Domain/Shared/LanguageLabelExtensions.cs` (`ResolveLabel` fallback chain)
+- `src/BBT.Workflow.Application/Languages/ICurrentLanguage.cs` + `src/BBT.Workflow.HttpApi.Shared/Services/Languages/HttpContextCurrentLanguage.cs`
 

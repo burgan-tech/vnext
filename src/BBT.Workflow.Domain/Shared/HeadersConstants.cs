@@ -10,4 +10,7 @@ public static class HeadersConstants
 
     /// <summary>Response header for entity/row version (concurrency and write operations).</summary>
     public const string XEntityETag = "X-Entity-ETag";
+
+    /// <summary>Request header carrying the caller's preferred languages (RFC 7231).</summary>
+    public const string AcceptLanguage = "Accept-Language";
 }

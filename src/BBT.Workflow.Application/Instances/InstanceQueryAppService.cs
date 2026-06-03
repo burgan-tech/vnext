@@ -1023,17 +1023,18 @@ public sealed class InstanceQueryAppService(
             : mainFlowCorrelationHrefs;
 
         // Role-aware state alias: when the displayed state is the main-flow current state and that
-        // state defines aliases, return the alias name resolved for the caller's role instead of the
-        // raw state key. Internal workflow logic is unaffected — it always uses instance.CurrentState.
+        // state defines aliases, return the role-resolved alias (localized label, else name) instead
+        // of the raw state key. Internal workflow logic is unaffected — it always uses instance.CurrentState.
         var displayedState = subFlowStateInfo.CurrentState;
         if (currentStateValue.Aliases.Count > 0 &&
             string.Equals(displayedState, instance.CurrentState, StringComparison.Ordinal))
         {
             var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
-            var aliasName = await ResolveStateAliasNameAsync(
-                currentStateValue, instance, input.Role, requestContext, cancellationToken);
-            if (!string.IsNullOrEmpty(aliasName))
-                displayedState = aliasName;
+            var culture = LanguageResolver.ResolveCulture(input.Headers);
+            var aliasDisplay = await ResolveStateAliasDisplayAsync(
+                currentStateValue, instance, input.Role, culture, requestContext, cancellationToken);
+            if (!string.IsNullOrEmpty(aliasDisplay))
+                displayedState = aliasDisplay;
         }
 
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
@@ -1051,15 +1052,18 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Resolves the role-appropriate display alias for a state. Aliases are evaluated in declaration
-    /// order; the first whose role grants resolve to the caller wins. An alias with no role grants
-    /// matches everyone (default/fallback). Returns null when the state defines no matching alias,
-    /// in which case the caller falls back to the raw state key.
+    /// Resolves the role-appropriate display value for a state's aliases. Aliases are evaluated in
+    /// declaration order; the first whose role grants resolve to the caller wins. An alias with no
+    /// role grants matches everyone (default/fallback). For the winning alias the localized label for
+    /// <paramref name="culture"/> is returned (exact → neutral → English → first), falling back to the
+    /// alias name when it has no labels. Returns null when no alias matches, so the caller falls back
+    /// to the raw state key.
     /// </summary>
-    private async Task<string?> ResolveStateAliasNameAsync(
+    private async Task<string?> ResolveStateAliasDisplayAsync(
         State state,
         Instance instance,
         string? role,
+        string culture,
         AuthorizationRequestContext requestContext,
         CancellationToken cancellationToken)
     {
@@ -1068,7 +1072,7 @@ public sealed class InstanceQueryAppService(
             var allowed = await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(
                 role, alias.Roles, instance, requestContext, cancellationToken);
             if (allowed)
-                return alias.Name;
+                return alias.Labels.ResolveLabel(culture) ?? alias.Name;
         }
 
         return null;

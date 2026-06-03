@@ -545,7 +545,116 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
     }
 
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenAliasHasLabels_ReturnsLocalizedLabelForAcceptLanguage()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(AliasFromJson("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [],
+                "labels": [
+                    { "label": "Operasyon İncelemesinde", "language": "tr" },
+                    { "label": "Under Operational Review", "language": "en" }
+                ]
+            }
+            """));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Headers["accept-language"] = "tr-TR,tr;q=0.9,en-US;q=0.8";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — Turkish label returned for the Turkish Accept-Language
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Operasyon İncelemesinde");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenAliasLabelsHaveNoLanguageMatch_FallsBackToEnglish()
+    {
+        // Arrange — labels in de + en, request fr → English fallback
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(AliasFromJson("""
+            {
+                "name": "Fallback Name",
+                "roles": [],
+                "labels": [
+                    { "label": "In Bearbeitung", "language": "de" },
+                    { "label": "Under Review", "language": "en" }
+                ]
+            }
+            """));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Headers["accept-language"] = "fr-FR";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Under Review");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenMatchingAliasHasNoLabels_ReturnsAliasName()
+    {
+        // Arrange — alias has labels omitted; even with an Accept-Language header, name is used
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(StateAlias.Create("Değerlendirme Aşamasında"));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Headers["accept-language"] = "tr-TR";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private static StateAlias AliasFromJson(string json) =>
+        System.Text.Json.JsonSerializer.Deserialize<StateAlias>(json, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        })!;
 
     private (Instance instance, Definitions.Workflow workflow) CreateParentWithActiveSubFlow()
     {
