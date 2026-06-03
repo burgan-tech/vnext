@@ -34,7 +34,7 @@ public sealed class State : IHasKey
         VersionStrategy versionStrategy,
         List<LanguageLabel>? labels,
         List<OnExecuteTask>? onEntries,
-         List<OnExecuteTask>? onExits,
+        List<OnExecuteTask>? onExits,
         List<RoleGrant>? queryRoles = null)
         : this(key, stateType, subType)
     {

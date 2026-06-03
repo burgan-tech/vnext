@@ -7,7 +7,7 @@ namespace BBT.Workflow.Definitions;
 /// Role-aware display alias for a state. Lets the same internal state be presented
 /// under different, role-appropriate labels without changing the workflow's real state identity.
 /// JSON format:
-/// { "name": "Değerlendirme Aşamasında",
+/// { "name": "Application Under Review",
 ///   "roles": [ { "role": "...", "grant": "allow" } ],
 ///   "labels": [ { "label": "...", "language": "tr" } ] }.
 /// <para>
