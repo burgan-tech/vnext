@@ -1,0 +1,14 @@
+{
+  "key": "order-flow",
+  "version": "1.0.0",
+  "transitions": [
+    {
+      "key": "submit-order",
+      "mapping": {
+        "comment": "The mapping references helper components by key. The engine builds these helper classes first, then compiles + runs the mapping against them.",
+        "helpers": [ "tax-calculator", "rsa-crypto" ],
+        "location": "mappings/order-mapping.csx"
+      }
+    }
+  ]
+}
