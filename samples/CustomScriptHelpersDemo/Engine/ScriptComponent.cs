@@ -22,9 +22,13 @@ public sealed record FlowTransition(
     MappingReference Mapping);
 
 /// <summary>
-/// The mapping section of a transition. <see cref="Helpers"/> lists helper component
-/// keys the mapping depends on; <see cref="Location"/> points at the mapping .csx.
+/// The mapping section of a transition.
+/// <see cref="Helpers"/> lists helper component keys the mapping depends on;
+/// <see cref="Location"/> points at the mapping .csx;
+/// <see cref="AllowedAssemblies"/> declares extra sandbox-permitted assemblies this
+/// mapping's helpers/script may reference, merged on top of the global baseline.
 /// </summary>
 public sealed record MappingReference(
     [property: JsonPropertyName("helpers")] List<string> Helpers,
-    [property: JsonPropertyName("location")] string Location);
+    [property: JsonPropertyName("location")] string Location,
+    [property: JsonPropertyName("allowedAssemblies")] List<string>? AllowedAssemblies = null);

@@ -10,8 +10,17 @@ namespace CustomScriptHelpersDemo.Engine;
 /// </summary>
 public static class SandboxedReferenceSet
 {
-    public static IReadOnlyList<MetadataReference> Build(SandboxOptions options)
+    /// <summary>
+    /// Builds the reference list from the global baseline allow-list plus any
+    /// per-mapping <paramref name="extraAllowed"/> assemblies declared in the flow's
+    /// mapping section. The effective set is the union of the two.
+    /// </summary>
+    public static IReadOnlyList<MetadataReference> Build(SandboxOptions options, IEnumerable<string>? extraAllowed = null)
     {
+        var allowed = new HashSet<string>(options.AllowedAssemblies, StringComparer.OrdinalIgnoreCase);
+        if (extraAllowed is not null)
+            allowed.UnionWith(extraAllowed);
+
         var tpa = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty)
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
 
@@ -19,7 +28,7 @@ public static class SandboxedReferenceSet
         foreach (var path in tpa)
         {
             var name = Path.GetFileNameWithoutExtension(path);
-            if (options.AllowedAssemblies.Contains(name))
+            if (allowed.Contains(name))
                 refs.Add(MetadataReference.CreateFromFile(path));
         }
 

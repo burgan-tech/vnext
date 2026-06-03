@@ -29,15 +29,19 @@ var flow = store.LoadFlow("flows/order-flow.json");
 var transition = flow.Transitions.First(t => t.Key == "submit-order");
 var mappingRef = transition.Mapping;
 
+var allowedAssemblies = mappingRef.AllowedAssemblies;
+
 Console.WriteLine($"Flow '{flow.Key}' v{flow.Version} — transition '{transition.Key}'");
-Console.WriteLine($"  mapping  : {mappingRef.Location}");
-Console.WriteLine($"  helpers  : {string.Join(", ", mappingRef.Helpers)}\n");
+Console.WriteLine($"  mapping           : {mappingRef.Location}");
+Console.WriteLine($"  helpers           : {string.Join(", ", mappingRef.Helpers)}");
+Console.WriteLine($"  allowedAssemblies : {string.Join(", ", allowedAssemblies ?? [])}\n");
 
 // ---------------------------------------------------------------------------
-// [1] Build the referenced helper classes FIRST (cached by content hash).
+// [1] Build the referenced helper classes FIRST (cached by content hash + allow-list).
+//     The per-mapping allowedAssemblies grant is what lets the RSA helper compile.
 // ---------------------------------------------------------------------------
 var helperComponents = mappingRef.Helpers.Select(store.Helper).ToList();
-var (helpers, fromCache) = engine.GetOrBuildHelpers(helperComponents);
+var (helpers, fromCache) = engine.GetOrBuildHelpers(helperComponents, allowedAssemblies);
 Console.WriteLine($"[1] Helper set built ({(fromCache ? "from cache" : "compiled")}). " +
                   $"Namespaces auto-imported: {string.Join(", ", helpers.Namespaces)}");
 
@@ -45,7 +49,7 @@ Console.WriteLine($"[1] Helper set built ({(fromCache ? "from cache" : "compiled
 // [2] THEN compile the mapping against the helper set and inject services.
 // ---------------------------------------------------------------------------
 var mappingComponent = store.Load(mappingRef.Location);
-var mapping = engine.BuildMapping(mappingComponent, helpers, services);
+var mapping = engine.BuildMapping(mappingComponent, helpers, services, allowedAssemblies);
 Console.WriteLine("[2] Mapping compiled + services injected.");
 
 // ---------------------------------------------------------------------------
@@ -75,8 +79,25 @@ foreach (var kv in data)
 // ---------------------------------------------------------------------------
 // [4] Re-running the same transition reuses the cached helper set.
 // ---------------------------------------------------------------------------
-var (_, fromCache2) = engine.GetOrBuildHelpers(helperComponents);
+var (_, fromCache2) = engine.GetOrBuildHelpers(helperComponents, allowedAssemblies);
 Console.WriteLine($"\n[4] Second run helper set: {(fromCache2 ? "served from cache ✓" : "rebuilt ✗")}");
+
+// ---------------------------------------------------------------------------
+// [4b] Without the per-mapping grant, the same RSA helper no longer compiles —
+//      System.Security.Cryptography is not in the global baseline.
+// ---------------------------------------------------------------------------
+Console.WriteLine("\n[4b] Building the RSA helper WITHOUT the allowedAssemblies grant ...");
+try
+{
+    engine.GetOrBuildHelpers([store.Helper("rsa-crypto")]); // no extra allow-list
+    Console.WriteLine("    !! ERROR: RSA helper compiled without the grant.");
+}
+catch (ScriptCompilationException ex)
+{
+    var first = ex.Message.Split('\n').FirstOrDefault(l => l.Contains("error CS")) ?? ex.Message.Split('\n')[0];
+    Console.WriteLine("    BLOCKED as expected (assembly not allow-listed):");
+    Console.WriteLine($"      {first.Trim()}");
+}
 
 // ---------------------------------------------------------------------------
 // [5] A malicious helper component is rejected by the sandbox at build time.

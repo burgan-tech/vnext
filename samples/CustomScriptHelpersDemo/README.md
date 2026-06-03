@@ -58,10 +58,16 @@ The flow declares which helpers a mapping needs:
 ```jsonc
 // components/flows/order-flow.json
 "mapping": {
-  "helpers":  [ "tax-calculator", "rsa-crypto" ],   // helper component keys
-  "location": "mappings/order-mapping.csx"
+  "helpers":           [ "tax-calculator", "rsa-crypto", "order-summary" ], // helper component keys
+  "allowedAssemblies": [ "System.Security.Cryptography" ],                  // per-mapping sandbox grant
+  "location":          "mappings/order-mapping.csx"
 }
 ```
+
+`allowedAssemblies` is **dynamic, per-mapping**: it is merged on top of the global baseline
+([`SandboxOptions.AllowedAssemblies`](Engine/SandboxOptions.cs)). In this demo crypto is *not* in the
+baseline, so the RSA helper compiles **only** because the flow grants it — step [4b] shows the same
+helper being blocked (CS1069) when the grant is removed.
 
 The engine ([`ScriptComponentEngine`](Engine/ScriptComponentEngine.cs)) then:
 
@@ -76,10 +82,10 @@ The engine ([`ScriptComponentEngine`](Engine/ScriptComponentEngine.cs)) then:
 `.NET has no in-process security boundary`, so the gate is applied **at compile time**:
 
 1. **Reference allow-list** — [`SandboxedReferenceSet`](Engine/SandboxedReferenceSet.cs) filters the
-   runtime's Trusted Platform Assemblies down to [`SandboxOptions.AllowedAssemblies`](Engine/SandboxOptions.cs).
-   Whole assemblies (e.g. `System.Net.Http`) are not referenced, so `HttpClient` won't compile.
-   **To allow crypto, `System.Security.Cryptography` was added to this list** — that is what lets
-   `rsa-crypto.csx` compile.
+   runtime's Trusted Platform Assemblies down to the **global baseline**
+   ([`SandboxOptions.AllowedAssemblies`](Engine/SandboxOptions.cs)) **plus the per-mapping
+   `allowedAssemblies` grant** from the flow. Whole assemblies (e.g. `System.Net.Http`) are not
+   referenced, so `HttpClient` won't compile. Crypto is enabled per-mapping via the flow's grant.
 2. **Banned-API analyzer** — [`BannedApiAnalyzer`](Engine/BannedApiAnalyzer.cs) resolves every symbol
    against the semantic model and rejects banned namespaces (`System.IO`, `System.Diagnostics`, …),
    `DllImport`, and `unsafe`. Required because dangerous types like `System.IO.File` live in the

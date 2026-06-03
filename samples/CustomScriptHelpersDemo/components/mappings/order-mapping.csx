@@ -12,9 +12,8 @@ public class OrderMapping : ScriptBase, IMapping
 
         LogInformation($"Pricing order on transition '{context.TransitionKey}' (currency {GetConfig("currency", "TRY")})");
 
-        // Custom helper from the consumer's own code:
-        var gross = TaxCalculator.WithTax(net);
-        var tax = TaxCalculator.TaxAmount(net);
+        // OrderSummary is a helper that itself calls the TaxCalculator helper.
+        var summary = OrderSummary.Build(net);
 
         // Custom RSA helper — keys are supplied by the host via config (GetConfig),
         // not generated inside the helper. Encrypt a sensitive field, verify round-trip:
@@ -24,17 +23,10 @@ public class OrderMapping : ScriptBase, IMapping
         var encryptedCard = RsaCryptoHelper.Encrypt(card, publicKey);
         var roundTripOk = RsaCryptoHelper.Decrypt(encryptedCard, privateKey) == card;
 
-        return Task.FromResult(new ScriptResponse
-        {
-            Data = new Dictionary<string, object?>
-            {
-                ["net"] = net,
-                ["tax"] = tax,
-                ["gross"] = gross,
-                ["currency"] = GetConfig("currency", "TRY"),
-                ["encryptedCard"] = encryptedCard,
-                ["cardRoundTripOk"] = roundTripOk,
-            }
-        });
+        summary["currency"] = GetConfig("currency", "TRY");
+        summary["encryptedCard"] = encryptedCard;
+        summary["cardRoundTripOk"] = roundTripOk;
+
+        return Task.FromResult(new ScriptResponse { Data = summary });
     }
 }

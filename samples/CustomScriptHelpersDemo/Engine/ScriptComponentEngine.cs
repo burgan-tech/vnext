@@ -40,15 +40,19 @@ public sealed class ScriptComponentEngine
     /// Builds (or returns cached) the combined assembly for a set of helper components.
     /// Compiling them together lets helpers reference one another.
     /// </summary>
-    public (CompiledAssembly Helpers, bool FromCache) GetOrBuildHelpers(IReadOnlyList<ScriptComponent> helpers)
+    public (CompiledAssembly Helpers, bool FromCache) GetOrBuildHelpers(
+        IReadOnlyList<ScriptComponent> helpers,
+        IReadOnlyList<string>? allowedAssemblies = null)
     {
-        var key = HashOf(helpers);
+        // The allow-list is part of the compilation identity — fold it into the cache key.
+        var key = HashOf(helpers, allowedAssemblies);
         var fromCache = _helperCache.ContainsKey(key);
         var compiled = _helperCache.GetOrAdd(key, _ =>
             _compiler.Compile(
                 assemblyName: $"Helpers_{key[..8]}",
                 sources: helpers.Select(h => (h.Path, h.Code)).ToList(),
-                loadContext: _alc));
+                loadContext: _alc,
+                extraAllowedAssemblies: allowedAssemblies));
         return (compiled, fromCache);
     }
 
@@ -56,7 +60,11 @@ public sealed class ScriptComponentEngine
     /// Compiles a mapping component against the supplied helper set (references + auto-usings)
     /// and returns a ready-to-run instance with services injected.
     /// </summary>
-    public IMapping BuildMapping(ScriptComponent mapping, CompiledAssembly? helpers, IScriptServices services)
+    public IMapping BuildMapping(
+        ScriptComponent mapping,
+        CompiledAssembly? helpers,
+        IScriptServices services,
+        IReadOnlyList<string>? allowedAssemblies = null)
     {
         var references = new List<MetadataReference> { _contractRef };
         var usings = BaseUsings.AsEnumerable();
@@ -68,11 +76,12 @@ public sealed class ScriptComponentEngine
         }
 
         var compiled = _compiler.Compile(
-            assemblyName: $"Mapping_{HashOf([mapping])[..8]}",
+            assemblyName: $"Mapping_{HashOf([mapping], allowedAssemblies)[..8]}",
             sources: [(mapping.Path, mapping.Code)],
             loadContext: _alc,
             extraReferences: references,
-            usingDirectives: usings);
+            usingDirectives: usings,
+            extraAllowedAssemblies: allowedAssemblies);
 
         var type = compiled.Assembly.GetTypes()
             .First(t => typeof(IMapping).IsAssignableFrom(t) && t is { IsInterface: false, IsAbstract: false });
@@ -82,11 +91,14 @@ public sealed class ScriptComponentEngine
         return instance;
     }
 
-    private static string HashOf(IReadOnlyList<ScriptComponent> components)
+    private static string HashOf(IReadOnlyList<ScriptComponent> components, IReadOnlyList<string>? allowedAssemblies = null)
     {
         var sb = new StringBuilder();
         foreach (var c in components)
             sb.Append(c.Key).Append('|').Append(c.Code).Append(';');
+        if (allowedAssemblies is not null)
+            foreach (var a in allowedAssemblies.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                sb.Append("@@").Append(a);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
 }

@@ -24,8 +24,10 @@ public sealed class SandboxOptions
         "System.ObjectModel",
         "System.Text.RegularExpressions",
         "System.Console",
-        "System.Security.Cryptography", // allow RSA/AES etc. (crypto is permitted)
         "netstandard",
+        // NOTE: System.Security.Cryptography is intentionally NOT in the global baseline.
+        // A flow's mapping section grants it per-mapping via "allowedAssemblies" — see
+        // components/flows/order-flow.json. That keeps crypto opt-in, per flow.
     };
 
     /// <summary>Namespace prefixes that scripts may not touch, even if reachable.</summary>

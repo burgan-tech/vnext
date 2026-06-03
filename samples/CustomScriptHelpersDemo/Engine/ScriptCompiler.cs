@@ -25,7 +25,8 @@ public sealed class ScriptCompiler(SandboxOptions sandbox)
         IReadOnlyList<(string Path, string Code)> sources,
         AssemblyLoadContext loadContext,
         IEnumerable<MetadataReference>? extraReferences = null,
-        IEnumerable<string>? usingDirectives = null)
+        IEnumerable<string>? usingDirectives = null,
+        IEnumerable<string>? extraAllowedAssemblies = null)
     {
         var usings = usingDirectives is null
             ? string.Empty
@@ -35,7 +36,7 @@ public sealed class ScriptCompiler(SandboxOptions sandbox)
             .Select(s => CSharpSyntaxTree.ParseText(usings + s.Code, ParseOptions, path: s.Path))
             .ToList();
 
-        var references = SandboxedReferenceSet.Build(sandbox).ToList();
+        var references = SandboxedReferenceSet.Build(sandbox, extraAllowedAssemblies).ToList();
         if (extraReferences is not null)
             references.AddRange(extraReferences);
 

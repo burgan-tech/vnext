@@ -5,8 +5,9 @@
     {
       "key": "submit-order",
       "mapping": {
-        "comment": "The mapping references helper components by key. The engine builds these helper classes first, then compiles + runs the mapping against them.",
-        "helpers": [ "tax-calculator", "rsa-crypto" ],
+        "comment": "References helper components by key. The engine builds these helper classes first, then compiles + runs the mapping. 'allowedAssemblies' grants extra sandbox-permitted assemblies for this mapping, merged on top of the global baseline.",
+        "helpers": [ "tax-calculator", "rsa-crypto", "order-summary" ],
+        "allowedAssemblies": [ "System.Security.Cryptography" ],
         "location": "mappings/order-mapping.csx"
       }
     }

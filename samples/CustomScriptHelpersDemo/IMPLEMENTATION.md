@@ -22,10 +22,15 @@
 ```jsonc
 // flow definition — transition mapping
 "mapping": {
-  "helpers":  [ "tax-calculator", "rsa-crypto" ],   // helper component keys (+ version)
-  "location": "mappings/order-mapping.csx"
+  "helpers":           [ "tax-calculator", "rsa-crypto" ], // helper component keys (+ version)
+  "allowedAssemblies": [ "System.Security.Cryptography" ], // per-mapping sandbox grant (dynamic)
+  "location":          "mappings/order-mapping.csx"
 }
 ```
+
+`allowedAssemblies` makes the reference allow-list **dynamic per-mapping** — merged on top of the
+global baseline (`Scripting:Sandbox:AllowedAssemblies`). A flow grants only what its helpers need
+(e.g. crypto) without widening the baseline for everyone.
 At transition time the runtime builds the referenced helper set (cached), then compiles + runs the
 mapping with those helpers referenced and their namespaces auto-imported. No base-image rebuild,
 no startup folder — helpers travel with the domain like any other component.
@@ -63,8 +68,14 @@ public sealed class ScriptHelpersOptions
 }
 ```
 Port `SandboxOptions`, `SandboxedReferenceSet`, `BannedApiAnalyzer` from the sample verbatim
-(see [`Engine/`](./Engine/)). `SandboxedReferenceSet` filters the TPA list down to `AllowedAssemblies`;
-`BannedApiAnalyzer` resolves symbols on the semantic model and rejects banned namespaces / `DllImport` / `unsafe`.
+(see [`Engine/`](./Engine/)). `SandboxedReferenceSet.Build(options, extraAllowed)` filters the TPA list
+down to `AllowedAssemblies` **∪ the per-mapping grant**; `BannedApiAnalyzer` resolves symbols on the
+semantic model and rejects banned namespaces / `DllImport` / `unsafe`.
+
+> **Governance:** the per-mapping `allowedAssemblies` grant should be bounded by a global
+> **`GrantableAssemblies` ceiling** (config), so a flow author cannot grant arbitrary assemblies
+> (e.g. `System.Net.Http`). Effective set = `baseline ∪ (mappingGrant ∩ grantable)`. The
+> `BannedNamespaces` analyzer is **not** bypassable by a grant — it always runs.
 
 > **Why two layers:** reference omission blocks whole assemblies (e.g. `System.Net.Http`), but dangerous
 > types like `System.IO.File` live in the *mandatory* `System.Private.CoreLib` — only the semantic
@@ -108,9 +119,11 @@ In `CSharpEvaluator`:
 Where a transition's mapping is compiled (the task executors / `FunctionAppService` that call
 [`ScriptEngine.CompileToInstanceAsync`](../../src/BBT.Workflow.Application/Scripting/ScriptEngine.cs#L100)):
 1. Resolve the mapping's `helpers[]` keys from the component store → `HelperComponent` list.
-2. `var set = registry.GetOrBuildHelpers(components);`  ← **build helper classes first**
-3. Pass `set.Reference` + `set.Namespaces` into the mapping compile (merge as below) **and** compile the
-   mapping into `set` 's ALC so helper calls resolve.
+2. Compute the effective grant: `mapping.allowedAssemblies ∩ Sandbox.GrantableAssemblies`.
+3. `var set = registry.GetOrBuildHelpers(components, grant);`  ← **build helper classes first**.
+   The grant is part of the compilation identity → fold it into the helper-set cache key.
+4. Pass `set.Reference` + `set.Namespaces` + the same `grant` into the mapping compile (merge as below)
+   **and** compile the mapping into `set` 's ALC so helper calls resolve.
 ```csharp
 var mergedReferences = (extraReferences ?? [])
     .Concat(DefaultReferences.Value)
@@ -121,6 +134,8 @@ var mergedUsings = (usingDirectives ?? [])
     .Concat(DefaultUsings)
     .Concat(set?.Namespaces ?? [])         // auto-import helper namespaces
     .Distinct();
+
+// references built from baseline ∪ grant (SandboxedReferenceSet.Build(options, grant))
 ```
 
 ### 3.5 DI
@@ -140,15 +155,17 @@ Keep `IScriptServices` **scoped** (per-request Dapr/Logger/Config). The `ScriptH
   "Helpers": { "Enabled": true },
   "Sandbox": {
     "Enabled": true,
-    "AllowedAssemblies": [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Text.RegularExpressions", "System.Security.Cryptography", "netstandard" ],
-    "BannedNamespaces": [ "System.IO", "System.Net", "System.Diagnostics", "System.Runtime.InteropServices", "System.Reflection", "Microsoft.Win32" ],
+    "AllowedAssemblies":   [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Text.RegularExpressions", "netstandard" ],
+    "GrantableAssemblies": [ "System.Security.Cryptography", "System.Text.Json" ],
+    "BannedNamespaces":    [ "System.IO", "System.Net", "System.Diagnostics", "System.Runtime.InteropServices", "System.Reflection", "Microsoft.Win32" ],
     "AllowUnsafe": false
   }
 }
 ```
-Default `Helpers.Enabled = false` so existing deployments are unaffected until opted in.
-`System.Security.Cryptography` is in the allow-list to permit RSA/AES helpers (see the sample's
-`rsa-crypto` helper) — drop it to forbid in-script crypto.
+- `AllowedAssemblies` — global baseline every mapping gets.
+- `GrantableAssemblies` — the **ceiling** a flow's `mapping.allowedAssemblies` may draw from; a grant
+  outside this set is ignored (and should be logged/validated). Put crypto here so flows opt in per-mapping.
+- Default `Helpers.Enabled = false` so existing deployments are unaffected until opted in.
 
 ## 5. Delivery (no Docker change)
 
@@ -198,7 +215,8 @@ process/container level. State this explicitly so the trust model is not over-so
 - [ ] Reference allow-list blocks an assembly-level API (e.g. `HttpClient`) at compile time.
 - [ ] Banned-namespace analyzer blocks `System.IO.File` (CoreLib-resident) at compile time.
 - [ ] `DllImport` and `unsafe` are rejected.
-- [ ] RSA helper compiles only because `System.Security.Cryptography` is allow-listed; keys are host/secret-store supplied, never embedded.
+- [ ] A mapping's `allowedAssemblies` grant broadens the reference set per-mapping; removing it blocks helpers that need it (CS1069), and a grant outside `GrantableAssemblies` is ignored + logged.
+- [ ] RSA helper compiles only when crypto is granted (per-mapping); keys are host/secret-store supplied, never embedded.
 - [ ] `Helpers.Enabled=false` ⇒ byte-for-byte unchanged behaviour.
 - [ ] A helper that fails the sandbox surfaces a clear, logged error (`WorkflowLogs`) and fails the transition compile — never silently skipped.
 - [ ] Helper sets are collectible (ALC) and unloaded when superseded.
