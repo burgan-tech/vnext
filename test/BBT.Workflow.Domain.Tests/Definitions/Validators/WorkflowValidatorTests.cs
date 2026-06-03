@@ -494,7 +494,124 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region State Alias Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenStateAliasIsComplete()
+    {
+        var workflow = BuildWorkflowWithStateAlias("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+                "labels": [ { "label": "Operasyon İncelemesinde", "language": "tr" } ]
+            }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        var aliasErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("Alias", StringComparison.Ordinal))
+            .ToList();
+        aliasErrors.ShouldBeEmpty($"Unexpected alias errors: {string.Join(", ", aliasErrors.Select(e => e.ErrorMessage))}");
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenStateHasNoAlias()
+    {
+        // The default workflow template has no alias arrays — alias is optional.
+        var workflow = CreateWorkflowWithDefaultAutoTransition();
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors
+            .ShouldNotContain(e => e.ErrorMessage!.Contains("Alias", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStateAliasHasNoLabels()
+    {
+        var workflow = BuildWorkflowWithStateAlias("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+                "labels": []
+            }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("at least one label", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Değerlendirme Aşamasında", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStateAliasHasNoRoles()
+    {
+        var workflow = BuildWorkflowWithStateAlias("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [],
+                "labels": [ { "label": "Operasyon İncelemesinde", "language": "tr" } ]
+            }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("at least one role", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Değerlendirme Aşamasında", StringComparison.Ordinal));
+    }
+
+    #endregion
+
     #region Helper Methods
+
+    /// <summary>
+    /// Builds an otherwise-valid workflow whose intermediate "pending" state carries the supplied alias entry.
+    /// </summary>
+    private WorkflowDefinition BuildWorkflowWithStateAlias(string aliasEntryJson)
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "go-pending",
+                            "target": "pending",
+                            "triggerType": "manual",
+                            "labels": [{"label": "Go", "language": "en"}]
+                        }
+                    ]
+                },
+                {
+                    "key": "pending",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Pending", "language": "en"}],
+                    "transitions": [],
+                    "alias": [ {{aliasEntryJson}} ]
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """;
+
+        return DeserializeWorkflow(json);
+    }
 
     private WorkflowDefinition CreateWorkflowWithDefaultAutoTransition()
     {

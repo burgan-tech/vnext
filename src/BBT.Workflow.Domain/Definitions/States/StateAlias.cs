@@ -11,8 +11,9 @@ namespace BBT.Workflow.Definitions;
 ///   "roles": [ { "role": "...", "grant": "allow" } ],
 ///   "labels": [ { "label": "...", "language": "tr" } ] }.
 /// <para>
-/// Aliases are evaluated in declaration order, first match wins. An entry with an empty
-/// <c>roles</c> list matches everyone and therefore acts as a default/fallback — place it last.
+/// Aliases are evaluated in declaration order, first match wins. Authoring rules
+/// (enforced by <c>WorkflowValidator</c>): each entry must declare a <c>name</c>, at least one
+/// <c>roles</c> grant, and at least one <c>labels</c> entry.
 /// </para>
 /// </summary>
 public sealed class StateAlias
@@ -43,8 +44,9 @@ public sealed class StateAlias
     private List<LanguageLabel> labels = new();
 
     /// <summary>
-    /// Role grants that must resolve to the caller for this alias to apply.
-    /// Empty means the alias matches everyone (default/fallback). DENY always wins; otherwise any ALLOW match applies.
+    /// Role grants that must resolve to the caller for this alias to apply (at least one is required by
+    /// validation). DENY always wins; otherwise any ALLOW match applies. The runtime treats an empty list
+    /// defensively as "matches everyone".
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<RoleGrant> Roles => roles.AsReadOnly();

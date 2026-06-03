@@ -69,7 +69,8 @@ Resolution in the `state` function:
   static roles, predefined roles (`$InstanceStarter`, `$PreviousUser`, …) and dynamic roles.
 - Aliases are evaluated in declaration order; the **first** alias whose `roles` resolve to
   the caller wins.
-- An alias with an empty `roles` list matches everyone, acting as a default/fallback — place it last.
+- Authoring rules (enforced by `WorkflowValidator`): the `alias` array is optional, but each
+  entry must declare a `name`, at least one `roles` grant, and at least one `labels` entry.
 - The winning alias's display value for the response `state` field is resolved as:
   1. **Localized label** — if the alias has `labels`, the label for the caller's current
      language is returned. Language comes from the `Accept-Language` header (`LanguageResolver`);
