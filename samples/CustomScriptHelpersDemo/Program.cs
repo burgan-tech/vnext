@@ -1,26 +1,50 @@
 using System.Security.Cryptography;
 using CustomScriptHelpersDemo.Contracts;
 using CustomScriptHelpersDemo.Engine;
+using Microsoft.Extensions.Configuration;
 
 var baseDir = AppContext.BaseDirectory;
 string Path_(string rel) => System.IO.Path.Combine(baseDir, rel);
 
+// All configuration lives in appsettings.json (Scripting:* sections).
+var config = new ConfigurationBuilder()
+    .SetBasePath(baseDir)
+    .AddJsonFile("appsettings.json", optional: false)
+    .Build();
+
+var helpersEnabled = config.GetValue("Scripting:Helpers:Enabled", true);
+
 var sandbox = new SandboxOptions();
+config.GetSection("Scripting:Sandbox").Bind(sandbox);
+
+// Plugin dir: env var (Docker volume) wins, else appsettings; resolve relative → base dir.
+var pluginDir = Environment.GetEnvironmentVariable("SCRIPT_PLUGIN_DIR");
+if (string.IsNullOrWhiteSpace(pluginDir))
+    pluginDir = sandbox.PluginDirectory;
+sandbox.PluginDirectory = Path.IsPathRooted(pluginDir) ? pluginDir : Path_(pluginDir);
+
 var compiler = new ScriptCompiler(sandbox);
-var engine = new ScriptComponentEngine(compiler);
+var engine = new ScriptComponentEngine(compiler, sandbox);
 var store = new ComponentStore(Path_("components"));
 
-// The HOST owns the RSA key pair and passes it to scripts as Base64 key material.
-// In the real runtime this comes from the secret store, not generated here.
+// Script services config comes from appsettings (Scripting:ScriptServices); the HOST adds the
+// RSA key pair at runtime (in the real runtime these come from the secret store, not generated here).
+var scriptConfig = config.GetSection("Scripting:ScriptServices")
+    .GetChildren().ToDictionary(c => c.Key, c => c.Value ?? string.Empty);
 using var rsa = RSA.Create(2048);
-var services = new DemoScriptServices(new Dictionary<string, string>
-{
-    ["currency"] = "EUR",
-    ["rsa:publicKey"] = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo()),
-    ["rsa:privateKey"] = Convert.ToBase64String(rsa.ExportPkcs8PrivateKey()),
-});
+scriptConfig["rsa:publicKey"] = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo());
+scriptConfig["rsa:privateKey"] = Convert.ToBase64String(rsa.ExportPkcs8PrivateKey());
+var services = new DemoScriptServices(scriptConfig);
 
 Console.WriteLine("=== vNext custom script-helpers demo (component model) ===\n");
+Console.WriteLine($"Config: Helpers.Enabled={helpersEnabled}, AllowUnsafe={sandbox.AllowUnsafe}, " +
+                  $"AllowedAssemblies={sandbox.AllowedAssemblies.Count}, BannedNamespaces={sandbox.BannedNamespaces.Count}\n");
+
+if (!helpersEnabled)
+{
+    Console.WriteLine("Scripting:Helpers:Enabled is false — helper loading disabled. Exiting.");
+    return;
+}
 
 // ---------------------------------------------------------------------------
 // Read the flow definition and find the mapping reference for a transition.
@@ -113,6 +137,28 @@ catch (ScriptCompilationException ex)
     Console.WriteLine("    BLOCKED as expected:");
     foreach (var line in ex.Message.Split('\n'))
         Console.WriteLine($"      {line}");
+}
+
+// ---------------------------------------------------------------------------
+// [6] Third-party assembly loaded DYNAMICALLY from the plugin volume.
+//     Present only if a DLL was mounted/dropped into the plugin directory.
+// ---------------------------------------------------------------------------
+Console.WriteLine($"\n[6] Third-party assembly from the plugin volume ({sandbox.PluginDirectory}) ...");
+if (File.Exists(Path.Combine(sandbox.PluginDirectory, "Newtonsoft.Json.dll")))
+{
+    // Newtonsoft.Json is in the baseline AllowedAssemblies — no per-mapping grant needed.
+    var (jsonSet, _) = engine.GetOrBuildHelpers([store.Helper("json-helper")]);
+    var jsonType = jsonSet.Assembly.GetType("Acme.Helpers.JsonHelper")!;
+    var json = (string)jsonType.GetMethod("Serialize")!
+        .Invoke(null, [new Dictionary<string, object?> { ["from"] = "plugin-volume", ["ok"] = true }])!;
+    Console.WriteLine("    Newtonsoft.Json loaded dynamically (baseline-allowed, not a host dependency).");
+    Console.WriteLine($"    JsonHelper.Serialize -> {json}");
+}
+else
+{
+    Console.WriteLine("    No third-party DLLs mounted. To enable this step:");
+    Console.WriteLine("      • local : ./setup-plugins.sh   (copies Newtonsoft.Json.dll into ./plugins)");
+    Console.WriteLine("      • docker: mount a volume to /app/assemblies (see docker-compose.yml)");
 }
 
 Console.WriteLine("\n=== done ===");

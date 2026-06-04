@@ -1,45 +1,30 @@
 namespace CustomScriptHelpersDemo.Engine;
 
 /// <summary>
-/// Sandbox policy applied when compiling consumer-supplied source.
+/// Sandbox policy, bound from <c>appsettings.json</c> (section <c>Scripting:Sandbox</c>).
 /// Two independent layers:
-///   1. <see cref="AllowedAssemblies"/> — a reference allow-list. Anything whose
-///      assembly is not referenced simply will not compile (e.g. HttpClient).
-///   2. <see cref="BannedNamespaces"/> — a semantic ban for types that live inside
-///      mandatory assemblies (System.Private.CoreLib) and therefore cannot be
-///      blocked by reference omission (e.g. System.IO.File).
+///   1. <see cref="AllowedAssemblies"/> — a reference allow-list. Anything whose assembly is not
+///      referenced will not compile (e.g. HttpClient).
+///   2. <see cref="BannedNamespaces"/> — a semantic ban for types that live inside mandatory
+///      assemblies (System.Private.CoreLib) and cannot be blocked by reference omission
+///      (e.g. System.IO.File).
 /// </summary>
 public sealed class SandboxOptions
 {
+    /// <summary>Whether <c>unsafe</c> code is permitted in scripts.</summary>
+    public bool AllowUnsafe { get; set; }
+
+    /// <summary>
+    /// Directory of operator-approved third-party DLLs loaded DYNAMICALLY at runtime.
+    /// In Docker this is a mounted volume (e.g. <c>./plugins:/app/assemblies:ro</c>); the host
+    /// never references these assemblies. Relative paths resolve against the app base directory;
+    /// overridable via the <c>SCRIPT_PLUGIN_DIR</c> environment variable.
+    /// </summary>
+    public string PluginDirectory { get; set; } = "plugins";
+
     /// <summary>Simple assembly names (no extension) that scripts may reference.</summary>
-    public HashSet<string> AllowedAssemblies { get; } = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "System.Private.CoreLib", // mandatory — contains Object, String, Math, decimal...
-        "System.Runtime",
-        "System.Runtime.Extensions",
-        "System.Collections",
-        "System.Collections.Concurrent",
-        "System.Linq",
-        "System.Linq.Expressions",
-        "System.ObjectModel",
-        "System.Text.RegularExpressions",
-        "System.Console",
-        "netstandard",
-        // NOTE: System.Security.Cryptography is intentionally NOT in the global baseline.
-        // A flow's mapping section grants it per-mapping via "allowedAssemblies" — see
-        // components/flows/order-flow.json. That keeps crypto opt-in, per flow.
-    };
+    public List<string> AllowedAssemblies { get; set; } = [];
 
     /// <summary>Namespace prefixes that scripts may not touch, even if reachable.</summary>
-    public HashSet<string> BannedNamespaces { get; } = new(StringComparer.Ordinal)
-    {
-        "System.IO",
-        "System.Net",
-        "System.Diagnostics",
-        "System.Reflection",
-        "System.Runtime.InteropServices",
-        "Microsoft.Win32",
-    };
-
-    public bool AllowUnsafe => false;
+    public List<string> BannedNamespaces { get; set; } = [];
 }

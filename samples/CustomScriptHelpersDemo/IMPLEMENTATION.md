@@ -72,10 +72,10 @@ Port `SandboxOptions`, `SandboxedReferenceSet`, `BannedApiAnalyzer` from the sam
 down to `AllowedAssemblies` **∪ the per-mapping grant**; `BannedApiAnalyzer` resolves symbols on the
 semantic model and rejects banned namespaces / `DllImport` / `unsafe`.
 
-> **Governance:** the per-mapping `allowedAssemblies` grant should be bounded by a global
-> **`GrantableAssemblies` ceiling** (config), so a flow author cannot grant arbitrary assemblies
-> (e.g. `System.Net.Http`). Effective set = `baseline ∪ (mappingGrant ∩ grantable)`. The
-> `BannedNamespaces` analyzer is **not** bypassable by a grant — it always runs.
+> **Trust:** effective set = `baseline ∪ per-mapping grant`. A grant only resolves against what is
+> physically available (framework TPA + operator-mounted plugins), and `BannedNamespaces` is **not**
+> bypassable by a grant — it always runs. Those two gates plus the operator-controlled plugin volume
+> are what bound a flow author; there is intentionally **no** separate "grantable" ceiling list.
 
 > **Why two layers:** reference omission blocks whole assemblies (e.g. `System.Net.Http`), but dangerous
 > types like `System.IO.File` live in the *mandatory* `System.Private.CoreLib` — only the semantic
@@ -119,10 +119,9 @@ In `CSharpEvaluator`:
 Where a transition's mapping is compiled (the task executors / `FunctionAppService` that call
 [`ScriptEngine.CompileToInstanceAsync`](../../src/BBT.Workflow.Application/Scripting/ScriptEngine.cs#L100)):
 1. Resolve the mapping's `helpers[]` keys from the component store → `HelperComponent` list.
-2. Compute the effective grant: `mapping.allowedAssemblies ∩ Sandbox.GrantableAssemblies`.
-3. `var set = registry.GetOrBuildHelpers(components, grant);`  ← **build helper classes first**.
+2. `var set = registry.GetOrBuildHelpers(components, mapping.allowedAssemblies);`  ← **build helper classes first**.
    The grant is part of the compilation identity → fold it into the helper-set cache key.
-4. Pass `set.Reference` + `set.Namespaces` + the same `grant` into the mapping compile (merge as below)
+3. Pass `set.Reference` + `set.Namespaces` + the same grant into the mapping compile (merge as below)
    **and** compile the mapping into `set` 's ALC so helper calls resolve.
 ```csharp
 var mergedReferences = (extraReferences ?? [])
@@ -156,23 +155,55 @@ Keep `IScriptServices` **scoped** (per-request Dapr/Logger/Config). The `ScriptH
   "Sandbox": {
     "Enabled": true,
     "AllowedAssemblies":   [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Text.RegularExpressions", "netstandard" ],
-    "GrantableAssemblies": [ "System.Security.Cryptography", "System.Text.Json" ],
+    "PluginDirectory":     "/app/assemblies",
     "BannedNamespaces":    [ "System.IO", "System.Net", "System.Diagnostics", "System.Runtime.InteropServices", "System.Reflection", "Microsoft.Win32" ],
     "AllowUnsafe": false
   }
 }
 ```
 - `AllowedAssemblies` — global baseline every mapping gets.
-- `GrantableAssemblies` — the **ceiling** a flow's `mapping.allowedAssemblies` may draw from; a grant
-  outside this set is ignored (and should be logged/validated). Put crypto here so flows opt in per-mapping.
+- A flow's `mapping.allowedAssemblies` is merged on top of the baseline; it only resolves against
+  assemblies that are actually available (framework TPA + mounted plugins), and `BannedNamespaces`
+  still applies — so there is no separate grantable-ceiling list.
+- `PluginDirectory` — operator-controlled folder of third-party DLLs loaded **dynamically** at runtime
+  (mounted Docker volume); not a host dependency. See §5.1.
 - Default `Helpers.Enabled = false` so existing deployments are unaffected until opted in.
 
-## 5. Delivery (no Docker change)
+## 5. Delivery (no Docker change for helpers)
 
 Helpers travel with the **domain as components**, not in the image. Consumers author `*.csx` helper
 components and reference them from the transition mapping (`mapping.helpers[]`). No base-image rebuild
 and no startup folder/volume — they deploy through the same component pipeline as flows/tasks/views.
 Validate the new component type in the `vnext-template` CLI (`npm run validate`).
+
+### 5.1 Third-party / NuGet assemblies (operator-curated only)
+
+A consumer **cannot** pull an arbitrary NuGet package: a precompiled DLL is IL the
+`BannedApiAnalyzer` can't inspect (it polices the *script source*, not the dependency's internals).
+Bringing in a third-party assembly therefore means **full-trusting it**, so it must be curated by the
+runtime operator, not the flow author. The supported path — **dynamically loaded, not a host dependency**:
+
+1. **Operator mounts approved DLLs into a plugin directory at runtime** — a Docker `volumes:` mount to
+   `Scripting:Sandbox:PluginDirectory` (e.g. `./approved-dlls:/app/assemblies:ro`). **No host project
+   rebuild, no `PackageReference`** — the DLLs are not host references (absent from `deps.json`). The
+   sample's `docker-compose.yml` shows the mount; `setup-plugins.sh` populates it for local runs.
+2. **Operator allow-lists it** in `Scripting:Sandbox:AllowedAssemblies` (baseline) or lets flows opt in
+   per-mapping via `allowedAssemblies`.
+3. **Compile time:** `SandboxedReferenceSet` resolves from the TPA *and* the plugin directory
+   (port the sample's `AvailableAssemblies(pluginDirectory)`), so plugin DLLs become referenceable.
+4. **Run time:** the registry `LoadFromAssemblyPath`s each plugin DLL into the shared script ALC at
+   startup, so compiled helpers resolve the dependency even though the host doesn't reference it. (For a
+   production-grade version, override the ALC's `Load` with an `AssemblyDependencyResolver` over the
+   plugin dir to also pull transitive deps.)
+5. **Consumer opts in per-mapping** via `mapping.allowedAssemblies` and `using`s the type in a helper.
+
+What this deliberately does **not** support: a flow shipping its own `.dll`, or on-the-fly nupkg
+download/restore (transitive-dependency + arbitrary-code-execution hazard). If a team needs an
+un-curated library, that is a request to the operator to drop it in the plugin dir — reviewed once,
+centrally — not a per-flow capability. State this in the issue so the trust model stays with the operator.
+
+> The banned-namespace analyzer still runs on the script source even when a third-party assembly is
+> granted; it just cannot see transitive calls made *inside* the third-party DLL.
 
 ## 6. Caching & memory
 
@@ -192,6 +223,8 @@ Validate the new component type in the `vnext-template` CLI (`npm run validate`)
 - `Sandbox_Blocks_Banned_Namespace` — helper using `System.IO.File` → `ScriptCompilationException`
 - `Sandbox_Blocks_DllImport` and `Sandbox_Blocks_Unsafe`
 - `Crypto_Helper_Compiles_When_Cryptography_Allowed` (RSA round-trip)
+- `ThirdParty_Dll_Helper_Compiles_When_Mounted_And_Allowed` (e.g. Newtonsoft.Json from the plugin dir);
+  a grant for an un-mounted/un-available assembly simply fails to resolve (CS1069)
 - `Helpers_Disabled_NoBehaviorChange` — `Enabled=false` leaves existing compilation untouched
 - Reuse patterns from [`ScriptEngineTests`](../../test/BBT.Workflow.Application.Tests/Scripting/ScriptEngineTests.cs).
 
@@ -215,7 +248,8 @@ process/container level. State this explicitly so the trust model is not over-so
 - [ ] Reference allow-list blocks an assembly-level API (e.g. `HttpClient`) at compile time.
 - [ ] Banned-namespace analyzer blocks `System.IO.File` (CoreLib-resident) at compile time.
 - [ ] `DllImport` and `unsafe` are rejected.
-- [ ] A mapping's `allowedAssemblies` grant broadens the reference set per-mapping; removing it blocks helpers that need it (CS1069), and a grant outside `GrantableAssemblies` is ignored + logged.
+- [ ] A mapping's `allowedAssemblies` grant broadens the reference set per-mapping; removing it blocks helpers that need it (CS1069).
+- [ ] A third-party DLL mounted into the plugin dir + allow-listed is usable from a helper once granted; un-mounted assemblies are not (and there is no per-flow DLL upload or nupkg download path).
 - [ ] RSA helper compiles only when crypto is granted (per-mapping); keys are host/secret-store supplied, never embedded.
 - [ ] `Helpers.Enabled=false` ⇒ byte-for-byte unchanged behaviour.
 - [ ] A helper that fails the sandbox surfaces a clear, logged error (`WorkflowLogs`) and fails the transition compile — never silently skipped.

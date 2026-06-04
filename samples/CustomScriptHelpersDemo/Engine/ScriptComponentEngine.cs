@@ -30,10 +30,17 @@ public sealed class ScriptComponentEngine
         "CustomScriptHelpersDemo.Contracts",
     };
 
-    public ScriptComponentEngine(ScriptCompiler compiler)
+    public ScriptComponentEngine(ScriptCompiler compiler, SandboxOptions sandbox)
     {
         _compiler = compiler;
         _contractRef = MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location);
+
+        // Load the operator-approved third-party DLLs dynamically into the shared ALC.
+        // The host does NOT reference these — preloading by path makes them resolvable
+        // when compiled helpers call into them at runtime.
+        if (Directory.Exists(sandbox.PluginDirectory))
+            foreach (var dll in Directory.EnumerateFiles(sandbox.PluginDirectory, "*.dll"))
+                _alc.LoadFromAssemblyPath(dll);
     }
 
     /// <summary>

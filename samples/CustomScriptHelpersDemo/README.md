@@ -49,8 +49,15 @@ components/
   flows/order-flow.json          flow definition; its transition mapping REFERENCES helper keys
   helpers/tax-calculator.csx      helper component  (key: "tax-calculator")
   helpers/rsa-crypto.csx          helper component  (key: "rsa-crypto", host supplies the RSA key)
+  helpers/order-summary.csx       helper that CALLS another helper (TaxCalculator)
+  helpers/json-helper.csx         helper that uses a THIRD-PARTY NuGet (Newtonsoft.Json)
   mappings/order-mapping.csx      mapping script; inherits ScriptBase, calls the helpers
   helpers-malicious/evil.csx      blocked by the sandbox
+
+appsettings.json                  all config: AllowedAssemblies, BannedNamespaces, AllowUnsafe, PluginDirectory, Helpers.Enabled
+plugins/                          runtime-loaded third-party DLLs (Docker volume target; git-ignored)
+setup-plugins.sh                  copies a sample DLL into ./plugins for local runs
+Dockerfile, docker-compose.yml    container build + the volume mount for plugins
 ```
 
 The flow declares which helpers a mapping needs:
@@ -93,6 +100,34 @@ The engine ([`ScriptComponentEngine`](Engine/ScriptComponentEngine.cs)) then:
 
 > ⚠️ Strong **best-effort gate for same-org domain teams**, not a hard security boundary.
 > A real boundary requires process/container isolation.
+
+## Third-party / NuGet assemblies
+
+A consumer **cannot freely pull a NuGet package** — a precompiled DLL is arbitrary IL the analyzer
+can't see inside (it only polices the *script source*, not the dependency's internals). So third-party
+assemblies are **operator-curated and loaded dynamically** from a plugin directory:
+
+1. **Operator** mounts approved DLLs into the plugin directory at **runtime** — a Docker `volumes:`
+   mount, **not** a host dependency (the package is never in the `.csproj` or `deps.json`):
+   ```yaml
+   # docker-compose.yml
+   environment: [ "SCRIPT_PLUGIN_DIR=/app/assemblies" ]
+   volumes:     [ "./plugins:/app/assemblies:ro" ]
+   ```
+2. **Allow-list it** — either in the **baseline** `Scripting:Sandbox:AllowedAssemblies` (every flow may
+   use it; this is where the demo puts `Newtonsoft.Json`) or per-mapping via `allowedAssemblies` for a
+   single flow — then `using` it in a helper (see [`json-helper.csx`](components/helpers/json-helper.csx)).
+
+Two pieces make dynamic loading work:
+- **Compile time:** `SandboxedReferenceSet` resolves assemblies from the TPA **and the plugin directory**.
+- **Run time:** `ScriptComponentEngine` `LoadFromAssemblyPath`s every plugin DLL into its shared ALC, so
+  compiled helpers resolve the dependency even though the host doesn't reference it.
+
+For a **local** run (no Docker), `./setup-plugins.sh` drops `Newtonsoft.Json.dll` into `./plugins` to
+simulate the mount; step [6] then loads it. The plugin directory is set by `SCRIPT_PLUGIN_DIR`
+(default `./plugins`). A per-mapping `allowedAssemblies` grant only resolves against what is actually
+available (framework TPA + mounted plugins), and the banned-namespace analyzer still applies — so the
+operator-controlled baseline + plugin volume + banned namespaces are the gates.
 
 ## Keys are host-owned
 

@@ -16,6 +16,21 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.0" />
+    <!-- NOTE: no third-party NuGet here on purpose. Third-party DLLs are supplied at
+         RUNTIME from the plugin directory (a Docker `volumes:` mount), never built in. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Any DLLs a developer drops into ./plugins are copied next to the binary for local
+       runs. In Docker this folder is replaced by a mounted volume (see docker-compose.yml);
+       the host never references these assemblies — they are loaded dynamically. -->
+  <ItemGroup>
+    <Content Include="plugins\**\*.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- The component store (helper/mapping .csx + flow .json) is compiled AT RUNTIME,

@@ -1,0 +1,10 @@
+services:
+  demo:
+    build: .
+    environment:
+      # Where the runtime looks for dynamically-loaded third-party assemblies.
+      - SCRIPT_PLUGIN_DIR=/app/assemblies
+    volumes:
+      # Operator-approved DLLs mounted read-only — supplied at runtime, never built in.
+      # Run ./setup-plugins.sh first to populate ./plugins with Newtonsoft.Json.dll.
+      - ./plugins:/app/assemblies:ro
