@@ -105,6 +105,16 @@ whose current state they are permitted to see.
 - The `authorize` function (`checkQueryRoles=true`) shares the same core evaluator
   (`AuthorizeAppService.EvaluateQueryRolesAsync` delegates to `IsQueryAllowedAsync`).
 
+### Custom function Roles
+
+**Custom (user-defined) functions** additionally enforce their own `Function.Roles`: when a custom
+function declares `roles`, the caller's roles are evaluated via
+`ITransitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync` at the single execution chokepoint
+(`FunctionAppService.ExecuteFunctionAsync`, covering both instance- and domain-scoped custom
+functions). No allow → **HTTP 403** (`WorkflowErrors.FunctionAccessDenied`); no `roles` → allow.
+Built-in functions (state/data/view/schema/authorize/permissions/hierarchy/extensions, `human-task`)
+are **excluded** — they use their own handlers and never flow through `FunctionAppService`.
+
 ## Failure Modes
 
 - Unknown function falls back to generic function lookup.

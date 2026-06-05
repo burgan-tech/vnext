@@ -452,6 +452,14 @@ public static class WorkflowErrors
             WorkflowErrorCodes.AuthorizationRoleDenied,
             $"Access to state '{stateKey}' is not permitted for the current roles.");
 
+    /// <summary>
+    /// The current roles are not permitted to invoke the custom function (function-level roles). Maps to HTTP 403.
+    /// </summary>
+    public static Error FunctionAccessDenied(string functionKey)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Access to function '{functionKey}' is not permitted for the current roles.");
+
     #endregion
 
     #region Discovery Errors

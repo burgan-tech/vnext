@@ -79,6 +79,33 @@ public sealed class TransitionAuthorizationManager(
     }
 
     /// <inheritdoc />
+    public async Task<bool> IsAnyRoleAllowedForGrantsAsync(
+        IReadOnlyCollection<string>? callerRoles,
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        Instance? instance,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (roleGrants.Count == 0)
+            return true; // No roles defined → allow
+
+        // No caller roles: still evaluate predefined/dynamic grants once.
+        if (callerRoles is null || callerRoles.Count == 0)
+            return await IsRoleAllowedForGrantsAsync(null, roleGrants, instance, requestContext, cancellationToken);
+
+        // Multi-role: any allowed role grants access.
+        foreach (var role in callerRoles)
+        {
+            if (string.IsNullOrWhiteSpace(role))
+                continue;
+            if (await IsRoleAllowedForGrantsAsync(role.Trim(), roleGrants, instance, requestContext, cancellationToken))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> IsQueryAllowedAsync(
         WorkflowDefinition workflow,
         Instance instance,
@@ -90,23 +117,7 @@ public sealed class TransitionAuthorizationManager(
         var state = string.IsNullOrWhiteSpace(currentStateKey) ? null : workflow.FindState(currentStateKey);
         var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
 
-        if (queryRoles.Count == 0)
-            return true; // No query roles defined → allow
-
-        // No caller roles: still evaluate predefined/dynamic grants once.
-        if (callerRoles is null || callerRoles.Count == 0)
-            return await IsRoleAllowedForGrantsAsync(null, queryRoles, instance, requestContext, cancellationToken);
-
-        // Multi-role: any allowed role grants access.
-        foreach (var role in callerRoles)
-        {
-            if (string.IsNullOrWhiteSpace(role))
-                continue;
-            if (await IsRoleAllowedForGrantsAsync(role.Trim(), queryRoles, instance, requestContext, cancellationToken))
-                return true;
-        }
-
-        return false;
+        return await IsAnyRoleAllowedForGrantsAsync(callerRoles, queryRoles, instance, requestContext, cancellationToken);
     }
 
     /// <inheritdoc />

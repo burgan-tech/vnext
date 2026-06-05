@@ -136,4 +136,37 @@ public sealed class TransitionAuthorizationManagerQueryRolesTests : IDisposable
         var wf = BuildWorkflow("""[{"role":"backoffice","grant":"allow"}]""", "[]");
         (await _sut.IsQueryAllowedAsync(wf, InReviewState(), new[] { "x", "backoffice" })).ShouldBeTrue();
     }
+
+    // ── IsAnyRoleAllowedForGrantsAsync (custom function Roles) ──────────────────
+
+    private static List<RoleGrant> Grants(string json) =>
+        JsonSerializer.Deserialize<List<RoleGrant>>(json, JsonOptions)!;
+
+    [Fact]
+    public async Task AnyRole_EmptyGrants_Allows()
+    {
+        (await _sut.IsAnyRoleAllowedForGrantsAsync(new[] { "anyone" }, Grants("[]"), instance: null)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AnyRole_Allows_WhenAnyCallerRoleMatches()
+    {
+        var grants = Grants("""[{"role":"fn-runner","grant":"allow"}]""");
+        (await _sut.IsAnyRoleAllowedForGrantsAsync(new[] { "x", "fn-runner" }, grants, instance: null)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AnyRole_Denies_WhenNoCallerRoleMatches()
+    {
+        var grants = Grants("""[{"role":"fn-runner","grant":"allow"}]""");
+        (await _sut.IsAnyRoleAllowedForGrantsAsync(new[] { "customer" }, grants, instance: null)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnyRole_NullCaller_DeniesStaticOnlyGrant()
+    {
+        // Null caller roles → only predefined/dynamic grants evaluated; a static grant cannot match.
+        var grants = Grants("""[{"role":"fn-runner","grant":"allow"}]""");
+        (await _sut.IsAnyRoleAllowedForGrantsAsync(null, grants, instance: null)).ShouldBeFalse();
+    }
 }

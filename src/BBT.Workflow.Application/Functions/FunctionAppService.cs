@@ -4,6 +4,8 @@ using System.Globalization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -25,7 +27,9 @@ public sealed class FunctionAppService(
     IComponentCacheStore componentCacheStore,
     ICurrentSchema currentSchema,
     ITaskCoordinator taskCoordinator,
-    IScriptEngine scriptEngine) : ApplicationService(serviceProvider), IFunctionAppService
+    IScriptEngine scriptEngine,
+    ICurrentUser currentUser,
+    ITransitionAuthorizationManager transitionAuthorizationManager) : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
     public async Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
@@ -125,6 +129,20 @@ public sealed class FunctionAppService(
         {
             return Result<FunctionResponseOutput>.Fail(
                 WorkflowErrors.FunctionNotInWorkflow(function.Key, workflow.Key));
+        }
+
+        // Custom-function authorization: when the function defines Roles, the caller must resolve to an allow.
+        // Built-in functions never reach this path (they use their own handlers/authorization).
+        if (function.Roles.Count > 0)
+        {
+            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
+                currentUser.Roles,
+                function.Roles,
+                instance,
+                new AuthorizationRequestContext(headers, queryParameters),
+                cancellationToken);
+            if (!allowed)
+                return Result<FunctionResponseOutput>.Fail(WorkflowErrors.FunctionAccessDenied(function.Key));
         }
 
         object scriptBody = body.HasValue
