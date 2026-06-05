@@ -443,6 +443,15 @@ public static class WorkflowErrors
             "Query roles check is only valid for instance-level authorize",
             target: "authorize");
 
+    /// <summary>
+    /// The current roles are not permitted to query the instance in its current state (state/workflow queryRoles).
+    /// Maps to HTTP 403.
+    /// </summary>
+    public static Error QueryAccessDenied(string stateKey)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Access to state '{stateKey}' is not permitted for the current roles.");
+
     #endregion
 
     #region Discovery Errors

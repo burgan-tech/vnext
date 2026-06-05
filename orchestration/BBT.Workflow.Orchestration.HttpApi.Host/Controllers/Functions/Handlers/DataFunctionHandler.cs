@@ -28,6 +28,7 @@ public sealed class DataFunctionHandler(
             Headers = request.Headers,
             QueryParameters = request.QueryParameters,
             Version = request.QueryParameters.GetOrDefault("version"),
+            Roles = request.CurrentUser.Roles,
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);

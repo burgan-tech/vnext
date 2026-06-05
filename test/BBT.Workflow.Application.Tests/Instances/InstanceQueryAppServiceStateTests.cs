@@ -647,7 +647,95 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
     }
 
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenQueryRolesDeny_Returns403()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        DenyQueryRoles();
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WhenQueryRolesDeny_Returns403()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        DenyQueryRoles();
+
+        // Act
+        var result = await _service.GetViewAsync(new GetViewInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString(),
+            Headers = new Dictionary<string, string?>(),
+            QueryParameters = new Dictionary<string, string?>()
+        }, transitionKey: null, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenQueryRolesDeny_Returns403()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        DenyQueryRoles();
+
+        // Act — denied before the transition-key requirement is evaluated
+        var result = await _service.GetSchemaAsync(new GetSchemaInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString()
+        }, transitionKey: "approve", CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private void DenyQueryRoles() =>
+        _transitionAuthorizationManager
+            .IsQueryAllowedAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
+                Arg.Any<AuthorizationRequestContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(false);
 
     private static StateAlias AliasFromJson(string json) =>
         System.Text.Json.JsonSerializer.Deserialize<StateAlias>(json, new System.Text.Json.JsonSerializerOptions
@@ -726,6 +814,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<IReadOnlyList<string>>(3)));
 
         _representationEtagService.Generate(Arg.Any<object>()).Returns((string?)null);
+
+        // Default: queryRoles visibility allowed (specific tests override to false to assert 403).
+        _transitionAuthorizationManager
+            .IsQueryAllowedAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
+                Arg.Any<AuthorizationRequestContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
     }
 
     private void SetupSubFlowGateway(InstanceStatus subFlowStatus, string subFlowState)

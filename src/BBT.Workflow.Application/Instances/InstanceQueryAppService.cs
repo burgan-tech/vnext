@@ -574,6 +574,10 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     var (flow, instance) = data;
+
+                    if (!await IsInstanceQueryAllowedAsync(flow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                        return ConditionalResult<GetInstanceDataOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
+
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
 
@@ -754,6 +758,9 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
+                        return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
                     var buildResult = await BuildInstanceStateOutputAsync(data.instance, data.workflow, input, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
@@ -1052,6 +1059,24 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
+    /// Enforces state/workflow <c>queryRoles</c> visibility for the instance query functions
+    /// (state/data/view/schema). Returns true when access is permitted: no grants defined → allow;
+    /// otherwise the caller's roles must resolve to an allow (DENY wins; predefined/dynamic roles honored).
+    /// </summary>
+    private async Task<bool> IsInstanceQueryAllowedAsync(
+        Definitions.Workflow workflow,
+        Instance instance,
+        IReadOnlyCollection<string>? roles,
+        IReadOnlyDictionary<string, string?>? headers,
+        IReadOnlyDictionary<string, string?>? queryParameters,
+        CancellationToken cancellationToken)
+    {
+        var requestContext = new AuthorizationRequestContext(headers, queryParameters);
+        return await transitionAuthorizationManager.IsQueryAllowedAsync(
+            workflow, instance, roles, requestContext, cancellationToken);
+    }
+
+    /// <summary>
     /// Resolves the role-appropriate display value for a state's aliases. Aliases are evaluated in
     /// declaration order; the first whose role grants resolve to the caller wins. An alias with no
     /// role grants matches everyone (default/fallback). For the winning alias the localized label for
@@ -1254,6 +1279,9 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
+        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+            return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
+
         if (string.IsNullOrEmpty(transitionKey))
         {
             return Result<GetSchemaOutput>.Fail(
@@ -1338,6 +1366,9 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
+        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+            return Result<GetViewOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
+
         // Get current state using Railway pattern
         var currentStateResult = currentWorkflow.GetState(instance.CurrentState!);
         if (!currentStateResult.IsSuccess || currentStateResult.Value == null)

@@ -43,4 +43,9 @@ public sealed class GetInstanceStateInput : IHasDomain
     /// When set, only transitions allowed for this role are returned; when null or empty, all available transitions are returned.
     /// </summary>
     public string? Role { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility (multi-role: any allowed → allow).
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; set; }
 }

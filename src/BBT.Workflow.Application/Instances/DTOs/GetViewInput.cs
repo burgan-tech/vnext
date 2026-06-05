@@ -36,4 +36,9 @@ public sealed class GetViewInput : IHasDomain
     /// Caller role for wizard view transition filtering.
     /// </summary>
     public string? Role { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility.
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; set; }
 }

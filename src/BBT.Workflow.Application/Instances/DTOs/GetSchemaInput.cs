@@ -20,8 +20,23 @@ public sealed class GetSchemaInput: IHasDomain
     [StringLength(WorkflowConstants.MaxVersionLength)]
     public string? Version { get; set; } = string.Empty;
 
-    [Required] 
+    [Required]
     public string Instance { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Request headers for queryRoles dynamic-role evaluation.
+    /// </summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>
+    /// Query parameters for queryRoles dynamic-role evaluation.
+    /// </summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility.
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; set; }
 }
 
 public sealed class GetSchemaOutput

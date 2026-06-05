@@ -88,6 +88,23 @@ Resolution in the `state` function:
   for the same culture resolution; the state function resolves from the request headers it already
   receives so it stays correct under forwarded/subflow contexts.
 
+## Query Authorization (queryRoles)
+
+The data-returning instance functions — **state, data, view, schema** — enforce the state's
+`queryRoles` (falling back to workflow root `queryRoles`) so a caller may only read an instance
+whose current state they are permitted to see.
+
+- Effective grants: the instance's effective-state `queryRoles` when it defines any, otherwise
+  `workflow.QueryRoles`. **No grants → allow** (unchanged behavior).
+- Grants present: the caller's roles (`ICurrentUser.Roles`, multi-role — any allowed → allow) are
+  evaluated via `ITransitionAuthorizationManager.IsQueryAllowedAsync` (DENY wins; predefined
+  `$InstanceStarter`/dynamic roles honored). No allow → **HTTP 403**
+  (`Error.Forbidden(WorkflowErrorCodes.AuthorizationRoleDenied)` → mapped in `AddExceptionHandling`).
+- Because all four functions share the same gate, denying `state` also denies `data`/`view`/`schema`
+  — the client cannot see data, view, or schema for a state it is not authorized to query.
+- The `authorize` function (`checkQueryRoles=true`) shares the same core evaluator
+  (`AuthorizeAppService.EvaluateQueryRolesAsync` delegates to `IsQueryAllowedAsync`).
+
 ## Failure Modes
 
 - Unknown function falls back to generic function lookup.
@@ -118,4 +135,5 @@ client polling status.
 - `src/BBT.Workflow.Domain/Localization/LanguageResolver.cs` (`Accept-Language` → culture)
 - `src/BBT.Workflow.Domain/Shared/LanguageLabelExtensions.cs` (`ResolveLabel` fallback chain)
 - `src/BBT.Workflow.Application/Languages/ICurrentLanguage.cs` + `src/BBT.Workflow.HttpApi.Shared/Services/Languages/HttpContextCurrentLanguage.cs`
+- `src/BBT.Workflow.Application/Authorization/ITransitionAuthorizationManager.cs` (`IsQueryAllowedAsync` — queryRoles gate)
 
