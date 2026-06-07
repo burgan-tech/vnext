@@ -36,6 +36,85 @@ Application services own domain behavior and result construction.
 | `hierarchy` | `HierarchyFunctionHandler` | Returns instance hierarchy. |
 | `humanTask` | `HumanTaskFunctionHandler` | Returns human task state for clients. |
 
+## State Alias (Role-Based State Visibility)
+
+A state may declare an `alias` array so the same internal state is presented under
+different, role-appropriate labels without changing the workflow's real state identity.
+This lets internal evaluation states (fraud check, KPS, limit checks, …) stay hidden from
+the end customer while back-office actors see a more detailed label.
+
+```json
+{
+  "key": "fraud-check",
+  "stateType": "Intermediate",
+  "alias": [
+    {
+      "name": "Operasyon İncelemesinde",
+      "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+      "labels": [
+        { "label": "Operasyon İncelemesinde", "language": "tr" },
+        { "label": "Under Operational Review", "language": "en" }
+      ]
+    },
+    { "name": "Değerlendirme Aşamasında", "roles": [] }
+  ]
+}
+```
+
+Resolution in the `state` function:
+
+- When the current (main-flow) state defines aliases, `StateFunctionHandler` →
+  `InstanceQueryAppService.BuildInstanceStateOutputAsync` resolves them using the same
+  role evaluator as transition filtering (`ITransitionAuthorizationManager.IsRoleAllowedForGrantsAsync`):
+  static roles, predefined roles (`$InstanceStarter`, `$PreviousUser`, …) and dynamic roles.
+- Aliases are evaluated in declaration order; the **first** alias whose `roles` resolve to
+  the caller wins.
+- Authoring rules (enforced by `WorkflowValidator`): the `alias` array is optional, but each
+  entry must declare a `name`, at least one `roles` grant, and at least one `labels` entry.
+- The winning alias's display value for the response `state` field is resolved as:
+  1. **Localized label** — if the alias has `labels`, the label for the caller's current
+     language is returned. Language comes from the `Accept-Language` header (`LanguageResolver`);
+     match order is exact culture (`tr-TR`) → neutral language (`tr`, incl. `tr-*`) →
+     English (`en-US`/`en`) → first label (`LanguageLabelExtensions.ResolveLabel`).
+  2. **Alias `name`** — when the alias has no `labels`.
+  3. **Raw state key** — when the state defines no aliases, or none resolves for the caller
+     (current behavior).
+- Only the `state` representation changes; `stateType`, status, transitions, and all internal
+  workflow logic continue to use the real state identity (`instance.CurrentState`). Because the
+  resolved value participates in the representation, different roles/languages get different `ETag`s.
+- Aliasing applies only to the main-flow current state. While a non-terminal subflow is
+  borrowing the displayed state, the value is left untouched.
+- `ICurrentLanguage` (registered scoped, `HttpContext`-based) is the reusable per-request handle
+  for the same culture resolution; the state function resolves from the request headers it already
+  receives so it stays correct under forwarded/subflow contexts.
+
+## Query Authorization (queryRoles)
+
+The data-returning instance functions — **state, data, view, schema** — enforce the state's
+`queryRoles` (falling back to workflow root `queryRoles`) so a caller may only read an instance
+whose current state they are permitted to see.
+
+- Effective grants: the instance's effective-state `queryRoles` when it defines any, otherwise
+  `workflow.QueryRoles`. **No grants → allow** (unchanged behavior).
+- Grants present: the caller's roles (`ICurrentUser.Roles`, multi-role — any allowed → allow) are
+  evaluated via `ITransitionAuthorizationManager.IsQueryAllowedAsync` (DENY wins; predefined
+  `$InstanceStarter`/dynamic roles honored). No allow → **HTTP 403**
+  (`Error.Forbidden(WorkflowErrorCodes.AuthorizationRoleDenied)` → mapped in `AddExceptionHandling`).
+- Because all four functions share the same gate, denying `state` also denies `data`/`view`/`schema`
+  — the client cannot see data, view, or schema for a state it is not authorized to query.
+- The `authorize` function (`checkQueryRoles=true`) shares the same core evaluator
+  (`AuthorizeAppService.EvaluateQueryRolesAsync` delegates to `IsQueryAllowedAsync`).
+
+### Custom function Roles
+
+**Custom (user-defined) functions** additionally enforce their own `Function.Roles`: when a custom
+function declares `roles`, the caller's roles are evaluated via
+`ITransitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync` at the single execution chokepoint
+(`FunctionAppService.ExecuteFunctionAsync`, covering both instance- and domain-scoped custom
+functions). No allow → **HTTP 403** (`WorkflowErrors.FunctionAccessDenied`); no `roles` → allow.
+Built-in functions (state/data/view/schema/authorize/permissions/hierarchy/extensions, `human-task`)
+are **excluded** — they use their own handlers and never flow through `FunctionAppService`.
+
 ## Failure Modes
 
 - Unknown function falls back to generic function lookup.
@@ -61,4 +140,10 @@ client polling status.
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/FunctionController.cs`
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/Handlers/`
 - `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs`
+- `src/BBT.Workflow.Domain/Definitions/States/StateAlias.cs` (state alias model + localized labels)
+- `src/BBT.Workflow.Application/Instances/InstanceQueryAppService.cs` (`ResolveStateAliasDisplayAsync`)
+- `src/BBT.Workflow.Domain/Localization/LanguageResolver.cs` (`Accept-Language` → culture)
+- `src/BBT.Workflow.Domain/Shared/LanguageLabelExtensions.cs` (`ResolveLabel` fallback chain)
+- `src/BBT.Workflow.Application/Languages/ICurrentLanguage.cs` + `src/BBT.Workflow.HttpApi.Shared/Services/Languages/HttpContextCurrentLanguage.cs`
+- `src/BBT.Workflow.Application/Authorization/ITransitionAuthorizationManager.cs` (`IsQueryAllowedAsync` — queryRoles gate)
 

@@ -11,12 +11,12 @@ namespace BBT.Workflow.Definitions.Schemas;
 public static class SchemaRolesParser
 {
     private const string PropertiesKey = "properties";
-    private const string RolesKey = "roles";
+    private const string RolesKey = "x-roles";
 
     /// <summary>
     /// Parses the schema and returns a map of property path to role grants.
     /// Path format: dot-separated (e.g. "amount", "internalNotes", "nested.field").
-    /// Properties without "roles" are not included (treated as visible to all).
+    /// Properties without "x-roles" are not included (treated as visible to all).
     /// </summary>
     /// <param name="schemaRoot">The root JsonElement of the schema (object with optional "properties").</param>
     /// <returns>Map of property path to list of role grants; empty if schema has no roles.</returns>

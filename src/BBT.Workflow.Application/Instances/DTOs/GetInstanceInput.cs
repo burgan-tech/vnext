@@ -184,4 +184,9 @@ public sealed class GetInstanceDataInput : IHasDomain
     /// Query parameters from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
-} 
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility (multi-role: any allowed → allow).
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; set; }
+}

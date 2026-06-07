@@ -284,9 +284,10 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<ResponseHeaderFilter>();
         services.AddScoped<IHeaderService, HttpContextHeaderService>();
+        services.AddScoped<BBT.Workflow.Languages.ICurrentLanguage, BBT.Workflow.Languages.HttpContextCurrentLanguage>();
         services
             .ReplaceSchemaResolver<HeaderSchemaResolutionStrategy, WorkflowHeaderSchemaResolutionStrategy>();
-        
+
         return services;
     }
 }
