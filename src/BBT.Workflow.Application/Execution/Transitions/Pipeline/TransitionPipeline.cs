@@ -91,7 +91,8 @@ public class TransitionPipeline
             await using var ownLock = await _lockScopeFactory.AcquireAsync(reservedKey, cancellationToken);
             if (!ownLock.IsAcquired)
             {
-                _logger.InstanceLockFailed(context.InstanceId.ToString());
+                // Lock failure is already logged by TransitionLockScopeFactory with the full key;
+                // avoid a duplicate log line for the same acquisition.
                 return Result<TransitionExecutionContext>.Fail(
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
@@ -108,7 +109,8 @@ public class TransitionPipeline
 
         if (!lockScope.IsAcquired)
         {
-            _logger.InstanceLockFailed(context.InstanceId.ToString());
+            // Lock failure is already logged by TransitionLockScopeFactory with the full key;
+            // avoid a duplicate log line for the same acquisition.
             return Result<TransitionExecutionContext>.Fail(
                 WorkflowErrors.InstanceLockConflict(context.InstanceId));
         }
