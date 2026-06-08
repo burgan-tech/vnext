@@ -421,6 +421,18 @@ public static class WorkflowErrors
             $"Function '{functionKey}' is not defined for workflow '{workflowKey}'",
             target: functionKey);
 
+    /// <summary>
+    /// The function's scope requirements are not satisfied for the current request
+    /// (e.g. an Instance/Flow-scoped function invoked without an instance, or a
+    /// Flow-scoped function not declared in the instance's flow). Maps to HTTP 403.
+    /// </summary>
+    /// <param name="functionKey">The key of the function whose scope was violated.</param>
+    /// <param name="scope">The scope description of the function.</param>
+    public static Error FunctionScopeNotSatisfied(string functionKey, string scope)
+        => Error.Forbidden(
+            WorkflowErrorCodes.FunctionScopeNotSatisfied,
+            $"Function '{functionKey}' with scope '{scope}' cannot be invoked in this context.");
+
     #endregion
 
     #region Authorization Errors
