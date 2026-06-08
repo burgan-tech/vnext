@@ -122,13 +122,20 @@ public sealed class FunctionAppService(
         JsonElement? body,
         CancellationToken cancellationToken)
     {
-        if (instance != null &&
-            workflow!.Key != RuntimeSysSchemaInfo.Functions &&
-            !function.Scope.Equals(TaskScope.Domain) &&
-            !workflow.Functions.Any(f => f.Key == function.Key))
+        // Scope enforcement. Domain is exempt; Instance/Flow require an instance;
+        // Flow additionally requires the function to be declared in the instance's flow.
+        if (!function.Scope.Equals(TaskScope.Domain))
         {
-            return Result<FunctionResponseOutput>.Fail(
-                WorkflowErrors.FunctionNotInWorkflow(function.Key, workflow.Key));
+            if (instance == null)
+                return Result<FunctionResponseOutput>.Fail(
+                    WorkflowErrors.FunctionScopeNotSatisfied(function.Key, function.Scope.Description));
+
+            if (function.Scope.Equals(TaskScope.Flow) &&
+                !(workflow?.Functions.Any(f => f.Key == function.Key) ?? false))
+            {
+                return Result<FunctionResponseOutput>.Fail(
+                    WorkflowErrors.FunctionScopeNotSatisfied(function.Key, function.Scope.Description));
+            }
         }
 
         // Custom-function authorization: when the function defines Roles, the caller must resolve to an allow.
