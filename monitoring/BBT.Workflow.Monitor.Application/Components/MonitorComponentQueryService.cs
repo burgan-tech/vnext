@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.Domain.Entities;
 using BBT.Aether.Results;
@@ -28,8 +29,23 @@ public sealed class MonitorComponentQueryService(
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new UndefinedJsonElementConverter() }
     };
+
+    private sealed class UndefinedJsonElementConverter : JsonConverter<JsonElement>
+    {
+        public override JsonElement Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => JsonElement.ParseValue(ref reader);
+
+        public override void Write(Utf8JsonWriter writer, JsonElement value, JsonSerializerOptions options)
+        {
+            if (value.ValueKind == JsonValueKind.Undefined)
+                writer.WriteNullValue();
+            else
+                value.WriteTo(writer);
+        }
+    }
 
     /// <inheritdoc />
     public async Task<Result<MonitorComponentResponse>> GetComponentsAsync(
@@ -47,7 +63,7 @@ public sealed class MonitorComponentQueryService(
 
         return canonicalType switch
         {
-            MonitorComponentTypes.Flows => await ResolveAsync<Workflow>(
+            MonitorComponentTypes.Flows => await ResolveAsync<Definitions.Workflow>(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetFlowAsync(d, k, v, ct),
