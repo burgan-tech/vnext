@@ -385,6 +385,16 @@ public sealed class EfCoreInstanceRepository(
         return new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
     }
 
+    /// <inheritdoc />
+    public async Task<long> CountAsync(
+        string? filter,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        return await query.LongCountAsync(cancellationToken);
+    }
+
     public async Task<(
         HateoasPagedList<Instance> PagedList,
         List<GroupSummary>? Groups

@@ -74,6 +74,17 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
+    public async Task<InstanceTask?> GetByIdAsReadOnlyAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == id, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<string>> GetCompletedTaskIdsAsync(
         Guid transitionId,
         CancellationToken cancellationToken = default)

@@ -20,7 +20,9 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
     : AetherControllerBase
 {
     /// <summary>
-    /// Lists or fetches component definitions using vNext cache layers (snapshot, then store/Redis/DB for key lookups; full list warms from DB when snapshot is cold).
+    /// Lists or fetches published component definitions (flows, tasks, schemas, views, functions, extensions).
+    /// When <paramref name="key"/> is supplied without <paramref name="version"/>, the latest version is returned;
+    /// when <paramref name="version"/> is supplied, that exact version is returned.
     /// </summary>
     /// <param name="domain">The tenant/domain key.</param>
     /// <param name="type">
@@ -34,7 +36,7 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
     /// <response code="200">Component definitions returned successfully</response>
     /// <response code="400">Unknown component type</response>
     /// <response code="404">Specific <paramref name="key"/> not found</response>
-    [HttpGet("{domain}/components")]
+    [HttpGet("{domain}/components/definition")]
     [ProducesResponseType(typeof(MonitorComponentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]

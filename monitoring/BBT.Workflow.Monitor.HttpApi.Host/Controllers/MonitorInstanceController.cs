@@ -134,60 +134,121 @@ public sealed class MonitorInstanceController(
     }
 
     /// <summary>
-    /// Returns the ordered state-transition history for an instance.
-    /// Use this data to render the flow graph or timeline in vnext-forge.
+    /// Returns the instance timeline. Behaviour depends on the optional query parameters:
+    /// no identifier returns the full ordered transition timeline; transitionId returns a single
+    /// transition's details; taskId returns a single task execution record. includeTasks embeds
+    /// each transition's task records (ignored in single-task mode).
     /// </summary>
-    /// <response code="200">Transition history returned successfully</response>
-    /// <response code="404">Instance not found</response>
-    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/history")]
-    [ProducesResponseType(typeof(MonitorInstanceHistoryResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetInstanceHistoryAsync(
-        [FromRoute] string domain,
-        [FromRoute] string workflow,
-        [FromRoute] string instance,
-        CancellationToken cancellationToken = default
-    )
-    {
-        var input = new MonitorGetInstanceHistoryInput
-        {
-            Domain = domain,
-            Workflow = workflow,
-            Instance = instance,
-        };
-
-        var result = await queryService.GetInstanceHistoryAsync(input, cancellationToken);
-        return FromResult(result);
-    }
-
-    /// <summary>
-    /// Returns task execution records for a specific transition.
-    /// Call this on-demand when the user expands a transition in the flow graph.
-    /// </summary>
-    /// <param name="transitionId">Required. The ID of the transition whose tasks should be returned.</param>
+    /// <param name="domain">Tenant/domain key.</param>
+    /// <param name="workflow">Workflow (flow) key.</param>
+    /// <param name="instance">Instance key or ID.</param>
+    /// <param name="transitionId">Optional. Returns only this transition's details.</param>
+    /// <param name="taskId">Optional. Returns only this single task; takes precedence over transitionId.</param>
+    /// <param name="includeTasks">Embeds task records into each returned transition.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <response code="200">Task list returned successfully</response>
-    /// <response code="404">Instance not found</response>
-    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/tasks")]
-    [ProducesResponseType(typeof(List<MonitorInstanceTaskResponse>), StatusCodes.Status200OK)]
+    /// <response code="200">Timeline returned successfully</response>
+    /// <response code="400">transitionId or taskId is supplied but empty</response>
+    /// <response code="404">Instance, transition, or task not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/timeline")]
+    [ProducesResponseType(typeof(MonitorInstanceTimelineResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetInstanceTasksAsync(
+    public async Task<IActionResult> GetInstanceTimelineAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        [FromQuery] [Required] Guid transitionId,
+        [FromQuery] Guid? transitionId = null,
+        [FromQuery] Guid? taskId = null,
+        [FromQuery] bool includeTasks = false,
         CancellationToken cancellationToken = default
     )
     {
-        var input = new MonitorGetInstanceTaskInput
+        var input = new MonitorGetInstanceTimelineInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
             TransitionId = transitionId,
+            TaskId = taskId,
+            IncludeTasks = includeTasks,
         };
 
-        var result = await queryService.GetInstanceTaskAsync(input, cancellationToken);
+        var result = await queryService.GetInstanceTimelineAsync(input, cancellationToken);
         return FromResult(result);
     }
+
+    /// <summary>Returns the instance's current state and the transitions available from it.</summary>
+    /// <response code="200">State returned successfully</response>
+    /// <response code="404">Instance not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/state")]
+    [ProducesResponseType(typeof(MonitorInstanceStateResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceStateAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var input = new MonitorGetInstanceStateInput { Domain = domain, Workflow = workflow, Instance = instance };
+        var result = await queryService.GetInstanceStateAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>Returns fault detail (failed tasks + unfinished transition) for a faulted instance.</summary>
+    /// <response code="200">Fault detail returned successfully</response>
+    /// <response code="404">Instance not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/faults")]
+    [ProducesResponseType(typeof(MonitorInstanceFaultResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceFaultsAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, [FromRoute] string instance,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceFaultsInput { Domain = domain, Workflow = workflow, Instance = instance };
+        var result = await queryService.GetInstanceFaultsAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>Returns the field-level diff between two instance data versions.</summary>
+    /// <response code="200">Diff returned successfully</response>
+    /// <response code="404">Instance or data version not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/diff")]
+    [ProducesResponseType(typeof(MonitorInstanceDataDiffResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceDataDiffAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] [Required] string from,
+        [FromQuery] [Required] string to,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceDataDiffInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            From = from,
+            To = to
+        };
+        var result = await queryService.GetInstanceDataDiffAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>Returns the recursive sub-flow/sub-process hierarchy tree for an instance.</summary>
+    /// <response code="200">Hierarchy returned successfully</response>
+    /// <response code="404">Instance not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/hierarchy")]
+    [ProducesResponseType(typeof(MonitorHierarchyNode), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceHierarchyAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, [FromRoute] string instance,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceHierarchyInput { Domain = domain, Workflow = workflow, Instance = instance };
+        var result = await queryService.GetInstanceHierarchyAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
 }

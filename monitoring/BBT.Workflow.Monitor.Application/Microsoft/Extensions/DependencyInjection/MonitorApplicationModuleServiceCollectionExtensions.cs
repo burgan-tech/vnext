@@ -1,5 +1,6 @@
 using BBT.Workflow.Monitor.Components;
 using BBT.Workflow.Monitor.Instances;
+using BBT.Workflow.Monitor.Stats;
 using BBT.Workflow.Runtime;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -23,6 +24,7 @@ public static class MonitorApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRuntimeService, RuntimeService>();
         services.AddScoped<IMonitorInstanceQueryService, MonitorInstanceQueryService>();
         services.AddScoped<IMonitorComponentQueryService, MonitorComponentQueryService>();
+        services.AddScoped<IMonitorStatsService, MonitorStatsService>();
 
         return services;
     }

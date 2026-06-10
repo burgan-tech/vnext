@@ -77,27 +77,17 @@ public sealed class MonitorGetInstanceDataInput : IHasDomain
 }
 
 /// <summary>
-/// Input for retrieving the state-transition history of an instance.
+/// Input for the unified instance timeline endpoint.
+/// <para>
+/// Behaviour depends on the optional identifiers:
+/// <list type="bullet">
+/// <item>No identifier → the full ordered transition timeline (optionally with embedded tasks).</item>
+/// <item><see cref="TransitionId"/> → details of that single transition (with its tasks when <see cref="IncludeTasks"/> is true).</item>
+/// <item><see cref="TaskId"/> → that single task execution record.</item>
+/// </list>
+/// </para>
 /// </summary>
-public sealed class MonitorGetInstanceHistoryInput : IHasDomain
-{
-    /// <summary>The tenant/domain key.</summary>
-    [Required]
-    public string Domain { get; set; } = string.Empty;
-
-    /// <summary>The workflow (flow) key.</summary>
-    [Required]
-    public string Workflow { get; set; } = string.Empty;
-
-    /// <summary>Instance key or ID.</summary>
-    [Required]
-    public string Instance { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// Input for retrieving task execution records for a specific transition.
-/// </summary>
-public sealed class MonitorGetInstanceTaskInput : IHasDomain
+public sealed class MonitorGetInstanceTimelineInput : IHasDomain
 {
     /// <summary>The tenant/domain key.</summary>
     [Required]
@@ -112,9 +102,91 @@ public sealed class MonitorGetInstanceTaskInput : IHasDomain
     public string Instance { get; set; } = string.Empty;
 
     /// <summary>
-    /// The transition Key whose tasks should be returned.
-    /// Required to avoid full table scans across all transitions.
+    /// When provided, returns only the matching transition's details instead of the full timeline.
     /// </summary>
+    public Guid? TransitionId { get; set; }
+
+    /// <summary>
+    /// When provided, returns only the matching single task execution record.
+    /// Takes precedence over <see cref="TransitionId"/>.
+    /// </summary>
+    public Guid? TaskId { get; set; }
+
+    /// <summary>
+    /// When true, embeds task records into each returned transition.
+    /// Ignored in single-task mode.
+    /// </summary>
+    public bool IncludeTasks { get; set; }
+}
+
+/// <summary>Input for the instance state query (current state + available transitions + active sub-flows).</summary>
+public sealed class MonitorGetInstanceStateInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
     [Required]
-    public Guid TransitionId { get; set; }
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required]
+    public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>Instance key or ID.</summary>
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+}
+
+/// <summary>Input for the fault detail query.</summary>
+public sealed class MonitorGetInstanceFaultsInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required]
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required]
+    public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>Instance key or ID.</summary>
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+}
+
+/// <summary>Input for the recursive instance hierarchy query.</summary>
+public sealed class MonitorGetInstanceHierarchyInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required]
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required]
+    public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>Instance key or ID (root of the hierarchy).</summary>
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+}
+
+/// <summary>Input for the instance data diff between two versions.</summary>
+public sealed class MonitorGetInstanceDataDiffInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required]
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required]
+    public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>Instance key or ID.</summary>
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>The baseline data version (older).</summary>
+    [Required]
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>The target data version (newer).</summary>
+    [Required]
+    public string To { get; set; } = string.Empty;
 }

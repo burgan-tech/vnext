@@ -1,0 +1,61 @@
+using BBT.Aether.AspNetCore.Controllers;
+using BBT.Workflow.Monitor.Stats;
+using BBT.Workflow.Monitor.Stats.DTOs;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
+
+namespace BBT.Workflow.Monitor.Controllers;
+
+/// <summary>Read-only aggregation endpoints (instance counters, state distribution) for dashboards.</summary>
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/monitor")]
+[ServiceFilter(typeof(ResponseHeaderFilter))]
+public sealed class MonitorStatsController(IMonitorStatsService statsService) : AetherControllerBase
+{
+    /// <summary>
+    /// Returns status-based instance counters for a specific workflow.
+    /// </summary>
+    /// <response code="200">Counters returned successfully</response>
+    [HttpGet("{domain}/workflows/{workflow}/stats/instances")]
+    [ProducesResponseType(typeof(MonitorInstanceCountersResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetWorkflowInstanceCountersAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceCountersInput { Domain = domain, Workflow = workflow };
+        var result = await statsService.GetInstanceCountersAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Returns status-based instance counters across the entire domain (best-effort; uses public schema).
+    /// </summary>
+    /// <response code="200">Counters returned successfully</response>
+    [HttpGet("{domain}/stats/instances")]
+    [ProducesResponseType(typeof(MonitorInstanceCountersResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetDomainInstanceCountersAsync(
+        [FromRoute] string domain,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceCountersInput { Domain = domain, Workflow = null };
+        var result = await statsService.GetInstanceCountersAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>Live instance distribution across a workflow's states.</summary>
+    /// <response code="200">State distribution returned successfully</response>
+    /// <response code="404">Workflow definition not found in cache</response>
+    [HttpGet("{domain}/workflows/{workflow}/stats/states")]
+    [ProducesResponseType(typeof(MonitorStateDistributionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetStateDistributionAsync(
+        [FromRoute] string domain, [FromRoute] string workflow,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetStateDistributionInput { Domain = domain, Workflow = workflow };
+        var result = await statsService.GetStateDistributionAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+}

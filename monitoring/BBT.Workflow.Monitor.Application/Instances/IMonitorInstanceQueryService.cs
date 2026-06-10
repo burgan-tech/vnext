@@ -39,16 +39,27 @@ public interface IMonitorInstanceQueryService
     /// Returns the ordered list of InstanceTransition records for a given instance,
     /// enabling the client to render the state-transition flow graph.
     /// </summary>
-    Task<Result<MonitorInstanceHistoryResponse>> GetInstanceHistoryAsync(
-        MonitorGetInstanceHistoryInput input,
+    Task<Result<MonitorInstanceTimelineResponse>> GetInstanceTimelineAsync(
+        MonitorGetInstanceTimelineInput input,
         CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Returns the task execution records for a specific transition.
-    /// Kept as a separate, on-demand endpoint to avoid N+1 when the client only needs
-    /// the transition flow (GetInstanceHistory).
-    /// </summary>
-    Task<Result<List<MonitorInstanceTaskResponse>>> GetInstanceTaskAsync(
-        MonitorGetInstanceTaskInput input,
+    /// <summary>Returns the instance's current state plus the transitions available from it (definition-derived, no rule eval).</summary>
+    Task<Result<MonitorInstanceStateResponse>> GetInstanceStateAsync(
+        MonitorGetInstanceStateInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns root-cause fault detail for a faulted instance (failed tasks + unfinished transition).</summary>
+    Task<Result<MonitorInstanceFaultResponse>> GetInstanceFaultsAsync(
+        MonitorGetInstanceFaultsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns the field-level diff between two data versions of an instance.</summary>
+    Task<Result<MonitorInstanceDataDiffResponse>> GetInstanceDataDiffAsync(
+        MonitorGetInstanceDataDiffInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns the recursive sub-flow/sub-process hierarchy tree for an instance (cross-schema).</summary>
+    Task<Result<MonitorHierarchyNode>> GetInstanceHierarchyAsync(
+        MonitorGetInstanceHierarchyInput input,
         CancellationToken cancellationToken = default);
 }

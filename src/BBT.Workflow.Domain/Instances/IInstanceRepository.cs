@@ -102,4 +102,17 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         Guid excludeInstanceId,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// Returns the total number of instances matching the optional GraphQL filter.
+    /// Uses the same filter-application logic as <see cref="GetPagedResultsAsync"/>
+    /// but issues a single COUNT query — no rows are transferred.
+    /// </summary>
+    /// <param name="filter">Optional GraphQL/legacy filter JSON. Null means count all instances.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The total row count matching the filter.</returns>
+    Task<long> CountAsync(
+        string? filter,
+        CancellationToken cancellationToken = default
+    );
 }

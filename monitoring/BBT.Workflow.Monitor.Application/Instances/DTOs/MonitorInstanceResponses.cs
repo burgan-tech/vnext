@@ -138,13 +138,20 @@ public sealed class MonitorDataVersion
 }
 
 /// <summary>
-/// Response for instance state-transition history.
-/// Provides the data to draw the state-flow graph.
+/// Response for the unified instance timeline endpoint.
+/// In timeline / single-transition modes <see cref="Transitions"/> is populated;
+/// in single-task mode <see cref="Task"/> is populated and <see cref="Transitions"/> is empty.
 /// </summary>
-public sealed class MonitorInstanceHistoryResponse
+public sealed class MonitorInstanceTimelineResponse
 {
-    /// <summary>Ordered list of transitions, oldest first.</summary>
+    /// <summary>
+    /// Ordered list of transitions, oldest first.
+    /// Contains the full timeline, or a single element when a specific transition was requested.
+    /// </summary>
     public List<MonitorTransitionItem> Transitions { get; set; } = [];
+
+    /// <summary>The single task execution record, populated only when a taskId was requested.</summary>
+    public MonitorInstanceTaskResponse? Task { get; set; }
 }
 
 /// <summary>
@@ -181,6 +188,180 @@ public sealed class MonitorTransitionItem
 
     /// <summary>Behalf-of user who triggered the transition.</summary>
     public string? CreatedByBehalfOf { get; set; }
+
+    /// <summary>Task execution records for this transition. Populated only when includeTasks=true.</summary>
+    public List<MonitorInstanceTaskResponse>? Tasks { get; set; }
+}
+
+/// <summary>Current runtime snapshot of an instance: state, status, available transitions, active sub-flows.</summary>
+public sealed class MonitorInstanceStateResponse
+{
+    /// <summary>Current internal state key.</summary>
+    public string? CurrentState { get; set; }
+
+    /// <summary>Type of the current state (derived from the workflow definition).</summary>
+    public StateType? StateType { get; set; }
+
+    /// <summary>Subtype of the current state (derived from the workflow definition).</summary>
+    public StateSubType? StateSubType { get; set; }
+
+    /// <summary>Instance status (Active, Completed, Faulted, etc.).</summary>
+    public InstanceStatus? Status { get; set; }
+
+    /// <summary>Effective state exposed to callers.</summary>
+    public string? EffectiveState { get; set; }
+
+    /// <summary>Transitions available from the current state (definition-derived, no rule evaluation).</summary>
+    public List<MonitorAvailableTransition> AvailableTransitions { get; set; } = [];
+
+    /// <summary>Active child correlations (sub-flows, sub-processes).</summary>
+    public List<MonitorCorrelationInfo> ActiveCorrelations { get; set; } = [];
+}
+
+/// <summary>A transition that can be triggered from the instance's current state (definition-derived).</summary>
+public sealed class MonitorAvailableTransition
+{
+    /// <summary>Transition definition key.</summary>
+    public string? Key { get; set; }
+
+    /// <summary>Target state the transition leads to.</summary>
+    public string? Target { get; set; }
+
+    /// <summary>How the transition is triggered (Manual, Automatic, Scheduled, Event).</summary>
+    public TriggerType TriggerType { get; set; }
+
+    /// <summary>Role identifiers permitted to trigger this transition. Null when no roles are configured.</summary>
+    public List<string>? Roles { get; set; }
+}
+
+/// <summary>Root-cause detail for a faulted instance: failed tasks + the unfinished transition + last known state.</summary>
+public sealed class MonitorInstanceFaultResponse
+{
+    /// <summary>Last known internal state key at the time of fault.</summary>
+    public string? LastKnownState { get; set; }
+
+    /// <summary>Effective state exposed to callers.</summary>
+    public string? EffectiveState { get; set; }
+
+    /// <summary>Instance status (Active, Completed, Faulted, etc.).</summary>
+    public InstanceStatus? Status { get; set; }
+
+    /// <summary>The transition that did not complete (FinishedAt == null) — the likely fault site.</summary>
+    public MonitorFaultedTransition? FaultedTransition { get; set; }
+
+    /// <summary>Task records within the unfinished transition whose Status is Faulted or BusinessStatus is Failed.</summary>
+    public List<MonitorInstanceTaskResponse> FaultedTasks { get; set; } = [];
+}
+
+/// <summary>The transition that did not complete (FinishedAt == null) on a faulted instance.</summary>
+public sealed class MonitorFaultedTransition
+{
+    /// <summary>Transition entity unique identifier.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>The transition definition key.</summary>
+    public string? TransitionId { get; set; }
+
+    /// <summary>State the instance was in before this transition started.</summary>
+    public string? FromState { get; set; }
+
+    /// <summary>Target state (null because the transition never completed).</summary>
+    public string? ToState { get; set; }
+
+    /// <summary>When this transition started.</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>How the transition was triggered (Manual, Automatic, Scheduled, Event).</summary>
+    public TriggerType TriggerType { get; set; }
+}
+
+/// <summary>Field-level diff between two instance data versions.</summary>
+public sealed class MonitorInstanceDataDiffResponse
+{
+    /// <summary>The baseline version that was compared from.</summary>
+    public string? FromVersion { get; set; }
+
+    /// <summary>The target version that was compared to.</summary>
+    public string? ToVersion { get; set; }
+
+    /// <summary>Fields present in <c>ToVersion</c> but absent in <c>FromVersion</c>.</summary>
+    public List<MonitorDiffField> Added { get; set; } = [];
+
+    /// <summary>Fields present in <c>FromVersion</c> but absent in <c>ToVersion</c>.</summary>
+    public List<MonitorDiffField> Removed { get; set; } = [];
+
+    /// <summary>Fields present in both versions but with different values.</summary>
+    public List<MonitorDiffChange> Changed { get; set; } = [];
+
+    /// <summary>Number of leaf fields that are identical across both versions.</summary>
+    public int UnchangedCount { get; set; }
+}
+
+/// <summary>A field entry in an instance data diff (added or removed).</summary>
+public sealed class MonitorDiffField
+{
+    /// <summary>Dot-notation path to the field (e.g. <c>payment.amount</c>).</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>The field value. Strings are unquoted; all other scalars use their raw JSON text.</summary>
+    public string Value { get; set; } = "";
+}
+
+/// <summary>A field whose value changed between two instance data versions.</summary>
+public sealed class MonitorDiffChange
+{
+    /// <summary>Dot-notation path to the field (e.g. <c>payment.amount</c>).</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>The value in the baseline (<c>from</c>) version.</summary>
+    public string OldValue { get; set; } = "";
+
+    /// <summary>The value in the target (<c>to</c>) version.</summary>
+    public string NewValue { get; set; } = "";
+}
+
+/// <summary>Recursive node in an instance's sub-flow/sub-process hierarchy tree.</summary>
+public sealed class MonitorHierarchyNode
+{
+    /// <summary>Instance unique identifier.</summary>
+    public Guid InstanceId { get; set; }
+
+    /// <summary>Business key of the instance.</summary>
+    public string? Key { get; set; }
+
+    /// <summary>Flow (workflow) key.</summary>
+    public string? Flow { get; set; }
+
+    /// <summary>Domain the instance belongs to.</summary>
+    public string? Domain { get; set; }
+
+    /// <summary>Flow version at start.</summary>
+    public string? FlowVersion { get; set; }
+
+    /// <summary>Current internal state key.</summary>
+    public string? CurrentState { get; set; }
+
+    /// <summary>Instance status (Active, Completed, Faulted, etc.).</summary>
+    public InstanceStatus? Status { get; set; }
+
+    /// <summary>Sub-flow type code: S = SubFlow, P = SubProcess. Null at root.</summary>
+    public string? SubFlowType { get; set; }
+
+    /// <summary>Parent state where the sub-flow was triggered. Null at root.</summary>
+    public string? ParentState { get; set; }
+
+    /// <summary>Whether the instance has completed.</summary>
+    public bool IsCompleted { get; set; }
+
+    /// <summary>When the instance completed. Null if still active.</summary>
+    public DateTime? CompletedAt { get; set; }
+
+    /// <summary>Direct child nodes (sub-flows / sub-processes spawned by this instance).</summary>
+    public List<MonitorHierarchyNode> Children { get; set; } = [];
+
+    /// <summary>Schema this node's instance lives in. Used only for traversal; not serialised.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? Schema { get; set; }
 }
 
 /// <summary>

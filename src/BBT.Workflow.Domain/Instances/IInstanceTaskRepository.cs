@@ -19,6 +19,17 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets a single instance task by its unique identifier.
+    /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
+    /// </summary>
+    /// <param name="id">The task entity ID.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The matching task, or null if none exists.</returns>
+    Task<InstanceTask?> GetByIdAsReadOnlyAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the IDs of completed tasks for a specific transition.
     /// Used for retry bypass logic to skip already completed tasks.
     /// </summary>
