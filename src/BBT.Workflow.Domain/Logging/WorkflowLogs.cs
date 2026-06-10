@@ -2082,4 +2082,68 @@ public static partial class WorkflowLogs
         int maxRequestHeaderCount);
 
     #endregion
+
+    #region Scripting Helpers (sandbox)
+
+    /// <summary>
+    /// Logs that a referenced helper set was compiled and loaded for a mapping.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60010,
+        Level = LogLevel.Information,
+        Message = "Helper set built for mapping: {HelperCount} helper(s) [{HelperKeys}], namespaces=[{Namespaces}]")]
+    public static partial void ScriptHelperSetBuilt(
+        this ILogger logger,
+        int helperCount,
+        string helperKeys,
+        string namespaces);
+
+    /// <summary>
+    /// Logs that a referenced helper set was served from the registry cache (no recompile).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60011,
+        Level = LogLevel.Debug,
+        Message = "Helper set served from cache: {HelperCount} helper(s) [{HelperKeys}]")]
+    public static partial void ScriptHelperSetCacheHit(
+        this ILogger logger,
+        int helperCount,
+        string helperKeys);
+
+    /// <summary>
+    /// Logs that a mapping referenced a helper component that could not be resolved from the store.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60012,
+        Level = LogLevel.Error,
+        Message = "Helper component could not be resolved: domain={Domain}, flow={Flow}, key={Key}, version={Version}")]
+    public static partial void ScriptHelperReferenceUnresolved(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string key,
+        string version);
+
+    /// <summary>
+    /// Logs that a mapping referenced helpers while the custom-script-helpers feature is disabled.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60013,
+        Level = LogLevel.Error,
+        Message = "Mapping references helpers but the custom-script-helpers feature is disabled (Scripting:Helpers:Enabled=false)")]
+    public static partial void ScriptHelpersDisabled(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs that a script failed the sandbox / compilation gate.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60014,
+        Level = LogLevel.Error,
+        Message = "Script compilation rejected by sandbox: {Reason}")]
+    public static partial void ScriptSandboxViolation(
+        this ILogger logger,
+        string reason);
+
+    #endregion
 }

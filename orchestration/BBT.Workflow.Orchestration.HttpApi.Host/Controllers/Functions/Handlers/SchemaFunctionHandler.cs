@@ -1,4 +1,5 @@
 using BBT.Aether.AspNetCore.Results;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.DTOs;
@@ -25,7 +26,7 @@ public sealed class SchemaFunctionHandler(
             Version = request.Parameters.Version,
             Headers = request.Headers,
             QueryParameters = request.QueryParameters,
-            Roles = request.CurrentUser.Roles,
+            Roles = request.CurrentUser.ResolveCallerRoles(request.Headers),
         };
 
         var result = await queryAppService.GetSchemaAsync(

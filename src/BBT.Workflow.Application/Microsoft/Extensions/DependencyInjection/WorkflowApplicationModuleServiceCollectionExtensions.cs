@@ -101,6 +101,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<ICacheBackend<Function>, RuntimeCacheBackend<Function>>();
         services.AddSingleton<ICacheBackend<View>, RuntimeCacheBackend<View>>();
         services.AddSingleton<ICacheBackend<Extension>, RuntimeCacheBackend<Extension>>();
+        services.AddSingleton<ICacheBackend<Mapping>, RuntimeCacheBackend<Mapping>>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();
@@ -118,6 +119,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IWorkflowCastHandler, ViewWorkflowCastHandler>();
         services.AddSingleton<IWorkflowCastHandler, SchemaWorkflowCastHandler>();
         services.AddSingleton<IWorkflowCastHandler, ExtensionWorkflowCastHandler>();
+        services.AddSingleton<IWorkflowCastHandler, MappingWorkflowCastHandler>();
         services.AddSingleton<WorkflowCastProcessor>();
     }
 
@@ -132,6 +134,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IComponentValidator, FunctionComponentValidator>();
         services.AddSingleton<IComponentValidator, SchemaComponentValidator>();
         services.AddSingleton<IComponentValidator, ExtensionComponentValidator>();
+        services.AddSingleton<IComponentValidator, MappingComponentValidator>();
         services.AddSingleton<ComponentValidatorProcessor>();
     }
 

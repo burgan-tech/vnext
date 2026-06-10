@@ -82,6 +82,17 @@ public sealed class MetricsAwareComponentCacheStore(
             () => innerStore.GetExtensionAsync(domain, key, version, cancellationToken));
     }
 
+    public async Task<Result<Mapping>> GetMappingAsync(
+        string domain,
+        string key,
+        string? version,
+        CancellationToken cancellationToken = default)
+    {
+        return await ExecuteWithMetricsAsync(
+            "Mapping",
+            () => innerStore.GetMappingAsync(domain, key, version, cancellationToken));
+    }
+
     public async Task<Result<IEnumerable<Extension>>> GetAllExtensionsAsync(
         string domain,
         CancellationToken cancellationToken = default)

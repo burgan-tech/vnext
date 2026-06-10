@@ -127,6 +127,13 @@ public class RuntimeSysSchemaInfo(string name, string schema, Type type)
     /// Constant representing the system extensions schema identifier.
     /// </summary>
     public const string Extensions = "sys-extensions";
+
+    /// <summary>
+    /// Constant representing the system mappings schema identifier.
+    /// A mapping component (<see cref="BBT.Workflow.Definitions.Mapping"/>) is a reusable, versioned
+    /// C# script (e.g. a helper class library) that transition mappings can reference.
+    /// </summary>
+    public const string Mappings = "sys-mappings";
 }
 
 /// <summary>

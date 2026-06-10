@@ -62,7 +62,8 @@ public sealed class ResourceLockStep(
         try
         {
             var mapping = await scriptEngine.CompileToInstanceAsync<ITransitionMapping>(
-                lockDef.KeyExpression.DecodedCode,
+                lockDef.KeyExpression,
+                flowScripts: context.Workflow.Scripts,
                 cancellationToken: cancellationToken);
 
             var scriptContext = await BuildScriptContextAsync(context, cancellationToken);

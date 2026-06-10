@@ -89,6 +89,43 @@ public static class CurrentUserHeaderExtensions
     }
 
     /// <summary>
+    /// Resolves the single caller role used when locally routing the state function. Prefers the first
+    /// role on the current user; when the user carries no roles, falls back to the first role parsed from
+    /// the request <c>role</c> header; returns <c>null</c> when neither is present.
+    /// </summary>
+    /// <param name="currentUser">The current user.</param>
+    /// <param name="headers">Request headers to read the <c>role</c> value from when the user has none.</param>
+    public static string? ResolveCallerRole(
+        this ICurrentUser currentUser,
+        IReadOnlyDictionary<string, string?>? headers)
+    {
+        if (currentUser.Roles is { Length: > 0 } roles)
+            return roles[0];
+
+        var headerRole = headers is null ? null : GetHeader(headers, CurrentUserHeaderKeys.Role);
+        var parsed = ParseRolesFromHeader(headerRole);
+        return parsed is { Length: > 0 } ? parsed[0] : null;
+    }
+
+    /// <summary>
+    /// Resolves the caller role list used when locally routing a function. Prefers all roles on the
+    /// current user; when the user carries no roles, falls back to the roles parsed from the request
+    /// <c>role</c> header; returns <c>null</c> when neither is present.
+    /// </summary>
+    /// <param name="currentUser">The current user.</param>
+    /// <param name="headers">Request headers to read the <c>role</c> value from when the user has none.</param>
+    public static string[]? ResolveCallerRoles(
+        this ICurrentUser currentUser,
+        IReadOnlyDictionary<string, string?>? headers)
+    {
+        if (currentUser.Roles is { Length: > 0 } roles)
+            return roles;
+
+        var headerRole = headers is null ? null : GetHeader(headers, CurrentUserHeaderKeys.Role);
+        return ParseRolesFromHeader(headerRole);
+    }
+
+    /// <summary>
     /// Parses the role header value into an array of role strings.
     /// Supports multiple roles separated by comma or space (e.g. "role1, role2" or "role1 role2").
     /// </summary>

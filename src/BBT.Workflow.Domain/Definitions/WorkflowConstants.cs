@@ -52,3 +52,9 @@ public class SchemaConstants
 {
     public const int MaxKeyLength = WorkflowConstants.MaxKeyLength;
 }
+
+public class MappingConstants
+{
+    public const int MaxKeyLength = WorkflowConstants.MaxKeyLength;
+    public const int MaxNameLength = 180;
+}
