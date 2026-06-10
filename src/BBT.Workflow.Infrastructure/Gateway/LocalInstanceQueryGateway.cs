@@ -95,6 +95,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Headers = input.Headers,
                     QueryParams = input.QueryParams,
                     Role = input.Role,
+                    Roles = input.Roles,
                     IfNoneMatch = input.IfNoneMatch
                 };
                 return await queryService.GetInstanceStateAsync(stateInput, ct);
@@ -119,7 +120,8 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Instance = input.Instance,
                     Headers = input.Headers,
                     QueryParameters = input.QueryParams,
-                    Role = input.Role
+                    Role = input.Role,
+                    Roles = input.Roles
                 };
                 return await queryService.GetViewAsync(viewInput, transitionKey, ct);
             }, cancellationToken);
@@ -140,7 +142,8 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Domain = input.Domain,
                     Workflow = input.Workflow,
                     Version = input.Version,
-                    Instance = input.Instance
+                    Instance = input.Instance,
+                    Roles = input.Roles
                 };
                 return await queryService.GetSchemaAsync(schemaInput, transitionKey, ct);
             }, cancellationToken);

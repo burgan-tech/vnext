@@ -46,21 +46,23 @@ public sealed class NotificationTaskExecutor(
                 taskType: TaskType.ToString()));
         }
 
-        var mappingCode = context.OnExecuteTask.Mapping?.DecodedCode;
+        var mappingScript = context.OnExecuteTask.Mapping;
         INotificationMapping? mapping = null;
         IStateNotificationMapping? stateMapping = null;
 
         var hasStateChannel = channels.Any(c => string.Equals(c, StateChannel, StringComparison.OrdinalIgnoreCase));
         var hasNonStateChannels = channels.Any(c => !string.Equals(c, StateChannel, StringComparison.OrdinalIgnoreCase));
 
-        if (!string.IsNullOrEmpty(mappingCode))
+        var flowScripts = context.ScriptContext.Workflow?.Scripts;
+
+        if (mappingScript is not null && mappingScript.HasMappingCode)
         {
             if (hasNonStateChannels)
                 mapping = await scriptEngine.CompileToInstanceAsync<INotificationMapping>(
-                    mappingCode, cancellationToken: cancellationToken);
+                    mappingScript, flowScripts: flowScripts, cancellationToken: cancellationToken);
 
             if (hasStateChannel)
-                stateMapping = await TryCompileStateMappingAsync(mappingCode, cancellationToken);
+                stateMapping = await TryCompileStateMappingAsync(mappingScript, flowScripts, cancellationToken);
         }
 
         var dispatched = new List<string>();
@@ -103,12 +105,13 @@ public sealed class NotificationTaskExecutor(
     }
 
     private async Task<IStateNotificationMapping?> TryCompileStateMappingAsync(
-        string code, CancellationToken cancellationToken)
+        ScriptCode code, ScriptSettings? flowScripts, CancellationToken cancellationToken)
     {
         try
         {
             return await scriptEngine.CompileToInstanceAsync<IStateNotificationMapping>(
                 code,
+                flowScripts: flowScripts,
                 cancellationToken: cancellationToken);
         }
         catch (InvalidOperationException)

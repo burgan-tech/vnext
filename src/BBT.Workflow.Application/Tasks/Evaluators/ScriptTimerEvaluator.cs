@@ -40,7 +40,8 @@ public sealed class ScriptTimerEvaluator : ITimerEvaluator
         return await ResultExtensions.TryAsync(async ct =>
             {
                 var scriptRunner = await _scriptEngine.CompileToInstanceAsync<ITimerMapping>(
-                    script.DecodedCode,
+                    script,
+                    flowScripts: context.Workflow?.Scripts,
                     cancellationToken: ct);
             
                 // ITimerMapping.Handler directly returns TimerSchedule

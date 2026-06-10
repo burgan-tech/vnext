@@ -1,7 +1,9 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Aether.Users;
 using BBT.Workflow.Caching;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
@@ -28,6 +30,7 @@ public sealed class InstanceRetryAppService(
     IInstanceRetryGateway instanceRetryGateway,
     IComponentCacheStore componentCacheStore,
     IWorkflowExecutionService workflowExecutionService,
+    ICurrentUser currentUser,
     ILogger<InstanceRetryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceRetryAppService
 {
@@ -87,7 +90,9 @@ public sealed class InstanceRetryAppService(
             Version = subflowCorrelation.SubFlowVersion,
             Instance = subflowCorrelation.SubFlowInstanceId.ToString(),
             Headers = input.Headers,
-            QueryParams = input.RouteValues
+            QueryParams = input.RouteValues,
+            Role = currentUser.ResolveCallerRole(input.Headers),
+            Roles = currentUser.ResolveCallerRoles(input.Headers)
         };
 
         var subflowStateResult = await instanceQueryGateway.GetFunctionWithStateAsync(

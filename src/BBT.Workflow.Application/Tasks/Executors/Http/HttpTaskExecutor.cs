@@ -40,7 +40,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         CancellationToken cancellationToken)
     {
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<ScriptResponse?>.Ok(null);
         }
@@ -48,7 +48,8 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
@@ -117,7 +118,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
 
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<object?>.Ok(invocationResult.Data);
         }
@@ -125,7 +126,8 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);

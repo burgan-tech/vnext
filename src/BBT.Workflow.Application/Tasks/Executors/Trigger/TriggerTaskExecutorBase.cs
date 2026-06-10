@@ -50,7 +50,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         CancellationToken cancellationToken)
     {
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<ScriptResponse?>.Ok(null);
         }
@@ -58,7 +58,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
@@ -89,7 +90,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
 
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<object?>.Ok(invocationResult.Data);
         }
@@ -97,7 +98,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
             var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);

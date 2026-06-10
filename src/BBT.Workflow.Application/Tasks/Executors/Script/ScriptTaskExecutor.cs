@@ -38,7 +38,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
     {
         // Compile and run input handler
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<ScriptResponse?>.Ok(null);
         }
@@ -46,7 +46,8 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
@@ -74,7 +75,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
     {
         // Run output handler to get the result
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
                 data: null,
@@ -84,7 +85,8 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
         var result = await ResultExtensions.TryAsync<TaskInvocationResult>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);

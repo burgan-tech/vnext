@@ -191,7 +191,7 @@ public sealed class FunctionAppService(
         if (function.Output != null)
         {
             var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
-                function.Output.DecodedCode, cancellationToken: cancellationToken);
+                function.Output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
             var scriptResponse = await handler.OutputHandler(scriptContext);
 
             if (function.RawResponse)

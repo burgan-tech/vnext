@@ -156,8 +156,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     [JsonInclude] [JsonPropertyName("queryRoles")]
     private List<RoleGrant> queryRoles = new();
 
-    [JsonInclude] [JsonPropertyName("schema")] 
+    [JsonInclude] [JsonPropertyName("schema")]
     public Reference? Schema { get; private set; }
+
+    /// <summary>
+    /// Flow-level script settings (helper references + sandbox grant) that apply globally to every
+    /// mapping in this workflow. At compile time these are unioned with the task/mapping-level
+    /// <c>scripts</c> (see <see cref="ScriptSettings.Union"/>).
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("scripts")]
+    public ScriptSettings? Scripts { get; private set; }
 
     /// <summary>
     /// Root-level query roles for state-based visibility. When a state has no queryRoles, this is used.

@@ -4,6 +4,9 @@ using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
+using BBT.Workflow.Scripting.Helpers;
+using BBT.Workflow.Scripting.Sandbox;
+using Microsoft.Extensions.Configuration;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
@@ -219,8 +222,22 @@ public static class TaskServiceCollectionExtensions
     {
         services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
 
-        // Evaluator is stateless - singleton for efficiency (caches MetadataReferences only)
-        services.TryAddSingleton<IEvaluator, CSharpEvaluator>();
+        // Sandbox + custom-script-helpers options, bound defensively from configuration so a missing
+        // section simply yields safe defaults (sandbox disabled, helpers disabled). Registered as
+        // concrete singletons (not IOptions) so consumers can be constructed without an IConfiguration.
+        services.TryAddSingleton(sp => BindSection<ScriptSandboxOptions>(sp, ScriptSandboxOptions.SectionName));
+        services.TryAddSingleton(sp => BindSection<ScriptHelpersOptions>(sp, ScriptHelpersOptions.SectionName));
+
+        // Evaluator is stateless - singleton for efficiency (caches MetadataReferences only).
+        // Built via factory so it receives the (singleton) sandbox options.
+        services.TryAddSingleton<IEvaluator>(sp =>
+            new CSharpEvaluator(sp.GetRequiredService<ScriptSandboxOptions>()));
+
+        // Helper-set registry is a process-wide singleton (shared collectible ALCs, content-hash cache).
+        services.TryAddSingleton<IScriptHelperRegistry>(sp =>
+            new ScriptHelperRegistry(
+                sp.GetRequiredService<IEvaluator>(),
+                sp.GetRequiredService<ScriptSandboxOptions>()));
 
         // Script services - scoped for per-request isolation (requires DaprClient to be registered)
         services.TryAddScoped<IScriptServices, ScriptServices>();
@@ -228,6 +245,18 @@ public static class TaskServiceCollectionExtensions
         services.TryAddScoped<IScriptEngine, ScriptEngine>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Binds a configuration section into a fresh options instance, tolerating an absent
+    /// <see cref="IConfiguration"/> or section (returns defaults) so consumers stay test-friendly.
+    /// </summary>
+    private static T BindSection<T>(IServiceProvider sp, string sectionName) where T : class, new()
+    {
+        var options = new T();
+        var configuration = sp.GetService<IConfiguration>();
+        configuration?.GetSection(sectionName)?.Bind(options);
+        return options;
     }
 
     /// <summary>

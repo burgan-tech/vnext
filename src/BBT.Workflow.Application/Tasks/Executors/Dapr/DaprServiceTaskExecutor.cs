@@ -41,7 +41,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
         CancellationToken cancellationToken)
     {
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<ScriptResponse?>.Ok(null);
         }
@@ -49,7 +49,8 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
@@ -115,7 +116,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
         CancellationToken cancellationToken)
     {
         var mapping = context.OnExecuteTask.Mapping;
-        if (mapping == null || string.IsNullOrEmpty(mapping.DecodedCode))
+        if (mapping is null || !mapping.HasMappingCode)
         {
             return Result<object?>.Ok(invocationResult.Data);
         }
@@ -125,7 +126,8 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
             var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping.DecodedCode,
+                mapping,
+                flowScripts: context.ScriptContext.Workflow?.Scripts,
                 cancellationToken: ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
