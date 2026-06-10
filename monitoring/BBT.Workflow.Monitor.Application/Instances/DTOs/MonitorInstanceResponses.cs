@@ -115,11 +115,14 @@ public sealed class MonitorCorrelationInfo
 /// </summary>
 public sealed class MonitorInstanceDataResponse
 {
-    /// <summary>The most recent instance data attributes.</summary>
+    /// <summary>Single version data (populated only when a specific version is requested).</summary>
+    public JsonElement? Data { get; set; }
+
+    /// <summary>The most recent instance data attributes (populated in full-history mode).</summary>
     public JsonElement? LatestData { get; set; }
 
-    /// <summary>Ordered history of all data versions, oldest first.</summary>
-    public List<MonitorDataVersion> VersionHistory { get; set; } = [];
+    /// <summary>Ordered history of all data versions, oldest first. Null in single-version mode.</summary>
+    public List<MonitorDataVersion>? VersionHistory { get; set; }
 }
 
 /// <summary>
@@ -362,6 +365,51 @@ public sealed class MonitorHierarchyNode
     /// <summary>Schema this node's instance lives in. Used only for traversal; not serialised.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public string? Schema { get; set; }
+}
+
+/// <summary>Multi-language label (language + text).</summary>
+public sealed class MonitorLabel
+{
+    /// <summary>ISO 639 language code.</summary>
+    public string? Language { get; set; }
+
+    /// <summary>Label text.</summary>
+    public string? Label { get; set; }
+}
+
+/// <summary>A candidate view entry with its rule flag (rule itself not evaluated).</summary>
+public sealed class MonitorViewCandidate
+{
+    /// <summary>Candidate view key.</summary>
+    public string? ViewKey { get; set; }
+
+    /// <summary>Candidate view version.</summary>
+    public string? Version { get; set; }
+
+    /// <summary>True if this candidate is guarded by a selection rule.</summary>
+    public bool HasRule { get; set; }
+}
+
+/// <summary>Response for the instance view query (P1).</summary>
+public sealed class MonitorInstanceViewResponse
+{
+    /// <summary>Selected (default) view key.</summary>
+    public string? ViewKey { get; set; }
+
+    /// <summary>View type: json/html/markdown/deepLink/http/urn.</summary>
+    public string? ViewType { get; set; }
+
+    /// <summary>Rendered content (parsed JSON for structured types, raw string otherwise).</summary>
+    public JsonElement? Content { get; set; }
+
+    /// <summary>Display mode string from the view definition (e.g. full-page, popup).</summary>
+    public string? Display { get; set; }
+
+    /// <summary>Multi-language labels.</summary>
+    public List<MonitorLabel> Labels { get; set; } = [];
+
+    /// <summary>All candidate views for this state/transition (when selection is rule-based).</summary>
+    public List<MonitorViewCandidate> Candidates { get; set; } = [];
 }
 
 /// <summary>

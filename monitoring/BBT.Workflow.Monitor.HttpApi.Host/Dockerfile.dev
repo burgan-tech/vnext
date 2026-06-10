@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Development image with SDK for hot reload
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine
 

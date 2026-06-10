@@ -62,4 +62,12 @@ public interface IMonitorInstanceQueryService
     Task<Result<MonitorHierarchyNode>> GetInstanceHierarchyAsync(
         MonitorGetInstanceHierarchyInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the view definition bound to the instance's current state or a given transition (P1).
+    /// Returns null value (204) when no view is defined for the state or transition.
+    /// </summary>
+    Task<Result<MonitorInstanceViewResponse?>> GetInstanceViewAsync(
+        MonitorGetInstanceViewInput input,
+        CancellationToken cancellationToken = default);
 }

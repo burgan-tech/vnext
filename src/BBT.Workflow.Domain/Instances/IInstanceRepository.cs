@@ -115,4 +115,10 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         string? filter,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>Read-only: avg/min/max completion duration over completed instances (additive, monitor-only).</summary>
+    Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Read-only: per-current-state count of faulted instances in the current schema (additive, monitor-only).</summary>
+    Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default);
 }

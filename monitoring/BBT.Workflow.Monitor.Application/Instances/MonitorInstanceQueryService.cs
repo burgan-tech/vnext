@@ -1,7 +1,9 @@
+using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
@@ -116,6 +118,21 @@ public sealed class MonitorInstanceQueryService(
         if (instance is null)
             return Result<MonitorInstanceDataResponse>.Fail(
                 Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        if (!string.IsNullOrWhiteSpace(input.Version))
+        {
+            var match = instance.DataList
+                .FirstOrDefault(d => string.Equals(d.Version, input.Version, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+                return Result<MonitorInstanceDataResponse>.Fail(
+                    Error.NotFound("instance.dataVersionNotFound",
+                        $"Data version '{input.Version}' not found for instance '{input.Instance}'."));
+
+            return Result<MonitorInstanceDataResponse>.Ok(new MonitorInstanceDataResponse
+            {
+                Data = match.Data.JsonElement
+            });
+        }
 
         var versionHistory = instance.DataList
             .OrderBy(d => d, InstanceDataVersionComparer.Instance)
@@ -453,6 +470,81 @@ public sealed class MonitorInstanceQueryService(
 
         await InstanceHierarchyBuilder.PopulateAsync(root, FetchChildren, HierarchyMaxDepth, visited);
         return Result<MonitorHierarchyNode>.Ok(root);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorInstanceViewResponse?>> GetInstanceViewAsync(
+        MonitorGetInstanceViewInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(input.Instance, cancellationToken);
+        if (instance is null)
+            return Result<MonitorInstanceViewResponse?>.Fail(
+                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        var flowResult = await componentCacheStore.GetFlowAsync(
+            input.Domain, instance.Flow!, input.Version ?? instance.FlowVersion, cancellationToken);
+        if (!flowResult.IsSuccess || flowResult.Value is not { } flow)
+            return Result<MonitorInstanceViewResponse?>.Fail(
+                Error.NotFound("workflow.notFound", $"Workflow '{instance.Flow}' definition not found."));
+
+        ViewDefinition? viewDef;
+        if (!string.IsNullOrWhiteSpace(input.TransitionKey))
+        {
+            var transition = flow.States.SelectMany(s => s.Transitions)
+                .Concat(flow.SharedTransitions)
+                .FirstOrDefault(t => string.Equals(t.Key, input.TransitionKey, StringComparison.OrdinalIgnoreCase));
+            if (transition is null)
+                return Result<MonitorInstanceViewResponse?>.Fail(
+                    Error.NotFound("transition.notFound", $"Transition '{input.TransitionKey}' not found."));
+            viewDef = transition.View;
+        }
+        else
+        {
+            var currentStateDef = flow.States
+                .FirstOrDefault(s => string.Equals(s.Key, instance.CurrentState, StringComparison.OrdinalIgnoreCase));
+            viewDef = currentStateDef?.View;
+        }
+
+        if (viewDef is null)
+            return Result<MonitorInstanceViewResponse?>.Ok(null);
+
+        var selection = ViewSelector.Select(viewDef);
+        var response = new MonitorInstanceViewResponse
+        {
+            Candidates = selection.Candidates
+                .Select(c => new MonitorViewCandidate { ViewKey = c.View.Key, Version = c.View.Version, HasRule = c.Rule is not null })
+                .ToList()
+        };
+
+        if (selection.Default is { } def)
+        {
+            var viewResult = await componentCacheStore.GetViewAsync(
+                input.Domain, def.View.Key, def.View.Version, cancellationToken);
+            if (viewResult.IsSuccess && viewResult.Value is { } view)
+            {
+                response.ViewKey = view.Key;
+                response.ViewType = view.Type.ToString();
+                response.Display = view.Display;
+                response.Labels = (view.Labels ?? [])
+                    .Select(l => new MonitorLabel { Language = l.Language, Label = l.Label })
+                    .ToList();
+                response.Content = ToJsonElement(view.GetContentAsTyped());
+            }
+            else
+            {
+                response.ViewKey = def.View.Key;
+            }
+        }
+
+        return Result<MonitorInstanceViewResponse?>.Ok(response);
+    }
+
+    private static JsonElement? ToJsonElement(object? typedContent)
+    {
+        if (typedContent is null) return null;
+        if (typedContent is JsonElement je) return je;
+        return JsonSerializer.SerializeToElement(typedContent, JsonSerializerConstants.JsonOptions);
     }
 
     private static MonitorInstanceTaskResponse MapTask(InstanceTask t) => new()

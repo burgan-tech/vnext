@@ -122,4 +122,41 @@ public class EfCoreInstanceTaskRepository(
             .Select(t => t.TaskId)
             .ToListAsync(cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var counts = await dbSet.AsNoTracking()
+            .GroupBy(t => t.TaskId)
+            .Select(g => new
+            {
+                TaskKey = g.Key,
+                ExecutionCount = g.Count(),
+                SuccessCount = g.Count(x => x.BusinessStatus == BusinessStatus.Success),
+                FailureCount = g.Count(x => x.BusinessStatus == BusinessStatus.Failed)
+            })
+            .ToListAsync(cancellationToken);
+
+        var context = await GetDbContextAsync();
+        var durations = await context.Database
+            .SqlQueryRaw<TaskDurationAvg>(
+                "SELECT task_id AS \"TaskKey\", AVG(EXTRACT(EPOCH FROM duration) * 1000) AS \"AvgMs\" " +
+                "FROM instance_tasks WHERE duration IS NOT NULL GROUP BY task_id")
+            .ToListAsync(cancellationToken);
+
+        var durMap = durations
+            .Where(d => d.TaskKey is not null)
+            .ToDictionary(d => d.TaskKey!, d => d.AvgMs, StringComparer.OrdinalIgnoreCase);
+
+        return counts.Select(c => new TaskExecutionStat(
+            c.TaskKey,
+            c.ExecutionCount,
+            durMap.TryGetValue(c.TaskKey, out var avg) ? avg : 0d,
+            c.SuccessCount,
+            c.FailureCount)).ToList();
+    }
 }
+
+/// <summary>SQL projection record for per-task average duration (monitor-only, additive).</summary>
+internal sealed record TaskDurationAvg(string? TaskKey, double AvgMs);

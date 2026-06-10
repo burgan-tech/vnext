@@ -996,6 +996,35 @@ public sealed class EfCoreInstanceRepository(
             );
     }
 
+    /// <inheritdoc />
+    public async Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var grouped = await dbSet.AsNoTracking()
+            .Where(i => i.Status == InstanceStatus.Faulted)
+            .GroupBy(i => i.CurrentState)
+            .Select(g => new { State = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+        return grouped.Select(x => new StateCountStat(x.State ?? string.Empty, x.Count)).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var result = await context.Database
+            .SqlQueryRaw<InstanceDurationRaw>(
+                "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM duration) * 1000), 0) AS \"AvgMs\", " +
+                "COALESCE(MIN(EXTRACT(EPOCH FROM duration) * 1000), 0) AS \"MinMs\", " +
+                "COALESCE(MAX(EXTRACT(EPOCH FROM duration) * 1000), 0) AS \"MaxMs\", " +
+                "COUNT(*) AS \"CompletedCount\" " +
+                "FROM instances WHERE completed_at IS NOT NULL AND duration IS NOT NULL")
+            .FirstOrDefaultAsync(cancellationToken);
+        return result is not null
+            ? new InstanceDurationStat(result.AvgMs, result.MinMs, result.MaxMs, result.CompletedCount)
+            : new InstanceDurationStat(0, 0, 0, 0);
+    }
+
     /// <summary>
     /// Loads DataList for instances (ordered by id list) and returns list in the same order. Used when ORDER BY must be preserved (EF Include breaks order).
     /// </summary>
@@ -1114,3 +1143,6 @@ public sealed class EfCoreInstanceRepository(
         await Task.CompletedTask; // For potential future async operations
     }
 }
+
+/// <summary>SQL projection record for instance duration aggregation (monitor-only, additive).</summary>
+internal sealed record InstanceDurationRaw(double AvgMs, double MinMs, double MaxMs, long CompletedCount);

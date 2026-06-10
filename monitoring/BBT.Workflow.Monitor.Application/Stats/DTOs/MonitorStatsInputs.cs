@@ -25,3 +25,15 @@ public sealed class MonitorGetStateDistributionInput : IHasDomain
     [Required]
     public string Workflow { get; set; } = string.Empty;
 }
+
+/// <summary>Workflow-scoped stats query (T2: P10–P13).</summary>
+public sealed class MonitorGetWorkflowStatsInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required]
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required]
+    public string Workflow { get; set; } = string.Empty;
+}

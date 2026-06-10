@@ -26,4 +26,16 @@ public interface IMonitorStatsService
     Task<Result<MonitorStateDistributionResponse>> GetStateDistributionAsync(
         MonitorGetStateDistributionInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Returns fault statistics: total faulted count, by-state breakdown, by-task breakdown, and time-window trend (P10).</summary>
+    Task<Result<MonitorFaultStatsResponse>> GetFaultStatsAsync(MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default);
+
+    /// <summary>Returns per-task execution stats: count, avg duration, success/failure rates (P11).</summary>
+    Task<Result<MonitorTaskStatsResponse>> GetTaskStatsAsync(MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default);
+
+    /// <summary>Returns instance completion duration stats: avg/min/max ms, completed count (P12).</summary>
+    Task<Result<MonitorDurationStatsResponse>> GetDurationStatsAsync(MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default);
+
+    /// <summary>Returns per-transition execution stats: count, avg duration, completion rate, trigger breakdown (P13).</summary>
+    Task<Result<MonitorTransitionStatsResponse>> GetTransitionStatsAsync(MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default);
 }

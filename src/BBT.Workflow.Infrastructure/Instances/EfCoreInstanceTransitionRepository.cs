@@ -100,4 +100,43 @@ public class EfCoreInstanceTransitionRepository(
             .OrderBy(p => p.StartedAt)
             .ToListAsync(cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<List<TransitionExecutionStat>> GetTransitionStatsAsync(CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var counts = await context.InstanceTransitions.AsNoTracking()
+            .GroupBy(t => new { t.TransitionId, t.FromState, t.ToState })
+            .Select(g => new
+            {
+                g.Key.TransitionId, g.Key.FromState, g.Key.ToState,
+                Count = g.Count(),
+                CompletedCount = g.Count(x => x.FinishedAt != null),
+                ManualCount = g.Count(x => x.TriggerType == TriggerType.Manual),
+                AutomaticCount = g.Count(x => x.TriggerType == TriggerType.Automatic),
+                ScheduledCount = g.Count(x => x.TriggerType == TriggerType.Scheduled),
+                EventCount = g.Count(x => x.TriggerType == TriggerType.Event)
+            })
+            .ToListAsync(cancellationToken);
+
+        var durations = await context.Database
+            .SqlQueryRaw<TransitionDurationAvg>(
+                "SELECT transition_id AS \"TransitionKey\", from_state AS \"FromState\", to_state AS \"ToState\", " +
+                "AVG(EXTRACT(EPOCH FROM duration) * 1000) AS \"AvgMs\" " +
+                "FROM instance_transitions WHERE duration IS NOT NULL GROUP BY transition_id, from_state, to_state")
+            .ToListAsync(cancellationToken);
+
+        var durMap = durations.ToDictionary(
+            d => $"{d.TransitionKey}|{d.FromState}|{d.ToState}",
+            d => d.AvgMs,
+            StringComparer.OrdinalIgnoreCase);
+
+        return counts.Select(c => new TransitionExecutionStat(
+            c.TransitionId, c.FromState, c.ToState, c.Count,
+            durMap.TryGetValue($"{c.TransitionId}|{c.FromState}|{c.ToState}", out var avg) ? avg : 0d,
+            c.CompletedCount, c.ManualCount, c.AutomaticCount, c.ScheduledCount, c.EventCount)).ToList();
+    }
 }
+
+/// <summary>SQL projection record for per-transition average duration (monitor-only, additive).</summary>
+internal sealed record TransitionDurationAvg(string? TransitionKey, string? FromState, string? ToState, double AvgMs);

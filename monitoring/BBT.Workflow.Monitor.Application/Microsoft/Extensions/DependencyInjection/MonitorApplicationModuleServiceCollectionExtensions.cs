@@ -1,3 +1,4 @@
+using BBT.Workflow.Monitor.Authorization;
 using BBT.Workflow.Monitor.Components;
 using BBT.Workflow.Monitor.Instances;
 using BBT.Workflow.Monitor.Stats;
@@ -25,6 +26,7 @@ public static class MonitorApplicationModuleServiceCollectionExtensions
         services.AddScoped<IMonitorInstanceQueryService, MonitorInstanceQueryService>();
         services.AddScoped<IMonitorComponentQueryService, MonitorComponentQueryService>();
         services.AddScoped<IMonitorStatsService, MonitorStatsService>();
+        services.AddScoped<IMonitorAuthorizationQueryService, MonitorAuthorizationQueryService>();
 
         return services;
     }

@@ -50,3 +50,145 @@ public sealed class MonitorStateCount
     /// <summary>Instances in this state with Faulted status.</summary>
     public long Faulted { get; set; }
 }
+
+/// <summary>P10 fault statistics: total faulted count, per-state and per-task breakdown, time-window trend.</summary>
+public sealed class MonitorFaultStatsResponse
+{
+    /// <summary>Total number of faulted instances in the current schema.</summary>
+    public long TotalFaulted { get; set; }
+
+    /// <summary>Faulted instance counts grouped by the current state key.</summary>
+    public List<MonitorKeyCount> ByState { get; set; } = [];
+
+    /// <summary>Faulted task counts grouped by task key.</summary>
+    public List<MonitorKeyCount> ByTask { get; set; } = [];
+
+    /// <summary>Faulted instance counts over recent time windows.</summary>
+    public MonitorTrend Trend { get; set; } = new();
+}
+
+/// <summary>A named count entry used in fault breakdown lists.</summary>
+public sealed class MonitorKeyCount
+{
+    /// <summary>The key (state key, task key, etc.).</summary>
+    public string? Key { get; set; }
+
+    /// <summary>The associated count.</summary>
+    public long Count { get; set; }
+}
+
+/// <summary>Faulted-instance counts over recent time windows.</summary>
+public sealed class MonitorTrend
+{
+    /// <summary>Faulted count in the last 1 hour.</summary>
+    public long Last1h { get; set; }
+
+    /// <summary>Faulted count in the last 24 hours.</summary>
+    public long Last24h { get; set; }
+
+    /// <summary>Faulted count in the last 7 days.</summary>
+    public long Last7d { get; set; }
+}
+
+/// <summary>P11 task execution statistics: per-task counts, durations, and success/failure rates.</summary>
+public sealed class MonitorTaskStatsResponse
+{
+    /// <summary>All tasks with their execution statistics.</summary>
+    public List<MonitorTaskStatItem> ByTask { get; set; } = [];
+
+    /// <summary>Top 10 slowest tasks by average duration (descending).</summary>
+    public List<MonitorTaskStatItem> Slowest { get; set; } = [];
+}
+
+/// <summary>Execution statistics for a single task key.</summary>
+public sealed class MonitorTaskStatItem
+{
+    /// <summary>The task definition key.</summary>
+    public string? TaskKey { get; set; }
+
+    /// <summary>Total number of executions.</summary>
+    public int ExecutionCount { get; set; }
+
+    /// <summary>Average execution duration in milliseconds.</summary>
+    public double AvgDurationMs { get; set; }
+
+    /// <summary>Ratio of successful executions to total (0–1).</summary>
+    public double SuccessRate { get; set; }
+
+    /// <summary>Ratio of failed executions to total (0–1).</summary>
+    public double FailureRate { get; set; }
+}
+
+/// <summary>P12 instance completion duration statistics: avg/min/max ms and completed count.</summary>
+public sealed class MonitorDurationStatsResponse
+{
+    /// <summary>Average completion duration in milliseconds.</summary>
+    public double AvgMs { get; set; }
+
+    /// <summary>Minimum completion duration in milliseconds.</summary>
+    public double MinMs { get; set; }
+
+    /// <summary>Maximum completion duration in milliseconds.</summary>
+    public double MaxMs { get; set; }
+
+    /// <summary>Number of completed instances with recorded duration.</summary>
+    public long CompletedCount { get; set; }
+}
+
+/// <summary>P13 transition execution statistics: per-transition counts, durations, completion rates, and trigger breakdowns.</summary>
+public sealed class MonitorTransitionStatsResponse
+{
+    /// <summary>Per-transition aggregated statistics.</summary>
+    public List<MonitorTransitionStatItem> ByTransition { get; set; } = [];
+
+    /// <summary>State-to-state flow density (from/to pair counts).</summary>
+    public List<MonitorFlowDensity> FlowDensity { get; set; } = [];
+}
+
+/// <summary>Aggregated statistics for a single transition key.</summary>
+public sealed class MonitorTransitionStatItem
+{
+    /// <summary>The transition definition key.</summary>
+    public string? TransitionKey { get; set; }
+
+    /// <summary>Total number of executions for this transition.</summary>
+    public int Count { get; set; }
+
+    /// <summary>Average execution duration in milliseconds.</summary>
+    public double AvgDurationMs { get; set; }
+
+    /// <summary>Ratio of completed executions to total (0–1).</summary>
+    public double CompletionRate { get; set; }
+
+    /// <summary>Breakdown of trigger types for this transition.</summary>
+    public MonitorTriggerBreakdown TriggerTypeBreakdown { get; set; } = new();
+}
+
+/// <summary>Count of transitions grouped by trigger type.</summary>
+public sealed class MonitorTriggerBreakdown
+{
+    /// <summary>Manual trigger count.</summary>
+    public int Manual { get; set; }
+
+    /// <summary>Automatic trigger count.</summary>
+    public int Automatic { get; set; }
+
+    /// <summary>Scheduled trigger count.</summary>
+    public int Scheduled { get; set; }
+
+    /// <summary>Event trigger count.</summary>
+    public int Event { get; set; }
+}
+
+/// <summary>Instance count for a state-to-state transition pair (flow density).</summary>
+public sealed class MonitorFlowDensity
+{
+    /// <summary>The originating state key.</summary>
+    public string? FromState { get; set; }
+
+    /// <summary>The target state key.</summary>
+    public string? ToState { get; set; }
+
+    /// <summary>Number of transitions on this path.</summary>
+    public int Count { get; set; }
+}

@@ -62,4 +62,7 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
     Task<List<string>> GetSuccessfulTaskIdsAsync(
         Guid transitionId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Read-only: per-task execution aggregation across the current schema (additive, monitor-only).</summary>
+    Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default);
 }

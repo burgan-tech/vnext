@@ -58,4 +58,40 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
         var result = await statsService.GetStateDistributionAsync(input, cancellationToken);
         return FromResult(result);
     }
+
+    /// <summary>Returns fault statistics: total faulted count, by-state and by-task breakdown, time-window trend (P10).</summary>
+    /// <response code="200">Fault stats returned.</response>
+    [HttpGet("{domain}/workflows/{workflow}/stats/faults")]
+    [ProducesResponseType(typeof(MonitorFaultStatsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetFaultStatsAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, CancellationToken cancellationToken = default)
+        => FromResult(await statsService.GetFaultStatsAsync(
+            new MonitorGetWorkflowStatsInput { Domain = domain, Workflow = workflow }, cancellationToken));
+
+    /// <summary>Returns per-task execution stats: count, avg duration, success/failure rates (P11).</summary>
+    /// <response code="200">Task stats returned.</response>
+    [HttpGet("{domain}/workflows/{workflow}/stats/tasks")]
+    [ProducesResponseType(typeof(MonitorTaskStatsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTaskStatsAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, CancellationToken cancellationToken = default)
+        => FromResult(await statsService.GetTaskStatsAsync(
+            new MonitorGetWorkflowStatsInput { Domain = domain, Workflow = workflow }, cancellationToken));
+
+    /// <summary>Returns instance completion duration stats: avg/min/max ms, completed count (P12).</summary>
+    /// <response code="200">Duration stats returned.</response>
+    [HttpGet("{domain}/workflows/{workflow}/stats/duration")]
+    [ProducesResponseType(typeof(MonitorDurationStatsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetDurationStatsAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, CancellationToken cancellationToken = default)
+        => FromResult(await statsService.GetDurationStatsAsync(
+            new MonitorGetWorkflowStatsInput { Domain = domain, Workflow = workflow }, cancellationToken));
+
+    /// <summary>Returns per-transition execution stats: count, avg duration, completion rate, trigger breakdown (P13).</summary>
+    /// <response code="200">Transition stats returned.</response>
+    [HttpGet("{domain}/workflows/{workflow}/stats/transitions")]
+    [ProducesResponseType(typeof(MonitorTransitionStatsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTransitionStatsAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, CancellationToken cancellationToken = default)
+        => FromResult(await statsService.GetTransitionStatsAsync(
+            new MonitorGetWorkflowStatsInput { Domain = domain, Workflow = workflow }, cancellationToken));
 }

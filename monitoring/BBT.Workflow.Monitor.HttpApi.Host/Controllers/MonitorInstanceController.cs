@@ -109,9 +109,10 @@ public sealed class MonitorInstanceController(
 
     /// <summary>
     /// Returns the latest instance data attributes and full version history.
+    /// When <paramref name="version"/> is specified, returns only that single data version.
     /// </summary>
     /// <response code="200">Instance data returned successfully</response>
-    /// <response code="404">Instance not found</response>
+    /// <response code="404">Instance or data version not found</response>
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data")]
     [ProducesResponseType(typeof(MonitorInstanceDataResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -119,6 +120,7 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
+        [FromQuery] string? version = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -127,9 +129,42 @@ public sealed class MonitorInstanceController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
+            Version = version,
         };
 
         var result = await queryService.GetInstanceDataAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>Returns the view bound to the instance's current state or a given transition.</summary>
+    /// <response code="200">View returned (with candidates when rule-based).</response>
+    /// <response code="204">No view is defined for the current state or specified transition.</response>
+    /// <response code="404">Instance, workflow or transition not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/view")]
+    [ProducesResponseType(typeof(MonitorInstanceViewResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceViewAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] string? transitionKey = null,
+        [FromQuery] string? role = null,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceViewInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            TransitionKey = transitionKey,
+            Role = role,
+            Version = version
+        };
+        var result = await queryService.GetInstanceViewAsync(input, cancellationToken);
+        if (result.IsSuccess && result.Value is null)
+            return NoContent();
         return FromResult(result);
     }
 

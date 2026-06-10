@@ -12,6 +12,8 @@ namespace BBT.Workflow.Monitor.Stats;
 public sealed class MonitorStatsService(
     IServiceProvider serviceProvider,
     IInstanceRepository instanceRepository,
+    IInstanceTaskRepository taskRepository,
+    IInstanceTransitionRepository transitionRepository,
     IComponentCacheStore componentCacheStore)
     : ApplicationService(serviceProvider), IMonitorStatsService
 {
@@ -75,6 +77,113 @@ public sealed class MonitorStatsService(
                 response.TotalActiveInstances += active;
             }
             return response;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorFaultStatsResponse>> GetFaultStatsAsync(
+        MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default)
+    {
+        return await ResultExtensions.TryAsync(async ct =>
+        {
+            var totalFaulted = await instanceRepository.CountAsync("{\"status\":{\"eq\":\"Faulted\"}}", ct);
+            var byState = (await instanceRepository.GetFaultStateCountsAsync(ct))
+                .Select(s => new MonitorKeyCount { Key = s.StateKey, Count = s.Count }).ToList();
+            var byTask = (await taskRepository.GetTaskStatsAsync(ct))
+                .Where(t => t.FailureCount > 0)
+                .Select(t => new MonitorKeyCount { Key = t.TaskKey, Count = t.FailureCount }).ToList();
+
+            var now = DateTime.UtcNow;
+            var last1h = await instanceRepository.CountAsync(
+                "{\"and\":[{\"status\":{\"eq\":\"Faulted\"}},{\"modifiedAt\":{\"gt\":\"" +
+                now.AddHours(-1).ToString("yyyy-MM-ddTHH:mm:ssZ") + "\"}}]}", ct);
+            var last24h = await instanceRepository.CountAsync(
+                "{\"and\":[{\"status\":{\"eq\":\"Faulted\"}},{\"modifiedAt\":{\"gt\":\"" +
+                now.AddHours(-24).ToString("yyyy-MM-ddTHH:mm:ssZ") + "\"}}]}", ct);
+            var last7d = await instanceRepository.CountAsync(
+                "{\"and\":[{\"status\":{\"eq\":\"Faulted\"}},{\"modifiedAt\":{\"gt\":\"" +
+                now.AddDays(-7).ToString("yyyy-MM-ddTHH:mm:ssZ") + "\"}}]}", ct);
+
+            return new MonitorFaultStatsResponse
+            {
+                TotalFaulted = totalFaulted,
+                ByState = byState,
+                ByTask = byTask,
+                Trend = new MonitorTrend { Last1h = last1h, Last24h = last24h, Last7d = last7d }
+            };
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorTaskStatsResponse>> GetTaskStatsAsync(
+        MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default)
+    {
+        return await ResultExtensions.TryAsync(async ct =>
+        {
+            var stats = await taskRepository.GetTaskStatsAsync(ct);
+            var items = stats.Select(s => new MonitorTaskStatItem
+            {
+                TaskKey = s.TaskKey,
+                ExecutionCount = s.ExecutionCount,
+                AvgDurationMs = s.AvgDurationMs,
+                SuccessRate = StatsRateCalculator.Rate(s.SuccessCount, s.ExecutionCount),
+                FailureRate = StatsRateCalculator.Rate(s.FailureCount, s.ExecutionCount)
+            }).ToList();
+
+            return new MonitorTaskStatsResponse
+            {
+                ByTask = items,
+                Slowest = items.OrderByDescending(i => i.AvgDurationMs).Take(10).ToList()
+            };
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorDurationStatsResponse>> GetDurationStatsAsync(
+        MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default)
+    {
+        return await ResultExtensions.TryAsync(async ct =>
+        {
+            var d = await instanceRepository.GetDurationStatAsync(ct);
+            return new MonitorDurationStatsResponse
+            {
+                AvgMs = d.AvgMs, MinMs = d.MinMs, MaxMs = d.MaxMs, CompletedCount = d.CompletedCount
+            };
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorTransitionStatsResponse>> GetTransitionStatsAsync(
+        MonitorGetWorkflowStatsInput input, CancellationToken cancellationToken = default)
+    {
+        return await ResultExtensions.TryAsync(async ct =>
+        {
+            var stats = await transitionRepository.GetTransitionStatsAsync(ct);
+            return new MonitorTransitionStatsResponse
+            {
+                ByTransition = stats
+                    .GroupBy(s => s.TransitionKey)
+                    .Select(g => new MonitorTransitionStatItem
+                    {
+                        TransitionKey = g.Key,
+                        Count = g.Sum(x => x.Count),
+                        AvgDurationMs = g.Any(x => x.AvgDurationMs > 0)
+                            ? g.Where(x => x.AvgDurationMs > 0).Average(x => x.AvgDurationMs)
+                            : 0d,
+                        CompletionRate = StatsRateCalculator.Rate(g.Sum(x => x.CompletedCount), g.Sum(x => x.Count)),
+                        TriggerTypeBreakdown = new MonitorTriggerBreakdown
+                        {
+                            Manual = g.Sum(x => x.ManualCount),
+                            Automatic = g.Sum(x => x.AutomaticCount),
+                            Scheduled = g.Sum(x => x.ScheduledCount),
+                            Event = g.Sum(x => x.EventCount)
+                        }
+                    }).ToList(),
+                FlowDensity = stats.Select(s => new MonitorFlowDensity
+                {
+                    FromState = s.FromState, ToState = s.ToState, Count = s.Count
+                }).ToList()
+            };
         }, cancellationToken);
     }
 

@@ -74,6 +74,9 @@ public sealed class MonitorGetInstanceDataInput : IHasDomain
     /// <summary>Instance key or ID.</summary>
     [Required]
     public string Instance { get; set; } = string.Empty;
+
+    /// <summary>Optional: return a specific data version instead of the latest + history.</summary>
+    public string? Version { get; set; }
 }
 
 /// <summary>
@@ -189,4 +192,29 @@ public sealed class MonitorGetInstanceDataDiffInput : IHasDomain
     /// <summary>The target data version (newer).</summary>
     [Required]
     public string To { get; set; } = string.Empty;
+}
+
+/// <summary>Input for the instance view query (P1).</summary>
+public sealed class MonitorGetInstanceViewInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required]
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required]
+    public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>The instance business key or GUID.</summary>
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>Optional: resolve the view of a specific transition instead of the current state.</summary>
+    public string? TransitionKey { get; set; }
+
+    /// <summary>Optional role context (reserved; no rule evaluation performed).</summary>
+    public string? Role { get; set; }
+
+    /// <summary>Optional workflow/definition version.</summary>
+    public string? Version { get; set; }
 }
