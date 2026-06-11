@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using Dapr.Client;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -6,28 +7,31 @@ using Microsoft.Extensions.Logging;
 namespace BBT.Workflow.Workers.Inbox.Forwarding;
 
 /// <summary>
-/// <see cref="IOrchestrationForwarder"/> over Dapr service invocation. The orchestration app-id
-/// comes from the <c>OrchestrationApi:AppId</c> configuration key — supplied as an ENV variable
-/// (e.g. <c>OrchestrationApi__AppId</c>) to the Inbox worker — defaulting to <c>vnext-app</c>.
-/// Mirrors <c>RemoteInvokerService</c>: per-invocation timeout via a linked CTS, the
-/// <c>X-Workflow</c> header for schema resolution, and rethrow-on-failure for at-least-once retry.
+/// <see cref="IOrchestrationForwarder"/> over Dapr service invocation using a Dapr-invokable
+/// <see cref="HttpClient"/> (<see cref="DaprClient.CreateInvokeHttpClient(string,string,string)"/>) —
+/// Dapr's recommended, non-obsolete invocation API: requests to a relative path are routed through
+/// the sidecar to the target app. The orchestration app-id comes from the
+/// <c>OrchestrationApi:AppId</c> configuration key, supplied as an ENV variable (e.g.
+/// <c>OrchestrationApi__AppId</c>) to the Inbox worker, defaulting to <c>vnext-app</c>.
+/// Adds the <c>X-Workflow</c> header for schema resolution and rethrows on failure so the inbox
+/// processor re-delivers (at-least-once).
 /// </summary>
 public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
 {
-    private readonly DaprClient _daprClient;
+    private readonly HttpClient _httpClient;
     private readonly string _orchestrationAppId;
     private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<DaprOrchestrationForwarder> _logger;
 
     public DaprOrchestrationForwarder(
-        DaprClient daprClient,
         IConfiguration configuration,
         ILogger<DaprOrchestrationForwarder> logger)
     {
-        _daprClient = daprClient;
         _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
         _invocationTimeoutSeconds = int.TryParse(
             configuration["OrchestrationApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
+        // Invokable client: relative requests are rewritten to the Dapr invoke endpoint for appId.
+        _httpClient = DaprClient.CreateInvokeHttpClient(appId: _orchestrationAppId);
         _logger = logger;
     }
 
@@ -46,21 +50,18 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         using var invocationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         invocationCts.CancelAfter(TimeSpan.FromSeconds(_invocationTimeoutSeconds));
 
-        // Data overload (appId, methodName, data) builds a POST request; set the verb explicitly.
-        var request = _daprClient.CreateInvokeMethodRequest(_orchestrationAppId, route, body);
-        request.Method = method;
+        using var request = new HttpRequestMessage(method, route)
+        {
+            Content = JsonContent.Create(body)
+        };
         request.Headers.Add(
             WorkflowInfo.Name,
             WorkflowInfo.Generate(domain, workflow, version ?? "latest", instanceId));
 
         try
         {
-            // Fire-and-forget: internal endpoints return 200 with no body. The non-generic
-            // InvokeMethodAsync is marked obsolete by Dapr but is the correct fit here (no
-            // response payload to deserialize); suppress the guidance warning intentionally.
-#pragma warning disable CS0618
-            await _daprClient.InvokeMethodAsync(request, invocationCts.Token);
-#pragma warning restore CS0618
+            using var response = await _httpClient.SendAsync(request, invocationCts.Token);
+            response.EnsureSuccessStatusCode();
             _logger.LogDebug(
                 "Forwarded {Method} {Route} to {AppId} for instance {InstanceId}",
                 method, route, _orchestrationAppId, instanceId);

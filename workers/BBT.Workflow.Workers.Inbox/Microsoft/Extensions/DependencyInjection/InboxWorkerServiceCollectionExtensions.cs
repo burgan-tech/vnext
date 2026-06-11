@@ -50,7 +50,8 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddAppHealthChecks();
 
         // Inbox = thin forwarder: deliver events to Orchestration via Dapr service invocation.
-        services.AddScoped<IOrchestrationForwarder, DaprOrchestrationForwarder>();
+        // Singleton — depends only on configuration/logger and owns one Dapr-invokable HttpClient.
+        services.AddSingleton<IOrchestrationForwarder, DaprOrchestrationForwarder>();
 
         return services;
     }
