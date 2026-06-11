@@ -38,8 +38,8 @@ dotnet ef migrations add AddInstanceTaskIdempotencyKey \
 |------|--------|----------------|------------------|
 | S6 | `Instance` | `ChainToken uuid NULL` + `IX_Instances_ChainToken` (filtered `ChainToken IS NOT NULL`) | `InstancesModelCreatingExtensions` |
 | S7 | `Instance` | `ChainHeartbeatAt timestamptz NULL` + filtered index `(Status, ChainHeartbeatAt)` | `InstancesModelCreatingExtensions` |
-| S8 | `Instance` | `ResumePoint jsonb NULL` | `InstancesModelCreatingExtensions` |
-| S8 | `InstanceTask` | `IdempotencyKey` + unique index `(InstanceTransitionId, TaskKey)` | InstanceTask config |
+| S8 | `Instance` | `ResumePointStepOrder int NULL` | `InstancesModelCreatingExtensions` |
+| S8 (deferred) | `InstanceTask` | per-task commit + execution-side idempotency key (`InstanceId:TransitionId:TaskId`) — needs TaskCoordinator restructuring + shared Execution contract change; do with compiler in the loop | TaskCoordinator / Execution.Abstractions |
 
 ## Multi-schema note
 

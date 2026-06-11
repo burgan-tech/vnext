@@ -141,6 +141,14 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public DateTime? ChainHeartbeatAt { get; private set; }
 
     /// <summary>
+    /// Durable resume point (S8): the last committed lifecycle step order within the in-flight
+    /// transition. On crash-resume the pipeline restarts from the next step rather than the
+    /// beginning, and already-committed remote task journal rows (InstanceTask) are bypassed,
+    /// avoiding duplicate irreversible side effects. Null when no transition is mid-flight.
+    /// </summary>
+    public int? ResumePointStepOrder { get; private set; }
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -556,6 +564,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         if (ChainToken.HasValue)
             ChainHeartbeatAt = DateTime.UtcNow;
     }
+
+    /// <summary>
+    /// Records the last committed lifecycle step order for crash-resume (S8).
+    /// </summary>
+    public void SetResumePoint(int stepOrder) => ResumePointStepOrder = stepOrder;
+
+    /// <summary>
+    /// Clears the durable resume point (called at transition finalize so it never leaks into the next transition).
+    /// </summary>
+    public void ClearResumePoint() => ResumePointStepOrder = null;
 
     /// <summary>
     /// Returns whether the supplied token matches the instance's current chain ownership token.

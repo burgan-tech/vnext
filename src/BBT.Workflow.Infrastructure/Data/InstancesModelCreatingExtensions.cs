@@ -74,6 +74,9 @@ public static class InstancesModelCreatingExtensions
                 .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
                 .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
 
+            // Durable resume point for crash-resume (S8).
+            b.Property(p => p.ResumePointStepOrder);
+
             b.Property(p => p.Incidents)
                 .HasColumnType("jsonb")
                 .HasConversion(

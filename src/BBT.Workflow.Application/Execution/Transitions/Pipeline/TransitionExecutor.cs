@@ -52,6 +52,12 @@ public sealed class TransitionExecutor
     {
         EnrichTelemetry(context);
 
+        // S8 crash-resume: if a durable resume point survived (set by per-transition checkpointing),
+        // restart from the next step rather than the beginning. Already-committed remote task
+        // journal rows are bypassed downstream, avoiding duplicate irreversible side effects.
+        if (context.Instance.ResumePointStepOrder is { } resumeOrder && context.Directives.ResumeFromOrder is null)
+            context.Directives.RequestResumeFrom(resumeOrder + 1);
+
         var profile = context.Profile ?? PipelineExecutionProfile.ForManual();
         var state = CreateInitialState(context, profile);
 
