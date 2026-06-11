@@ -175,17 +175,22 @@ public class TransitionPipeline
                 }
             }
 
-            // Realize the continuation (Inline = in-process auto-chain).
-            // The strategy consumes the next-transition directive and returns the next
-            // workflow context to run, or null when the chain is complete.
+            // Realize the continuation. Inline = in-process auto-chain (sync); Enqueue =
+            // transition-per-job (the strategy persists the next transition to the outbox and
+            // returns null, ending the in-process loop — a separate job resumes the chain).
+            var continuationMode = context.EnqueueContinuations
+                ? ContinuationMode.Enqueue
+                : ContinuationMode.Inline;
+
             var continuationResult = await _continuationDispatcher.DispatchAsync(
-                ContinuationMode.Inline, context, cancellationToken);
+                continuationMode, context, cancellationToken);
             if (!continuationResult.IsSuccess)
                 return Result<TransitionExecutionContext>.Fail(continuationResult.Error);
 
             if (continuationResult.Value is null)
             {
-                // Chain complete — apply deferred status (inside lock, no re-acquire needed)
+                // No further in-process work (chain complete or continuation enqueued) —
+                // apply deferred status (inside lock, no re-acquire needed).
                 await ApplyResolvedStatusAsync(context, cancellationToken);
                 return Result<TransitionExecutionContext>.Ok(context);
             }
@@ -224,6 +229,7 @@ public class TransitionPipeline
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 
         context.Profile = _profileResolver.Resolve(workflowContext);
+        context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         return Result<TransitionExecutionContext>.Ok(context);
     }
 

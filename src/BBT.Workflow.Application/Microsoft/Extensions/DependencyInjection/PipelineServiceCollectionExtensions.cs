@@ -87,8 +87,10 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, FinalizeTransitionStep>();
         services.AddScoped<ITransitionStep, ResolveAvailableStep>();
 
-        // Continuation realization (Inline = in-process auto-chain; Enqueue added in a later spec)
+        // Continuation realization: Inline = in-process auto-chain (sync);
+        // Enqueue = transition-per-job via the transactional outbox.
         services.AddScoped<IContinuationStrategy, InlineContinuationStrategy>();
+        services.AddScoped<IContinuationStrategy, EnqueueContinuationStrategy>();
         services.AddScoped<ContinuationDispatcher>();
 
         // Pipeline

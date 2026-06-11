@@ -106,6 +106,14 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public PipelineExecutionProfile? Profile { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether the auto-chain continuation should be enqueued as a separate
+    /// background job (transition-per-job) instead of executed in-process. Set from the
+    /// originating <see cref="WorkflowExecutionContext"/>; selects the continuation strategy
+    /// (Enqueue vs Inline) in <c>TransitionPipeline</c>. Default false (Inline).
+    /// </summary>
+    public bool EnqueueContinuations { get; set; }
+
     // Telemetry & Headers & Temporary storage
     /// <summary>Gets the distributed tracing trace identifier.</summary>
     public string TraceId { get; init; } = default!;
