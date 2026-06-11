@@ -8,7 +8,7 @@ using Xunit;
 namespace BBT.Workflow.Execution.Transitions.Context;
 
 /// <summary>
-/// Unit tests for the <see cref="Continuations"/> value object and the
+/// Unit tests for the <see cref="ContinuationSet"/> value object and the
 /// <see cref="PipelineDirectives.ToContinuations"/> non-consuming projection.
 /// </summary>
 public class ContinuationsTests
@@ -16,11 +16,11 @@ public class ContinuationsTests
     [Fact]
     public void Empty_ShouldHaveNoWork()
     {
-        Continuations.Empty.HasWork.ShouldBeFalse();
-        Continuations.Empty.Next.ShouldBeNull();
-        Continuations.Empty.PostCommitJobs.ShouldBeEmpty();
-        Continuations.Empty.TerminalReached.ShouldBeFalse();
-        Continuations.Empty.Epilogue.ShouldBe(EpilogueMode.Run);
+        ContinuationSet.Empty.HasWork.ShouldBeFalse();
+        ContinuationSet.Empty.Next.ShouldBeNull();
+        ContinuationSet.Empty.PostCommitJobs.ShouldBeEmpty();
+        ContinuationSet.Empty.TerminalReached.ShouldBeFalse();
+        ContinuationSet.Empty.Epilogue.ShouldBe(EpilogueMode.Run);
     }
 
     [Fact]

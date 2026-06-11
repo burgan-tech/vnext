@@ -209,14 +209,14 @@ public sealed class PipelineDirectives
     }
 
     /// <summary>
-    /// Projects the current directive state into an immutable <see cref="Continuations"/>
+    /// Projects the current directive state into an immutable <see cref="ContinuationSet"/>
     /// snapshot. This is a pure read: it does NOT consume or clear any directive
     /// (next transition, post-commit jobs, resolved status, resume order remain intact).
     /// Post-commit jobs are snapshotted into a stable array so the returned value is
     /// unaffected by later mutations.
     /// </summary>
     /// <returns>An immutable snapshot of the pending continuation work.</returns>
-    public Continuations ToContinuations() =>
+    public ContinuationSet ToContinuations() =>
         new(
             NextTransition,
             _postCommitJobs.ToArray(),

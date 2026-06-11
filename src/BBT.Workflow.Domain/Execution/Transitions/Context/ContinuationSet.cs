@@ -23,7 +23,7 @@ namespace BBT.Workflow.Execution;
 /// <param name="ResumeFromOrder">Lifecycle order to resume execution from (subflow resume / replan), or null.</param>
 /// <param name="TerminalReached">Whether the pipeline reached a terminal state.</param>
 /// <param name="Epilogue">The epilogue execution mode (Run/DispatchOnly/Skip).</param>
-public sealed record Continuations(
+public sealed record ContinuationSet(
     NextTransitionRequest? Next,
     IReadOnlyList<IPostCommitJob> PostCommitJobs,
     InstanceStatus? ResolvedStatus,
@@ -34,7 +34,7 @@ public sealed record Continuations(
     /// <summary>
     /// An empty continuation set representing "nothing left to do".
     /// </summary>
-    public static readonly Continuations Empty =
+    public static readonly ContinuationSet Empty =
         new(null, Array.Empty<IPostCommitJob>(), null, null, false, EpilogueMode.Run);
 
     /// <summary>

@@ -14,5 +14,5 @@ namespace BBT.Workflow.Execution.Services;
 public sealed record TransitionCoreOutput(
     TransitionOutput Output,
     IReadOnlyList<DomainEventEnvelope> DeferredEvents,
-    Continuations Continuations);
+    ContinuationSet Continuations);
 
