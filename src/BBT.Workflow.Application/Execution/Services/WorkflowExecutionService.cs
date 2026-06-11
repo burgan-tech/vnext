@@ -75,9 +75,12 @@ public sealed class WorkflowExecutionService(
         if (!outputResult.IsSuccess)
             return Task.FromResult(Result<TransitionCoreOutput>.Fail(outputResult.Error));
 
+        // Snapshot continuation work as a pure read BEFORE consuming events.
+        // Behavior-preserving: nothing acts on this snapshot yet (see S3/S4).
+        var continuations = executionContext.Directives.ToContinuations();
         var deferredEvents = executionContext.Directives.ConsumeDeferredEvents();
         return Task.FromResult(
-            Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!, deferredEvents)));
+            Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!, deferredEvents, continuations)));
     }
 
     /// <summary>

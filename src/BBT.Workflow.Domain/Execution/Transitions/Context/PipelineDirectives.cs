@@ -189,6 +189,13 @@ public sealed class PipelineDirectives
     }
 
     /// <summary>
+    /// Gets a non-consuming, read-only view of the currently accumulated post-commit jobs.
+    /// Unlike <see cref="ConsumePostCommitJobs"/>, this does not clear the queue.
+    /// Used by <see cref="ToContinuations"/> to project the directives state.
+    /// </summary>
+    public IReadOnlyList<IPostCommitJob> PostCommitJobs => _postCommitJobs;
+
+    /// <summary>
     /// Consumes and clears all post-commit jobs.
     /// Called by the pipeline after transition completes to get jobs for execution outside the lock.
     /// </summary>
@@ -200,6 +207,23 @@ public sealed class PipelineDirectives
         _postCommitJobKeys.Clear();
         return copy;
     }
+
+    /// <summary>
+    /// Projects the current directive state into an immutable <see cref="Continuations"/>
+    /// snapshot. This is a pure read: it does NOT consume or clear any directive
+    /// (next transition, post-commit jobs, resolved status, resume order remain intact).
+    /// Post-commit jobs are snapshotted into a stable array so the returned value is
+    /// unaffected by later mutations.
+    /// </summary>
+    /// <returns>An immutable snapshot of the pending continuation work.</returns>
+    public Continuations ToContinuations() =>
+        new(
+            NextTransition,
+            _postCommitJobs.ToArray(),
+            ResolvedStatus,
+            ResumeFromOrder,
+            TerminalReached,
+            Epilogue);
 
     /// <summary>
     /// Gets a value indicating whether there are deferred events waiting to be published.
