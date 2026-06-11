@@ -1,6 +1,5 @@
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.Domain.Services;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
@@ -16,8 +15,7 @@ namespace BBT.Workflow.Instances;
 public class EfCoreInstanceTaskRepository(
     IDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
-    IDataSinkManager dataSinkManager,
-    ICurrentSchema currentSchema)
+    IDataSinkManager dataSinkManager)
     : EfCoreRepository<WorkflowDbContext, InstanceTask, Guid>(dbContext, serviceProvider),
         IInstanceTaskRepository
 {
@@ -140,26 +138,10 @@ public class EfCoreInstanceTaskRepository(
             })
             .ToListAsync(cancellationToken);
 
-        var schema = currentSchema.Name ?? "public";
-        var context = await GetDbContextAsync();
-        var durations = await context.Database
-            .SqlQueryRaw<TaskDurationAvg>(
-                $"SELECT \"TaskId\" AS \"TaskKey\", AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000) AS \"AvgMs\" " +
-                $"FROM \"{schema}\".\"InstanceTasks\" WHERE \"Duration\" IS NOT NULL GROUP BY \"TaskId\"")
-            .ToListAsync(cancellationToken);
-
-        var durMap = durations
-            .Where(d => d.TaskKey is not null)
-            .ToDictionary(d => d.TaskKey!, d => d.AvgMs, StringComparer.OrdinalIgnoreCase);
-
         return counts.Select(c => new TaskExecutionStat(
             c.TaskKey,
             c.ExecutionCount,
-            durMap.TryGetValue(c.TaskKey, out var avg) ? avg : 0d,
             c.SuccessCount,
             c.FailureCount)).ToList();
     }
 }
-
-/// <summary>SQL projection record for per-task average duration (monitor-only, additive).</summary>
-internal sealed record TaskDurationAvg(string? TaskKey, double AvgMs);

@@ -90,14 +90,11 @@ public sealed class MonitorTrend
     public long Last7d { get; set; }
 }
 
-/// <summary>P11 task execution statistics: per-task counts, durations, and success/failure rates.</summary>
+/// <summary>P11 task execution statistics: per-task counts and success/failure rates.</summary>
 public sealed class MonitorTaskStatsResponse
 {
     /// <summary>All tasks with their execution statistics.</summary>
     public List<MonitorTaskStatItem> ByTask { get; set; } = [];
-
-    /// <summary>Top 10 slowest tasks by average duration (descending).</summary>
-    public List<MonitorTaskStatItem> Slowest { get; set; } = [];
 }
 
 /// <summary>Execution statistics for a single task key.</summary>
@@ -108,9 +105,6 @@ public sealed class MonitorTaskStatItem
 
     /// <summary>Total number of executions.</summary>
     public int ExecutionCount { get; set; }
-
-    /// <summary>Average execution duration in milliseconds.</summary>
-    public double AvgDurationMs { get; set; }
 
     /// <summary>Ratio of successful executions to total (0–1).</summary>
     public double SuccessRate { get; set; }
@@ -153,9 +147,6 @@ public sealed class MonitorTransitionStatItem
 
     /// <summary>Total number of executions for this transition.</summary>
     public int Count { get; set; }
-
-    /// <summary>Average execution duration in milliseconds.</summary>
-    public double AvgDurationMs { get; set; }
 
     /// <summary>Ratio of completed executions to total (0–1).</summary>
     public double CompletionRate { get; set; }

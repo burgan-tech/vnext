@@ -1,6 +1,5 @@
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.Domain.Services;
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
@@ -12,8 +11,7 @@ namespace BBT.Workflow.Instances;
 public class EfCoreInstanceTransitionRepository(
     IDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
-    IDataSinkManager dataSinkManager,
-    ICurrentSchema currentSchema)
+    IDataSinkManager dataSinkManager)
     : EfCoreRepository<WorkflowDbContext, InstanceTransition, Guid>(dbContext, serviceProvider),
         IInstanceTransitionRepository
 {
@@ -121,25 +119,8 @@ public class EfCoreInstanceTransitionRepository(
             })
             .ToListAsync(cancellationToken);
 
-        var schema = currentSchema.Name ?? "public";
-        var durations = await context.Database
-            .SqlQueryRaw<TransitionDurationAvg>(
-                $"SELECT \"TransitionId\" AS \"TransitionKey\", \"FromState\", \"ToState\", " +
-                $"AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000) AS \"AvgMs\" " +
-                $"FROM \"{schema}\".\"InstanceTransitions\" WHERE \"Duration\" IS NOT NULL GROUP BY \"TransitionId\", \"FromState\", \"ToState\"")
-            .ToListAsync(cancellationToken);
-
-        var durMap = durations.ToDictionary(
-            d => $"{d.TransitionKey}|{d.FromState}|{d.ToState}",
-            d => d.AvgMs,
-            StringComparer.OrdinalIgnoreCase);
-
         return counts.Select(c => new TransitionExecutionStat(
             c.TransitionId, c.FromState, c.ToState, c.Count,
-            durMap.TryGetValue($"{c.TransitionId}|{c.FromState}|{c.ToState}", out var avg) ? avg : 0d,
             c.CompletedCount, c.ManualCount, c.AutomaticCount, c.ScheduledCount, c.EventCount)).ToList();
     }
 }
-
-/// <summary>SQL projection record for per-transition average duration (monitor-only, additive).</summary>
-internal sealed record TransitionDurationAvg(string? TransitionKey, string? FromState, string? ToState, double AvgMs);

@@ -125,15 +125,13 @@ public sealed class MonitorStatsService(
             {
                 TaskKey = s.TaskKey,
                 ExecutionCount = s.ExecutionCount,
-                AvgDurationMs = s.AvgDurationMs,
                 SuccessRate = StatsRateCalculator.Rate(s.SuccessCount, s.ExecutionCount),
                 FailureRate = StatsRateCalculator.Rate(s.FailureCount, s.ExecutionCount)
             }).ToList();
 
             return new MonitorTaskStatsResponse
             {
-                ByTask = items,
-                Slowest = items.OrderByDescending(i => i.AvgDurationMs).Take(10).ToList()
+                ByTask = items
             };
         }, cancellationToken);
     }
@@ -167,9 +165,6 @@ public sealed class MonitorStatsService(
                     {
                         TransitionKey = g.Key,
                         Count = g.Sum(x => x.Count),
-                        AvgDurationMs = g.Any(x => x.AvgDurationMs > 0)
-                            ? g.Where(x => x.AvgDurationMs > 0).Average(x => x.AvgDurationMs)
-                            : 0d,
                         CompletionRate = StatsRateCalculator.Rate(g.Sum(x => x.CompletedCount), g.Sum(x => x.Count)),
                         TriggerTypeBreakdown = new MonitorTriggerBreakdown
                         {
