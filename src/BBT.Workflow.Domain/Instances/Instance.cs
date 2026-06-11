@@ -126,6 +126,14 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public InstanceStatus Status { get; private set; }
 
     /// <summary>
+    /// Durable ownership token for an in-flight auto-chain. While set (and the instance is Busy),
+    /// only transitions carrying the matching token (the chain's own continuations) are admitted;
+    /// foreign transitions are rejected. Reserved transitions (cancel/timeout) are exempt.
+    /// Replaces a long-held distributed lock for chain ownership (transition-per-job). Null when idle.
+    /// </summary>
+    public Guid? ChainToken { get; private set; }
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -321,6 +329,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public void Complete(string domain)
     {
         Status = InstanceStatus.Completed;
+        ChainToken = null;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
@@ -366,6 +375,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public void Fault(string domain)
     {
         Status = InstanceStatus.Faulted;
+        ChainToken = null;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
@@ -515,6 +525,29 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Busy;
     }
 
+    /// <summary>
+    /// Begins an auto-chain: marks the instance Busy and stamps the durable ownership token.
+    /// No-op if the instance is already completed.
+    /// </summary>
+    /// <param name="token">The chain ownership token to stamp.</param>
+    public void BeginChain(Guid token)
+    {
+        if (IsCompleted)
+            return;
+
+        Status = InstanceStatus.Busy;
+        ChainToken = token;
+    }
+
+    /// <summary>
+    /// Returns whether the supplied token matches the instance's current chain ownership token.
+    /// </summary>
+    public bool MatchesChain(Guid token) => ChainToken.HasValue && ChainToken.Value == token;
+
+    /// <summary>
+    /// Clears the chain ownership token (chain complete / instance returning to a resting state).
+    /// </summary>
+    public void EndChain() => ChainToken = null;
 
     /// <summary>
     /// Sets the instance status to Active.
@@ -526,6 +559,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             return;
 
         Status = InstanceStatus.Active;
+        ChainToken = null;
     }
 
     /// <summary>

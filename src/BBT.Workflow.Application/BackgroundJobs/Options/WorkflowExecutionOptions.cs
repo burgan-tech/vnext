@@ -24,6 +24,19 @@ public sealed class WorkflowExecutionOptions
     /// next via the outbox. Default: false.
     /// </summary>
     public bool TransitionPerJob { get; set; }
+
+    /// <summary>
+    /// When enabled, the chain-token gate rejects foreign transitions that arrive while an
+    /// instance is Busy with an active chain token, unless they carry the matching token or are
+    /// reserved (cancel/timeout). Provides auto-chain atomicity without a chain-spanning lock.
+    /// Default: false (legacy "Busy blocks all except reserved").
+    /// </summary>
+    public bool StrictChainTokenGate { get; set; }
+
+    /// <summary>
+    /// Enables the stuck-Busy chain reaper (S7) sweep. Default: false.
+    /// </summary>
+    public bool EnableChainReaper { get; set; }
 }
 
 public sealed class TransitionJobFailurePolicyOptions

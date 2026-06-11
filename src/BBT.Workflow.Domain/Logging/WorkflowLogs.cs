@@ -116,6 +116,19 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when a foreign transition is rejected by the chain-token gate because the instance
+    /// is Busy with an active auto-chain owned by a different token.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10124,
+        Level = LogLevel.Warning,
+        Message = "Foreign transition {TransitionKey} rejected: instance {InstanceId} is Busy with an active chain (token mismatch)")]
+    public static partial void ForeignChainTransitionRejected(
+        this ILogger logger,
+        string transitionKey,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>

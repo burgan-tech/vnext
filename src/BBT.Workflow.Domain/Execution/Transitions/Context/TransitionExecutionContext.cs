@@ -114,6 +114,13 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public bool EnqueueContinuations { get; set; }
 
+    /// <summary>
+    /// Gets or sets the auto-chain ownership token for this execution (S6). Minted at SetBusy
+    /// for a fresh chain, or carried in from a continuation. Stamped on the instance via
+    /// <c>BeginChain</c> and propagated to subsequent continuations so the gate admits them.
+    /// </summary>
+    public Guid? ChainToken { get; set; }
+
     // Telemetry & Headers & Temporary storage
     /// <summary>Gets the distributed tracing trace identifier.</summary>
     public string TraceId { get; init; } = default!;

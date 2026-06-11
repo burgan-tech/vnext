@@ -58,7 +58,7 @@ public sealed class EnqueueContinuationStrategy(
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             ExecutionActor = ExecutionActor.System.ToString(),
-            ChainToken = null, // wired by the ChainToken ownership spec (S6)
+            ChainToken = current.ChainToken, // propagate chain ownership (S6)
             ChainDepth = current.ChainDepth + 1
         };
 

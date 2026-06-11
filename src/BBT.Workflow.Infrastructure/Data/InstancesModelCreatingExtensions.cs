@@ -62,6 +62,12 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
+            // Durable auto-chain ownership token (S6). Nullable; filtered by the chain-token gate.
+            b.Property(p => p.ChainToken);
+            b.HasIndex(p => p.ChainToken)
+                .HasDatabaseName("IX_Instances_ChainToken")
+                .HasFilter("\"ChainToken\" IS NOT NULL");
+
             b.Property(p => p.Incidents)
                 .HasColumnType("jsonb")
                 .HasConversion(

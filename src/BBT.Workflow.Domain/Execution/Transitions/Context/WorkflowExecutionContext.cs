@@ -68,6 +68,13 @@ public sealed class WorkflowExecutionContext
     /// </summary>
     public bool EnqueueContinuations { get; set; }
 
+    /// <summary>
+    /// Gets or sets the incoming auto-chain ownership token carried by a continuation (S6).
+    /// Null for a fresh request (a new token is minted at SetBusy); non-null when this execution
+    /// is the chain's own continuation, which the chain-token gate admits past a Busy instance.
+    /// </summary>
+    public Guid? ChainToken { get; set; }
+
     /// <summary>Gets or sets whether this transition was requested by an error boundary (e.g. Rollback/Notify). When true, state policy checks are bypassed so the transition can run from any state.</summary>
     public bool IsErrorBoundaryTransition { get; set; }
     

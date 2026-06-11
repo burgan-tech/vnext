@@ -230,6 +230,7 @@ public class TransitionPipeline
 
         context.Profile = _profileResolver.Resolve(workflowContext);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
+        context.ChainToken = workflowContext.ChainToken;
         return Result<TransitionExecutionContext>.Ok(context);
     }
 

@@ -264,7 +264,7 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            ChainToken = null, // wired by the ChainToken ownership spec (S6)
+            ChainToken = transContext.ChainToken, // propagate chain ownership (S6)
             ChainDepth = transContext.ChainDepth
         };
 

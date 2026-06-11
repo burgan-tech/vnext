@@ -67,7 +67,8 @@ internal sealed class TransitionContinuationRequestedEventHandler(
             ExecutionActor = actor,
             CallerSync = false,
             TraceParent = eventData.TraceParent,
-            TraceState = eventData.TraceState
+            TraceState = eventData.TraceState,
+            ChainToken = eventData.ChainToken
         };
 
         var fp = executionOptions.Value.FailurePolicy;
