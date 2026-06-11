@@ -2,10 +2,14 @@ using System.ComponentModel.DataAnnotations;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
+using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Domain.Shared;
+using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -27,6 +31,7 @@ public sealed class InstanceController(
     IInstanceCancellationService cancellationService,
     IChildSubflowCancellationService childSubflowCancellationService,
     IChildSubflowFaultService childSubflowFaultService,
+    ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway) : AetherControllerBase
 {
     /// <summary>
@@ -243,6 +248,51 @@ public sealed class InstanceController(
         var result = await childSubflowFaultService.FaultChildAsync(
             instance, domain, workflow, parentInstanceId, cancellationToken);
         return FromResult(result);
+    }
+
+    /// <summary>
+    /// Enqueues a (chained) transition as a background job. Internal endpoint the Inbox forwards
+    /// <c>TransitionContinuationRequested</c> events to when outbox continuations are enabled, so
+    /// the Dapr job is enqueued in the Orchestration process (never in the Inbox). Preserves the
+    /// chain token for the chain-ownership gate.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}/enqueue")]
+    public async Task<IActionResult> EnqueueTransitionAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromRoute] string transitionKey,
+        [FromBody] TransitionContinuationRequested continuation,
+        CancellationToken cancellationToken = default)
+    {
+        var actor = Enum.TryParse<ExecutionActor>(continuation.ExecutionActor, ignoreCase: true, out var parsed)
+            ? parsed
+            : ExecutionActor.System;
+
+        var payload = new TransitionJobPayload
+        {
+            JobName = continuation.JobName,
+            InstanceId = continuation.InstanceId,
+            TransitionKey = continuation.TransitionKey,
+            Domain = continuation.Domain,
+            Workflow = continuation.Flow,
+            Version = continuation.Version,
+            Data = continuation.Data,
+            InstanceKey = continuation.InstanceKey,
+            Tags = continuation.Tags,
+            Stage = continuation.Stage,
+            Headers = continuation.Headers,
+            RouteValues = continuation.RouteValues,
+            ExecutionActor = actor,
+            CallerSync = false,
+            TraceParent = continuation.TraceParent,
+            TraceState = continuation.TraceState,
+            ChainToken = continuation.ChainToken
+        };
+
+        await transitionJobEnqueuer.EnqueueAsync(payload, cancellationToken);
+        return Ok();
     }
 
     /// <summary>

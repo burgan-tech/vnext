@@ -1,35 +1,21 @@
-using BBT.Aether.BackgroundJob;
 using BBT.Aether.Events;
-using BBT.Aether.MultiSchema;
-using BBT.Aether.Uow;
-using BBT.Workflow.BackgroundJobs.Handlers;
-using BBT.Workflow.BackgroundJobs.Options;
-using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.Shared;
-using Dapr.Jobs.Models;
-using Microsoft.Extensions.Options;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
 /// <summary>
-/// Handles <see cref="TransitionContinuationRequested"/> by enqueuing the actual Dapr
-/// transition job. The event was committed atomically with the durable job intent via the
-/// transactional outbox, so this handler is the distributed, at-least-once delivery of the
-/// external Dapr enqueue (closing the dual-write gap of a pre-commit enqueue).
+/// Forwards <see cref="TransitionContinuationRequested"/> (published via the transactional outbox
+/// when <c>UseOutboxContinuations</c> is ON) to the Orchestration <c>transitions/{key}/enqueue</c>
+/// internal endpoint via Dapr service invocation. Thin relay: the Dapr <c>flow.transition</c> job
+/// is enqueued in the Orchestration process, never in the Inbox. Idempotency is enforced downstream
+/// by the active-<c>InstanceJob</c> guard and the chain token.
 /// </summary>
-/// <remarks>
-/// Idempotency: at-least-once delivery may invoke this more than once; the downstream
-/// <c>InstanceJob</c> active-job guard (and, later, the chain token) prevents duplicate
-/// transition execution. Draft (S4) — not compiled; verify Dapr enqueue + UoW semantics in CI.
-/// </remarks>
 internal sealed class TransitionContinuationRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
-    IOptions<WorkflowExecutionOptions> executionOptions,
-    ICurrentSchema currentSchema,
-    IServiceScopeFactory scopeFactory,
+    IOrchestrationForwarder forwarder,
     ILogger<TransitionContinuationRequestedEventHandler> logger)
     : IEventHandler<TransitionContinuationRequested>
 {
@@ -49,72 +35,13 @@ internal sealed class TransitionContinuationRequestedEventHandler(
         logger.TransitionContinuationReceived(
             eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
 
-        var actor = Enum.TryParse<ExecutionActor>(eventData.ExecutionActor, ignoreCase: true, out var parsed)
-            ? parsed
-            : ExecutionActor.System;
+        var route =
+            $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/transitions/{eventData.TransitionKey}/enqueue";
 
-        var payload = new TransitionJobPayload
-        {
-            JobName = eventData.JobName,
-            InstanceId = eventData.InstanceId,
-            TransitionKey = eventData.TransitionKey,
-            Domain = eventData.Domain,
-            Workflow = eventData.Flow,
-            Version = eventData.Version,
-            Data = eventData.Data,
-            InstanceKey = eventData.InstanceKey,
-            Tags = eventData.Tags,
-            Stage = eventData.Stage,
-            Headers = eventData.Headers,
-            RouteValues = eventData.RouteValues,
-            ExecutionActor = actor,
-            CallerSync = false,
-            TraceParent = eventData.TraceParent,
-            TraceState = eventData.TraceState,
-            ChainToken = eventData.ChainToken
-        };
+        await forwarder.ForwardAsync(HttpMethod.Post, route, eventData,
+            eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
 
-        var fp = executionOptions.Value.FailurePolicy;
-        var failurePolicy = JobScheduleFailurePolicy.Constant(
-            TimeSpan.FromSeconds(fp.IntervalSeconds),
-            (uint)fp.MaxRetries);
-
-        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow.AddMilliseconds(5)).ExpressionValue;
-
-        var metadata = new Dictionary<string, object>
-        {
-            ["domain"] = eventData.Domain,
-            ["flowName"] = eventData.Flow,
-            ["instanceId"] = eventData.InstanceId.ToString()
-        };
-
-        try
-        {
-            using (currentSchema.Use(eventData.Flow))
-            {
-                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
-                    async (sp, ct) =>
-                    {
-                        var backgroundJobService = sp.GetRequiredService<IBackgroundJobService>();
-                        await backgroundJobService.EnqueueAsync(
-                            TransitionJobHandler.HandlerName,
-                            eventData.JobName,
-                            payload,
-                            schedule,
-                            metadata,
-                            failurePolicy,
-                            ct);
-                    }, cancellationToken);
-            }
-            
-            logger.TransitionContinuationEnqueued(
-                eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
-        }
-        catch (Exception ex)
-        {
-            logger.TransitionContinuationEnqueueFailed(
-                eventData.InstanceId, eventData.TransitionKey, eventData.JobName, ex.Message);
-            throw; // let the Inbox retry (at-least-once)
-        }
+        logger.TransitionContinuationEnqueued(
+            eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
     }
 }

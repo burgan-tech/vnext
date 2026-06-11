@@ -43,7 +43,8 @@ public static class InboxWorkerApplicationBuilderExtensions
         app.UseHttpMetrics();
         app.MapMetrics(); 
         app.MapControllers();
-        app.UseDaprScheduledJobHandler();
+        // NOTE: UseDaprScheduledJobHandler removed — the Inbox registers no background-job handlers
+        // and must not dispatch Dapr scheduled jobs (that allowed transitions to run in-process here).
         app.MapAppHealthChecks();
         return app;
     }

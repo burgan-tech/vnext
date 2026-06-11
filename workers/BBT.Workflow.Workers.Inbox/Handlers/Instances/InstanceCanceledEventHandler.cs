@@ -1,27 +1,21 @@
-using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
-using BBT.Aether.MultiSchema;
-using BBT.Aether.Uow;
-using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
 /// <summary>
-/// Handles InstanceCanceledEvent to propagate cancellation to child flows and cancel active jobs.
-/// This handler delegates the actual cancellation logic to IInstanceCancellationService.
+/// Forwards <see cref="InstanceCanceledEvent"/> to the Orchestration <c>cancel-cleanup</c>
+/// internal endpoint via Dapr service invocation. Thin relay: Orchestration's
+/// <c>IInstanceCancellationService</c> cancels active jobs and propagates cancellation.
 /// </summary>
 internal sealed class InstanceCanceledEventHandler(
-    ICurrentSchema currentSchema,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IServiceScopeFactory scopeFactory,
+    IOrchestrationForwarder forwarder,
     ILogger<InstanceCanceledEventHandler> logger) : IEventHandler<InstanceCanceledEvent>
 {
-    /// <summary>
-    /// Handles the InstanceCanceledEvent by delegating cancellation cleanup to the service.
-    /// </summary>
     public async Task HandleAsync(CloudEventEnvelope<InstanceCanceledEvent> envelope,
         CancellationToken cancellationToken)
     {
@@ -45,37 +39,11 @@ internal sealed class InstanceCanceledEventHandler(
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
         }))
         {
-            logger.InstanceCanceledEventReceived(
-                eventData.InstanceId,
-                eventData.Flow);
+            logger.InstanceCanceledEventReceived(eventData.InstanceId, eventData.Flow);
 
-            using (currentSchema.Use(eventData.Flow))
-            {
-                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
-                    async (sp, ct) =>
-                {
-                    var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                    var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
-
-                    await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-                    {
-                        Scope = UnitOfWorkScopeOption.RequiresNew
-                    }, ct);
-
-                    var result = await cancellationService.ProcessCancellationAsync(
-                        eventData.InstanceId,
-                        ct);
-
-                    await uow.CommitAsync(ct);
-
-                    if (!result.IsSuccess)
-                    {
-                        logger.InstanceCanceledProcessingFailed(
-                            new InvalidOperationException(result.Error.Message),
-                            eventData.InstanceId);
-                    }
-                }, cancellationToken);
-            }
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/cancel-cleanup";
+            await forwarder.ForwardAsync(HttpMethod.Post, route, new { },
+                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
         }
     }
 }

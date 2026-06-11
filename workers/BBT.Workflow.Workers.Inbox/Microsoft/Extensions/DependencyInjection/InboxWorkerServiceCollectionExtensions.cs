@@ -1,4 +1,3 @@
-using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Inbox.Forwarding;
 using BBT.Workflow.Workers.Inbox.HostedServices;
@@ -32,7 +31,10 @@ public static class InboxWorkerServiceCollectionExtensions
                 options.PrefixEnvironmentToTopic = true;
                 options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
             })
-            .AddWorkflowEventHooks()
+            // NOTE: AddWorkflowEventHooks / AddTransitionLockScope / AddBackgroundJob removed —
+            // the Inbox is a thin forwarder: it performs NO domain processing and MUST NOT register
+            // the flow.transition job handler (that ran transitions in the Inbox process). Transition
+            // jobs are enqueued/executed only in the Orchestration host now.
             .AddDomainEventsInfrastructure()
             .AddInfrastructureRuntimeServices()
             .AddDbContext(configuration)
@@ -40,8 +42,6 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddTelemetry(configuration)
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
-            .AddTransitionLockScope()
-            .AddBackgroundJob()
             .AddRedis()
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
