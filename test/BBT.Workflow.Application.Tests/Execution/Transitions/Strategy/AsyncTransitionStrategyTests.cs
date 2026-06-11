@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.DistributedLock;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
@@ -39,6 +40,7 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<ITransitionValidationService> _mockValidationService;
     private readonly Mock<IUnitOfWorkManager> _uowManager;
     private readonly Mock<IInstanceCommandGateway> _mockInstanceCommandGateway;
+    private readonly Mock<IDistributedEventBus> _mockEventBus;
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger;
     private readonly AsyncTransitionStrategy _strategy;
 
@@ -53,6 +55,7 @@ public class AsyncTransitionStrategyTests
         _mockValidationService = new Mock<ITransitionValidationService>();
         _uowManager = new Mock<IUnitOfWorkManager>();
         _mockInstanceCommandGateway = new Mock<IInstanceCommandGateway>();
+        _mockEventBus = new Mock<IDistributedEventBus>();
         _mockLogger = new Mock<ILogger<AsyncTransitionStrategy>>();
 
         var executionOptions = Options.Create(new WorkflowExecutionOptions());
@@ -84,6 +87,7 @@ public class AsyncTransitionStrategyTests
             _mockValidationService.Object,
             _uowManager.Object,
             _mockInstanceCommandGateway.Object,
+            _mockEventBus.Object,
             executionOptions,
             _mockLogger.Object);
     }

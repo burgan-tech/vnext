@@ -63,6 +63,59 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when a transition continuation event is received by the Inbox handler.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10120,
+        Level = LogLevel.Information,
+        Message = "Transition continuation received for instance {InstanceId} transition {TransitionKey} (job {JobName})")]
+    public static partial void TransitionContinuationReceived(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName);
+
+    /// <summary>
+    /// Logs when a transition continuation event is ignored due to a domain mismatch.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10121,
+        Level = LogLevel.Debug,
+        Message = "Transition continuation ignored: event domain {EventDomain} does not match runtime domain {RuntimeDomain} (instance {InstanceId})")]
+    public static partial void TransitionContinuationIgnoredDomainMismatch(
+        this ILogger logger,
+        string eventDomain,
+        string runtimeDomain,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a transition continuation has been enqueued as a Dapr job by the Inbox handler.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10122,
+        Level = LogLevel.Information,
+        Message = "Transition continuation enqueued for instance {InstanceId} transition {TransitionKey} (job {JobName})")]
+    public static partial void TransitionContinuationEnqueued(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName);
+
+    /// <summary>
+    /// Logs when enqueuing a transition continuation job fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10123,
+        Level = LogLevel.Error,
+        Message = "Transition continuation enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}): {Reason}")]
+    public static partial void TransitionContinuationEnqueueFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName,
+        string reason);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>
