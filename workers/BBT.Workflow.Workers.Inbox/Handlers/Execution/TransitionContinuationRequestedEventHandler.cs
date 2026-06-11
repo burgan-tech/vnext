@@ -1,5 +1,7 @@
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Events;
+using BBT.Aether.MultiSchema;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -25,8 +27,9 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 /// </remarks>
 internal sealed class TransitionContinuationRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
-    IBackgroundJobService backgroundJobService,
     IOptions<WorkflowExecutionOptions> executionOptions,
+    ICurrentSchema currentSchema,
+    IServiceScopeFactory scopeFactory,
     ILogger<TransitionContinuationRequestedEventHandler> logger)
     : IEventHandler<TransitionContinuationRequested>
 {
@@ -87,15 +90,23 @@ internal sealed class TransitionContinuationRequestedEventHandler(
 
         try
         {
-            await backgroundJobService.EnqueueAsync(
-                TransitionJobHandler.HandlerName,
-                eventData.JobName,
-                payload,
-                schedule,
-                metadata,
-                failurePolicy,
-                cancellationToken);
-
+            using (currentSchema.Use(eventData.Flow))
+            {
+                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
+                    async (sp, ct) =>
+                    {
+                        var backgroundJobService = sp.GetRequiredService<IBackgroundJobService>();
+                        await backgroundJobService.EnqueueAsync(
+                            TransitionJobHandler.HandlerName,
+                            eventData.JobName,
+                            payload,
+                            schedule,
+                            metadata,
+                            failurePolicy,
+                            ct);
+                    }, cancellationToken);
+            }
+            
             logger.TransitionContinuationEnqueued(
                 eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
         }
