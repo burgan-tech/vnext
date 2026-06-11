@@ -1172,22 +1172,20 @@ public sealed class EfCoreInstanceRepository(
     public async Task<List<Instance>> GetStuckBusyChainsAsync(
         DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default)
     {
-        var schema = SanitizeIdentifier(currentSchema.Name ?? string.Empty);
-        var busyCode = InstanceStatus.Busy.Code;
         var limit = maxCount <= 0 ? 100 : maxCount;
 
         var dbSet = await GetDbSetAsync();
 
-        // Tracked (no AsNoTracking): the reaper faults / updates returned instances.
+        // Schema is resolved by the schema-aware DbContext from the ambient ICurrentSchema,
+        // established by the caller (ChainReaperHostedService via ICurrentSchema.Use(flowKey)).
+        // Tracked (no AsNoTracking): the reaper faults / updates the returned instances.
         return await dbSet
-            .FromSqlRaw(
-                "SELECT * FROM \"" + schema + "\".\"Instances\""
-                + " WHERE \"Status\" = {0}"
-                + " AND \"ChainToken\" IS NOT NULL"
-                + " AND \"ChainHeartbeatAt\" < {1}"
-                + " ORDER BY \"ChainHeartbeatAt\" ASC"
-                + " LIMIT " + limit,
-                busyCode, olderThanUtc)
+            .Where(i => i.Status == InstanceStatus.Busy
+                && i.ChainToken != null
+                && i.ChainHeartbeatAt != null
+                && i.ChainHeartbeatAt < olderThanUtc)
+            .OrderBy(i => i.ChainHeartbeatAt)
+            .Take(limit)
             .ToListAsync(cancellationToken);
     }
 
