@@ -1,5 +1,6 @@
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 using BBT.Workflow.Workers.Inbox.HostedServices;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -47,7 +48,10 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddHeaderService()
             .AddHostedServices()
             .AddAppHealthChecks();
-        
+
+        // Inbox = thin forwarder: deliver events to Orchestration via Dapr service invocation.
+        services.AddScoped<IOrchestrationForwarder, DaprOrchestrationForwarder>();
+
         return services;
     }
     

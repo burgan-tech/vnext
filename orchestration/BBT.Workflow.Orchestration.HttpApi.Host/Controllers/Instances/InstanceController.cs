@@ -24,6 +24,9 @@ public sealed class InstanceController(
     ISubflowCompletionService subflowCompletionService,
     ISubflowStateService subflowStateService,
     ISubflowFaultService subflowFaultService,
+    IInstanceCancellationService cancellationService,
+    IChildSubflowCancellationService childSubflowCancellationService,
+    IChildSubflowFaultService childSubflowFaultService,
     IInstanceCommandGateway instanceCommandGateway) : AetherControllerBase
 {
     /// <summary>
@@ -187,6 +190,58 @@ public sealed class InstanceController(
             },
             cancellationToken);
 
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Cancels scheduled jobs when an instance is canceled/completed/faulted.
+    /// Internal endpoint the Inbox forwards canceled/completed-cleanup/faulted-cleanup events to.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/cancel-cleanup")]
+    public async Task<IActionResult> CancelCleanupAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await cancellationService.ProcessCancellationAsync(instance, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Cancels a child subflow on request from its parent.
+    /// Internal endpoint the Inbox forwards child-subflow-cancel events to.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/child-cancel")]
+    public async Task<IActionResult> ChildCancelAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await childSubflowCancellationService.CancelChildSubflowAsync(
+            instance, domain, workflow, version, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Faults a child subflow on request from its parent.
+    /// Internal endpoint the Inbox forwards child-subflow-fault events to.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/child-fault")]
+    public async Task<IActionResult> ChildFaultAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] Guid parentInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await childSubflowFaultService.FaultChildAsync(
+            instance, domain, workflow, parentInstanceId, cancellationToken);
         return FromResult(result);
     }
 
