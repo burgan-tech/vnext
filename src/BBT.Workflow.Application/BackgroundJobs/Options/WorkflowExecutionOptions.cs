@@ -37,6 +37,15 @@ public sealed class WorkflowExecutionOptions
     /// Enables the stuck-Busy chain reaper (S7) sweep. Default: false.
     /// </summary>
     public bool EnableChainReaper { get; set; }
+
+    /// <summary>
+    /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
+    /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
+    /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process
+    /// routing of ForwardToSubflowJob is pending compiler-in-the-loop work; the reload-by-id isolation
+    /// fix in the resume/revert path is already applied.
+    /// </summary>
+    public bool InProcessSameDomainForwarding { get; set; }
 }
 
 public sealed class TransitionJobFailurePolicyOptions
