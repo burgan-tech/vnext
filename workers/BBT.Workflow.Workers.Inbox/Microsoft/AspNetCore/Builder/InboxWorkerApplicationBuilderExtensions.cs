@@ -39,7 +39,9 @@ public static class InboxWorkerApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
-        app.UseWorkflowHttpMetrics();
+        // NOTE: UseWorkflowHttpMetrics removed — its HttpMetricsMiddleware needs IWorkflowMetrics,
+        // which lived in the (now-removed) Infrastructure module. Generic Prometheus HTTP metrics
+        // below are sufficient for the thin forwarder.
         app.UseHttpMetrics();
         app.MapMetrics(); 
         app.MapControllers();
