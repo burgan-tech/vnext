@@ -1191,6 +1191,24 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // Flow definitions are stored as instances in the sys_flows schema; switch to it for this
+        // read only so a background sweep (no request scope) can enumerate the per-flow schemas.
+        // Mirrors the discovery in SchemaMigrationRunner.
+        using (currentSchema.Use(RuntimeSysSchemaInfo.Flows))
+        {
+            var dbSet = await GetDbSetAsync();
+            return await dbSet
+                .AsNoTracking()
+                .Where(i => i.Key != null)
+                .Select(i => i.Key!)
+                .Distinct()
+                .ToListAsync(cancellationToken);
+        }
+    }
+
     private static string SanitizeIdentifier(string identifier)
     {
         return identifier.Replace("\"", "", StringComparison.Ordinal);

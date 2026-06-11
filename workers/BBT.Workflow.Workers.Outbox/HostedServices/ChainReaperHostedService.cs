@@ -1,5 +1,7 @@
+using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
+using BBT.Workflow.Instances;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Workers.Outbox.HostedServices;
@@ -10,9 +12,13 @@ namespace BBT.Workflow.Workers.Outbox.HostedServices;
 /// Gated by <c>WorkflowExecutionOptions.EnableChainReaper</c>.
 /// </summary>
 /// <remarks>
-/// Draft (S7) — not compiled. Multi-schema gap: this sweeps the worker's current schema/domain
-/// scope only; a full deployment must iterate tenant schemas (e.g. resolve schemas and run a
-/// sweep per schema scope). Interval is fixed here; promote to options if needed.
+/// Multi-schema: vNext creates one database schema per loaded flow at runtime, and instances
+/// live in those per-flow schemas — not in any single ambient/default schema. A hosted service
+/// has no request-scoped <see cref="ICurrentSchema"/>, so this worker first discovers all flow
+/// keys from <c>sys_flows</c> and then runs the reaper once per flow schema, each in its own DI
+/// scope with the schema established via <c>ICurrentSchema.Use(flowKey)</c> (mirrors
+/// <c>SchemaMigrationRunner</c> / <c>MultiSchemaMigrator</c>). A fresh scope per schema avoids
+/// change-tracker bleed across schemas. Interval is fixed here; promote to options if needed.
 /// </remarks>
 public sealed class ChainReaperHostedService(
     IServiceScopeFactory scopeFactory,
@@ -34,9 +40,7 @@ public sealed class ChainReaperHostedService(
             {
                 try
                 {
-                    await using var scope = scopeFactory.CreateAsyncScope();
-                    var reaper = scope.ServiceProvider.GetRequiredService<IChainReaperService>();
-                    await reaper.SweepAsync(stoppingToken);
+                    await SweepAllFlowSchemasAsync(stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -59,5 +63,48 @@ public sealed class ChainReaperHostedService(
         }
 
         logger.LogInformation("Chain Reaper Worker stopped");
+    }
+
+    /// <summary>
+    /// Discovers every flow key from <c>sys_flows</c> and runs the reaper once per flow schema,
+    /// each in its own scope with the schema established. One bad schema (e.g. not yet migrated
+    /// with the chain-token columns) is logged and skipped so it cannot abort the whole sweep.
+    /// </summary>
+    private async Task SweepAllFlowSchemasAsync(CancellationToken stoppingToken)
+    {
+        // 1) Discover all flow keys (own scope; the repository switches to sys_flows internally).
+        IReadOnlyList<string> flowKeys;
+        await using (var discoveryScope = scopeFactory.CreateAsyncScope())
+        {
+            var instanceRepository = discoveryScope.ServiceProvider.GetRequiredService<IInstanceRepository>();
+            flowKeys = await instanceRepository.GetActiveFlowKeysAsync(stoppingToken);
+        }
+
+        // 2) Sweep each flow schema in its own scope, with the per-flow schema established so the
+        //    DI-scoped repositories/DbContext resolve the correct schema for that flow.
+        foreach (var flowKey in flowKeys)
+        {
+            stoppingToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await using var scope = scopeFactory.CreateAsyncScope();
+                var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+
+                using (currentSchema.Use(flowKey))
+                {
+                    var reaper = scope.ServiceProvider.GetRequiredService<IChainReaperService>();
+                    await reaper.SweepAsync(stoppingToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Chain reaper sweep failed for flow schema {FlowKey}", flowKey);
+            }
+        }
     }
 }

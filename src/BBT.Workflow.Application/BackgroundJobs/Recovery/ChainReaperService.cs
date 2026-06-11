@@ -10,9 +10,12 @@ namespace BBT.Workflow.BackgroundJobs.Recovery;
 
 /// <inheritdoc cref="IChainReaperService" />
 /// <remarks>
-/// Draft (S7) — not compiled. Operates within the current schema scope; the hosting sweep must
-/// establish the schema per tenant. Re-enqueue of a recoverable continuation is intentionally
-/// NOT attempted here (conservative): a stuck chain with no live job is faulted.
+/// Operates within the CURRENT schema only — one sweep == one flow schema. The hosting
+/// <c>ChainReaperHostedService</c> enumerates all flow schemas from <c>sys_flows</c> and invokes
+/// this once per schema with <c>ICurrentSchema.Use(flowKey)</c> already established, so all
+/// repository queries here resolve to that flow's schema. Re-enqueue of a recoverable
+/// continuation is intentionally NOT attempted here (conservative): a stuck chain with no live
+/// job is faulted.
 /// </remarks>
 public sealed class ChainReaperService(
     IUnitOfWorkManager uowManager,
