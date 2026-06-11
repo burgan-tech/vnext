@@ -30,34 +30,6 @@ public sealed class EfCoreInstanceRepository(
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
 {
-    #region Compiled Queries
-
-    private static readonly Func<WorkflowDbContext, string, Guid, Task<bool>>
-        AnyActiveByKeyCompiledQuery = EF.CompileAsyncQuery(
-            (WorkflowDbContext ctx, string key, Guid excludeId) =>
-                ctx.Instances.Any(
-                    i => i.Key == key
-                         && i.Id != excludeId
-                         && i.Status == InstanceStatus.Active));
-
-    private static readonly Func<WorkflowDbContext, string, string, IAsyncEnumerable<InstanceAndDataModel>>
-        FindActiveDataExactCompiledQuery = EF.CompileAsyncQuery(
-            (WorkflowDbContext ctx, string key, string version) =>
-                ctx.Instances
-                    .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
-                    .Join(ctx.InstancesData,
-                        i => i.Id,
-                        d => d.InstanceId,
-                        (i, d) => new { Instance = i, Data = d })
-                    .Where(x => x.Data.Version == version)
-                    .Select(x => new InstanceAndDataModel
-                    {
-                        Instance = x.Instance,
-                        InstanceData = x.Data
-                    }));
-
-    #endregion
-
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
         // Loads the full InstanceData history so that Instance.AddData can perform
@@ -173,6 +145,23 @@ public sealed class EfCoreInstanceRepository(
                 cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindActiveByKeyAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        var query = (await WithDetailsAsync())
+            .AsSplitQuery();
+
+        // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
+        // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
+        // result deterministic even if legacy data left more than one live row for a key.
+        return await query
+            .Where(i => i.Key == key
+                        && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy))
+            .OrderByDescending(i => i.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
@@ -275,15 +264,23 @@ public sealed class EfCoreInstanceRepository(
     {
         var context = await GetDbContextAsync();
 
-        // If full version → exact match via compiled query (avoids expression tree re-compilation)
+        // If full version → exact match
         if (InstanceDataVersionComparer.IsFullVersion(version))
         {
-            await foreach (var item in FindActiveDataExactCompiledQuery(context, key, version))
-            {
-                return item;
-            }
-
-            return null;
+            return await context.Instances
+                .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+                .Join(context.InstancesData,
+                    i => i.Id,
+                    d => d.InstanceId,
+                    (i, d) => new { Instance = i, Data = d })
+                .Where(x => x.Data.Version == version)
+                .Select(x => new InstanceAndDataModel
+                {
+                    Instance = x.Instance,
+                    InstanceData = x.Data
+                })
+                .AsNoTracking()
+                .FirstOrDefaultAsync(cancellationToken);
         }
 
         // For artifact or partial version → load all matching versions and use smart matching
@@ -1034,7 +1031,11 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
-        return await AnyActiveByKeyCompiledQuery(context, key, excludeInstanceId);
+        return await context.Instances.AnyAsync(
+            i => i.Key == key
+                 && i.Id != excludeInstanceId
+                 && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy),
+            cancellationToken);
     }
 
     /// <inheritdoc />

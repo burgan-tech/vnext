@@ -15,6 +15,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
+    /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
+    /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,
+    /// which matches any row regardless of status.
+    /// </summary>
+    Task<Instance?> FindActiveByKeyAsync(string key,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
     /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
     /// </summary>
