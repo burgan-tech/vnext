@@ -225,9 +225,73 @@ public sealed class MonitorComponentQueryService(
         return Result<List<T>>.Ok(latest);
     }
 
+    /// <inheritdoc />
+    public async Task<Result<MonitorComponentStatsResponse>> GetComponentStatsAsync(
+        MonitorGetComponentStatsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var flows      = await CountTypeAsync<Definitions.Workflow>(input.Domain, ct => domainCacheContext.Workflows.GetAllByDomainAsync(input.Domain, ct),   cancellationToken);
+        if (!flows.IsSuccess)      return Result<MonitorComponentStatsResponse>.Fail(flows.Error);
+
+        var tasks      = await CountTypeAsync<WorkflowTask>(input.Domain,          ct => domainCacheContext.Tasks.GetAllByDomainAsync(input.Domain, ct),      cancellationToken);
+        if (!tasks.IsSuccess)      return Result<MonitorComponentStatsResponse>.Fail(tasks.Error);
+
+        var schemas    = await CountTypeAsync<SchemaDefinition>(input.Domain,      ct => domainCacheContext.Schemas.GetAllByDomainAsync(input.Domain, ct),    cancellationToken);
+        if (!schemas.IsSuccess)    return Result<MonitorComponentStatsResponse>.Fail(schemas.Error);
+
+        var views      = await CountTypeAsync<View>(input.Domain,                  ct => domainCacheContext.Views.GetAllByDomainAsync(input.Domain, ct),      cancellationToken);
+        if (!views.IsSuccess)      return Result<MonitorComponentStatsResponse>.Fail(views.Error);
+
+        var functions  = await CountTypeAsync<Function>(input.Domain,              ct => domainCacheContext.Functions.GetAllByDomainAsync(input.Domain, ct),  cancellationToken);
+        if (!functions.IsSuccess)  return Result<MonitorComponentStatsResponse>.Fail(functions.Error);
+
+        var extensions = await CountTypeAsync<Extension>(input.Domain,             ct => domainCacheContext.Extensions.GetAllByDomainAsync(input.Domain, ct), cancellationToken);
+        if (!extensions.IsSuccess) return Result<MonitorComponentStatsResponse>.Fail(extensions.Error);
+
+        return Result<MonitorComponentStatsResponse>.Ok(new MonitorComponentStatsResponse
+        {
+            Flows      = flows.Value,
+            Tasks      = tasks.Value,
+            Schemas    = schemas.Value,
+            Views      = views.Value,
+            Functions  = functions.Value,
+            Extensions = extensions.Value,
+        });
+    }
+
+    private async Task<Result<int>> CountTypeAsync<T>(
+        string domain,
+        Func<CancellationToken, Task<Result<List<T>>>> getSnapshotAllByDomain,
+        CancellationToken cancellationToken)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var snapResult = await getSnapshotAllByDomain(cancellationToken);
+        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
+            return Result<int>.Ok(snapResult.Value.Count);
+
+        var loadResult = await LoadLatestPerKeyFromRuntimeAndWarmCacheAsync<T>(domain, cancellationToken);
+        if (!loadResult.IsSuccess)
+            return Result<int>.Fail(loadResult.Error);
+
+        return Result<int>.Ok(loadResult.Value!.Count);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorDependencyResponse>> GetWorkflowDependenciesAsync(
+        string domain, string workflow, string? version, CancellationToken cancellationToken = default)
+    {
+        var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, version, cancellationToken);
+        if (!flowResult.IsSuccess || flowResult.Value is not { } flow)
+            return Result<MonitorDependencyResponse>.Fail(
+                Error.NotFound("workflow.notFound", $"Workflow '{workflow}' definition not found."));
+
+        return Result<MonitorDependencyResponse>.Ok(DependencyExtractor.Extract(flow));
+    }
+
     private static JsonElement Serialize<T>(T value) where T : class
     {
         var json = JsonSerializer.Serialize(value, SerializerOptions);
-        return JsonDocument.Parse(json).RootElement;
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
     }
 }

@@ -30,7 +30,9 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
     }
 
     /// <summary>
-    /// Returns status-based instance counters across the entire domain (best-effort; uses public schema).
+    /// Returns status-based instance counters aggregated across all workflows in the domain.
+    /// Workflow list is resolved from cache (snapshot) then falls back to the runtime backend.
+    /// Each workflow schema is scanned in parallel and the counts are summed.
     /// </summary>
     /// <response code="200">Counters returned successfully</response>
     [HttpGet("{domain}/stats/instances")]

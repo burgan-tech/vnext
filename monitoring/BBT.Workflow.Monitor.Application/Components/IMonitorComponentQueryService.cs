@@ -19,4 +19,21 @@ public interface IMonitorComponentQueryService
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// Returns per-type component counts (flows, tasks, schemas, views, functions, extensions)
+    /// for the given domain. Snapshot first; falls back to runtime DB load and cache warm if snapshot is empty.
+    /// </summary>
+    Task<Result<MonitorComponentStatsResponse>> GetComponentStatsAsync(
+        MonitorGetComponentStatsInput input,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Returns all component dependencies of a workflow definition (tasks, schemas, views,
+    /// functions, extensions, sub-flows) with their reference site in the definition.
+    /// </summary>
+    Task<Result<MonitorDependencyResponse>> GetWorkflowDependenciesAsync(
+        string domain, string workflow, string? version,
+        CancellationToken cancellationToken = default);
 }

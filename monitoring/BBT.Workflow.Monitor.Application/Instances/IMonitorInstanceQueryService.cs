@@ -70,4 +70,12 @@ public interface IMonitorInstanceQueryService
     Task<Result<MonitorInstanceViewResponse?>> GetInstanceViewAsync(
         MonitorGetInstanceViewInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reverse navigates from a sub-flow instance to its parent (P6).
+    /// Returns Parent = null for a root (top-level) instance.
+    /// </summary>
+    Task<Result<MonitorParentResponse>> GetInstanceParentAsync(
+        MonitorGetParentInput input,
+        CancellationToken cancellationToken = default);
 }

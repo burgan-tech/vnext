@@ -431,3 +431,32 @@ public sealed class MonitorInstanceTaskResponse
     /// <summary>Response payload received from the task.</summary>
     public JsonElement? Response { get; set; }
 }
+
+/// <summary>P6 — parent navigation result; Parent is null for a root instance.</summary>
+public sealed class MonitorParentResponse
+{
+    /// <summary>The parent instance; null if this is a root (top-level) instance.</summary>
+    public MonitorParentItem? Parent { get; set; }
+}
+
+/// <summary>Minimal parent instance identification.</summary>
+public sealed class MonitorParentItem
+{
+    /// <summary>GUID of the parent instance.</summary>
+    public Guid ParentInstanceId { get; set; }
+
+    /// <summary>Business key of the parent instance.</summary>
+    public string? Key { get; set; }
+
+    /// <summary>Workflow key of the parent instance.</summary>
+    public string? Flow { get; set; }
+
+    /// <summary>Domain of the parent instance.</summary>
+    public string? Domain { get; set; }
+
+    /// <summary>The parent's state at the time of sub-flow creation.</summary>
+    public string? ParentState { get; set; }
+
+    /// <summary>Correlation type code: "S" (SubFlow) or "P" (SubProcess).</summary>
+    public string? CorrelationType { get; set; }
+}

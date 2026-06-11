@@ -32,4 +32,28 @@ public sealed class EfCoreInstanceJobRepository(
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.JobId == jobId, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceJob>> GetActiveByFlowAsync(
+        string flow,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .AsNoTracking()
+            .Where(j => j.IsActive == true && j.FlowName == flow)
+            .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceJob>> GetActiveByDomainAsync(
+        string domain,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .AsNoTracking()
+            .Where(j => j.IsActive == true && j.Domain == domain)
+            .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
 }

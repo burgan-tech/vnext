@@ -286,4 +286,21 @@ public sealed class MonitorInstanceController(
         return FromResult(result);
     }
 
+    /// <summary>
+    /// Reverse navigates from a sub-flow instance to its parent.
+    /// Returns Parent = null for a root (top-level) instance.
+    /// </summary>
+    /// <response code="200">Parent returned (or null for root).</response>
+    /// <response code="404">Instance not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/parent")]
+    [ProducesResponseType(typeof(MonitorParentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceParentAsync(
+        [FromRoute] string domain, [FromRoute] string workflow, [FromRoute] string instance,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetParentInput { Domain = domain, Workflow = workflow, Instance = instance };
+        return FromResult(await queryService.GetInstanceParentAsync(input, cancellationToken));
+    }
+
 }

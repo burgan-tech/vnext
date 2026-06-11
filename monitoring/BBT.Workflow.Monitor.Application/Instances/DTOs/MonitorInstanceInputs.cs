@@ -218,3 +218,16 @@ public sealed class MonitorGetInstanceViewInput : IHasDomain
     /// <summary>Optional workflow/definition version.</summary>
     public string? Version { get; set; }
 }
+
+/// <summary>Input for parent reverse navigation (P6).</summary>
+public sealed class MonitorGetParentInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required] public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow key.</summary>
+    [Required] public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>The sub-flow instance identifier (business key or GUID).</summary>
+    [Required] public string Instance { get; set; } = string.Empty;
+}

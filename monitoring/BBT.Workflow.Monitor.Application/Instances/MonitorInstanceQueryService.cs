@@ -597,4 +597,34 @@ public sealed class MonitorInstanceQueryService(
                 .ToList()
         };
     }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorParentResponse>> GetInstanceParentAsync(
+        MonitorGetParentInput input, CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(input.Instance, cancellationToken);
+        if (instance is null)
+            return Result<MonitorParentResponse>.Fail(
+                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        var correlation = await correlationRepository.FindBySubInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+        if (correlation is null)
+            return Result<MonitorParentResponse>.Ok(new MonitorParentResponse { Parent = null });
+
+        var parent = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+            correlation.ParentInstanceId.ToString(), cancellationToken);
+
+        return Result<MonitorParentResponse>.Ok(new MonitorParentResponse
+        {
+            Parent = new MonitorParentItem
+            {
+                ParentInstanceId = correlation.ParentInstanceId,
+                Key              = parent?.Key,
+                Flow             = parent?.Flow,
+                Domain           = input.Domain,
+                ParentState      = correlation.ParentState,
+                CorrelationType  = correlation.SubFlowType?.Code
+            }
+        });
+    }
 }

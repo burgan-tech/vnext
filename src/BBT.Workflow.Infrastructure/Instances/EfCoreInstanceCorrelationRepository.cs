@@ -67,10 +67,20 @@ public sealed class EfCoreInstanceCorrelationRepository(
 
     /// <inheritdoc />
     public async Task<InstanceCorrelation?> FindBySubInstanceIdAsync(
-        Guid subInstanceId, 
+        Guid subInstanceId,
         CancellationToken cancellationToken = default)
     {
         return await (await GetDbSetAsync())
+            .FirstOrDefaultAsync(c => c.SubFlowInstanceId == subInstanceId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceCorrelation?> FindBySubInstanceIdAsReadOnlyAsync(
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetDbSetAsync())
+            .AsNoTracking()
             .FirstOrDefaultAsync(c => c.SubFlowInstanceId == subInstanceId, cancellationToken);
     }
 }

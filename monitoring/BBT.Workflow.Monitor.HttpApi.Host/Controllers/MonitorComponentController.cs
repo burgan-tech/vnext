@@ -59,4 +59,37 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
         var result = await queryService.GetComponentsAsync(input, cancellationToken);
         return FromResult(result);
     }
+
+    /// <summary>
+    /// Returns per-type component counts (flows, tasks, schemas, views, functions, extensions) for the domain.
+    /// Useful for a quick inventory overview — "how many components of each type exist in this domain?"
+    /// Snapshot cache is used first; falls back to runtime DB load if the snapshot is empty.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Component counts returned successfully</response>
+    [HttpGet("{domain}/stats/components")]
+    [ProducesResponseType(typeof(MonitorComponentStatsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetComponentStatsAsync(
+        [FromRoute] string domain,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentStatsInput { Domain = domain.Trim() };
+        var result = await queryService.GetComponentStatsAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Returns all component dependencies of a workflow definition
+    /// (tasks, schemas, views, functions, extensions, sub-flows) with their reference site.
+    /// </summary>
+    /// <response code="200">Dependency graph returned.</response>
+    /// <response code="404">Workflow definition not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/dependencies")]
+    [ProducesResponseType(typeof(MonitorDependencyResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkflowDependenciesAsync(
+        [FromRoute] string domain, [FromRoute] string workflow,
+        [FromQuery] string? version = null, CancellationToken cancellationToken = default)
+        => FromResult(await queryService.GetWorkflowDependenciesAsync(domain, workflow, version, cancellationToken));
 }

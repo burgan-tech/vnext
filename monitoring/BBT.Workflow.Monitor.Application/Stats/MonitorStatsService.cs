@@ -1,10 +1,13 @@
 using BBT.Aether;
 using BBT.Aether.Application.Services;
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitor.Stats.DTOs;
+using BBT.Workflow.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BBT.Workflow.Monitor.Stats;
 
@@ -14,7 +17,9 @@ public sealed class MonitorStatsService(
     IInstanceRepository instanceRepository,
     IInstanceTaskRepository taskRepository,
     IInstanceTransitionRepository transitionRepository,
-    IComponentCacheStore componentCacheStore)
+    IComponentCacheStore componentCacheStore,
+    IDomainCacheContext domainCacheContext,
+    IServiceScopeFactory serviceScopeFactory)
     : ApplicationService(serviceProvider), IMonitorStatsService
 {
     private static readonly string[] StatusNames = ["Active", "Busy", "Completed", "Faulted", "Passive"];
@@ -26,23 +31,10 @@ public sealed class MonitorStatsService(
     {
         return await ResultExtensions.TryAsync(async ct =>
         {
-            var response = new MonitorInstanceCountersResponse();
+            if (string.IsNullOrWhiteSpace(input.Workflow))
+                return await CountAcrossDomainAsync(input.Domain, ct);
 
-            foreach (var status in StatusNames)
-            {
-                var count = await CountByStatusAsync(status, ct);
-                switch (status)
-                {
-                    case "Active":    response.Active    = count; break;
-                    case "Busy":      response.Busy      = count; break;
-                    case "Completed": response.Completed = count; break;
-                    case "Faulted":   response.Faulted   = count; break;
-                    case "Passive":   response.Passive   = count; break;
-                }
-                response.Total += count;
-            }
-
-            return response;
+            return await CountInCurrentSchemaAsync(instanceRepository, ct);
         }, cancellationToken);
     }
 
@@ -182,9 +174,82 @@ public sealed class MonitorStatsService(
         }, cancellationToken);
     }
 
-    private async Task<long> CountByStatusAsync(string statusName, CancellationToken ct)
+    private async Task<MonitorInstanceCountersResponse> CountAcrossDomainAsync(
+        string domain, CancellationToken ct)
     {
-        var filter = "{\"status\":{\"eq\":\"" + statusName + "\"}}";
-        return await instanceRepository.CountAsync(filter, ct);
+        var workflowKeys = await GetWorkflowKeysForDomainAsync(domain, ct);
+        if (workflowKeys.Count == 0)
+            return new MonitorInstanceCountersResponse();
+
+        var perSchema = await Task.WhenAll(workflowKeys.Select(key => CountInIsolatedSchemaAsync(key, ct)));
+
+        var response = new MonitorInstanceCountersResponse();
+        foreach (var r in perSchema)
+        {
+            response.Active    += r.Active;
+            response.Busy      += r.Busy;
+            response.Completed += r.Completed;
+            response.Faulted   += r.Faulted;
+            response.Passive   += r.Passive;
+            response.Total     += r.Total;
+        }
+        return response;
     }
+
+    private async Task<MonitorInstanceCountersResponse> CountInIsolatedSchemaAsync(
+        string schemaKey, CancellationToken ct)
+    {
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+        var repo = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
+
+        using (currentSchema.Use(schemaKey))
+            return await CountInCurrentSchemaAsync(repo, ct);
+    }
+
+    private static async Task<MonitorInstanceCountersResponse> CountInCurrentSchemaAsync(
+        IInstanceRepository repo, CancellationToken ct)
+    {
+        var response = new MonitorInstanceCountersResponse();
+        foreach (var status in StatusNames)
+        {
+            var count = await repo.CountAsync("{\"status\":{\"eq\":\"" + status + "\"}}", ct);
+            switch (status)
+            {
+                case "Active":    response.Active    = count; break;
+                case "Busy":      response.Busy      = count; break;
+                case "Completed": response.Completed = count; break;
+                case "Faulted":   response.Faulted   = count; break;
+                case "Passive":   response.Passive   = count; break;
+            }
+            response.Total += count;
+        }
+        return response;
+    }
+
+    private async Task<IReadOnlyList<string>> GetWorkflowKeysForDomainAsync(
+        string domain, CancellationToken ct)
+    {
+        var snapResult = await domainCacheContext.Workflows.GetAllByDomainAsync(domain, ct);
+        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
+        {
+            return snapResult.Value
+                .Where(w => !string.IsNullOrWhiteSpace(w.Key))
+                .Select(w => w.Key!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
+        var fromDb = (await runtimeService.GetAsync<Definitions.Workflow>(ct)).ToList();
+        return fromDb
+            .Where(w => w is not null
+                        && !string.IsNullOrWhiteSpace(w.Key)
+                        && string.Equals(w.Domain, domain, StringComparison.OrdinalIgnoreCase))
+            .Select(w => w.Key!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
 }
