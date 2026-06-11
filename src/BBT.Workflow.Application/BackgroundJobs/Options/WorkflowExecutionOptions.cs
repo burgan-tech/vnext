@@ -9,11 +9,19 @@ public sealed class WorkflowExecutionOptions
     public TransitionJobFailurePolicyOptions FailurePolicy { get; set; } = new();
 
     /// <summary>
-    /// When enabled, async transition continuations are enqueued through the transactional
-    /// outbox (a <c>TransitionContinuationRequested</c> event committed in the same UoW as the
-    /// durable job intent) instead of a pre-commit Dapr enqueue. Closes the dual-write gap
-    /// (Dapr-succeeds-then-UoW-rolls-back); the Inbox handler performs the actual Dapr enqueue.
-    /// Default: false (legacy dual-write path retained).
+    /// Selects the async continuation/enqueue atomicity model.
+    /// <para>
+    /// ON: continuations are enqueued through the transactional outbox — a
+    /// <c>TransitionContinuationRequested</c> event commits in the same UoW as the durable job
+    /// intent, and the Inbox forwards it to Orchestration which performs the Dapr enqueue. Fully
+    /// transactional, at the cost of the outbox/inbox poll hop.
+    /// </para>
+    /// <para>
+    /// OFF (default): the durable <c>InstanceJob</c> intent is committed in its own UoW FIRST,
+    /// then the Dapr enqueue happens — so a Dapr job can never exist without a tracking intent
+    /// (closes the dual-write gap). A crash between the intent commit and the enqueue is recovered
+    /// by the ChainReaper. Faster (no poll hop), recommended for low-latency transitions.
+    /// </para>
     /// </summary>
     public bool UseOutboxContinuations { get; set; }
 

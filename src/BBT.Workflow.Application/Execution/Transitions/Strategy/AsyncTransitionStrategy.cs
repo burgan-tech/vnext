@@ -29,8 +29,15 @@ namespace BBT.Workflow.Execution.Strategies;
 /// lock — so they are accepted and enqueued even while the main flow is Busy, mirroring
 /// the sync <see cref="Pipeline.TransitionPipeline"/>. Under the lock, checks if an active
 /// job already exists and returns 409 if so. Sets the instance to Busy before enqueueing so callers immediately see
-/// the correct in-progress status. The UoW boundary in TransitionRunner guarantees
-/// atomicity: if the Dapr enqueue fails the UoW rolls back and the instance stays Active.
+/// the correct in-progress status.
+/// <para>
+/// Continuation/enqueue atomicity is governed by <c>WorkflowExecutionOptions.UseOutboxContinuations</c>:
+/// when ON, the durable intent + a <c>TransitionContinuationRequested</c> outbox row commit in one
+/// unit of work and the Inbox performs the Dapr enqueue (fully transactional). When OFF (default),
+/// the durable <c>InstanceJob</c> intent is committed in its own unit of work FIRST and the Dapr
+/// enqueue happens AFTER — so a failed commit can never orphan an enqueued job; a crash in the
+/// narrow window between the intent commit and the enqueue is recovered by the ChainReaper.
+/// </para>
 /// </summary>
 public sealed class AsyncTransitionStrategy(
     IBackgroundJobService backgroundJobService,
@@ -216,15 +223,29 @@ public sealed class AsyncTransitionStrategy(
         if (executionOptions.Value.UseOutboxContinuations)
             return await PublishContinuationViaOutboxAsync(context, transContext, activity, cancellationToken);
 
+        // OFF (direct) path — intent-first ordering for atomicity:
+        // 1) Commit the durable InstanceJob intent in its OWN unit of work, THEN
+        // 2) enqueue to Dapr.
+        // This closes the dual-write gap: a Dapr job can never exist without a tracking
+        // InstanceJob (the previous order — enqueue then commit — could orphan a job if the
+        // commit failed). If the process crashes after the intent commit but before the
+        // enqueue, the ChainReaper backstop recovers the pending intent. The job is keyed by
+        // JobName (not the Dapr-returned id), so a generated id for the intent is sufficient —
+        // mirroring the outbox path.
         var (jobName, jobPayload, schedule, metadata) = BuildJobPayload(context, transContext, activity);
+        var jobId = Guid.NewGuid();
 
-        // Enqueue to Dapr - external service, TryAsync is appropriate
+        await using (var jobUow = await uowManager.BeginAsync(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, cancellationToken))
+        {
+            await SaveJobRecordAsync(context, transContext, jobName, jobId, cancellationToken);
+            await jobUow.CommitAsync(cancellationToken);
+        }
+
+        // Side-effect AFTER the intent is durable. Dapr is external → TryAsync.
         var enqueueResult = await EnqueueToDaprAsync(jobName, jobPayload, schedule, metadata, cancellationToken);
         if (!enqueueResult.IsSuccess)
             return Result<string>.Fail(enqueueResult.Error);
-
-        // Save job record - repository call, no Try needed (infrastructure exceptions bubble up)
-        await SaveJobRecordAsync(context, transContext, jobName, enqueueResult.Value!, cancellationToken);
 
         return Result<string>.Ok(jobName);
     }

@@ -15,8 +15,9 @@ public sealed class OutboxProcessorHostedService(
             "Outbox Processor Worker starting. Processing interval: {Interval}",
             options.ProcessingInterval);
 
-        // Wait a bit before starting to allow other services to initialize
-        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        // Brief warm-up to let the sidecar/other services initialize, then begin polling.
+        // Kept short to minimize cold-start latency for outbox publishing.
+        await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
