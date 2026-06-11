@@ -87,6 +87,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, ResolveAvailableStep>();
 
         // Pipeline
+        services.AddScoped<TransitionExecutor>();
         services.AddScoped<TransitionPipeline>();
 
         // Error Boundary Services (used by TaskCoordinator for task-level error handling)

@@ -95,8 +95,14 @@ public class TransitionPipelineTests
             .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<Instance>(0)));
 
-        _pipeline = new TransitionPipeline(
+        // The single-transition step runner now lives in TransitionExecutor (S2).
+        // Wrap the mock steps in a real executor so pipeline behavior is preserved.
+        var executor = new TransitionExecutor(
             _mockSteps,
+            Substitute.For<ILogger<TransitionExecutor>>());
+
+        _pipeline = new TransitionPipeline(
+            executor,
             _mockLockScopeFactory,
             _mockReservedResolver,
             _mockBusyMarker,
