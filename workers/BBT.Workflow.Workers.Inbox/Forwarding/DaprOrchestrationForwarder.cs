@@ -46,14 +46,21 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         using var invocationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         invocationCts.CancelAfter(TimeSpan.FromSeconds(_invocationTimeoutSeconds));
 
-        var request = _daprClient.CreateInvokeMethodRequest(method, _orchestrationAppId, route, body);
+        // Data overload (appId, methodName, data) builds a POST request; set the verb explicitly.
+        var request = _daprClient.CreateInvokeMethodRequest(_orchestrationAppId, route, body);
+        request.Method = method;
         request.Headers.Add(
             WorkflowInfo.Name,
             WorkflowInfo.Generate(domain, workflow, version ?? "latest", instanceId));
 
         try
         {
+            // Fire-and-forget: internal endpoints return 200 with no body. The non-generic
+            // InvokeMethodAsync is marked obsolete by Dapr but is the correct fit here (no
+            // response payload to deserialize); suppress the guidance warning intentionally.
+#pragma warning disable CS0618
             await _daprClient.InvokeMethodAsync(request, invocationCts.Token);
+#pragma warning restore CS0618
             _logger.LogDebug(
                 "Forwarded {Method} {Route} to {AppId} for instance {InstanceId}",
                 method, route, _orchestrationAppId, instanceId);
