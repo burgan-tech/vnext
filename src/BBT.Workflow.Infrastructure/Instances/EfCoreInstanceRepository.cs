@@ -1011,14 +1011,15 @@ public sealed class EfCoreInstanceRepository(
     /// <inheritdoc />
     public async Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default)
     {
+        var schema = currentSchema.Name ?? "public";
         var context = await GetDbContextAsync();
         var result = await context.Database
             .SqlQueryRaw<InstanceDurationRaw>(
-                "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM duration) * 1000), 0) AS \"AvgMs\", " +
-                "COALESCE(MIN(EXTRACT(EPOCH FROM duration) * 1000), 0) AS \"MinMs\", " +
-                "COALESCE(MAX(EXTRACT(EPOCH FROM duration) * 1000), 0) AS \"MaxMs\", " +
-                "COUNT(*) AS \"CompletedCount\" " +
-                "FROM instances WHERE completed_at IS NOT NULL AND duration IS NOT NULL")
+                $"SELECT COALESCE(AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"AvgMs\", " +
+                $"COALESCE(MIN(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MinMs\", " +
+                $"COALESCE(MAX(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MaxMs\", " +
+                $"COUNT(*) AS \"CompletedCount\" " +
+                $"FROM \"{schema}\".\"Instances\" WHERE \"CompletedAt\" IS NOT NULL AND \"Duration\" IS NOT NULL")
             .FirstOrDefaultAsync(cancellationToken);
         return result is not null
             ? new InstanceDurationStat(result.AvgMs, result.MinMs, result.MaxMs, result.CompletedCount)

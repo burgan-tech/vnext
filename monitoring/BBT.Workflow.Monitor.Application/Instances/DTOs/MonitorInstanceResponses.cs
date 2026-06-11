@@ -377,19 +377,6 @@ public sealed class MonitorLabel
     public string? Label { get; set; }
 }
 
-/// <summary>A candidate view entry with its rule flag (rule itself not evaluated).</summary>
-public sealed class MonitorViewCandidate
-{
-    /// <summary>Candidate view key.</summary>
-    public string? ViewKey { get; set; }
-
-    /// <summary>Candidate view version.</summary>
-    public string? Version { get; set; }
-
-    /// <summary>True if this candidate is guarded by a selection rule.</summary>
-    public bool HasRule { get; set; }
-}
-
 /// <summary>Response for the instance view query (P1).</summary>
 public sealed class MonitorInstanceViewResponse
 {
@@ -407,9 +394,6 @@ public sealed class MonitorInstanceViewResponse
 
     /// <summary>Multi-language labels.</summary>
     public List<MonitorLabel> Labels { get; set; } = [];
-
-    /// <summary>All candidate views for this state/transition (when selection is rule-based).</summary>
-    public List<MonitorViewCandidate> Candidates { get; set; } = [];
 }
 
 /// <summary>

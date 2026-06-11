@@ -49,4 +49,103 @@ public static class AuthorizationMatrixMapper
         if (matched.Any(g => string.Equals(g.Grant, "deny", StringComparison.OrdinalIgnoreCase))) return false;
         return matched.Any(g => string.Equals(g.Grant, "allow", StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="response"/> retaining only the entries where <paramref name="role"/> appears.
+    /// Sections with no matching entries are returned as empty lists; <c>state</c> becomes <c>null</c> when it has no match.
+    /// </summary>
+    public static MonitorInstancePermissionsResponse FilterByRole(
+        MonitorInstancePermissionsResponse response, string role)
+    {
+        var filteredState = response.State is { } s
+            ? new MonitorStatePermission
+            {
+                Key = s.Key,
+                QueryRoles = s.QueryRoles
+                    .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                    .ToList()
+            }
+            : null;
+
+        return new MonitorInstancePermissionsResponse
+        {
+            WorkflowKey = response.WorkflowKey,
+            Version = response.Version,
+            QueryRoles = response.QueryRoles
+                .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                .ToList(),
+            State = filteredState?.QueryRoles.Count > 0 ? filteredState : null,
+            Transitions = response.Transitions
+                .Select(t => new MonitorTransitionPermission
+                {
+                    Key = t.Key,
+                    From = t.From,
+                    Target = t.Target,
+                    Roles = t.Roles
+                        .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                        .ToList()
+                })
+                .Where(t => t.Roles.Count > 0)
+                .ToList(),
+            Functions = response.Functions
+                .Select(f => new MonitorFunctionPermission
+                {
+                    Key = f.Key,
+                    Roles = f.Roles
+                        .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                        .ToList()
+                })
+                .Where(f => f.Roles.Count > 0)
+                .ToList()
+        };
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="matrix"/> retaining only the entries where <paramref name="role"/> appears.
+    /// Sections with no matching entries are returned as empty lists.
+    /// </summary>
+    public static MonitorAuthorizationMatrixResponse FilterByRole(
+        MonitorAuthorizationMatrixResponse matrix, string role)
+    {
+        return new MonitorAuthorizationMatrixResponse
+        {
+            WorkflowKey = matrix.WorkflowKey,
+            Version = matrix.Version,
+            QueryRoles = matrix.QueryRoles
+                .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                .ToList(),
+            States = matrix.States
+                .Select(s => new MonitorStatePermission
+                {
+                    Key = s.Key,
+                    QueryRoles = s.QueryRoles
+                        .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                        .ToList()
+                })
+                .Where(s => s.QueryRoles.Count > 0)
+                .ToList(),
+            Transitions = matrix.Transitions
+                .Select(t => new MonitorTransitionPermission
+                {
+                    Key = t.Key,
+                    From = t.From,
+                    Target = t.Target,
+                    Roles = t.Roles
+                        .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                        .ToList()
+                })
+                .Where(t => t.Roles.Count > 0)
+                .ToList(),
+            Functions = matrix.Functions
+                .Select(f => new MonitorFunctionPermission
+                {
+                    Key = f.Key,
+                    Roles = f.Roles
+                        .Where(g => string.Equals(g.Role, role, StringComparison.OrdinalIgnoreCase))
+                        .ToList()
+                })
+                .Where(f => f.Roles.Count > 0)
+                .ToList()
+        };
+    }
 }

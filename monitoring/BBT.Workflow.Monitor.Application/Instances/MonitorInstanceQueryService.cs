@@ -510,12 +510,7 @@ public sealed class MonitorInstanceQueryService(
             return Result<MonitorInstanceViewResponse?>.Ok(null);
 
         var selection = ViewSelector.Select(viewDef);
-        var response = new MonitorInstanceViewResponse
-        {
-            Candidates = selection.Candidates
-                .Select(c => new MonitorViewCandidate { ViewKey = c.View.Key, Version = c.View.Version, HasRule = c.Rule is not null })
-                .ToList()
-        };
+        var response = new MonitorInstanceViewResponse();
 
         if (selection.Default is { } def)
         {

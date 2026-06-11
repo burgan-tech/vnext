@@ -15,8 +15,9 @@ public sealed class MonitorAuthorizationController(
     IMonitorAuthorizationQueryService authorizationService) : AetherControllerBase
 {
     /// <summary>
-    /// Full workflow authorization matrix (workflow-scoped).
-    /// Add <c>?role=</c> or <c>?queryRoles[]=</c> to also get an inline authorization verdict.
+    /// Workflow authorization matrix.
+    /// Without <c>?role=</c>: full matrix (queryRoles, states, transitions, functions).
+    /// With <c>?role=</c>: only entries where the given role appears are returned.
     /// </summary>
     /// <response code="200">Matrix returned.</response>
     /// <response code="404">Workflow not found.</response>
@@ -28,8 +29,6 @@ public sealed class MonitorAuthorizationController(
         [FromRoute] string workflow,
         [FromQuery] string? version = null,
         [FromQuery] string? role = null,
-        [FromQuery] List<string>? queryRoles = null,
-        [FromQuery] string? transitionKey = null,
         CancellationToken cancellationToken = default)
     {
         var input = new MonitorGetWorkflowPermissionsInput
@@ -37,29 +36,26 @@ public sealed class MonitorAuthorizationController(
             Domain = domain,
             Workflow = workflow,
             Version = version,
-            Role = role,
-            QueryRoles = queryRoles ?? [],
-            TransitionKey = transitionKey
+            Role = role
         };
         return FromResult(await authorizationService.GetWorkflowMatrixAsync(input, cancellationToken));
     }
 
     /// <summary>
-    /// Workflow authorization matrix resolved via an instance (instance-scoped convenience).
-    /// Add <c>?role=</c> or <c>?queryRoles[]=</c> to also get an inline authorization verdict based on the instance's current state.
+    /// Instance-scoped permissions view. Returns workflow-level roles, the current state's roles,
+    /// transitions available from the current state, and workflow functions — derived from the instance's live state.
+    /// Add <c>?role=</c> to filter the response to only entries where that role appears.
     /// </summary>
-    /// <response code="200">Matrix returned.</response>
+    /// <response code="200">Instance permissions returned.</response>
     /// <response code="404">Instance or workflow not found.</response>
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/permissions")]
-    [ProducesResponseType(typeof(MonitorAuthorizationMatrixResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(MonitorInstancePermissionsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetInstancePermissionsAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
         [FromQuery] string? role = null,
-        [FromQuery] List<string>? queryRoles = null,
-        [FromQuery] string? transitionKey = null,
         CancellationToken cancellationToken = default)
     {
         var input = new MonitorGetInstancePermissionsInput
@@ -67,11 +63,9 @@ public sealed class MonitorAuthorizationController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            Role = role,
-            QueryRoles = queryRoles ?? [],
-            TransitionKey = transitionKey
+            Role = role
         };
-        return FromResult(await authorizationService.GetInstanceMatrixAsync(input, cancellationToken));
+        return FromResult(await authorizationService.GetInstancePermissionsAsync(input, cancellationToken));
     }
 
     /// <summary>Transition-level permissions sub-view (P17).</summary>

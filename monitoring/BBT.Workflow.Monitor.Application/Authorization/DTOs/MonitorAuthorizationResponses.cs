@@ -10,7 +10,10 @@ public sealed class MonitorRoleGrant
     public string Grant { get; set; } = string.Empty;
 }
 
-/// <summary>Full workflow authorization matrix (P4). When role parameters are supplied, also includes an inline authorization verdict.</summary>
+/// <summary>
+/// Workflow authorization matrix. When <c>role</c> was supplied on the request, only entries
+/// where the role appears are included; otherwise the full matrix is returned.
+/// </summary>
 public sealed class MonitorAuthorizationMatrixResponse
 {
     /// <summary>The workflow definition key.</summary>
@@ -30,9 +33,35 @@ public sealed class MonitorAuthorizationMatrixResponse
 
     /// <summary>Per-function execution authorization entries.</summary>
     public List<MonitorFunctionPermission> Functions { get; set; } = [];
+}
 
-    /// <summary>Inline authorization verdict. Present only when <c>role</c> or <c>queryRoles</c> parameters are supplied.</summary>
-    public MonitorAuthorizeResult? Authorize { get; set; }
+/// <summary>
+/// Instance-scoped permissions view. Mirrors the workflow matrix shape but scoped to the
+/// instance's current state: workflow-level query roles, the current state's entry, transitions
+/// available from that state, and workflow functions.
+/// </summary>
+public sealed class MonitorInstancePermissionsResponse
+{
+    /// <summary>The workflow definition key resolved from the instance.</summary>
+    public string? WorkflowKey { get; set; }
+
+    /// <summary>The resolved workflow version.</summary>
+    public string? Version { get; set; }
+
+    /// <summary>Workflow-level query roles — same field as in the workflow matrix response.</summary>
+    public List<MonitorRoleGrant> QueryRoles { get; set; } = [];
+
+    /// <summary>
+    /// The instance's current state with its own query roles.
+    /// Uses the same <see cref="MonitorStatePermission"/> shape as the <c>states</c> array in the workflow matrix.
+    /// </summary>
+    public MonitorStatePermission? State { get; set; }
+
+    /// <summary>Transitions available from the current state (state-scoped + applicable shared transitions).</summary>
+    public List<MonitorTransitionPermission> Transitions { get; set; } = [];
+
+    /// <summary>Workflow functions and their required roles.</summary>
+    public List<MonitorFunctionPermission> Functions { get; set; } = [];
 }
 
 /// <summary>State-level view authorization.</summary>
@@ -45,7 +74,7 @@ public sealed class MonitorStatePermission
     public List<MonitorRoleGrant> QueryRoles { get; set; } = [];
 }
 
-/// <summary>Transition-level execution authorization (P17 item).</summary>
+/// <summary>Transition-level execution authorization.</summary>
 public sealed class MonitorTransitionPermission
 {
     /// <summary>The transition key.</summary>
@@ -61,7 +90,7 @@ public sealed class MonitorTransitionPermission
     public List<MonitorRoleGrant> Roles { get; set; } = [];
 }
 
-/// <summary>Function-level execution authorization (P19 item).</summary>
+/// <summary>Function-level execution authorization.</summary>
 public sealed class MonitorFunctionPermission
 {
     /// <summary>The function key.</summary>
@@ -71,26 +100,16 @@ public sealed class MonitorFunctionPermission
     public List<MonitorRoleGrant> Roles { get; set; } = [];
 }
 
-/// <summary>P17 sub-view response — transition permissions only.</summary>
+/// <summary>Transition permissions sub-view response.</summary>
 public sealed class MonitorTransitionPermissionsResponse
 {
     /// <summary>Transition-level permission entries.</summary>
     public List<MonitorTransitionPermission> Transitions { get; set; } = [];
 }
 
-/// <summary>P19 sub-view response — function permissions only.</summary>
+/// <summary>Function permissions sub-view response.</summary>
 public sealed class MonitorFunctionPermissionsResponse
 {
     /// <summary>Function-level permission entries.</summary>
     public List<MonitorFunctionPermission> Functions { get; set; } = [];
-}
-
-/// <summary>Inline authorization verdict embedded in the permissions matrix response.</summary>
-public sealed class MonitorAuthorizeResult
-{
-    /// <summary>True when at least one matching transition grants access and no deny overrides it.</summary>
-    public bool Allowed { get; set; }
-
-    /// <summary>The role identifiers that matched transition grants (allow grants only).</summary>
-    public List<string> MatchedRoles { get; set; } = [];
 }

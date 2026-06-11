@@ -17,17 +17,14 @@ public sealed class MonitorGetWorkflowPermissionsInput : IHasDomain
     /// <summary>Optional version filter; if null, returns the latest version.</summary>
     public string? Version { get; set; }
 
-    /// <summary>Single role for authorization check; when provided together with <see cref="QueryRoles"/>, the response includes an <c>authorize</c> block.</summary>
+    /// <summary>
+    /// When provided, the response is filtered to only include entries where this role appears.
+    /// When omitted, the full permission matrix is returned.
+    /// </summary>
     public string? Role { get; set; }
-
-    /// <summary>Additional roles for authorization check.</summary>
-    public List<string> QueryRoles { get; set; } = [];
-
-    /// <summary>Transition key to scope the authorization check; if null, all transitions from the workflow are evaluated.</summary>
-    public string? TransitionKey { get; set; }
 }
 
-/// <summary>Instance-scoped matrix query (P4 instance route) — resolves workflow from the instance. Optional role params enable inline authorization check.</summary>
+/// <summary>Instance-scoped permissions query — resolves workflow and current state from the instance.</summary>
 public sealed class MonitorGetInstancePermissionsInput : IHasDomain
 {
     /// <summary>The tenant/domain key.</summary>
@@ -42,12 +39,9 @@ public sealed class MonitorGetInstancePermissionsInput : IHasDomain
     [Required]
     public string Instance { get; set; } = string.Empty;
 
-    /// <summary>Single role for authorization check; when provided together with <see cref="QueryRoles"/>, the response includes an <c>authorize</c> block.</summary>
+    /// <summary>
+    /// When provided, the response is filtered to only include entries where this role appears.
+    /// When omitted, all role entries for the current state are returned.
+    /// </summary>
     public string? Role { get; set; }
-
-    /// <summary>Additional roles for authorization check.</summary>
-    public List<string> QueryRoles { get; set; } = [];
-
-    /// <summary>Transition key to scope the authorization check; if null, all transitions from the current state are evaluated.</summary>
-    public string? TransitionKey { get; set; }
 }

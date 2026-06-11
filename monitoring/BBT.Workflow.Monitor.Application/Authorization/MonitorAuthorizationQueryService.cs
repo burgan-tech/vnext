@@ -29,15 +29,15 @@ public sealed class MonitorAuthorizationQueryService(
 
         var matrix = await BuildMatrixAsync(flow, input.Domain, cancellationToken);
 
-        var roles = CollectRoles(input.Role, input.QueryRoles);
-        if (roles.Count > 0)
-            matrix.Authorize = ComputeWorkflowAuthorize(flow, roles, input.TransitionKey, currentState: null);
+        if (!string.IsNullOrWhiteSpace(input.Role))
+            return Result<MonitorAuthorizationMatrixResponse>.Ok(
+                AuthorizationMatrixMapper.FilterByRole(matrix, input.Role));
 
         return Result<MonitorAuthorizationMatrixResponse>.Ok(matrix);
     }
 
     /// <inheritdoc />
-    public async Task<Result<MonitorAuthorizationMatrixResponse>> GetInstanceMatrixAsync(
+    public async Task<Result<MonitorInstancePermissionsResponse>> GetInstancePermissionsAsync(
         MonitorGetInstancePermissionsInput input,
         CancellationToken cancellationToken = default)
     {
@@ -45,27 +45,58 @@ public sealed class MonitorAuthorizationQueryService(
             input.Instance, cancellationToken);
 
         if (instance is null)
-            return Result<MonitorAuthorizationMatrixResponse>.Fail(
+            return Result<MonitorInstancePermissionsResponse>.Fail(
                 Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
 
         if (string.IsNullOrEmpty(instance.Flow))
-            return Result<MonitorAuthorizationMatrixResponse>.Fail(
+            return Result<MonitorInstancePermissionsResponse>.Fail(
                 Error.Validation("instance.invalidFlow", $"Instance '{input.Instance}' has no workflow reference."));
 
         var flowResult = await componentCacheStore.GetFlowAsync(
             input.Domain, instance.Flow, instance.FlowVersion, cancellationToken);
 
         if (!flowResult.IsSuccess || flowResult.Value is not { } flow)
-            return Result<MonitorAuthorizationMatrixResponse>.Fail(
+            return Result<MonitorInstancePermissionsResponse>.Fail(
                 Error.NotFound("workflow.notFound", $"Workflow '{instance.Flow}' definition not found."));
 
-        var matrix = await BuildMatrixAsync(flow, input.Domain, cancellationToken);
+        var currentState = flow.FindState(instance.CurrentState ?? string.Empty);
 
-        var roles = CollectRoles(input.Role, input.QueryRoles);
-        if (roles.Count > 0)
-            matrix.Authorize = ComputeWorkflowAuthorize(flow, roles, input.TransitionKey, instance.CurrentState);
+        var stateTransitions = currentState?.Transitions ?? [];
+        var availableShared = flow.SharedTransitions.Where(t =>
+            t.AvailableIn.Count == 0
+            || t.AvailableIn.Any(s => string.Equals(s, instance.CurrentState, StringComparison.OrdinalIgnoreCase)));
 
-        return Result<MonitorAuthorizationMatrixResponse>.Ok(matrix);
+        var transitions = stateTransitions.Concat(availableShared)
+            .Select(t => new MonitorTransitionPermission
+            {
+                Key = t.Key,
+                From = t.From,
+                Target = t.Target,
+                Roles = AuthorizationMatrixMapper.Map(t.Roles)
+            })
+            .ToList();
+
+        var response = new MonitorInstancePermissionsResponse
+        {
+            WorkflowKey = flow.Key,
+            Version = flow.Version,
+            QueryRoles = AuthorizationMatrixMapper.Map(flow.QueryRoles),
+            State = currentState is not null
+                ? new MonitorStatePermission
+                {
+                    Key = currentState.Key,
+                    QueryRoles = AuthorizationMatrixMapper.Map(currentState.QueryRoles)
+                }
+                : null,
+            Transitions = transitions,
+            Functions = await MapFunctionsAsync(input.Domain, flow, cancellationToken)
+        };
+
+        if (!string.IsNullOrWhiteSpace(input.Role))
+            return Result<MonitorInstancePermissionsResponse>.Ok(
+                AuthorizationMatrixMapper.FilterByRole(response, input.Role));
+
+        return Result<MonitorInstancePermissionsResponse>.Ok(response);
     }
 
     /// <inheritdoc />
@@ -118,43 +149,6 @@ public sealed class MonitorAuthorizationQueryService(
             Functions = await MapFunctionsAsync(domain, flow, ct)
         };
 
-    private static MonitorAuthorizeResult ComputeWorkflowAuthorize(
-        WorkflowDefinition flow, List<string> roles, string? transitionKey, string? currentState)
-    {
-        var allFlowTransitions = flow.States.SelectMany(s => s.Transitions).Concat(flow.SharedTransitions);
-
-        IEnumerable<Transition> candidates;
-        if (!string.IsNullOrWhiteSpace(transitionKey))
-        {
-            candidates = allFlowTransitions.Where(t =>
-                string.Equals(t.Key, transitionKey, StringComparison.OrdinalIgnoreCase));
-        }
-        else if (!string.IsNullOrWhiteSpace(currentState))
-        {
-            candidates = allFlowTransitions.Where(t =>
-                string.Equals(t.From, currentState, StringComparison.OrdinalIgnoreCase)
-                || (t.From is null && (t.AvailableIn.Count == 0
-                    || t.AvailableIn.Any(s => string.Equals(s, currentState, StringComparison.OrdinalIgnoreCase)))));
-        }
-        else
-        {
-            candidates = allFlowTransitions;
-        }
-
-        var allGrants = candidates.SelectMany(t => AuthorizationMatrixMapper.Map(t.Roles)).ToList();
-        var allowed = AuthorizationMatrixMapper.IsAllowed(allGrants, roles);
-
-        var roleSet = new HashSet<string>(roles, StringComparer.OrdinalIgnoreCase);
-        var matchedRoles = allGrants
-            .Where(g => roleSet.Contains(g.Role)
-                && string.Equals(g.Grant, "allow", StringComparison.OrdinalIgnoreCase))
-            .Select(g => g.Role)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return new MonitorAuthorizeResult { Allowed = allowed, MatchedRoles = matchedRoles };
-    }
-
     private async Task<List<MonitorFunctionPermission>> MapFunctionsAsync(
         string domain, WorkflowDefinition flow, CancellationToken ct)
     {
@@ -173,10 +167,4 @@ public sealed class MonitorAuthorizationQueryService(
         }).ToList();
     }
 
-    private static List<string> CollectRoles(string? role, List<string> queryRoles)
-    {
-        var roles = new List<string>(queryRoles);
-        if (!string.IsNullOrWhiteSpace(role)) roles.Add(role);
-        return roles;
-    }
 }

@@ -1,5 +1,6 @@
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.Domain.Services;
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
@@ -15,7 +16,8 @@ namespace BBT.Workflow.Instances;
 public class EfCoreInstanceTaskRepository(
     IDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
-    IDataSinkManager dataSinkManager)
+    IDataSinkManager dataSinkManager,
+    ICurrentSchema currentSchema)
     : EfCoreRepository<WorkflowDbContext, InstanceTask, Guid>(dbContext, serviceProvider),
         IInstanceTaskRepository
 {
@@ -138,11 +140,12 @@ public class EfCoreInstanceTaskRepository(
             })
             .ToListAsync(cancellationToken);
 
+        var schema = currentSchema.Name ?? "public";
         var context = await GetDbContextAsync();
         var durations = await context.Database
             .SqlQueryRaw<TaskDurationAvg>(
-                "SELECT task_id AS \"TaskKey\", AVG(EXTRACT(EPOCH FROM duration) * 1000) AS \"AvgMs\" " +
-                "FROM instance_tasks WHERE duration IS NOT NULL GROUP BY task_id")
+                $"SELECT \"TaskId\" AS \"TaskKey\", AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000) AS \"AvgMs\" " +
+                $"FROM \"{schema}\".\"InstanceTasks\" WHERE \"Duration\" IS NOT NULL GROUP BY \"TaskId\"")
             .ToListAsync(cancellationToken);
 
         var durMap = durations

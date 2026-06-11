@@ -1,5 +1,6 @@
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.Domain.Services;
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
@@ -11,7 +12,8 @@ namespace BBT.Workflow.Instances;
 public class EfCoreInstanceTransitionRepository(
     IDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
-    IDataSinkManager dataSinkManager)
+    IDataSinkManager dataSinkManager,
+    ICurrentSchema currentSchema)
     : EfCoreRepository<WorkflowDbContext, InstanceTransition, Guid>(dbContext, serviceProvider),
         IInstanceTransitionRepository
 {
@@ -119,11 +121,12 @@ public class EfCoreInstanceTransitionRepository(
             })
             .ToListAsync(cancellationToken);
 
+        var schema = currentSchema.Name ?? "public";
         var durations = await context.Database
             .SqlQueryRaw<TransitionDurationAvg>(
-                "SELECT transition_id AS \"TransitionKey\", from_state AS \"FromState\", to_state AS \"ToState\", " +
-                "AVG(EXTRACT(EPOCH FROM duration) * 1000) AS \"AvgMs\" " +
-                "FROM instance_transitions WHERE duration IS NOT NULL GROUP BY transition_id, from_state, to_state")
+                $"SELECT \"TransitionId\" AS \"TransitionKey\", \"FromState\", \"ToState\", " +
+                $"AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000) AS \"AvgMs\" " +
+                $"FROM \"{schema}\".\"InstanceTransitions\" WHERE \"Duration\" IS NOT NULL GROUP BY \"TransitionId\", \"FromState\", \"ToState\"")
             .ToListAsync(cancellationToken);
 
         var durMap = durations.ToDictionary(
