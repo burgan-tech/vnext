@@ -68,6 +68,12 @@ public static class InstancesModelCreatingExtensions
                 .HasDatabaseName("IX_Instances_ChainToken")
                 .HasFilter("\"ChainToken\" IS NOT NULL");
 
+            // Auto-chain heartbeat (S7) — drives the stuck-Busy reaper sweep.
+            b.Property(p => p.ChainHeartbeatAt);
+            b.HasIndex(p => p.ChainHeartbeatAt)
+                .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
+                .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
+
             b.Property(p => p.Incidents)
                 .HasColumnType("jsonb")
                 .HasConversion(

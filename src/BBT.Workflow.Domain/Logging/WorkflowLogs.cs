@@ -129,6 +129,31 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when the chain reaper faults a stuck-Busy instance whose chain has no live job.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10125,
+        Level = LogLevel.Warning,
+        Message = "Chain reaper faulted stuck instance {InstanceId} (chain {ChainToken}); heartbeat stale since {HeartbeatAt:o}")]
+    public static partial void ChainReaperFaultedInstance(
+        this ILogger logger,
+        Guid instanceId,
+        Guid? chainToken,
+        DateTime? heartbeatAt);
+
+    /// <summary>
+    /// Logs the result of a chain reaper sweep.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10126,
+        Level = LogLevel.Information,
+        Message = "Chain reaper sweep completed: {Faulted} faulted, {SkippedActive} skipped (active job)")]
+    public static partial void ChainReaperSweepCompleted(
+        this ILogger logger,
+        int faulted,
+        int skippedActive);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>

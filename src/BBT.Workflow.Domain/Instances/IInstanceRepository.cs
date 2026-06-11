@@ -111,4 +111,13 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// </summary>
     Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns Busy instances that own an auto-chain token whose heartbeat is older than
+    /// <paramref name="olderThanUtc"/> — candidates for the stuck-Busy reaper (S7).
+    /// Scoped to the current schema; the reaper sweeps schemas it is invoked for.
+    /// </summary>
+    /// <param name="olderThanUtc">Heartbeat staleness threshold (UTC).</param>
+    /// <param name="maxCount">Maximum number of candidates to return per sweep.</param>
+    Task<List<Instance>> GetStuckBusyChainsAsync(
+        DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default);
 }

@@ -134,6 +134,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public Guid? ChainToken { get; private set; }
 
     /// <summary>
+    /// Last heartbeat of the in-flight auto-chain (UTC). Refreshed when the chain begins and on
+    /// each per-transition commit. Used by the stuck-Busy reaper (S7) to detect chains that own a
+    /// Busy instance but have no live/pending job. Null when idle.
+    /// </summary>
+    public DateTime? ChainHeartbeatAt { get; private set; }
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -537,6 +544,17 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
         Status = InstanceStatus.Busy;
         ChainToken = token;
+        ChainHeartbeatAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Refreshes the chain heartbeat (called on each per-transition commit while the chain owns
+    /// the instance). No-op when there is no active chain token.
+    /// </summary>
+    public void TouchChainHeartbeat()
+    {
+        if (ChainToken.HasValue)
+            ChainHeartbeatAt = DateTime.UtcNow;
     }
 
     /// <summary>
@@ -545,9 +563,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public bool MatchesChain(Guid token) => ChainToken.HasValue && ChainToken.Value == token;
 
     /// <summary>
-    /// Clears the chain ownership token (chain complete / instance returning to a resting state).
+    /// Clears the chain ownership token + heartbeat (chain complete / instance returning to a resting state).
     /// </summary>
-    public void EndChain() => ChainToken = null;
+    public void EndChain()
+    {
+        ChainToken = null;
+        ChainHeartbeatAt = null;
+    }
 
     /// <summary>
     /// Sets the instance status to Active.
@@ -560,6 +582,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
         Status = InstanceStatus.Active;
         ChainToken = null;
+        ChainHeartbeatAt = null;
     }
 
     /// <summary>
