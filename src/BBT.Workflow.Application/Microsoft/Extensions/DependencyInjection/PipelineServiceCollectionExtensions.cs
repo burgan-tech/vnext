@@ -1,6 +1,7 @@
 using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
@@ -85,6 +86,10 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, HandleFinishStep>();
         services.AddScoped<ITransitionStep, FinalizeTransitionStep>();
         services.AddScoped<ITransitionStep, ResolveAvailableStep>();
+
+        // Continuation realization (Inline = in-process auto-chain; Enqueue added in a later spec)
+        services.AddScoped<IContinuationStrategy, InlineContinuationStrategy>();
+        services.AddScoped<ContinuationDispatcher>();
 
         // Pipeline
         services.AddScoped<TransitionExecutor>();

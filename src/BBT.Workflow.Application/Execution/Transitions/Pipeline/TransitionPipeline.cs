@@ -3,6 +3,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
@@ -20,6 +21,7 @@ namespace BBT.Workflow.Execution.Pipeline;
 public class TransitionPipeline
 {
     private readonly TransitionExecutor _executor;
+    private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly ITransitionLockScopeFactory _lockScopeFactory;
     private readonly IReservedTransitionResolver _reservedTransitionResolver;
     private readonly IInstanceBusyMarker _busyMarker;
@@ -41,6 +43,7 @@ public class TransitionPipeline
     /// </summary>
     public TransitionPipeline(
         TransitionExecutor executor,
+        ContinuationDispatcher continuationDispatcher,
         ITransitionLockScopeFactory lockScopeFactory,
         IReservedTransitionResolver reservedTransitionResolver,
         IInstanceBusyMarker busyMarker,
@@ -52,6 +55,7 @@ public class TransitionPipeline
         ILogger<TransitionPipeline> logger)
     {
         _executor = executor;
+        _continuationDispatcher = continuationDispatcher;
         _lockScopeFactory = lockScopeFactory;
         _reservedTransitionResolver = reservedTransitionResolver;
         _busyMarker = busyMarker;
@@ -101,7 +105,7 @@ public class TransitionPipeline
             if (context.Directives.IsSubFlowResume)
                 await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
-            return await RunChainAsync(context, workflowContext, ownLock, cancellationToken);
+            return await RunChainAsync(context, ownLock, cancellationToken);
         }
 
         // 3) Normal transitions — acquire single lock for the entire chain
@@ -119,7 +123,7 @@ public class TransitionPipeline
         await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
         // 5) Run the entire chain under this lock scope
-        return await RunChainAsync(context, workflowContext, lockScope, cancellationToken);
+        return await RunChainAsync(context, lockScope, cancellationToken);
     }
 
     /// <summary>
@@ -128,12 +132,10 @@ public class TransitionPipeline
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> RunChainAsync(
         TransitionExecutionContext initialContext,
-        WorkflowExecutionContext initialWorkflowContext,
         ITransitionLockScope? lockScope,
         CancellationToken cancellationToken)
     {
         var context = initialContext;
-        var currentWorkflowContext = initialWorkflowContext;
 
         while (true)
         {
@@ -173,9 +175,15 @@ public class TransitionPipeline
                 }
             }
 
-            // Check for next transition in the auto-chain
-            var nextTransition = context.Directives.ConsumeNextTransition();
-            if (nextTransition is null)
+            // Realize the continuation (Inline = in-process auto-chain).
+            // The strategy consumes the next-transition directive and returns the next
+            // workflow context to run, or null when the chain is complete.
+            var continuationResult = await _continuationDispatcher.DispatchAsync(
+                ContinuationMode.Inline, context, cancellationToken);
+            if (!continuationResult.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(continuationResult.Error);
+
+            if (continuationResult.Value is null)
             {
                 // Chain complete — apply deferred status (inside lock, no re-acquire needed)
                 await ApplyResolvedStatusAsync(context, cancellationToken);
@@ -188,9 +196,8 @@ public class TransitionPipeline
                 await lockScope.ExtendAsync(cancellationToken);
             }
 
-            // Build next context for the chained transition
-            currentWorkflowContext = CreateNextWorkflowContext(context, nextTransition);
-            var nextContextResult = await CreateAndValidateContextAsync(currentWorkflowContext, cancellationToken);
+            // Rebuild and validate the next chained transition context (single source of truth).
+            var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, cancellationToken);
             if (!nextContextResult.IsSuccess)
                 return Result<TransitionExecutionContext>.Fail(nextContextResult.Error);
 
@@ -218,39 +225,6 @@ public class TransitionPipeline
 
         context.Profile = _profileResolver.Resolve(workflowContext);
         return Result<TransitionExecutionContext>.Ok(context);
-    }
-
-    /// <summary>
-    /// Creates a new WorkflowExecutionContext for the next transition in the chain.
-    /// </summary>
-    private static WorkflowExecutionContext CreateNextWorkflowContext(
-        TransitionExecutionContext currentContext,
-        NextTransitionRequest nextTransition)
-    {
-        return new WorkflowExecutionContext
-        {
-            Domain = currentContext.Domain,
-            InstanceId = currentContext.InstanceId.ToString(),
-            WorkflowKey = currentContext.WorkflowKey,
-            WorkflowVersion = currentContext.Workflow.Version,
-            TransitionKey = nextTransition.TransitionKey,
-            TriggerType = TriggerType.Automatic,
-            Mode = ExecMode.Sync,
-            CallerMode = currentContext.CallerMode,
-            Actor = Shared.ExecutionActor.System,
-            CorrelationId = currentContext.CorrelationId,
-            CausationId = currentContext.ExecutionChainId,
-            RequestedAt = DateTimeOffset.UtcNow,
-            Headers = currentContext.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-            Execution = new ExecutionInfo
-            {
-                ExecutionChainId = currentContext.ExecutionChainId,
-                ChainDepth = currentContext.ChainDepth + 1,
-                ResumeFrom = null
-            },
-            IsReentry = true,
-            IsErrorBoundaryTransition = string.Equals(nextTransition.Reason, TransitionRequestReasons.ErrorBoundary, StringComparison.OrdinalIgnoreCase)
-        };
     }
 
     /// <summary>
