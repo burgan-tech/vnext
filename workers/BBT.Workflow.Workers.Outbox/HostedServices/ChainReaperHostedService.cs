@@ -1,6 +1,7 @@
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
+using BBT.Workflow.Hosting;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.Options;
 
@@ -32,7 +33,8 @@ public sealed class ChainReaperHostedService(
     {
         logger.LogInformation("Chain Reaper Worker starting. Sweep interval: {Interval}", SweepInterval);
 
-        await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+        // Jittered warm-up so multiple reaper replicas don't sweep in lockstep.
+        await Task.Delay(PollingJitter.Startup(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(5)), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -54,7 +56,7 @@ public sealed class ChainReaperHostedService(
 
             try
             {
-                await Task.Delay(SweepInterval, stoppingToken);
+                await Task.Delay(PollingJitter.Apply(SweepInterval), stoppingToken);
             }
             catch (OperationCanceledException)
             {

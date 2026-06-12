@@ -1,4 +1,5 @@
 using BBT.Aether.Events;
+using BBT.Workflow.Hosting;
 
 namespace BBT.Workflow.Workers.Outbox.HostedServices;
 
@@ -16,8 +17,8 @@ public sealed class OutboxProcessorHostedService(
             options.ProcessingInterval);
 
         // Brief warm-up to let the sidecar/other services initialize, then begin polling.
-        // Kept short to minimize cold-start latency for outbox publishing.
-        await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+        // Jittered so scaled replicas don't start (and stay) in lockstep.
+        await Task.Delay(PollingJitter.Startup(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -41,7 +42,7 @@ public sealed class OutboxProcessorHostedService(
 
             try
             {
-                await Task.Delay(options.ProcessingInterval, stoppingToken);
+                await Task.Delay(PollingJitter.Apply(options.ProcessingInterval), stoppingToken);
             }
             catch (OperationCanceledException)
             {
