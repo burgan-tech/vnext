@@ -148,16 +148,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.DispatchStrategy = DomainEventDispatchStrategy.AlwaysUseOutbox;
         });
 
-        // Tune the outbox/inbox poll interval (shared AetherOutboxOptions singleton drives both
-        // workers). Lower interval → lower event-propagation latency, higher DB poll load.
-        // Config-overridable via "Aether:Outbox:ProcessingIntervalMs"; default 1000ms.
-        var outboxIntervalMs = services.GetConfiguration()
-            .GetValue<int?>("Aether:Outbox:ProcessingIntervalMs") ?? 1000;
+        // Bind the full AetherOutboxOptions from the "Aether:Outbox" config section (ProcessingInterval,
+        // BatchSize, LeaseDuration, RetentionPeriod, MaxRetryCount, RetryBaseDelay). Absent keys keep
+        // Aether's defaults. The shared singleton drives both the outbox and inbox processors, so the
+        // section configures poll latency, batch size, and lease behavior from appsettings.
+        var configuration = services.GetConfiguration();
 
         services.AddAetherOutbox<MessagingDbContext>(options =>
-        {
-            options.ProcessingInterval = TimeSpan.FromMilliseconds(outboxIntervalMs);
-        });
+            configuration.GetSection("Aether:Outbox").Bind(options));
         services.AddAetherInbox<MessagingDbContext>();
 
         return services;

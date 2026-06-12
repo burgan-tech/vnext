@@ -52,16 +52,14 @@ public static class InboxWorkerServiceCollectionExtensions
         //  - IDistributedLockService: the Aether InboxProcessor coordinates with a distributed
         //    lock. Register only the Dapr lock service (not the orchestration ResourceLock).
         //  - AetherOutboxOptions: shared poll options consumed by InboxProcessorHostedService and
-        //    the Aether processors. Registered via AddAetherOutbox so Aether applies its defaults
-        //    (batch size, etc.); we only override the poll interval (S16). The outbox processor it
-        //    registers is never run here (no OutboxProcessorHostedService) — it is harmless.
+        //    the Aether processors. Bound from the "Aether:Outbox" config section (ProcessingInterval,
+        //    BatchSize, LeaseDuration, RetentionPeriod, MaxRetryCount, RetryBaseDelay); absent keys
+        //    keep Aether defaults. The outbox processor AddAetherOutbox registers is never run here
+        //    (no OutboxProcessorHostedService) — it is harmless.
         services.AddDaprDistributedLock(configuration["DAPR_LOCK_STORE_NAME"]!);
 
-        var outboxIntervalMs = configuration.GetValue<int?>("Aether:Outbox:ProcessingIntervalMs") ?? 1000;
         services.AddAetherOutbox<MessagingDbContext>(options =>
-        {
-            options.ProcessingInterval = TimeSpan.FromMilliseconds(outboxIntervalMs);
-        });
+            configuration.GetSection("Aether:Outbox").Bind(options));
 
         // Inbox dedup store (IInboxStore) on the messaging DbContext. The Inbox only CONSUMES
         // events; it never publishes domain events (no AddAetherDomainEvents).
