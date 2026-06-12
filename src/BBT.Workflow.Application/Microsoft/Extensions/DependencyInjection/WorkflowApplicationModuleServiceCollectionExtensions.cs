@@ -11,6 +11,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Functions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -72,7 +73,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceBusyPropagationService, InstanceBusyPropagationService>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
         services.AddScoped<IChildSubflowFaultService, ChildSubflowFaultService>();
-        services.AddScoped<BackgroundJobs.ITransitionJobEnqueuer, BackgroundJobs.TransitionJobEnqueuer>();
+        services.AddScoped<ITransitionJobEnqueuer, TransitionJobEnqueuer>();
 
         // Instance Services
         services.AddScoped<IInstanceCancellationService, InstanceCancellationService>();
