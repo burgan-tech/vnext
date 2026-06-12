@@ -65,4 +65,13 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
 
     /// <summary>Read-only: per-task execution aggregation across the current schema (additive, monitor-only).</summary>
     Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: returns all tasks belonging to the given instance, joined with their parent
+    /// transition's definition key and state context. Ordered by <c>StartedAt</c> ascending.
+    /// Additive — monitor-only.
+    /// </summary>
+    Task<List<InstanceTaskRow>> GetByInstanceIdAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
 }

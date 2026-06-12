@@ -13,3 +13,15 @@ public sealed record StateCountStat(string StateKey, int Count);
 
 /// <summary>Aggregate duration statistics over completed instances in a schema.</summary>
 public sealed record InstanceDurationStat(double AvgMs, double MinMs, double MaxMs, long CompletedCount);
+
+/// <summary>
+/// Join projection: InstanceTask enriched with its parent transition's definition key and state context.
+/// Additive — used only by monitor read paths, not by orchestration.
+/// </summary>
+public sealed record InstanceTaskRow(
+    InstanceTask Task,
+    string TransitionKey,
+    string FromState,
+    string? ToState,
+    Definitions.TriggerType TriggerType
+);

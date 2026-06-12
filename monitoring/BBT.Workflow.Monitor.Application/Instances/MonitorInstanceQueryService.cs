@@ -542,6 +542,122 @@ public sealed class MonitorInstanceQueryService(
         return JsonSerializer.SerializeToElement(typedContent, JsonSerializerConstants.JsonOptions);
     }
 
+    /// <inheritdoc />
+    public async Task<Result<MonitorInstanceTaskListResponse>> GetInstanceTaskListAsync(
+        MonitorGetInstanceTasksInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+            input.Instance, cancellationToken);
+        if (instance is null)
+            return Result<MonitorInstanceTaskListResponse>.Fail(
+                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        var rows = await instanceTaskRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
+
+        var items = rows.Select(MapToTaskListItem).ToList();
+        return Result<MonitorInstanceTaskListResponse>.Ok(new MonitorInstanceTaskListResponse
+        {
+            Items = items,
+            Total = items.Count
+        });
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorTaskDetailResponse>> GetInstanceTaskDetailAsync(
+        MonitorGetInstanceTaskDetailInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+            input.Instance, cancellationToken);
+        if (instance is null)
+            return Result<MonitorTaskDetailResponse>.Fail(
+                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        var rows = await instanceTaskRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
+        var row = rows.FirstOrDefault(r => r.Task.Id == input.TaskId);
+        if (row is null)
+            return Result<MonitorTaskDetailResponse>.Fail(
+                Error.NotFound("task.notFound", $"Task '{input.TaskId}' not found for instance '{input.Instance}'."));
+
+        // Best-effort: look up definition and trigger context using the instance's flow version
+        MonitorTaskDefinitionInfo? definitionInfo = null;
+        MonitorTaskTriggerContext? triggerContext = null;
+
+        var flowResult = await componentCacheStore.GetFlowAsync(
+            input.Domain, instance.Flow!, instance.FlowVersion, cancellationToken);
+
+        if (flowResult.IsSuccess && flowResult.Value is { } flow)
+        {
+            triggerContext = TaskTriggerContextResolver.Resolve(
+                flow, row.TransitionKey, row.FromState, row.ToState, row.Task.TaskId);
+
+            var taskResult = await componentCacheStore.GetTaskAsync(
+                input.Domain, row.Task.TaskId, null, cancellationToken);
+
+            if (taskResult.IsSuccess && taskResult.Value is { } taskDef)
+            {
+                definitionInfo = new MonitorTaskDefinitionInfo
+                {
+                    Key = taskDef.Key,
+                    Type = taskDef.Type,
+                    Version = taskDef.Version,
+                    Config = taskDef.Config.ValueKind == System.Text.Json.JsonValueKind.Undefined
+                        ? null
+                        : taskDef.Config
+                };
+            }
+        }
+
+        return Result<MonitorTaskDetailResponse>.Ok(MapToTaskDetail(row, definitionInfo, triggerContext));
+    }
+
+    private static MonitorTaskListItem MapToTaskListItem(InstanceTaskRow row)
+    {
+        var task = row.Task;
+        long? durationMs = task.FinishedAt.HasValue
+            ? (long)(task.FinishedAt.Value - task.StartedAt).TotalMilliseconds
+            : null;
+
+        return new MonitorTaskListItem
+        {
+            Id = task.Id,
+            TaskDefinitionKey = task.TaskId,
+            Status = task.Status.ToString(),
+            BusinessStatus = task.BusinessStatus.ToString(),
+            StartedAt = task.StartedAt,
+            FinishedAt = task.FinishedAt,
+            DurationMs = durationMs
+        };
+    }
+
+    private static MonitorTaskDetailResponse MapToTaskDetail(
+        InstanceTaskRow row,
+        MonitorTaskDefinitionInfo? definitionInfo,
+        MonitorTaskTriggerContext? triggerContext)
+    {
+        var task = row.Task;
+        long? durationMs = task.FinishedAt.HasValue
+            ? (long)(task.FinishedAt.Value - task.StartedAt).TotalMilliseconds
+            : null;
+
+        return new MonitorTaskDetailResponse
+        {
+            Id = task.Id,
+            TaskDefinitionKey = task.TaskId,
+            Status = task.Status.ToString(),
+            BusinessStatus = task.BusinessStatus.ToString(),
+            StartedAt = task.StartedAt,
+            FinishedAt = task.FinishedAt,
+            DurationMs = durationMs,
+            TriggerContext = triggerContext,
+            Definition = definitionInfo,
+            Input = task.Request.JsonElement,
+            Output = task.Response.JsonElement,
+            InvocationResult = task.InvocationResult?.JsonElement
+        };
+    }
+
     private static MonitorInstanceTaskResponse MapTask(InstanceTask t) => new()
     {
         Id = t.Id,

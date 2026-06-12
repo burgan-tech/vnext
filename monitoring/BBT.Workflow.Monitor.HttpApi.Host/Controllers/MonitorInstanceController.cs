@@ -303,4 +303,55 @@ public sealed class MonitorInstanceController(
         return FromResult(await queryService.GetInstanceParentAsync(input, cancellationToken));
     }
 
+    /// <summary>
+    /// Returns all tasks the instance has executed, ordered by StartedAt ascending,
+    /// enriched with the transition key and state context.
+    /// </summary>
+    /// <response code="200">Task list returned successfully</response>
+    /// <response code="404">Instance not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/tasks")]
+    [ProducesResponseType(typeof(MonitorInstanceTaskListResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceTasksAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceTasksInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance
+        };
+        return FromResult(await queryService.GetInstanceTaskListAsync(input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Returns the full detail of a single task execution, including definition config,
+    /// trigger slot (OnExecute / OnExit / OnEntry), and input/output payloads.
+    /// Definition and trigger context are best-effort — null when the definition is unavailable.
+    /// </summary>
+    /// <response code="200">Task detail returned successfully</response>
+    /// <response code="404">Instance or task not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/tasks/{taskId:guid}")]
+    [ProducesResponseType(typeof(MonitorTaskDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceTaskDetailAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] Guid taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceTaskDetailInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            TaskId = taskId
+        };
+        return FromResult(await queryService.GetInstanceTaskDetailAsync(input, cancellationToken));
+    }
+
 }

@@ -144,4 +144,35 @@ public class EfCoreInstanceTaskRepository(
             c.SuccessCount,
             c.FailureCount)).ToList();
     }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTaskRow>> GetByInstanceIdAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var rows = await (
+            from task in context.InstanceTasks.AsNoTracking()
+            join tr in context.InstanceTransitions.AsNoTracking()
+                on task.TransitionId equals tr.Id
+            where tr.InstanceId == instanceId
+            orderby task.StartedAt
+            select new
+            {
+                Task = task,
+                TransitionKey = tr.TransitionId,
+                tr.FromState,
+                tr.ToState,
+                tr.TriggerType
+            }
+        ).ToListAsync(cancellationToken);
+
+        return rows.Select(r => new InstanceTaskRow(
+            r.Task,
+            r.TransitionKey,
+            r.FromState,
+            r.ToState,
+            r.TriggerType
+        )).ToList();
+    }
 }

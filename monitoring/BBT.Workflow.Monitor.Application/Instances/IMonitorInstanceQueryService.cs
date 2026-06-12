@@ -78,4 +78,21 @@ public interface IMonitorInstanceQueryService
     Task<Result<MonitorParentResponse>> GetInstanceParentAsync(
         MonitorGetParentInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns all tasks the instance has executed, ordered by StartedAt ascending,
+    /// enriched with the transition definition key and state context.
+    /// </summary>
+    Task<Result<MonitorInstanceTaskListResponse>> GetInstanceTaskListAsync(
+        MonitorGetInstanceTasksInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the full detail of a single task execution, including definition config,
+    /// trigger slot (OnExecute/OnExit/OnEntry), and input/output payloads.
+    /// Definition and trigger context are best-effort: null when the definition version is unavailable.
+    /// </summary>
+    Task<Result<MonitorTaskDetailResponse>> GetInstanceTaskDetailAsync(
+        MonitorGetInstanceTaskDetailInput input,
+        CancellationToken cancellationToken = default);
 }
