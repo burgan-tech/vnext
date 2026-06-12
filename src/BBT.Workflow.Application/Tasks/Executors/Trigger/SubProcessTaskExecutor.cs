@@ -407,7 +407,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             Logger.TaskCorrelationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 

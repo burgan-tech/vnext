@@ -63,7 +63,7 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
             Logger.TaskInputHandlerFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 
@@ -82,7 +82,7 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
             Logger.TaskEnvelopeCreationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 envelopeResult.Error.Message ?? "Unknown error");
             return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
         }
@@ -101,7 +101,7 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
             Logger.TaskInvocationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 
@@ -141,7 +141,7 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
             Logger.TaskOutputHandlerFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 

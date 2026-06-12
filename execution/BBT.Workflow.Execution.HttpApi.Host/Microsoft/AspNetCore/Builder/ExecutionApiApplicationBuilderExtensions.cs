@@ -34,7 +34,9 @@ public static class ExecutionApiApplicationBuilderExtensions
         app.UseSecurityHeaders();
         app.UseCurrentUser();
         app.UseStaticFiles();
-        app.UseAetherApiVersioning();
+        app.UseAetherApiVersioning(
+            useSwagger: !app.Environment.IsProduction(),
+            useSwaggerUi: !app.Environment.IsProduction());
         app.UseRouting();
         app.UseHttpMetrics();
         app.MapMetrics(); 
