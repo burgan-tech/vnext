@@ -60,7 +60,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             Logger.TaskInputHandlerFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
 
@@ -103,7 +103,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             Logger.TaskScriptCompilationFailed(
                 task.Key,
                 TaskType.ToString(),
-                context.ScriptContext.Instance.Id,
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
         }
         
