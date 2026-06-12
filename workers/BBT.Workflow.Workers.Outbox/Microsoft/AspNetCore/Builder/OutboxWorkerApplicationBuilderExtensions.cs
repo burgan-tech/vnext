@@ -35,7 +35,9 @@ public static class OutboxWorkerApplicationBuilderExtensions
         app.UseSecurityHeaders();
         app.UseCurrentUser();
         app.UseStaticFiles();
-        app.UseAetherApiVersioning();
+        app.UseAetherApiVersioning(
+            useSwagger: !app.Environment.IsProduction(),
+            useSwaggerUi: !app.Environment.IsProduction());
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
