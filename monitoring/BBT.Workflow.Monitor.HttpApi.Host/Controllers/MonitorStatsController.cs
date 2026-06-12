@@ -22,9 +22,15 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
     public async Task<IActionResult> GetWorkflowInstanceCountersAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
+        [FromQuery] string? version = null,
         CancellationToken cancellationToken = default)
     {
-        var input = new MonitorGetInstanceCountersInput { Domain = domain, Workflow = workflow };
+        var input = new MonitorGetInstanceCountersInput
+        {
+            Domain   = domain,
+            Workflow = workflow,
+            Version  = string.IsNullOrWhiteSpace(version) ? null : version.Trim()
+        };
         var result = await statsService.GetInstanceCountersAsync(input, cancellationToken);
         return FromResult(result);
     }
@@ -54,9 +60,15 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetStateDistributionAsync(
         [FromRoute] string domain, [FromRoute] string workflow,
+        [FromQuery] string? version = null,
         CancellationToken cancellationToken = default)
     {
-        var input = new MonitorGetStateDistributionInput { Domain = domain, Workflow = workflow };
+        var input = new MonitorGetStateDistributionInput
+        {
+            Domain   = domain,
+            Workflow = workflow,
+            Version  = string.IsNullOrWhiteSpace(version) ? null : version.Trim()
+        };
         var result = await statsService.GetStateDistributionAsync(input, cancellationToken);
         return FromResult(result);
     }

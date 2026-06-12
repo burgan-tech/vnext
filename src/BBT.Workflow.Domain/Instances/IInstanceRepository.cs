@@ -116,6 +116,28 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default
     );
 
+    /// <summary>
+    /// Read-only: counts instances matching the given status and optional flowVersion filter.
+    /// Uses direct LINQ predicates — does not go through the JSON filter parsing chain.
+    /// Pass <c>null</c> for <paramref name="status"/> to count all statuses.
+    /// Pass <c>null</c> for <paramref name="flowVersion"/> to count all versions (additive, monitor-only).
+    /// </summary>
+    Task<long> CountByStatusAsync(
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: counts instances whose <c>CurrentState</c> equals <paramref name="stateKey"/>,
+    /// filtered by optional <paramref name="status"/> and optional <paramref name="flowVersion"/>.
+    /// Uses direct LINQ predicates (additive, monitor-only).
+    /// </summary>
+    Task<long> CountByStateAsync(
+        string stateKey,
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Read-only: avg/min/max completion duration over completed instances (additive, monitor-only).</summary>
     Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default);
 

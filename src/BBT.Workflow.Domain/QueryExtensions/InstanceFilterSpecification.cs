@@ -48,6 +48,7 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
                 return x => x.EffectiveStateSubType == stateSubType;
             },
             ["flow"] = value => x => x.Flow == value,
+            ["flowVersion"] = value => x => x.FlowVersion == value,
             ["key"] = value => 
             {
                 var match = KeyValueRegex.Match(value);

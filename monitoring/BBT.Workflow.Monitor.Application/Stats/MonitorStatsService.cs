@@ -22,7 +22,6 @@ public sealed class MonitorStatsService(
     IServiceScopeFactory serviceScopeFactory)
     : ApplicationService(serviceProvider), IMonitorStatsService
 {
-    private static readonly string[] StatusNames = ["Active", "Busy", "Completed", "Faulted", "Passive"];
 
     /// <inheritdoc />
     public async Task<Result<MonitorInstanceCountersResponse>> GetInstanceCountersAsync(
@@ -34,7 +33,7 @@ public sealed class MonitorStatsService(
             if (string.IsNullOrWhiteSpace(input.Workflow))
                 return await CountAcrossDomainAsync(input.Domain, ct);
 
-            return await CountInCurrentSchemaAsync(instanceRepository, ct);
+            return await CountInCurrentSchemaAsync(instanceRepository, input.Version, ct);
         }, cancellationToken);
     }
 
@@ -57,10 +56,10 @@ public sealed class MonitorStatsService(
             foreach (var state in flowResult.Value!.States)
             {
                 var key = state.Key;
-                var total   = await instanceRepository.CountAsync("{\"currentState\":{\"eq\":\"" + key + "\"}}", ct);
-                var active  = await instanceRepository.CountAsync("{\"and\":[{\"currentState\":{\"eq\":\"" + key + "\"}},{\"status\":{\"eq\":\"Active\"}}]}", ct);
-                var busy    = await instanceRepository.CountAsync("{\"and\":[{\"currentState\":{\"eq\":\"" + key + "\"}},{\"status\":{\"eq\":\"Busy\"}}]}", ct);
-                var faulted = await instanceRepository.CountAsync("{\"and\":[{\"currentState\":{\"eq\":\"" + key + "\"}},{\"status\":{\"eq\":\"Faulted\"}}]}", ct);
+                var total   = await instanceRepository.CountByStateAsync(key, null,                      input.Version, ct);
+                var active  = await instanceRepository.CountByStateAsync(key, InstanceStatus.Active,     input.Version, ct);
+                var busy    = await instanceRepository.CountByStateAsync(key, InstanceStatus.Busy,       input.Version, ct);
+                var faulted = await instanceRepository.CountByStateAsync(key, InstanceStatus.Faulted,    input.Version, ct);
 
                 response.States.Add(new MonitorStateCount
                 {
@@ -204,26 +203,21 @@ public sealed class MonitorStatsService(
         var repo = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
 
         using (currentSchema.Use(schemaKey))
-            return await CountInCurrentSchemaAsync(repo, ct);
+            return await CountInCurrentSchemaAsync(repo, null, ct);
     }
 
     private static async Task<MonitorInstanceCountersResponse> CountInCurrentSchemaAsync(
-        IInstanceRepository repo, CancellationToken ct)
+        IInstanceRepository repo, string? flowVersion, CancellationToken ct)
     {
-        var response = new MonitorInstanceCountersResponse();
-        foreach (var status in StatusNames)
+        var response = new MonitorInstanceCountersResponse
         {
-            var count = await repo.CountAsync("{\"status\":{\"eq\":\"" + status + "\"}}", ct);
-            switch (status)
-            {
-                case "Active":    response.Active    = count; break;
-                case "Busy":      response.Busy      = count; break;
-                case "Completed": response.Completed = count; break;
-                case "Faulted":   response.Faulted   = count; break;
-                case "Passive":   response.Passive   = count; break;
-            }
-            response.Total += count;
-        }
+            Active    = await repo.CountByStatusAsync(InstanceStatus.Active,    flowVersion, ct),
+            Busy      = await repo.CountByStatusAsync(InstanceStatus.Busy,      flowVersion, ct),
+            Completed = await repo.CountByStatusAsync(InstanceStatus.Completed, flowVersion, ct),
+            Faulted   = await repo.CountByStatusAsync(InstanceStatus.Faulted,   flowVersion, ct),
+            Passive   = await repo.CountByStatusAsync(InstanceStatus.Passive,   flowVersion, ct),
+        };
+        response.Total = response.Active + response.Busy + response.Completed + response.Faulted + response.Passive;
         return response;
     }
 

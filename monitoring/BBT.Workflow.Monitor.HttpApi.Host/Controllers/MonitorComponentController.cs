@@ -20,6 +20,55 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
     : AetherControllerBase
 {
     /// <summary>
+    /// Returns a lightweight summary of published components for the given type and domain.
+    /// When <paramref name="key"/> is omitted, returns a list of all published components (<see cref="MonitorComponentSummaryResponse"/>).
+    /// When <paramref name="key"/> is provided, returns a single flat detail object (<see cref="MonitorComponentDetailResponse"/>)
+    /// that includes the component's <c>flow</c> identifier and all published versions — no <c>items</c> wrapper.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="type">
+    /// Component type. Supported values:
+    /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>.
+    /// </param>
+    /// <param name="key">Optional single component key. When provided, returns detail or 404.</param>
+    /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Summary list or single component detail returned successfully</response>
+    /// <response code="400">Unknown component type</response>
+    /// <response code="404">Specific <paramref name="key"/> not found</response>
+    [HttpGet("{domain}/components")]
+    [ProducesResponseType(typeof(MonitorComponentSummaryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(MonitorComponentDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComponentSummaryAsync(
+        [FromRoute] string domain,
+        [FromQuery] [Required] string type,
+        [FromQuery] string? key = null,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var input = new MonitorGetComponentsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = type.Trim(),
+            Key           = string.IsNullOrWhiteSpace(key)     ? null : key.Trim(),
+            Version       = string.IsNullOrWhiteSpace(version) ? null : version.Trim(),
+        };
+
+        if (input.Key is not null)
+        {
+            var detail = await queryService.GetComponentDetailAsync(input, cancellationToken);
+            return FromResult(detail);
+        }
+
+        var result = await queryService.GetComponentSummaryAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Lists or fetches published component definitions (flows, tasks, schemas, views, functions, extensions).
     /// When <paramref name="key"/> is supplied without <paramref name="version"/>, the latest version is returned;
     /// when <paramref name="version"/> is supplied, that exact version is returned.

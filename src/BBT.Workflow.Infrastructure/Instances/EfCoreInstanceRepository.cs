@@ -1009,6 +1009,37 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<long> CountByStatusAsync(
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet.AsNoTracking();
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+        if (!string.IsNullOrWhiteSpace(flowVersion))
+            query = query.Where(i => i.FlowVersion == flowVersion);
+        return await query.LongCountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> CountByStateAsync(
+        string stateKey,
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet.AsNoTracking().Where(i => i.CurrentState == stateKey);
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+        if (!string.IsNullOrWhiteSpace(flowVersion))
+            query = query.Where(i => i.FlowVersion == flowVersion);
+        return await query.LongCountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default)
     {
         var schema = currentSchema.Name ?? "public";

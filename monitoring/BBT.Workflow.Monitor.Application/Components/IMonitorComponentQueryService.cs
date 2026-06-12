@@ -30,6 +30,26 @@ public interface IMonitorComponentQueryService
     );
 
     /// <summary>
+    /// Returns a lightweight summary list (key, version, domain, labels) for the given
+    /// component type and domain — without the full definition payload.
+    /// Snapshot first; falls back to runtime DB load and cache warm if snapshot is empty.
+    /// </summary>
+    Task<Result<MonitorComponentSummaryResponse>> GetComponentSummaryAsync(
+        MonitorGetComponentsInput input,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Returns detail for a single component identified by <c>key</c> (and optional <c>version</c>).
+    /// Includes the component's <c>flow</c> identifier and all published versions sorted descending.
+    /// Returns 404 when the component is not found.
+    /// </summary>
+    Task<Result<MonitorComponentDetailResponse>> GetComponentDetailAsync(
+        MonitorGetComponentsInput input,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Returns all component dependencies of a workflow definition (tasks, schemas, views,
     /// functions, extensions, sub-flows) with their reference site in the definition.
     /// </summary>

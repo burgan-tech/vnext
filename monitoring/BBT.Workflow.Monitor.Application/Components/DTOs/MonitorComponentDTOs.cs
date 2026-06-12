@@ -107,6 +107,88 @@ public sealed class MonitorComponentStatsResponse
     public int Total => Flows + Tasks + Schemas + Views + Functions + Extensions;
 }
 
+/// <summary>Summary list response for a single component type — lightweight alternative to /definition.</summary>
+public sealed class MonitorComponentSummaryResponse
+{
+    /// <summary>The component type that was queried.</summary>
+    public string ComponentType { get; set; } = string.Empty;
+
+    /// <summary>Summary items — one per published component.</summary>
+    public List<MonitorComponentSummaryItem> Items { get; set; } = [];
+}
+
+/// <summary>Lightweight summary of a single published component (list query, no key).</summary>
+public sealed class MonitorComponentSummaryItem
+{
+    /// <summary>Component key.</summary>
+    public string? Key { get; set; }
+
+    /// <summary>Semantic version.</summary>
+    public string? Version { get; set; }
+
+    /// <summary>Owning domain.</summary>
+    public string? Domain { get; set; }
+
+    /// <summary>Human-readable labels (multi-language). Null when the component type does not define labels.</summary>
+    public List<MonitorComponentLabel>? Labels { get; set; }
+
+    /// <summary>
+    /// Component type discriminator when present in the definition (e.g. <c>WorkflowType</c>, <c>TaskType</c>, <c>ViewType</c>).
+    /// Null for component types that do not carry a <c>type</c> field.
+    /// </summary>
+    public JsonElement? Type { get; set; }
+
+    /// <summary>Free-text developer notes from the definition's <c>_comment</c> field. Null when absent.</summary>
+    public string? Comment { get; set; }
+}
+
+/// <summary>
+/// Single-component detail response returned when a <c>key</c> is provided.
+/// Flat structure (no <c>items</c> wrapper), includes the component's <c>flow</c> identifier and all published versions.
+/// </summary>
+public sealed class MonitorComponentDetailResponse
+{
+    /// <summary>Component key.</summary>
+    public string? Key { get; set; }
+
+    /// <summary>Resolved semantic version.</summary>
+    public string? Version { get; set; }
+
+    /// <summary>Owning domain.</summary>
+    public string? Domain { get; set; }
+
+    /// <summary>
+    /// Component stream identifier (e.g. <c>sys-flows</c>, <c>sys-tasks</c>).
+    /// Reflects the <c>flow</c> field stored inside the component definition.
+    /// </summary>
+    public string? Flow { get; set; }
+
+    /// <summary>Human-readable labels (multi-language). Null when the component type does not define labels.</summary>
+    public List<MonitorComponentLabel>? Labels { get; set; }
+
+    /// <summary>
+    /// Component type discriminator when present in the definition (e.g. <c>WorkflowType</c>, <c>TaskType</c>, <c>ViewType</c>).
+    /// Null for component types that do not carry a <c>type</c> field.
+    /// </summary>
+    public JsonElement? Type { get; set; }
+
+    /// <summary>Free-text developer notes from the definition's <c>_comment</c> field. Null when absent.</summary>
+    public string? Comment { get; set; }
+
+    /// <summary>All published versions of this component, sorted descending (newest first).</summary>
+    public List<string>? Versions { get; set; }
+}
+
+/// <summary>A localised display label for a component.</summary>
+public sealed class MonitorComponentLabel
+{
+    /// <summary>ISO 639 language code (e.g. "tr", "en").</summary>
+    public string? Language { get; set; }
+
+    /// <summary>Display text in the given language.</summary>
+    public string? Label { get; set; }
+}
+
 /// <summary>P15 — all component dependencies of a workflow definition.</summary>
 public sealed class MonitorDependencyResponse
 {
