@@ -68,13 +68,13 @@ public sealed class MonitorTaskListItem
 
 /// <summary>
 /// Where in the workflow definition the task was placed.
-/// <c>Slot</c> indicates the lifecycle hook; <c>ContextType</c> and <c>ContextKey</c>
+/// <c>TriggerLocation</c> indicates the lifecycle hook; <c>ContextType</c> and <c>ContextKey</c>
 /// identify the owning state or transition.
 /// </summary>
 public sealed class MonitorTaskTriggerContext
 {
-    /// <summary>Lifecycle hook: OnExecute, OnExit, or OnEntry.</summary>
-    public string Slot { get; set; } = string.Empty;
+    /// <summary>Lifecycle hook where the task was triggered: OnExecute, OnExit, or OnEntry.</summary>
+    public string TriggerLocation { get; set; } = string.Empty;
 
     /// <summary>
     /// Whether <c>ContextKey</c> refers to a state or a transition.
@@ -147,8 +147,23 @@ public sealed class MonitorTaskDetailResponse
     /// <summary>The raw output returned by the task executor.</summary>
     public JsonElement? Output { get; set; }
 
-    /// <summary>The final invocation result merged back into the instance data.</summary>
-    public JsonElement? InvocationResult { get; set; }
+    /// <summary>GUID of another InstanceTask that caused this task to fault (fault cascade), or null.</summary>
+    public Guid? FaultedByTaskId { get; set; }
+
+    /// <summary>
+    /// Structured error info. Always present — fields are populated when Status=Faulted,
+    /// BusinessStatus=Failed, or InvocationResult.isSuccess=false. Empty object when no error.
+    /// </summary>
+    public MonitorTaskErrorInfo Error { get; set; } = new();
+
+    /// <summary>
+    /// Structured invocation result (HTTP/Dapr/script execution metadata).
+    /// Null when the task never reached the invocation step (e.g. mapping error).
+    /// </summary>
+    public MonitorTaskInvocationResult? InvocationResult { get; set; }
+
+    /// <summary>Execution sub-steps from the InstanceActions table. Empty array when no actions are recorded.</summary>
+    public List<MonitorTaskActionItem> Actions { get; set; } = [];
 }
 
 /// <summary>Paged list of task items for an instance.</summary>
@@ -159,4 +174,71 @@ public sealed class MonitorInstanceTaskListResponse
 
     /// <summary>Total number of tasks.</summary>
     public int Total { get; set; }
+}
+
+/// <summary>
+/// Structured error block. Non-null when <see cref="MonitorTaskDetailResponse.Status"/> is Faulted
+/// or <see cref="MonitorTaskDetailResponse.BusinessStatus"/> is Failed.
+/// Populated from InvocationResult metadata (invocation errors) or from
+/// Response.error string (mapping errors — when InvokeAsync was never reached).
+/// </summary>
+public sealed class MonitorTaskErrorInfo
+{
+    /// <summary>Human-readable error message.</summary>
+    public string? Message { get; set; }
+
+    /// <summary>
+    /// .NET exception type name (e.g. "HttpRequestException", "NullReferenceException").
+    /// Null for business-logic failures or when metadata is unavailable.
+    /// </summary>
+    public string? ExceptionType { get; set; }
+
+    /// <summary>Full .NET stack trace. Null for business-logic failures or mapping errors.</summary>
+    public string? StackTrace { get; set; }
+}
+
+/// <summary>Structured invocation result — HTTP/execution metadata only, no error duplication.</summary>
+public sealed class MonitorTaskInvocationResult
+{
+    /// <summary>Whether the invocation itself succeeded (independent of business outcome).</summary>
+    public bool IsSuccess { get; set; }
+
+    /// <summary>HTTP status code returned by the task endpoint, or null if not applicable.</summary>
+    public int? StatusCode { get; set; }
+
+    /// <summary>Execution duration in milliseconds as reported by the invoker.</summary>
+    public long? ExecutionDurationMs { get; set; }
+
+    /// <summary>Response headers from the task endpoint, or null.</summary>
+    public Dictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// Parsed response data from the task endpoint.
+    /// Presented as a JSON object/array when the body is valid JSON;
+    /// as a JSON string when the body is plain text.
+    /// Null when no body was returned.
+    /// </summary>
+    public JsonElement? Body { get; set; }
+}
+
+/// <summary>One execution sub-step of a task, from the InstanceActions table.</summary>
+public sealed class MonitorTaskActionItem
+{
+    /// <summary>Action entity GUID.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>Step status: Pending, Processing, Completed, Failed, Cancelled.</summary>
+    public string? Status { get; set; }
+
+    /// <summary>UTC start of this step.</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>UTC end of this step, or null if not finished.</summary>
+    public DateTime? FinishedAt { get; set; }
+
+    /// <summary>Step duration in milliseconds, or null if not finished.</summary>
+    public double? DurationMs { get; set; }
+
+    /// <summary>Step-specific JSON payload (parameters, result, metadata).</summary>
+    public JsonElement? Detail { get; set; }
 }

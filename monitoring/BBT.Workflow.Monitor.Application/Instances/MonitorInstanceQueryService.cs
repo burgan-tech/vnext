@@ -9,6 +9,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitor.Instances.DTOs;
+using WorkflowTaskStatus = BBT.Workflow.Definitions.TaskStatus;
 
 namespace BBT.Workflow.Monitor.Instances;
 
@@ -21,6 +22,7 @@ public sealed class MonitorInstanceQueryService(
     IInstanceRepository instanceRepository,
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceTaskRepository instanceTaskRepository,
+    IInstanceActionRepository actionRepository,
     IComponentCacheStore componentCacheStore,
     IInstanceCorrelationRepository correlationRepository,
     ICurrentSchema currentSchema)
@@ -609,7 +611,8 @@ public sealed class MonitorInstanceQueryService(
             }
         }
 
-        return Result<MonitorTaskDetailResponse>.Ok(MapToTaskDetail(row, definitionInfo, triggerContext));
+        var actions = await actionRepository.GetByTaskIdAsync(row.Task.Id, cancellationToken);
+        return Result<MonitorTaskDetailResponse>.Ok(MapToTaskDetail(row, definitionInfo, triggerContext, actions));
     }
 
     private static MonitorTaskListItem MapToTaskListItem(InstanceTaskRow row)
@@ -634,7 +637,8 @@ public sealed class MonitorInstanceQueryService(
     private static MonitorTaskDetailResponse MapToTaskDetail(
         InstanceTaskRow row,
         MonitorTaskDefinitionInfo? definitionInfo,
-        MonitorTaskTriggerContext? triggerContext)
+        MonitorTaskTriggerContext? triggerContext,
+        List<InstanceAction> actions)
     {
         var task = row.Task;
         long? durationMs = task.FinishedAt.HasValue
@@ -654,7 +658,147 @@ public sealed class MonitorInstanceQueryService(
             Definition = definitionInfo,
             Input = task.Request.JsonElement,
             Output = task.Response.JsonElement,
-            InvocationResult = task.InvocationResult?.JsonElement
+            FaultedByTaskId = task.FaultedTaskId,
+            Error = BuildError(task),
+            InvocationResult = BuildInvocationResult(task),
+            Actions = actions.Select(MapToActionItem).ToList()
+        };
+    }
+
+    private static MonitorTaskActionItem MapToActionItem(InstanceAction action)
+    {
+        double? durationMs = action.FinishedAt.HasValue
+            ? (action.FinishedAt.Value - action.StartedAt).TotalMilliseconds
+            : null;
+
+        return new MonitorTaskActionItem
+        {
+            Id = action.Id,
+            Status = action.Status,
+            StartedAt = action.StartedAt,
+            FinishedAt = action.FinishedAt,
+            DurationMs = durationMs,
+            Detail = action.Detail?.JsonElement
+        };
+    }
+
+    private static MonitorTaskInvocationResult? BuildInvocationResult(InstanceTask task)
+    {
+        var el = task.InvocationResult?.JsonElement;
+        if (el is not { ValueKind: JsonValueKind.Object })
+            return null;
+
+        var root = el.Value;
+
+        return new MonitorTaskInvocationResult
+        {
+            IsSuccess = root.TryGetProperty("isSuccess", out var isSuccessProp)
+                        && isSuccessProp.ValueKind == JsonValueKind.True,
+            StatusCode = root.TryGetProperty("statusCode", out var scProp)
+                         && scProp.ValueKind == JsonValueKind.Number
+                ? scProp.GetInt32()
+                : null,
+            ExecutionDurationMs = root.TryGetProperty("executionDurationMs", out var durProp)
+                                  && durProp.ValueKind == JsonValueKind.Number
+                ? durProp.GetInt64()
+                : null,
+            Body = root.TryGetProperty("body", out var bodyProp)
+                ? ParseBodyElement(bodyProp)
+                : null,
+            Headers = root.TryGetProperty("headers", out var headersProp)
+                      && headersProp.ValueKind == JsonValueKind.Object
+                ? headersProp.EnumerateObject()
+                    .ToDictionary(
+                        p => p.Name,
+                        p => p.Value.ValueKind == JsonValueKind.String
+                            ? p.Value.GetString() ?? string.Empty
+                            : p.Value.GetRawText())
+                : null
+        };
+    }
+
+    private static JsonElement? ParseBodyElement(JsonElement prop)
+    {
+        if (prop.ValueKind == JsonValueKind.Undefined)
+            return null;
+
+        if (prop.ValueKind == JsonValueKind.String)
+        {
+            var raw = prop.GetString();
+            if (raw != null)
+            {
+                try { return JsonDocument.Parse(raw).RootElement.Clone(); }
+                catch (JsonException) { }
+            }
+        }
+
+        return prop.Clone();
+    }
+
+    private static MonitorTaskErrorInfo BuildError(InstanceTask task)
+    {
+        var invEl = task.InvocationResult?.JsonElement;
+
+        bool invocationFailed = invEl is { ValueKind: JsonValueKind.Object }
+            && invEl.Value.TryGetProperty("isSuccess", out var isSuccessProp)
+            && isSuccessProp.ValueKind == JsonValueKind.False;
+
+        bool hasError = task.Status == WorkflowTaskStatus.Faulted
+            || task.BusinessStatus == BusinessStatus.Failed
+            || invocationFailed;
+
+        if (!hasError)
+            return new MonitorTaskErrorInfo();
+
+        // Prefer InvocationResult metadata (invocation-level error: HTTP, Dapr, script)
+        if (invEl is { ValueKind: JsonValueKind.Object })
+        {
+            var root = invEl.Value;
+            string? message = root.TryGetProperty("errorMessage", out var msgProp)
+                              && msgProp.ValueKind == JsonValueKind.String
+                ? msgProp.GetString()
+                : null;
+            string? exceptionType = null;
+            string? stackTrace = null;
+
+            if (root.TryGetProperty("metadata", out var metaProp)
+                && metaProp.ValueKind == JsonValueKind.Object)
+            {
+                if (metaProp.TryGetProperty("ExceptionType", out var etProp)
+                    && etProp.ValueKind == JsonValueKind.String)
+                    exceptionType = etProp.GetString();
+
+                if (metaProp.TryGetProperty("StackTrace", out var stProp)
+                    && stProp.ValueKind == JsonValueKind.String)
+                    stackTrace = stProp.GetString();
+            }
+
+            if (message != null || exceptionType != null)
+                return new MonitorTaskErrorInfo
+                {
+                    Message = message,
+                    ExceptionType = exceptionType,
+                    StackTrace = stackTrace
+                };
+        }
+
+        // Fallback: mapping error — InvokeAsync never reached; Response holds {"error": "..."}
+        var respEl = task.Response.JsonElement;
+        if (respEl.ValueKind == JsonValueKind.Object
+            && respEl.TryGetProperty("error", out var errProp)
+            && errProp.ValueKind == JsonValueKind.String)
+        {
+            return new MonitorTaskErrorInfo { Message = errProp.GetString() };
+        }
+
+        // Status indicates failure but no detail available
+        return new MonitorTaskErrorInfo
+        {
+            Message = task.Status == WorkflowTaskStatus.Faulted
+                ? "Task execution faulted."
+                : invocationFailed
+                    ? "Task invocation failed."
+                    : "Task business logic failed."
         };
     }
 

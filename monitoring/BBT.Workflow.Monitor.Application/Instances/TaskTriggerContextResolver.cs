@@ -42,7 +42,7 @@ internal static class TaskTriggerContextResolver
             {
                 return new MonitorTaskTriggerContext
                 {
-                    Slot = "OnExecute",
+                    TriggerLocation = "OnExecute",
                     ContextType = "Transition",
                     ContextKey = transitionKey,
                     Order = onExecuteEntry.Order,
@@ -62,7 +62,7 @@ internal static class TaskTriggerContextResolver
             {
                 return new MonitorTaskTriggerContext
                 {
-                    Slot = "OnExit",
+                    TriggerLocation = "OnExit",
                     ContextType = "State",
                     ContextKey = fromState,
                     Order = onExitEntry.Order,
@@ -84,7 +84,7 @@ internal static class TaskTriggerContextResolver
                 {
                     return new MonitorTaskTriggerContext
                     {
-                        Slot = "OnEntry",
+                        TriggerLocation = "OnEntry",
                         ContextType = "State",
                         ContextKey = toState,
                         Order = onEntryEntry.Order,
