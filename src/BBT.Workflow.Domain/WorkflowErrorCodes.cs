@@ -127,7 +127,8 @@ public static class WorkflowErrorCodes
     #region Function Errors (800xxx)
     
     public const string FunctionNotInWorkflow = "Function:800001";
-    
+    public const string FunctionScopeNotSatisfied = "Function:800002";
+
     #endregion
 
     #region Authorization Errors (110xxx)

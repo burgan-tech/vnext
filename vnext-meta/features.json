@@ -1,3 +1,19 @@
 {
-
+  "runtimeVersion": "0.0.58",
+  "engine": {
+    "customScriptHelpers": {
+      "since": "0.0.58",
+      "status": "experimental",
+      "configFlag": "Scripting:Helpers:Enabled",
+      "description": "Reference reusable C# helper components (sys-mappings) from a mapping via mapping.scripts.helpers[] (Reference: key/version/domain/flow), with a per-mapping mapping.scripts.allowedAssemblies grant. A workflow may also declare a flow-level scripts object that is unioned with each mapping's scripts (helpers deduped, assemblies merged). The referenced helper set is compiled first under a best-effort compile-time sandbox (reference allow-list + mandatory banned-namespace analyzer), cached by content hash, then the mapping is compiled against it with helper namespaces auto-imported. A mapping may set encoding=REF to run a sys-mappings component directly (code is a Reference, resolved from the component store; single level, no REF chaining). Grants merge on top of the Scripting:Sandbox:AllowedAssemblies baseline. Disabled by default; not a hard security boundary.",
+      "relatedConfig": [
+        "Scripting:Helpers:Enabled",
+        "Scripting:Sandbox:Enabled",
+        "Scripting:Sandbox:AllowedAssemblies",
+        "Scripting:Sandbox:BannedNamespaces",
+        "Scripting:Sandbox:PluginDirectory",
+        "Scripting:Sandbox:AllowUnsafe"
+      ]
+    }
+  }
 }

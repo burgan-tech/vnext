@@ -1,4 +1,5 @@
 using BBT.Aether.Events;
+using BBT.Workflow.Hosting;
 
 namespace BBT.Workflow.Workers.Inbox.HostedServices;
 
@@ -15,8 +16,9 @@ public sealed class InboxProcessorHostedService(
             "Inbox Processor Worker starting. Processing interval: {Interval}",
             options.ProcessingInterval);
 
-        // Wait a bit before starting to allow other services to initialize
-        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+        // Brief warm-up to let the sidecar/other services initialize, then begin polling.
+        // Jittered so scaled replicas don't start (and stay) in lockstep.
+        await Task.Delay(PollingJitter.Startup(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -40,7 +42,7 @@ public sealed class InboxProcessorHostedService(
 
             try
             {
-                await Task.Delay(options.ProcessingInterval, stoppingToken);
+                await Task.Delay(PollingJitter.Apply(options.ProcessingInterval), stoppingToken);
             }
             catch (OperationCanceledException)
             {

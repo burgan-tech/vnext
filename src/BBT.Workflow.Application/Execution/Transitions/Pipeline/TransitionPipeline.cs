@@ -3,6 +3,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
@@ -19,7 +20,8 @@ namespace BBT.Workflow.Execution.Pipeline;
 /// </summary>
 public class TransitionPipeline
 {
-    private readonly IReadOnlyList<ITransitionStep> _steps;
+    private readonly TransitionExecutor _executor;
+    private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly ITransitionLockScopeFactory _lockScopeFactory;
     private readonly IReservedTransitionResolver _reservedTransitionResolver;
     private readonly IInstanceBusyMarker _busyMarker;
@@ -40,7 +42,8 @@ public class TransitionPipeline
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
     public TransitionPipeline(
-        IEnumerable<ITransitionStep> steps,
+        TransitionExecutor executor,
+        ContinuationDispatcher continuationDispatcher,
         ITransitionLockScopeFactory lockScopeFactory,
         IReservedTransitionResolver reservedTransitionResolver,
         IInstanceBusyMarker busyMarker,
@@ -51,7 +54,8 @@ public class TransitionPipeline
         IPipelineProfileResolver profileResolver,
         ILogger<TransitionPipeline> logger)
     {
-        _steps = steps.OrderBy(s => s.Order).ToList();
+        _executor = executor;
+        _continuationDispatcher = continuationDispatcher;
         _lockScopeFactory = lockScopeFactory;
         _reservedTransitionResolver = reservedTransitionResolver;
         _busyMarker = busyMarker;
@@ -91,7 +95,8 @@ public class TransitionPipeline
             await using var ownLock = await _lockScopeFactory.AcquireAsync(reservedKey, cancellationToken);
             if (!ownLock.IsAcquired)
             {
-                _logger.InstanceLockFailed(context.InstanceId.ToString());
+                // Lock failure is already logged by TransitionLockScopeFactory with the full key;
+                // avoid a duplicate log line for the same acquisition.
                 return Result<TransitionExecutionContext>.Fail(
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
@@ -100,7 +105,7 @@ public class TransitionPipeline
             if (context.Directives.IsSubFlowResume)
                 await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
-            return await RunChainAsync(context, workflowContext, ownLock, cancellationToken);
+            return await RunChainAsync(context, ownLock, cancellationToken);
         }
 
         // 3) Normal transitions — acquire single lock for the entire chain
@@ -108,7 +113,8 @@ public class TransitionPipeline
 
         if (!lockScope.IsAcquired)
         {
-            _logger.InstanceLockFailed(context.InstanceId.ToString());
+            // Lock failure is already logged by TransitionLockScopeFactory with the full key;
+            // avoid a duplicate log line for the same acquisition.
             return Result<TransitionExecutionContext>.Fail(
                 WorkflowErrors.InstanceLockConflict(context.InstanceId));
         }
@@ -117,7 +123,7 @@ public class TransitionPipeline
         await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
         // 5) Run the entire chain under this lock scope
-        return await RunChainAsync(context, workflowContext, lockScope, cancellationToken);
+        return await RunChainAsync(context, lockScope, cancellationToken);
     }
 
     /// <summary>
@@ -126,12 +132,10 @@ public class TransitionPipeline
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> RunChainAsync(
         TransitionExecutionContext initialContext,
-        WorkflowExecutionContext initialWorkflowContext,
         ITransitionLockScope? lockScope,
         CancellationToken cancellationToken)
     {
         var context = initialContext;
-        var currentWorkflowContext = initialWorkflowContext;
 
         while (true)
         {
@@ -145,7 +149,7 @@ public class TransitionPipeline
             }
 
             // Execute pipeline steps for this transition
-            var pipelineResult = await RunSingleTransitionAsync(context, cancellationToken);
+            var pipelineResult = await _executor.ExecuteOneAsync(context, cancellationToken);
             if (!pipelineResult.IsSuccess)
             {
                 await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
@@ -171,11 +175,22 @@ public class TransitionPipeline
                 }
             }
 
-            // Check for next transition in the auto-chain
-            var nextTransition = context.Directives.ConsumeNextTransition();
-            if (nextTransition is null)
+            // Realize the continuation. Inline = in-process auto-chain (sync); Enqueue =
+            // transition-per-job (the strategy persists the next transition to the outbox and
+            // returns null, ending the in-process loop — a separate job resumes the chain).
+            var continuationMode = context.EnqueueContinuations
+                ? ContinuationMode.Enqueue
+                : ContinuationMode.Inline;
+
+            var continuationResult = await _continuationDispatcher.DispatchAsync(
+                continuationMode, context, cancellationToken);
+            if (!continuationResult.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(continuationResult.Error);
+
+            if (continuationResult.Value is null)
             {
-                // Chain complete — apply deferred status (inside lock, no re-acquire needed)
+                // No further in-process work (chain complete or continuation enqueued) —
+                // apply deferred status (inside lock, no re-acquire needed).
                 await ApplyResolvedStatusAsync(context, cancellationToken);
                 return Result<TransitionExecutionContext>.Ok(context);
             }
@@ -186,9 +201,8 @@ public class TransitionPipeline
                 await lockScope.ExtendAsync(cancellationToken);
             }
 
-            // Build next context for the chained transition
-            currentWorkflowContext = CreateNextWorkflowContext(context, nextTransition);
-            var nextContextResult = await CreateAndValidateContextAsync(currentWorkflowContext, cancellationToken);
+            // Rebuild and validate the next chained transition context (single source of truth).
+            var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, cancellationToken);
             if (!nextContextResult.IsSuccess)
                 return Result<TransitionExecutionContext>.Fail(nextContextResult.Error);
 
@@ -215,254 +229,9 @@ public class TransitionPipeline
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 
         context.Profile = _profileResolver.Resolve(workflowContext);
+        context.EnqueueContinuations = workflowContext.EnqueueContinuations;
+        context.ChainToken = workflowContext.ChainToken;
         return Result<TransitionExecutionContext>.Ok(context);
-    }
-
-    /// <summary>
-    /// Executes a single transition's pipeline steps.
-    /// </summary>
-    [Trace]
-    private async Task<Result> RunSingleTransitionAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        EnrichTelemetry(context);
-
-        var profile = context.Profile ?? PipelineExecutionProfile.ForManual();
-        var state = CreateInitialState(context, profile);
-
-        using (_logger.BeginScope(BuildLogScope(context)))
-        {
-            try
-            {
-                while (state.HasMoreSteps())
-                {
-                    if (context.SkipImmediateExecution)
-                        return Result.Ok();
-
-                    var stepResult = await ExecuteStepWithBoundaryAsync(
-                        state.CurrentStep, context, cancellationToken);
-
-                    if (!stepResult.IsSuccess)
-                        return Result.Fail(stepResult.Error);
-
-                    var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
-
-                    if (flowControl.ShouldStop)
-                        break;
-
-                    if (flowControl.ShouldReplan)
-                    {
-                        state = CreateInitialState(context, profile);
-                        continue;
-                    }
-
-                    state = state.MoveNext();
-                }
-
-                return Result.Ok();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unhandled exception in pipeline execution for workflow {WorkflowKey}",
-                    context.Workflow.Key);
-                return Result.Fail(Error.Failure("PipelineException", ex.Message));
-            }
-        }
-    }
-
-    /// <summary>
-    /// Builds a log scope dictionary for the current transition.
-    /// </summary>
-    private static Dictionary<string, object> BuildLogScope(TransitionExecutionContext context)
-    {
-        var props = new Dictionary<string, object>
-        {
-            [TelemetryConstants.TagNames.Domain]    = context.Domain,
-            [TelemetryConstants.TagNames.Flow]    = context.Workflow.Key,
-            [TelemetryConstants.TagNames.FlowVersion]    = context.Workflow.Version,
-            [TelemetryConstants.TagNames.InstanceId]    = context.InstanceId,
-            [TelemetryConstants.TagNames.InstanceKey]    = context.Instance.Key ?? "N/A",
-            [TelemetryConstants.TagNames.StateFrom]     = context.Transition?.From ?? context.Instance.GetCurrentState,
-            [TelemetryConstants.TagNames.StateTo]       = context.Transition?.Target ?? "N/A",
-            [TelemetryConstants.TagNames.TransitionKey] = context.TransitionKey,
-            [TelemetryConstants.TagNames.TriggerType]    = context.Transition?.TriggerType.ToString() ?? "N/A",
-            ["ChainDepth"] = context.ChainDepth,
-            ["PipelineProfile"] = context.Profile?.Name ?? "unknown",
-        };
-        if (context.Headers.TryGetValue(TelemetryConstants.HeaderNames.ParentInstanceId, out var raw)
-            && Guid.TryParse(raw, out var parentId))
-        {
-            props[TelemetryConstants.TagNames.ParentInstanceId] = parentId;
-        }
-        return props;
-    }
-
-    /// <summary>
-    /// Executes a pipeline step with exception boundary.
-    /// </summary>
-    private async Task<Result<StepOutcome>> ExecuteStepWithBoundaryAsync(
-        ITransitionStep step,
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await step.ExecuteAsync(context, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unhandled exception in step {StepName}", step.Name);
-            return Result<StepOutcome>.Fail(Error.Failure(ex.GetType().Name, ex.Message));
-        }
-    }
-
-    private static void EnrichTelemetry(TransitionExecutionContext context)
-    {
-        var activity = Activity.Current;
-        if (activity is null) return;
-        
-        activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
-        activity.SetTag(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
-        activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
-        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, context.TransitionKey);
-        if (context.Transition != null)
-        {
-            activity.SetTag(TelemetryConstants.TagNames.TriggerType, context.Transition.TriggerType.ToString());
-        }
-
-        activity.SetTag("vnext.chain.depth", context.ChainDepth);
-        activity.SetTag("vnext.pipeline.profile", context.Profile?.Name ?? "unknown");
-        activity.SetTag("vnext.chain.id", context.ExecutionChainId);
-        
-        activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
-        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
-        activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
-        
-        activity.SetDisplayName($"transition/{context.TransitionKey}");
-    }
-
-    /// <summary>
-    /// Creates a new WorkflowExecutionContext for the next transition in the chain.
-    /// </summary>
-    private static WorkflowExecutionContext CreateNextWorkflowContext(
-        TransitionExecutionContext currentContext,
-        NextTransitionRequest nextTransition)
-    {
-        return new WorkflowExecutionContext
-        {
-            Domain = currentContext.Domain,
-            InstanceId = currentContext.InstanceId.ToString(),
-            WorkflowKey = currentContext.WorkflowKey,
-            WorkflowVersion = currentContext.Workflow.Version,
-            TransitionKey = nextTransition.TransitionKey,
-            TriggerType = TriggerType.Automatic,
-            Mode = ExecMode.Sync,
-            CallerMode = currentContext.CallerMode,
-            Actor = Shared.ExecutionActor.System,
-            CorrelationId = currentContext.CorrelationId,
-            CausationId = currentContext.ExecutionChainId,
-            RequestedAt = DateTimeOffset.UtcNow,
-            Headers = currentContext.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-            Execution = new ExecutionInfo
-            {
-                ExecutionChainId = currentContext.ExecutionChainId,
-                ChainDepth = currentContext.ChainDepth + 1,
-                ResumeFrom = null
-            },
-            IsReentry = true,
-            IsErrorBoundaryTransition = string.Equals(nextTransition.Reason, TransitionRequestReasons.ErrorBoundary, StringComparison.OrdinalIgnoreCase)
-        };
-    }
-
-    /// <summary>
-    /// Creates initial pipeline state with execution plan.
-    /// </summary>
-    private PipelineState CreateInitialState(TransitionExecutionContext context, PipelineExecutionProfile profile)
-    {
-        var plan = BuildExecutionPlan(context, profile);
-        _logger.PipelineExecutingWithProfile(profile.Name, plan.Count, context.ChainDepth);
-        var excludedCount = _steps.Count - plan.Count;
-        if (excludedCount > 0)
-            _logger.ProfileExcludedSteps(profile.Name, excludedCount, context.TransitionKey);
-
-        return new PipelineState(plan, 0);
-    }
-
-    /// <summary>
-    /// Builds an execution plan by filtering and ordering steps based on context directives.
-    /// </summary>
-    private IReadOnlyList<ITransitionStep> BuildExecutionPlan(
-        TransitionExecutionContext context,
-        PipelineExecutionProfile profile)
-    {
-        var ordered = _steps
-            .Where(s => !profile.ExcludedStepOrders.Contains(s.Order))
-            .ToList();
-
-        var startOrder = context.Directives.ConsumeResumeFrom();
-        if (startOrder.HasValue)
-            ordered = ordered.Where(s => s.Order >= startOrder.Value).ToList();
-
-        if (context.Directives.TerminalReached)
-        {
-            var maxOrder = LifecycleOrder.Finalize;
-            ordered = ordered.Where(s => s.Order <= maxOrder).ToList();
-        }
-
-        if (context.Directives.Epilogue == EpilogueMode.Skip)
-        {
-            ordered = ordered
-                .Where(s => s.Order != LifecycleOrder.Schedule &&
-                            s.Order != LifecycleOrder.Auto)
-                .ToList();
-        }
-
-        return ordered;
-    }
-
-    /// <summary>
-    /// Determines flow control based on step outcome.
-    /// </summary>
-    private static FlowControl DetermineFlowControl(
-        StepOutcome outcome,
-        ITransitionStep step,
-        TransitionExecutionContext context,
-        PipelineState state)
-    {
-        outcome.MutateDirectives?.Invoke(context.Directives);
-
-        if (outcome.StopPipeline)
-            return FlowControl.Stop();
-
-        if (outcome.SkipToOrder is { } skipTo)
-        {
-            context.Directives.RequestResumeFrom(skipTo);
-            return FlowControl.Replan();
-        }
-
-        if (NeedsReplan(state.Plan, context.Directives))
-        {
-            context.Directives.RequestResumeFrom(step.Order + 1);
-            return FlowControl.Replan();
-        }
-
-        return FlowControl.Continue();
-    }
-
-    private static bool NeedsReplan(IReadOnlyList<ITransitionStep> currentPlan, PipelineDirectives d)
-    {
-        if (d.TerminalReached)
-            return true;
-
-        if (d.Epilogue == EpilogueMode.Skip &&
-            currentPlan.Any(s => s.Order == LifecycleOrder.Schedule || s.Order == LifecycleOrder.Auto))
-            return true;
-
-        if (d.ResumeFromOrder is not null)
-            return true;
-
-        return false;
     }
 
     /// <summary>
@@ -552,19 +321,5 @@ public class TransitionPipeline
         _logger.LogDebug(
             "Instance {InstanceId} resolved to Active after chain completion",
             context.InstanceId);
-    }
-
-    private readonly record struct PipelineState(IReadOnlyList<ITransitionStep> Plan, int Index)
-    {
-        public ITransitionStep CurrentStep => Plan[Index];
-        public bool HasMoreSteps() => Index < Plan.Count;
-        public PipelineState MoveNext() => this with { Index = Index + 1 };
-    }
-
-    private readonly record struct FlowControl(bool ShouldStop, bool ShouldReplan)
-    {
-        public static FlowControl Stop() => new(ShouldStop: true, ShouldReplan: false);
-        public static FlowControl Replan() => new(ShouldStop: false, ShouldReplan: true);
-        public static FlowControl Continue() => new(ShouldStop: false, ShouldReplan: false);
     }
 }

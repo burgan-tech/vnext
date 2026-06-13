@@ -73,30 +73,7 @@ public class TransitionValidationService(
     }
 
     private static string ResolveCulture(IReadOnlyDictionary<string, string?>? headers)
-    {
-        if (headers is null)
-            return "en-US";
-
-        if (!headers.TryGetValue("accept-language", out var acceptLanguage) &&
-            !headers.TryGetValue("Accept-Language", out acceptLanguage))
-        {
-            return "en-US";
-        }
-
-        if (string.IsNullOrWhiteSpace(acceptLanguage))
-            return "en-US";
-
-        var firstLanguage = acceptLanguage
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault();
-
-        if (string.IsNullOrWhiteSpace(firstLanguage))
-            return "en-US";
-
-        return firstLanguage
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault() ?? "en-US";
-    }
+        => LanguageResolver.ResolveCulture(headers);
 
     /// <inheritdoc />
     /// <summary>

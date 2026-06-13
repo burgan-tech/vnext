@@ -1,4 +1,5 @@
 using BBT.Aether.AspNetCore.Results;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Instances;
@@ -28,7 +29,8 @@ public sealed class StateFunctionHandler(
             Extensions = request.Parameters.Extensions,
             Headers = request.Headers,
             QueryParams = request.QueryParameters,
-            Role = request.CurrentUser.Roles?.FirstOrDefault()
+            Role = request.CurrentUser.ResolveCallerRole(request.Headers),
+            Roles = request.CurrentUser.ResolveCallerRoles(request.Headers)
         };
 
         var result = await queryAppService.GetInstanceStateAsync(input, cancellationToken);

@@ -128,7 +128,7 @@ public sealed class NotificationTaskExecutorTests
     {
         var engine = Substitute.For<IScriptEngine>();
         engine.CompileToInstanceAsync<INotificationMapping>(
-                Arg.Any<string>(),
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
                 Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
                 Arg.Any<IEnumerable<string>?>(),
                 Arg.Any<CancellationToken>())
@@ -137,7 +137,7 @@ public sealed class NotificationTaskExecutorTests
         if (stateMapping is not null)
         {
             engine.CompileToInstanceAsync<IStateNotificationMapping>(
-                    Arg.Any<string>(),
+                    Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
                     Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
                     Arg.Any<IEnumerable<string>?>(),
                     Arg.Any<CancellationToken>())
@@ -146,7 +146,7 @@ public sealed class NotificationTaskExecutorTests
         else
         {
             engine.CompileToInstanceAsync<IStateNotificationMapping>(
-                    Arg.Any<string>(),
+                    Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
                     Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
                     Arg.Any<IEnumerable<string>?>(),
                     Arg.Any<CancellationToken>())
@@ -431,7 +431,7 @@ public sealed class NotificationTaskExecutorTests
     {
         var scriptEngine = Substitute.For<IScriptEngine>();
         scriptEngine.CompileToInstanceAsync<IStateNotificationMapping>(
-                Arg.Any<string>(),
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
                 Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
                 Arg.Any<IEnumerable<string>?>(),
                 Arg.Any<CancellationToken>())
@@ -446,7 +446,7 @@ public sealed class NotificationTaskExecutorTests
 
         result.IsSuccess.ShouldBeTrue();
         await scriptEngine.DidNotReceive().CompileToInstanceAsync<INotificationMapping>(
-            Arg.Any<string>(),
+            Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
             Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
             Arg.Any<IEnumerable<string>?>(),
             Arg.Any<CancellationToken>());
@@ -458,7 +458,7 @@ public sealed class NotificationTaskExecutorTests
         var mapping = CreateMapping();
         var scriptEngine = Substitute.For<IScriptEngine>();
         scriptEngine.CompileToInstanceAsync<INotificationMapping>(
-                Arg.Any<string>(),
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
                 Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
                 Arg.Any<IEnumerable<string>?>(),
                 Arg.Any<CancellationToken>())
@@ -472,7 +472,7 @@ public sealed class NotificationTaskExecutorTests
 
         result.IsSuccess.ShouldBeTrue();
         await scriptEngine.DidNotReceive().CompileToInstanceAsync<IStateNotificationMapping>(
-            Arg.Any<string>(),
+            Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings>(),
             Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
             Arg.Any<IEnumerable<string>?>(),
             Arg.Any<CancellationToken>());

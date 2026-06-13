@@ -93,4 +93,10 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// Gets or sets the W3C Trace Context tracestate header for vendor-specific trace data.
     /// </summary>
     public string? TraceState { get; set; }
+
+    /// <summary>
+    /// Gets or sets the auto-chain ownership token (S6). Carried so a continuation job is
+    /// admitted past the Busy chain-token gate as the chain's own work.
+    /// </summary>
+    public Guid? ChainToken { get; set; }
 }

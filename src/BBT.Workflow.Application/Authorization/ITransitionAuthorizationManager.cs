@@ -76,6 +76,32 @@ public interface ITransitionAuthorizationManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Evaluates a set of role grants against ALL of the caller's roles (multi-role: any allowed → allow).
+    /// No grants → allow. When callerRoles is null/empty only predefined/dynamic grants are evaluated.
+    /// DENY wins within each role evaluation. Reused for custom function <c>Roles</c> and state queryRoles.
+    /// </summary>
+    Task<bool> IsAnyRoleAllowedForGrantsAsync(
+        IReadOnlyCollection<string>? callerRoles,
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        Instance? instance,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates state-based query visibility for the caller. Resolves the effective grants —
+    /// the instance's effective-state <c>queryRoles</c> when present, otherwise <c>workflow.QueryRoles</c> —
+    /// and evaluates the caller's roles against them (multi-role: any allowed → allow). No grants → allow.
+    /// Used by the state/data/view/schema instance functions to gate access; predefined and dynamic role
+    /// grants are honored via the instance and <paramref name="requestContext"/>.
+    /// </summary>
+    Task<bool> IsQueryAllowedAsync(
+        WorkflowDefinition workflow,
+        Instance instance,
+        IReadOnlyCollection<string>? callerRoles,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Builds the effective caller roles list for schema field-level visibility.
     /// Returns static roles (ICurrentUser.Roles); when instance is present, adds applicable predefined roles:
     /// <c>$InstanceStarter</c>, <c>$PreviousUser</c> (matched via ActorUserName),

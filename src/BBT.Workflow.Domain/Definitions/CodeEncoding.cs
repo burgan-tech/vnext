@@ -19,6 +19,13 @@ public sealed class CodeEncoding : IEquatable<CodeEncoding>
     public static readonly CodeEncoding Native = new("NAT", "Native");
 
     /// <summary>
+    /// Code is a reference to a <c>sys-mappings</c> component; the actual body is resolved from the
+    /// component store (its own <c>Name/Code/Encoding</c>). The <c>code</c> field holds a
+    /// <see cref="Reference"/> object instead of a string.
+    /// </summary>
+    public static readonly CodeEncoding Reference = new("REF", "Reference");
+
+    /// <summary>
     /// Short code identifier for the encoding type.
     /// </summary>
     public string Code { get; }
@@ -51,6 +58,7 @@ public sealed class CodeEncoding : IEquatable<CodeEncoding>
         {
             "B64" => Base64,
             "NAT" => Native,
+            "REF" => Reference,
             _ => Base64
         };
     }

@@ -1,28 +1,21 @@
-using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
-using BBT.Aether.Uow;
-using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
 /// <summary>
-/// Handles ChildSubflowFaultRequestedEvent to propagate fault downward to child SubFlow instances.
-/// When a parent faults, this handler loads the child instance and faults it, which recursively
-/// triggers further downward and upward propagation through the child's own Fault() logic.
+/// Forwards <see cref="ChildSubflowFaultRequestedEvent"/> to the Orchestration <c>child-fault</c>
+/// internal endpoint via Dapr service invocation. Thin relay: Orchestration's
+/// <c>IChildSubflowFaultService</c> loads + faults the child (idempotency lives server-side now).
 /// </summary>
 internal sealed class ChildSubflowFaultRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
-    IServiceScopeFactory scopeFactory,
-    ILogger<ChildSubflowFaultRequestedEventHandler> logger
-) : IEventHandler<ChildSubflowFaultRequestedEvent>
+    IOrchestrationForwarder forwarder,
+    ILogger<ChildSubflowFaultRequestedEventHandler> logger) : IEventHandler<ChildSubflowFaultRequestedEvent>
 {
-    /// <summary>
-    /// Handles the ChildSubflowFaultRequestedEvent by loading and faulting the child instance.
-    /// Idempotent: skips if the child is already Faulted or Completed.
-    /// </summary>
     public async Task HandleAsync(CloudEventEnvelope<ChildSubflowFaultRequestedEvent> envelope,
         CancellationToken cancellationToken)
     {
@@ -51,40 +44,9 @@ internal sealed class ChildSubflowFaultRequestedEventHandler(
                 eventData.Domain,
                 eventData.Flow);
 
-            await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
-                async (sp, ct) =>
-                {
-                    var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                    var instanceRepository = sp.GetRequiredService<IInstanceRepository>();
-
-                    await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-                    {
-                        Scope = UnitOfWorkScopeOption.RequiresNew
-                    }, ct);
-
-                    var childInstance = await instanceRepository.FindAsync(
-                        eventData.InstanceId, true, ct);
-
-                    if (childInstance == null)
-                    {
-                        logger.InstanceNotFound(eventData.InstanceId, eventData.Flow);
-                        return;
-                    }
-
-                    // Idempotency: skip if child is already in a terminal state
-                    if (childInstance.Status.Equals(InstanceStatus.Faulted) ||
-                        childInstance.Status.Equals(InstanceStatus.Completed))
-                    {
-                        return;
-                    }
-
-                    childInstance.Fault(eventData.Domain);
-                    await instanceRepository.UpdateAsync(childInstance, true, ct);
-
-                    logger.ChildSubflowFaultApplied(eventData.InstanceId, eventData.ParentInstanceId);
-
-                    await uow.CommitAsync(ct);
-                }, cancellationToken);
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-fault?parentInstanceId={eventData.ParentInstanceId}";
+            await forwarder.ForwardAsync(HttpMethod.Post, route, new { },
+                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
         }
     }
 }

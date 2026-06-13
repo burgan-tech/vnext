@@ -148,7 +148,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.DispatchStrategy = DomainEventDispatchStrategy.AlwaysUseOutbox;
         });
 
-        services.AddAetherOutbox<MessagingDbContext>();
+        // Bind the full AetherOutboxOptions from the "Aether:Outbox" config section (ProcessingInterval,
+        // BatchSize, LeaseDuration, RetentionPeriod, MaxRetryCount, RetryBaseDelay). Absent keys keep
+        // Aether's defaults. The shared singleton drives both the outbox and inbox processors, so the
+        // section configures poll latency, batch size, and lease behavior from appsettings.
+        var configuration = services.GetConfiguration();
+
+        services.AddAetherOutbox<MessagingDbContext>(options =>
+            configuration.GetSection("Aether:Outbox").Bind(options));
         services.AddAetherInbox<MessagingDbContext>();
 
         return services;
@@ -284,9 +291,10 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<ResponseHeaderFilter>();
         services.AddScoped<IHeaderService, HttpContextHeaderService>();
+        services.AddScoped<BBT.Workflow.Languages.ICurrentLanguage, BBT.Workflow.Languages.HttpContextCurrentLanguage>();
         services
             .ReplaceSchemaResolver<HeaderSchemaResolutionStrategy, WorkflowHeaderSchemaResolutionStrategy>();
-        
+
         return services;
     }
 }

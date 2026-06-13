@@ -42,5 +42,11 @@ public sealed class GetFunctionWithInstanceInput : IHasDomain
     /// Caller role for state function (e.g. to filter available transitions by transition role grants when calling SubFlow state).
     /// </summary>
     public string? Role { get; set; }
+
+    /// <summary>
+    /// Caller roles forwarded to the locally-routed function for authorization (e.g. instance query
+    /// access checks). Mirrors the single <see cref="Role"/> but carries the full role list.
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; set; }
 }
 

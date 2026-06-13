@@ -39,7 +39,8 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
         return await ResultExtensions.TryAsync(async ct =>
             {
                 var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IConditionMapping>(
-                    script.DecodedCode,
+                    script,
+                    flowScripts: context.Workflow?.Scripts,
                     cancellationToken: ct);
             
                 var result = await scriptRunner.Handler(context);

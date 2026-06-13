@@ -27,9 +27,11 @@ public sealed class SetBusyStep(
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(SetBusyStep)}");
 
-        // Skip if instance is already Busy (chained auto transitions)
+        // Skip if instance is already Busy (chained auto transitions). Adopt the instance's
+        // existing chain token so continuations from this hop carry it forward.
         if (context.Instance.IsBusy)
         {
+            context.ChainToken ??= context.Instance.ChainToken;
             logger.LogDebug(
                 "Instance {InstanceId} is already Busy, skipping SetBusyStep",
                 context.InstanceId);
@@ -51,13 +53,18 @@ public sealed class SetBusyStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Set instance to Busy and persist
+        // Begin (or adopt) the auto-chain ownership token, mark Busy, and persist.
+        // A fresh request mints a new token; a continuation carries one in via context.ChainToken.
+        var chainToken = context.ChainToken ?? Guid.NewGuid();
+        context.ChainToken = chainToken;
+
         return await Result.Ok(context)
-            .Tap(ctx => ctx.Instance.Busy())
+            .Tap(ctx => ctx.Instance.BeginChain(chainToken))
             .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
             .Tap(ctx => logger.LogDebug(
-                "Instance {InstanceId} set to Busy for transition {TransitionKey}",
+                "Instance {InstanceId} set to Busy (chain {ChainToken}) for transition {TransitionKey}",
                 ctx.InstanceId,
+                chainToken,
                 ctx.TransitionKey))
             .Map(_ => StepOutcome.Continue());
     }

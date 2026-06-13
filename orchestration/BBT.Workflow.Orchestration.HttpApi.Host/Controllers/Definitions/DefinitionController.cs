@@ -10,6 +10,7 @@ namespace BBT.Workflow.Orchestration.Controllers.Definitions;
 public sealed class DefinitionController(
     IDefinitionAppService appService) : AetherControllerBase
 {
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("publish")]
     public async Task<IActionResult> PublishAsync(
         [FromBody] PublishInput input,

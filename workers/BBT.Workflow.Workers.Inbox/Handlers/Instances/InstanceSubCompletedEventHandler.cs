@@ -1,27 +1,23 @@
-using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
-using BBT.Aether.MultiSchema;
-using BBT.Aether.Uow;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
 /// <summary>
-/// Handles the InstanceSubCompletedEvent to process SubFlow/SubProcess completion.
-/// This handler delegates the actual completion logic to ISubflowCompletionService.
+/// Forwards <see cref="InstanceSubCompletedEvent"/> to the Orchestration <c>complete</c> internal
+/// endpoint via Dapr service invocation. Thin relay: no domain processing here — Orchestration's
+/// <c>ISubflowCompletionService</c> runs the completion. Domain guard stays local to avoid
+/// forwarding cross-domain events.
 /// </summary>
 internal sealed class InstanceSubCompletedEventHandler(
-    ICurrentSchema currentSchema,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IServiceScopeFactory scopeFactory,
+    IOrchestrationForwarder forwarder,
     ILogger<InstanceSubCompletedEventHandler> logger) : IEventHandler<InstanceSubCompletedEvent>
 {
-    /// <summary>
-    /// Handles the InstanceSubCompletedEvent by delegating to the subflow completion service.
-    /// </summary>
     public async Task HandleAsync(CloudEventEnvelope<InstanceSubCompletedEvent> envelope,
         CancellationToken cancellationToken)
     {
@@ -52,35 +48,22 @@ internal sealed class InstanceSubCompletedEventHandler(
                 eventData.Domain,
                 eventData.Flow);
 
-            using (currentSchema.Use(eventData.Flow))
+            var body = new FlowCompletedInput
             {
-                var completedData = new FlowCompletedInput
-                {
-                    SubInstanceId = eventData.SubInstanceId,
-                    InstanceId = eventData.InstanceId,
-                    Domain = eventData.Domain,
-                    Flow = eventData.Flow,
-                    Version = eventData.Version,
-                    CompletedState = eventData.CompletedState,
-                    InstanceData = eventData.InstanceData,
-                    CompletedAt = eventData.CompletedAt,
-                    Duration = eventData.Duration
-                };
+                SubInstanceId = eventData.SubInstanceId,
+                InstanceId = eventData.InstanceId,
+                Domain = eventData.Domain,
+                Flow = eventData.Flow,
+                Version = eventData.Version,
+                CompletedState = eventData.CompletedState,
+                InstanceData = eventData.InstanceData,
+                CompletedAt = eventData.CompletedAt,
+                Duration = eventData.Duration
+            };
 
-                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
-                    async (sp, ct) =>
-                    {
-                        var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                        var subflowCompletionService = sp.GetRequiredService<ISubflowCompletionService>();
-                        await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-                        {
-                            Scope = UnitOfWorkScopeOption.RequiresNew
-                        }, ct);
-
-                        await subflowCompletionService.CompletionAsync(completedData, ct);
-                        await uow.CommitAsync(ct);
-                    }, cancellationToken);
-            }
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";
+            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
+                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
         }
     }
 }

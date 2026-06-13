@@ -33,7 +33,7 @@ public sealed class SubflowOutputMappingService(
 
         var parentState = parentStateResult.Value!;
         var subFlowConfig = parentState.SubFlow;
-        if (subFlowConfig?.Mapping == null || string.IsNullOrWhiteSpace(subFlowConfig.Mapping.DecodedCode))
+        if (subFlowConfig?.Mapping is null || !subFlowConfig.Mapping.HasMappingCode)
             return;
 
         try
@@ -48,7 +48,8 @@ public sealed class SubflowOutputMappingService(
                 .BuildAsync(cancellationToken);
 
             var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-                subFlowConfig.Mapping.DecodedCode,
+                subFlowConfig.Mapping,
+                flowScripts: parentWorkflow.Scripts,
                 cancellationToken: cancellationToken);
 
             ScriptResponse? outputMappingResult = null;

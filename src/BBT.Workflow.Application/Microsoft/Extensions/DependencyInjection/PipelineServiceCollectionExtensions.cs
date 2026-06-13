@@ -1,6 +1,7 @@
 using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
@@ -86,7 +87,14 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, FinalizeTransitionStep>();
         services.AddScoped<ITransitionStep, ResolveAvailableStep>();
 
+        // Continuation realization: Inline = in-process auto-chain (sync);
+        // Enqueue = transition-per-job via the transactional outbox.
+        services.AddScoped<IContinuationStrategy, InlineContinuationStrategy>();
+        services.AddScoped<IContinuationStrategy, EnqueueContinuationStrategy>();
+        services.AddScoped<ContinuationDispatcher>();
+
         // Pipeline
+        services.AddScoped<TransitionExecutor>();
         services.AddScoped<TransitionPipeline>();
 
         // Error Boundary Services (used by TaskCoordinator for task-level error handling)

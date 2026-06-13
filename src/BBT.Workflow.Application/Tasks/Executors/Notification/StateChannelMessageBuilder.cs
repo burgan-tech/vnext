@@ -1,6 +1,7 @@
 using System.Dynamic;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
@@ -26,8 +27,8 @@ internal sealed class StateChannelMessageBuilder(
             ? instance!.Key
             : instance?.Id.ToString() ?? string.Empty;
 
-        var headers = DynamicToDictionary(context.ScriptContext.Headers);
-        var queryParams = DynamicToDictionary(context.ScriptContext.QueryParameters);
+        Dictionary<string, string?> headers = DynamicToDictionary(context.ScriptContext.Headers);
+        Dictionary<string, string?> queryParams = DynamicToDictionary(context.ScriptContext.QueryParameters);
 
         var input = new GetFunctionWithInstanceInput
         {
@@ -38,7 +39,8 @@ internal sealed class StateChannelMessageBuilder(
             Extensions = null,
             Headers = headers,
             QueryParams = queryParams,
-            Role = currentUser.Roles is { Length: > 0 } ? currentUser.Roles[0] : null
+            Role = currentUser.ResolveCallerRole(headers),
+            Roles = currentUser.ResolveCallerRoles(headers)
         };
 
         var stateResult = await instanceQueryGateway.GetFunctionWithStateAsync(input, cancellationToken);

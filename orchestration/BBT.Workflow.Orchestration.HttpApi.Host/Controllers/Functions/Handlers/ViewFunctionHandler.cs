@@ -1,4 +1,5 @@
 using BBT.Aether.AspNetCore.Results;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Instances;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +25,8 @@ public sealed class ViewFunctionHandler(
             Version = request.Parameters.Version,
             Headers = request.Headers,
             QueryParameters = request.QueryParameters,
-            Role = request.CurrentUser.Roles?.FirstOrDefault()
+            Role = request.CurrentUser.ResolveCallerRole(request.Headers),
+            Roles = request.CurrentUser.ResolveCallerRoles(request.Headers)
         };
 
         var result = await queryAppService.GetViewAsync(

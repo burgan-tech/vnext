@@ -1,3 +1,4 @@
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting.Functions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Scripting;
@@ -33,6 +34,28 @@ public interface IScriptCompiler
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled</exception>
     Task<T> CompileToInstanceAsync<T>(
         string code,
+        IEnumerable<MetadataReference>? extraReferences = null,
+        IEnumerable<string>? usingDirectives = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compiles a mapping <see cref="ScriptCode"/> into an instance of the specified type.
+    /// When the script declares helper references (<see cref="ScriptCode.Helpers"/>), the referenced
+    /// helper set is built first (sandboxed, cached by content hash), its assembly referenced and its
+    /// public namespaces auto-imported, and the mapping is compiled into the helper set's load context.
+    /// When no helpers are declared this is equivalent to the string overload.
+    /// </summary>
+    /// <typeparam name="T">The target type to compile the code into.</typeparam>
+    /// <param name="scriptCode">The mapping script (code/encoding, optional <c>scripts</c> settings).</param>
+    /// <param name="flowScripts">Optional flow-level (workflow) script settings, unioned with the
+    /// mapping-level <c>scripts</c> (helpers concatenated/deduped, allowed assemblies merged).</param>
+    /// <param name="extraReferences">Optional additional metadata references for compilation.</param>
+    /// <param name="usingDirectives">Optional additional using directives to include.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>A task containing the compiled instance of type T.</returns>
+    Task<T> CompileToInstanceAsync<T>(
+        ScriptCode scriptCode,
+        ScriptSettings? flowScripts = null,
         IEnumerable<MetadataReference>? extraReferences = null,
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default);

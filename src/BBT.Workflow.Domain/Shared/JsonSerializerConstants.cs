@@ -33,5 +33,6 @@ public static class JsonSerializerConstants
         // Add converters for proper serialization of enums and dynamic objects
         JsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         JsonOptions.Converters.Add(new ExpandoObjectJsonConverter());
+        JsonOptions.Converters.Add(new BBT.Workflow.Definitions.ScriptCodeJsonConverter());
     }
 }

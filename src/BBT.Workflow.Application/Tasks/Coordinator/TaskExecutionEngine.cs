@@ -609,10 +609,9 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             if (!boundaryChain.HasAnyBoundary)
             {
                 // No ErrorBoundary - let flow continue with auto-transitions
-                _logger.LogDebug(
-                    "Task {TaskKey} failed with business error (StatusCode: {StatusCode}), " +
-                    "but no ErrorBoundary is defined. Flow will continue with auto-transitions.",
-                    task.Key, response.StatusCode);
+                _logger.LogError(
+                    "Task {TaskKey} failed with business error (StatusCode: {StatusCode}) and no ErrorBoundary is defined. Flow will continue with auto-transitions. Error: {Error}",
+                    task.Key, response.StatusCode, executionError.ErrorMessage);
 
                 // Add event only — span Status stays OK since the flow continues normally via auto-transitions
                 TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, executionError.ErrorMessage, taskTypeStr, response.StatusCode);
@@ -628,10 +627,9 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             }
 
             // ErrorBoundary exists - return failure for retry evaluation
-            _logger.LogDebug(
-                "Task {TaskKey} failed with business error (StatusCode: {StatusCode}). " +
-                "ErrorBoundary is configured - retry policy will be evaluated.",
-                task.Key, response.StatusCode);
+            _logger.LogError(
+                "Task {TaskKey} failed with business error (StatusCode: {StatusCode}). ErrorBoundary is configured - retry policy will be evaluated. Error: {Error}",
+                task.Key, response.StatusCode, executionError.ErrorMessage);
 
             // Add event per attempt so each failure is visible in the trace timeline
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, executionError.ErrorMessage, executionError.TaskType, response.StatusCode);

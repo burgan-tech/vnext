@@ -15,6 +15,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
+    /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
+    /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,
+    /// which matches any row regardless of status.
+    /// </summary>
+    Task<Instance?> FindActiveByKeyAsync(string key,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
     /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
     /// </summary>
@@ -111,4 +120,22 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// </summary>
     Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns Busy instances that own an auto-chain token whose heartbeat is older than
+    /// <paramref name="olderThanUtc"/> — candidates for the stuck-Busy reaper (S7).
+    /// Scoped to the current schema; the reaper sweeps schemas it is invoked for.
+    /// </summary>
+    /// <param name="olderThanUtc">Heartbeat staleness threshold (UTC).</param>
+    /// <param name="maxCount">Maximum number of candidates to return per sweep.</param>
+    Task<List<Instance>> GetStuckBusyChainsAsync(
+        DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the distinct flow keys registered as definitions in the <c>sys_flows</c> schema.
+    /// Each flow key maps to its own runtime-created database schema. Used by background sweeps
+    /// (e.g. the stuck-Busy chain reaper) to enumerate the per-flow schemas to scan, since a
+    /// hosted service has no request-scoped <c>ICurrentSchema</c> and the real instances live in
+    /// the per-flow schemas — not in any single ambient/default schema.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default);
 }

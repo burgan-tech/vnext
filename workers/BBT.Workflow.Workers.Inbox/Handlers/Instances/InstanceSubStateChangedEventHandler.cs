@@ -1,29 +1,23 @@
 using BBT.Aether.Events;
-using BBT.Aether.MultiSchema;
-using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
 /// <summary>
-/// Handles the InstanceSubStateChangedEvent to process SubFlow state changes.
-/// This handler delegates the actual state update logic to ISubflowStateService.
-/// Used as fallback when the event hook fails and the event is processed via outbox/inbox.
+/// Forwards <see cref="InstanceSubStateChangedEvent"/> to the Orchestration <c>sub/state</c>
+/// internal endpoint via Dapr service invocation. Thin relay: Orchestration's
+/// <c>ISubflowStateService</c> updates the parent's EffectiveState.
 /// </summary>
 internal sealed class InstanceSubStateChangedEventHandler(
-    ICurrentSchema currentSchema,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IServiceScopeFactory scopeFactory,
+    IOrchestrationForwarder forwarder,
     ILogger<InstanceSubStateChangedEventHandler> logger) : IEventHandler<InstanceSubStateChangedEvent>
 {
-    /// <summary>
-    /// Handles the InstanceSubStateChangedEvent by delegating to the subflow state service.
-    /// Updates the parent instance's EffectiveState and correlation's SubFlowCurrentState.
-    /// </summary>
     public async Task HandleAsync(CloudEventEnvelope<InstanceSubStateChangedEvent> envelope,
         CancellationToken cancellationToken)
     {
@@ -54,37 +48,23 @@ internal sealed class InstanceSubStateChangedEventHandler(
                 eventData.ParentInstanceId,
                 eventData.NewState);
 
-            using (currentSchema.Use(eventData.Flow))
+            var body = new SubFlowStateChangedInput
             {
-                var input = new SubFlowStateChangedInput
-                {
-                    ParentInstanceId = eventData.ParentInstanceId,
-                    SubInstanceId = eventData.SubInstanceId,
-                    Domain = eventData.Domain,
-                    Flow = eventData.Flow,
-                    Version = eventData.Version,
-                    NewState = eventData.NewState,
-                    PreviousState = eventData.PreviousState,
-                    NewStateType = (StateType)eventData.NewStateType,
-                    NewStateSubType = (StateSubType)eventData.NewStateSubType,
-                    ChangedAt = eventData.ChangedAt
-                };
+                ParentInstanceId = eventData.ParentInstanceId,
+                SubInstanceId = eventData.SubInstanceId,
+                Domain = eventData.Domain,
+                Flow = eventData.Flow,
+                Version = eventData.Version,
+                NewState = eventData.NewState,
+                PreviousState = eventData.PreviousState,
+                NewStateType = (StateType)eventData.NewStateType,
+                NewStateSubType = (StateSubType)eventData.NewStateSubType,
+                ChangedAt = eventData.ChangedAt
+            };
 
-                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
-                    async (sp, ct) =>
-                    {
-                        var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                        var subflowStateService = sp.GetRequiredService<ISubflowStateService>();
-
-                        await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-                        {
-                            Scope = UnitOfWorkScopeOption.RequiresNew
-                        }, ct);
-
-                        await subflowStateService.UpdateParentStateAsync(input, ct);
-                        await uow.CommitAsync(ct);
-                    }, cancellationToken);
-            }
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.ParentInstanceId}/sub/state";
+            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
+                eventData.Domain, eventData.Flow, eventData.Version, eventData.ParentInstanceId, cancellationToken);
         }
     }
 }

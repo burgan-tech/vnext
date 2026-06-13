@@ -437,7 +437,312 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateHasMatchingAlias_ReturnsAliasNameAsState()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(StateAlias.Create("Değerlendirme Aşamasında"));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — state reflects the resolved alias name, StateType still reflects the real type
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
+        result.Result.Value!.StateType.ShouldBe("intermediate");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNoAliasMatches_ReturnsRealStateKey()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(StateAlias.Create("Backoffice Only"));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — falls back to the raw state key
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe(TestState);
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNoAliasesDefined_ReturnsRealStateKeyWithoutEvaluation()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — current behavior preserved; role evaluation skipped entirely
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe(TestState);
+        await _transitionAuthorizationManager.DidNotReceive()
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenMultipleAliases_ReturnsFirstMatchingInDeclarationOrder()
+    {
+        // Arrange — first alias does not resolve, second does
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(StateAlias.Create("Operasyon İncelemesinde"));
+        state.AddAlias(StateAlias.Create("Değerlendirme Aşamasında"));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(false, true);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenAliasHasLabels_ReturnsLocalizedLabelForAcceptLanguage()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(AliasFromJson("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [],
+                "labels": [
+                    { "label": "Operasyon İncelemesinde", "language": "tr" },
+                    { "label": "Under Operational Review", "language": "en" }
+                ]
+            }
+            """));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Headers["accept-language"] = "tr-TR,tr;q=0.9,en-US;q=0.8";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — Turkish label returned for the Turkish Accept-Language
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Operasyon İncelemesinde");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenAliasLabelsHaveNoLanguageMatch_FallsBackToEnglish()
+    {
+        // Arrange — labels in de + en, request fr → English fallback
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(AliasFromJson("""
+            {
+                "name": "Fallback Name",
+                "roles": [],
+                "labels": [
+                    { "label": "In Bearbeitung", "language": "de" },
+                    { "label": "Under Review", "language": "en" }
+                ]
+            }
+            """));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Headers["accept-language"] = "fr-FR";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Under Review");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenMatchingAliasHasNoLabels_ReturnsAliasName()
+    {
+        // Arrange — alias has labels omitted; even with an Accept-Language header, name is used
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddAlias(StateAlias.Create("Değerlendirme Aşamasında"));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _transitionAuthorizationManager
+            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Headers["accept-language"] = "tr-TR";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenQueryRolesDeny_Returns403()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        DenyQueryRoles();
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WhenQueryRolesDeny_Returns403()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        DenyQueryRoles();
+
+        // Act
+        var result = await _service.GetViewAsync(new GetViewInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString(),
+            Headers = new Dictionary<string, string?>(),
+            QueryParameters = new Dictionary<string, string?>()
+        }, transitionKey: null, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenQueryRolesDeny_Returns403()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        DenyQueryRoles();
+
+        // Act — denied before the transition-key requirement is evaluated
+        var result = await _service.GetSchemaAsync(new GetSchemaInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString()
+        }, transitionKey: "approve", CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private void DenyQueryRoles() =>
+        _transitionAuthorizationManager
+            .IsQueryAllowedAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
+                Arg.Any<AuthorizationRequestContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(false);
+
+    private static StateAlias AliasFromJson(string json) =>
+        System.Text.Json.JsonSerializer.Deserialize<StateAlias>(json, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        })!;
 
     private (Instance instance, Definitions.Workflow workflow) CreateParentWithActiveSubFlow()
     {
@@ -509,6 +814,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<IReadOnlyList<string>>(3)));
 
         _representationEtagService.Generate(Arg.Any<object>()).Returns((string?)null);
+
+        // Default: queryRoles visibility allowed (specific tests override to false to assert 403).
+        _transitionAuthorizationManager
+            .IsQueryAllowedAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
+                Arg.Any<AuthorizationRequestContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
     }
 
     private void SetupSubFlowGateway(InstanceStatus subFlowStatus, string subFlowState)

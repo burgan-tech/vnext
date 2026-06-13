@@ -16,6 +16,7 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
     public ICacheSet<Function> Functions { get; }
     public ICacheSet<View> Views { get; }
     public ICacheSet<Extension> Extensions { get; }
+    public ICacheSet<Mapping> Mappings { get; }
 
     public DomainCacheContext(
         IDistributedCacheService distributedCache,
@@ -25,6 +26,7 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         ICacheBackend<Function> functionBackend,
         ICacheBackend<View> viewBackend,
         ICacheBackend<Extension> extensionBackend,
+        ICacheBackend<Mapping> mappingBackend,
         ILoggerFactory loggerFactory)
     {
         Workflows = new CacheSet<Definitions.Workflow>(
@@ -56,6 +58,11 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             distributedCache,
             extensionBackend,
             loggerFactory.CreateLogger<CacheSet<Extension>>());
+
+        Mappings = new CacheSet<Mapping>(
+            distributedCache,
+            mappingBackend,
+            loggerFactory.CreateLogger<CacheSet<Mapping>>());
     }
 
     public ICacheSet<T> Set<T>() where T : class, IDomainEntity, IReferenceSetter
@@ -66,6 +73,7 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         if (typeof(T) == typeof(Function)) return (ICacheSet<T>)Functions;
         if (typeof(T) == typeof(View)) return (ICacheSet<T>)Views;
         if (typeof(T) == typeof(Extension)) return (ICacheSet<T>)Extensions;
+        if (typeof(T) == typeof(Mapping)) return (ICacheSet<T>)Mappings;
 
         throw new NotSupportedException($"Type {typeof(T).Name} is not supported in DomainCacheContext.");
     }
@@ -78,5 +86,6 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         Functions.Dispose();
         Views.Dispose();
         Extensions.Dispose();
+        Mappings.Dispose();
     }
 }

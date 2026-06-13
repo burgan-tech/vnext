@@ -1,4 +1,5 @@
 using BBT.Aether.AspNetCore.Results;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Instances;
@@ -28,6 +29,7 @@ public sealed class DataFunctionHandler(
             Headers = request.Headers,
             QueryParameters = request.QueryParameters,
             Version = request.QueryParameters.GetOrDefault("version"),
+            Roles = request.CurrentUser.ResolveCallerRoles(request.Headers),
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);
