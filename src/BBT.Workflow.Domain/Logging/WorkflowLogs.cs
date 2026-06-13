@@ -63,6 +63,97 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when a transition continuation event is received by the Inbox handler.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10120,
+        Level = LogLevel.Information,
+        Message = "Transition continuation received for instance {InstanceId} transition {TransitionKey} (job {JobName})")]
+    public static partial void TransitionContinuationReceived(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName);
+
+    /// <summary>
+    /// Logs when a transition continuation event is ignored due to a domain mismatch.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10121,
+        Level = LogLevel.Debug,
+        Message = "Transition continuation ignored: event domain {EventDomain} does not match runtime domain {RuntimeDomain} (instance {InstanceId})")]
+    public static partial void TransitionContinuationIgnoredDomainMismatch(
+        this ILogger logger,
+        string eventDomain,
+        string runtimeDomain,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a transition continuation has been enqueued as a Dapr job by the Inbox handler.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10122,
+        Level = LogLevel.Information,
+        Message = "Transition continuation enqueued for instance {InstanceId} transition {TransitionKey} (job {JobName})")]
+    public static partial void TransitionContinuationEnqueued(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName);
+
+    /// <summary>
+    /// Logs when enqueuing a transition continuation job fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10123,
+        Level = LogLevel.Error,
+        Message = "Transition continuation enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}): {Reason}")]
+    public static partial void TransitionContinuationEnqueueFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName,
+        string reason);
+
+    /// <summary>
+    /// Logs when a foreign transition is rejected by the chain-token gate because the instance
+    /// is Busy with an active auto-chain owned by a different token.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10124,
+        Level = LogLevel.Warning,
+        Message = "Foreign transition {TransitionKey} rejected: instance {InstanceId} is Busy with an active chain (token mismatch)")]
+    public static partial void ForeignChainTransitionRejected(
+        this ILogger logger,
+        string transitionKey,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when the chain reaper faults a stuck-Busy instance whose chain has no live job.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10125,
+        Level = LogLevel.Warning,
+        Message = "Chain reaper faulted stuck instance {InstanceId} (chain {ChainToken}); heartbeat stale since {HeartbeatAt:o}")]
+    public static partial void ChainReaperFaultedInstance(
+        this ILogger logger,
+        Guid instanceId,
+        Guid? chainToken,
+        DateTime? heartbeatAt);
+
+    /// <summary>
+    /// Logs the result of a chain reaper sweep.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10126,
+        Level = LogLevel.Information,
+        Message = "Chain reaper sweep completed: {Faulted} faulted, {SkippedActive} skipped (active job)")]
+    public static partial void ChainReaperSweepCompleted(
+        this ILogger logger,
+        int faulted,
+        int skippedActive);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>

@@ -62,6 +62,21 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
+            // Durable auto-chain ownership token (S6). Nullable; filtered by the chain-token gate.
+            b.Property(p => p.ChainToken);
+            b.HasIndex(p => p.ChainToken)
+                .HasDatabaseName("IX_Instances_ChainToken")
+                .HasFilter("\"ChainToken\" IS NOT NULL");
+
+            // Auto-chain heartbeat (S7) — drives the stuck-Busy reaper sweep.
+            b.Property(p => p.ChainHeartbeatAt);
+            b.HasIndex(p => p.ChainHeartbeatAt)
+                .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
+                .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
+
+            // Durable resume point for crash-resume (S8).
+            b.Property(p => p.ResumePointStepOrder);
+
             b.Property(p => p.Incidents)
                 .HasColumnType("jsonb")
                 .HasConversion(

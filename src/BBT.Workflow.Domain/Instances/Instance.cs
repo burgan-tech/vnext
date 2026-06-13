@@ -126,6 +126,29 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public InstanceStatus Status { get; private set; }
 
     /// <summary>
+    /// Durable ownership token for an in-flight auto-chain. While set (and the instance is Busy),
+    /// only transitions carrying the matching token (the chain's own continuations) are admitted;
+    /// foreign transitions are rejected. Reserved transitions (cancel/timeout) are exempt.
+    /// Replaces a long-held distributed lock for chain ownership (transition-per-job). Null when idle.
+    /// </summary>
+    public Guid? ChainToken { get; private set; }
+
+    /// <summary>
+    /// Last heartbeat of the in-flight auto-chain (UTC). Refreshed when the chain begins and on
+    /// each per-transition commit. Used by the stuck-Busy reaper (S7) to detect chains that own a
+    /// Busy instance but have no live/pending job. Null when idle.
+    /// </summary>
+    public DateTime? ChainHeartbeatAt { get; private set; }
+
+    /// <summary>
+    /// Durable resume point (S8): the last committed lifecycle step order within the in-flight
+    /// transition. On crash-resume the pipeline restarts from the next step rather than the
+    /// beginning, and already-committed remote task journal rows (InstanceTask) are bypassed,
+    /// avoiding duplicate irreversible side effects. Null when no transition is mid-flight.
+    /// </summary>
+    public int? ResumePointStepOrder { get; private set; }
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -321,6 +344,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public void Complete(string domain)
     {
         Status = InstanceStatus.Completed;
+        ChainToken = null;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
@@ -366,6 +390,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public void Fault(string domain)
     {
         Status = InstanceStatus.Faulted;
+        ChainToken = null;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
@@ -515,6 +540,54 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Busy;
     }
 
+    /// <summary>
+    /// Begins an auto-chain: marks the instance Busy and stamps the durable ownership token.
+    /// No-op if the instance is already completed.
+    /// </summary>
+    /// <param name="token">The chain ownership token to stamp.</param>
+    public void BeginChain(Guid token)
+    {
+        if (IsCompleted)
+            return;
+
+        Status = InstanceStatus.Busy;
+        ChainToken = token;
+        ChainHeartbeatAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Refreshes the chain heartbeat (called on each per-transition commit while the chain owns
+    /// the instance). No-op when there is no active chain token.
+    /// </summary>
+    public void TouchChainHeartbeat()
+    {
+        if (ChainToken.HasValue)
+            ChainHeartbeatAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Records the last committed lifecycle step order for crash-resume (S8).
+    /// </summary>
+    public void SetResumePoint(int stepOrder) => ResumePointStepOrder = stepOrder;
+
+    /// <summary>
+    /// Clears the durable resume point (called at transition finalize so it never leaks into the next transition).
+    /// </summary>
+    public void ClearResumePoint() => ResumePointStepOrder = null;
+
+    /// <summary>
+    /// Returns whether the supplied token matches the instance's current chain ownership token.
+    /// </summary>
+    public bool MatchesChain(Guid token) => ChainToken.HasValue && ChainToken.Value == token;
+
+    /// <summary>
+    /// Clears the chain ownership token + heartbeat (chain complete / instance returning to a resting state).
+    /// </summary>
+    public void EndChain()
+    {
+        ChainToken = null;
+        ChainHeartbeatAt = null;
+    }
 
     /// <summary>
     /// Sets the instance status to Active.
@@ -526,6 +599,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             return;
 
         Status = InstanceStatus.Active;
+        ChainToken = null;
+        ChainHeartbeatAt = null;
     }
 
     /// <summary>

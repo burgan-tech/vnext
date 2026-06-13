@@ -41,11 +41,14 @@ public static class InboxWorkerApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
-        app.UseWorkflowHttpMetrics();
+        // NOTE: UseWorkflowHttpMetrics removed — its HttpMetricsMiddleware needs IWorkflowMetrics,
+        // which lived in the (now-removed) Infrastructure module. Generic Prometheus HTTP metrics
+        // below are sufficient for the thin forwarder.
         app.UseHttpMetrics();
         app.MapMetrics(); 
         app.MapControllers();
-        app.UseDaprScheduledJobHandler();
+        // NOTE: UseDaprScheduledJobHandler removed — the Inbox registers no background-job handlers
+        // and must not dispatch Dapr scheduled jobs (that allowed transitions to run in-process here).
         app.MapAppHealthChecks();
         return app;
     }

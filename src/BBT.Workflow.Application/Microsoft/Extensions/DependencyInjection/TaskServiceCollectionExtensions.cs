@@ -63,6 +63,7 @@ public static class TaskServiceCollectionExtensions
             .BindConfiguration(WorkflowExecutionOptions.SectionName);
 
         services.AddScoped<IJobTimeoutRecoveryService, JobTimeoutRecoveryService>();
+        services.AddScoped<IChainReaperService, ChainReaperService>();
 
         return services;
     }

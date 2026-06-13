@@ -288,12 +288,18 @@ public sealed class SubflowCompletionService(
         Guid parentInstanceId,
         CancellationToken cancellationToken)
     {
-        var correlation = parentInstance.RevertCorrelation(subInstanceId);
-        if(correlation == null)
+        // S9 isolation rule: do NOT mutate the detached Phase-1 entity inside this new UoW —
+        // reload by id so we operate on an entity tracked by the current scope's DbContext.
+        // Avoids change-tracker bleed and lost/duplicate domain events across the scope boundary.
+        var tracked = await instanceRepository.FindAsync(parentInstanceId, true, cancellationToken)
+                      ?? parentInstance;
+
+        var correlation = tracked.RevertCorrelation(subInstanceId);
+        if (correlation == null)
             return;
 
         logger.SubFlowCorrelationReverted(subInstanceId, parentInstanceId);
 
-        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+        await instanceRepository.UpdateAsync(tracked, true, cancellationToken);
     }
 }

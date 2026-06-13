@@ -45,6 +45,22 @@ public static class BannedApiAnalyzer
     public static readonly IReadOnlyList<string> MandatoryAllowedNamespaces = System.Array.Empty<string>();
 
     /// <summary>
+    /// Member-level carve-outs: specific members that live under a banned namespace but are benign
+    /// metadata reads — they expose no code-execution or sandbox-escape capability — and so remain
+    /// usable. Matched against the resolved symbol's display string. The dangerous reflection surface
+    /// (e.g. <c>MethodInfo.Invoke</c>, <c>Assembly.Load</c>, <c>Activator</c>) stays banned.
+    /// <para>
+    /// <c>System.Reflection.MemberInfo.Name</c> backs the ubiquitous <c>value.GetType().Name</c>
+    /// pattern (<c>Type.Name</c> resolves to the inherited <c>MemberInfo.Name</c>), used by mappings
+    /// and the <c>ScriptBase</c> helper surface for diagnostics/branching on a value's type name.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> MandatoryAllowedMembers = new[]
+    {
+        "System.Reflection.MemberInfo.Name",
+    };
+
+    /// <summary>
     /// Analyzes the compilation and returns the list of human-readable sandbox violations
     /// (empty when the script is clean).
     /// </summary>
@@ -86,6 +102,10 @@ public static class BannedApiAnalyzer
                 var symbol = model.GetSymbolInfo(node).Symbol;
                 var ns = NamespaceOf(symbol);
                 if (ns is null)
+                    continue;
+
+                // Member-level carve-outs (benign metadata reads) win over the banned prefixes.
+                if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
                     continue;
 
                 // Carve-outs win over the banned prefixes.

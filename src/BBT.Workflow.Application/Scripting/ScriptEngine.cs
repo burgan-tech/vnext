@@ -76,6 +76,11 @@ public sealed class ScriptEngine(
         // sandbox, where the curated assembly allow-list would otherwise omit it.
         MetadataReference.CreateFromFile(typeof(System.Dynamic.ExpandoObject).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location),
+        // BBT.Aether.Domain: aggregate base types (AggregateRoot<>, Entity<>, audit interfaces).
+        // Domain entities exposed to mappings — e.g. ScriptContext.Instance — inherit members such as
+        // Id/CreationTime from here, so the assembly must be referenced for those inherited members to
+        // resolve. Like the others, its simple name flows into the sandbox grant automatically.
+        MetadataReference.CreateFromFile(typeof(BBT.Aether.Domain.Entities.AggregateRoot<>).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(JsonSerializableAttribute).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(System.Text.Encodings.Web.JavaScriptEncoder).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(System.Xml.XmlDocument).Assembly.Location),
