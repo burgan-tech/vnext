@@ -703,9 +703,15 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
+          # 10.0.x (latest 10.0 SDK) is installed alongside the 10.0.2xx band so
+          # the AspNetCore.App shared framework matching the runner's system
+          # runtime (e.g. 10.0.9) is present. PostSharp rolls its host forward to
+          # that runtime and requires the matching AspNetCore.App or it fails with
+          # "No compatible version of requested runtime framework Microsoft.AspNetCore.App".
           dotnet-version: |
             9.0.x
             10.0.2xx
+            10.0.x
 
       - name: Setup NETStandard.Library.Ref for PostSharp
         run: ./scripts/setup-netstandard-ref.sh
@@ -787,6 +793,9 @@ jobs:
           node-version: '24'
           always-auth: false
           cache: 'npm'
+          # setup-node runs from the repo root, but the lockfile lives in
+          # vnext-meta, so point caching at it explicitly.
+          cache-dependency-path: vnext-meta/package-lock.json
 
       - name: Set package version
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
