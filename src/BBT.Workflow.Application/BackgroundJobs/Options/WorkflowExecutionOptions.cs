@@ -34,6 +34,21 @@ public sealed class WorkflowExecutionOptions
     public bool TransitionPerJob { get; set; }
 
     /// <summary>
+    /// Governs how <c>EnqueueContinuationStrategy</c> realizes a chained continuation.
+    /// <para>
+    /// ON (default): enqueue the Dapr job DIRECTLY (no outbox/inbox poll hop) for lower latency;
+    /// if the direct Dapr enqueue fails, fall back to publishing a <c>TransitionContinuationRequested</c>
+    /// event through the transactional outbox so durability is preserved.
+    /// </para>
+    /// <para>
+    /// OFF: always publish the continuation via the transactional outbox (legacy behavior) — fully
+    /// transactional at the cost of the outbox/inbox poll hop.
+    /// </para>
+    /// The durable <c>InstanceJob</c> intent is inserted in the ambient transition UoW in both modes.
+    /// </summary>
+    public bool DirectEnqueueContinuations { get; set; } = true;
+
+    /// <summary>
     /// When enabled, the chain-token gate rejects foreign transitions that arrive while an
     /// instance is Busy with an active chain token, unless they carry the matching token or are
     /// reserved (cancel/timeout). Provides auto-chain atomicity without a chain-spanning lock.
