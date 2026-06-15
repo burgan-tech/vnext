@@ -136,6 +136,40 @@ public class ResolveAvailableStepTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenTargetIsBusySubType_ShouldRequestEndChainAndNotDeferStatus()
+    {
+        // Regression (#725 chain-token gate): an instance that comes to rest in a Busy-subtype
+        // state stays Busy but the auto-chain is finished. The chain-ownership token must be
+        // released so legitimate foreign transitions (e.g. a child sub-process triggering the
+        // initiator's "Ready") are not rejected by the chain-token gate.
+        var context = CreateTransitionExecutionContextWithBusySubTypeState();
+        context.Instance.BeginChain(Guid.NewGuid()); // Busy + chain token, as a real start sets
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Instance.IsBusy.ShouldBeTrue();              // stays Busy
+        context.Directives.ResolvedStatus.ShouldBeNull();    // not resolved to Active
+        context.Directives.EndChainRequested.ShouldBeTrue(); // but chain ownership released
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBusySubTypeButNextTransitionPending_ShouldNotRequestEndChain()
+    {
+        // An in-flight auto-chain (NextTransition set) must keep its token — the NextTransition
+        // guard short-circuits before the Busy-subtype branch, so no release is requested.
+        var context = CreateTransitionExecutionContextWithBusySubTypeState();
+        context.Instance.BeginChain(Guid.NewGuid());
+        context.Directives.RequestNextTransition(new NextTransitionRequest("auto-transition", "auto"));
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Directives.EndChainRequested.ShouldBeFalse();
+        context.Directives.ResolvedStatus.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenTargetIsFinishState_ShouldNotDeferStatus()
     {
         // Arrange
@@ -448,6 +482,79 @@ public class ResolveAvailableStepTests
             "sharedTransitions": [],
             "extensions": [],
             "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+        }
+        """;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+
+        workflow.SetReference(new Reference(key, domain, "sys-flows", "1.0.0"));
+        return workflow;
+    }
+
+    private TransitionExecutionContext CreateTransitionExecutionContextWithBusySubTypeState()
+    {
+        var instanceId = Guid.NewGuid();
+        var workflowKey = "test-workflow";
+        var domain = "test-domain";
+
+        var workflow = CreateMockWorkflowWithBusySubTypeState(workflowKey, domain);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
+        var busyState = workflow.GetState("busy-state").Value!;
+        var transition = Transition.Create("start", null, "busy-state", TriggerType.Manual, "Patch");
+
+        return new TransitionExecutionContext
+        {
+            InstanceId = instanceId,
+            Domain = domain,
+            WorkflowKey = workflowKey,
+            TransitionKey = "start",
+            Trigger = TriggerType.Manual,
+            Actor = ExecutionActor.User,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ExecutionChainId = Guid.NewGuid().ToString("N"),
+            RequestedAt = DateTimeOffset.UtcNow,
+            Workflow = workflow,
+            Current = busyState,
+            Target = busyState,
+            Transition = transition,
+            Instance = instance,
+            TraceId = Guid.NewGuid().ToString("N"),
+            SpanId = Guid.NewGuid().ToString("N")[..16]
+        };
+    }
+
+    private Definitions.Workflow CreateMockWorkflowWithBusySubTypeState(string key, string domain)
+    {
+        // "busy-state" has only a manual "Ready" transition (no auto transitions) and a Busy
+        // subtype — the resting state in the regression scenario.
+        var json = """
+        {
+            "type": "F",
+            "timeout": null,
+            "labels": [],
+            "functions": [],
+            "features": [],
+            "states": [
+                {
+                    "key": "busy-state",
+                    "stateType": "Initial",
+                    "subType": "Busy",
+                    "transitions": [{"key": "Ready", "from": "busy-state", "target": "state2", "triggerType": "Manual", "versionStrategy": "Patch"}]
+                },
+                {
+                    "key": "state2",
+                    "stateType": "Intermediate",
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "extensions": [],
+            "startTransition": {"key": "start", "from": null, "target": "busy-state", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
         }
         """;
 
