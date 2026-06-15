@@ -5,16 +5,17 @@
  *
  * Run with: node --test
  *
- * Covers the subprocess (`process` block) domain replacement rules from issue #729:
- * - same-domain process refs are rewritten to the target domain
- * - cross-domain process refs are preserved
- * - crossDomain:true exemption, config skipping, and non-process replacement regressions
+ * Domain replacement is source-domain matched: a `domain` is rewritten to the target
+ * domain only when it equals the package's own (source) domain. Any `domain` on a
+ * different domain is a genuine cross-domain reference and is preserved — at every level
+ * (root, attributes, data[], subprocess `process`, nested objects). `crossDomain: true`
+ * is exempt and the `config` subtree is skipped entirely.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { replaceDomainInJson, replaceProcessDomainInJson } = require('./package-api-server.js');
+const { replaceDomainInJson } = require('./package-api-server.js');
 
 const SOURCE = 'local-test-domain';
 const TARGET = 'real-domain';
@@ -61,7 +62,7 @@ test('crossDomain:true is exempt at top level and inside process', () => {
     assert.equal(result.process.domain, SOURCE, 'crossDomain process ref preserved even when same domain');
 });
 
-test('No regression: non-process domain fields are still replaced unconditionally', () => {
+test('Only same-domain fields are replaced; differing domains are preserved everywhere', () => {
     const input = {
         key: 'task',
         domain: SOURCE,
@@ -75,9 +76,23 @@ test('No regression: non-process domain fields are still replaced unconditionall
     const result = replaceDomainInJson(input, TARGET, SOURCE);
 
     assert.equal(result.domain, TARGET);
-    assert.equal(result.attributes.domain, TARGET);
-    assert.equal(result.data[0].domain, TARGET);
-    assert.equal(result.data[1].domain, TARGET, 'non-process domains replaced regardless of original value');
+    assert.equal(result.attributes.domain, TARGET, 'same-domain attributes replaced');
+    assert.equal(result.data[0].domain, TARGET, 'same-domain data item replaced');
+    assert.equal(result.data[1].domain, 'some-other-domain', 'cross-domain data item preserved');
+});
+
+test('Nested non-process object with a different domain is preserved', () => {
+    const input = {
+        domain: SOURCE,
+        reference: { key: 'ext', domain: 'other-domain' },
+        attributes: { nested: { domain: 'yet-another-domain' } }
+    };
+
+    const result = replaceDomainInJson(input, TARGET, SOURCE);
+
+    assert.equal(result.domain, TARGET);
+    assert.equal(result.reference.domain, 'other-domain', 'nested cross-domain reference preserved');
+    assert.equal(result.attributes.nested.domain, 'yet-another-domain', 'deeply nested cross-domain preserved');
 });
 
 test('No regression: config subtree is left untouched', () => {
@@ -109,13 +124,4 @@ test('Nested domain inside process follows the same same-domain-only rule', () =
     assert.equal(result.process.domain, TARGET, 'process root same-domain replaced');
     assert.equal(result.process.mapping.domain, TARGET, 'nested same-domain replaced');
     assert.equal(result.process.externalRef.domain, 'notification', 'nested cross-domain preserved');
-});
-
-test('replaceProcessDomainInJson honors config skip', () => {
-    const input = { domain: SOURCE, config: { domain: SOURCE } };
-
-    const result = replaceProcessDomainInJson(input, TARGET, SOURCE);
-
-    assert.equal(result.domain, TARGET);
-    assert.equal(result.config.domain, SOURCE, 'config untouched inside process subtree');
 });

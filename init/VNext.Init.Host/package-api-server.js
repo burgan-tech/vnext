@@ -531,27 +531,25 @@ async function downloadPackage(packageName, version, registry, authOptions = {})
 }
 
 /**
- * Replace ALL domain fields in JSON object at ALL levels
+ * Replace domain fields in a JSON object at ALL levels — but only for references
+ * that belong to the package's own (source) domain.
  *
- * Replaces domain in:
+ * A `domain` is rewritten to the target domain only when it equals `sourceDomain`.
+ * Any `domain` carrying a different value is a genuine cross-domain reference and is
+ * left untouched. This rule applies uniformly to every level:
  * - Root level domain (if object has key, flow, version, domain)
  * - attributes.domain
- * - data[].domain
- * - data[].attributes.domain
- * - Any nested object's domain field
+ * - data[].domain / data[].attributes.domain
+ * - subprocess `process` references and any other nested object's domain field
  *
- * Cross-domain exclusion: if an object has `crossDomain: true`, its `domain`
- * field is preserved as-is (intentionally targets another domain).
- *
- * Subprocess references (the `process` block of a SubProcess task) are treated
- * conditionally: their `domain` is rewritten only when it equals the package's
- * own (source) domain. A `process.domain` pointing at a different domain is a
- * genuine cross-domain call and is left untouched. See replaceProcessDomainInJson.
+ * Exemptions preserved:
+ * - `crossDomain: true` — the object's `domain` is never rewritten.
+ * - `config` — the subtree is skipped entirely.
  *
  * @param {Object} obj - Object to process
  * @param {string} targetDomain - Target domain to replace with
- * @param {string} sourceDomain - Package's own domain; a `process.domain` is rewritten
- *                                only when it equals this value
+ * @param {string} sourceDomain - Package's own domain; a `domain` is rewritten only
+ *                                when it equals this value
  */
 function replaceDomainInJson(obj, targetDomain, sourceDomain) {
     if (typeof obj !== 'object' || obj === null) {
@@ -565,64 +563,20 @@ function replaceDomainInJson(obj, targetDomain, sourceDomain) {
     // Create a copy of the object
     const result = { ...obj };
 
-    // Replace domain field only if this object is not marked as cross-domain
-    if (typeof result.domain === 'string' && result.crossDomain !== true) {
-        result.domain = targetDomain;
-    }
-
-    // Recursively process all properties to find nested domain fields.
-    // "config" is always skipped. The "process" subtree is rewritten conditionally:
-    // only domains equal to the source domain are replaced (cross-domain refs kept).
-    for (const [key, value] of Object.entries(result)) {
-        if (key === 'domain' || key === 'config') {
-            continue;
-        }
-        if (key === 'process') {
-            result[key] = replaceProcessDomainInJson(value, targetDomain, sourceDomain);
-        } else {
-            result[key] = replaceDomainInJson(value, targetDomain, sourceDomain);
-        }
-    }
-
-    return result;
-}
-
-/**
- * Replace domain fields inside a subprocess `process` subtree.
- *
- * Unlike replaceDomainInJson, replacement here is conditional: a `domain` is rewritten
- * to the target domain only when it equals the source domain (the package's own domain).
- * A `domain` pointing at a different domain is a genuine cross-domain reference and is
- * preserved as-is. The `crossDomain: true` exemption and `config` skip are both honored.
- *
- * The conditional rule applies to the whole subtree, so any nested `domain` inside
- * `process` follows the same same-domain-only replacement.
- *
- * @param {Object} obj - Object to process (a `process` block or any of its descendants)
- * @param {string} targetDomain - Target domain to replace with
- * @param {string} sourceDomain - Source domain; only domains equal to this are replaced
- */
-function replaceProcessDomainInJson(obj, targetDomain, sourceDomain) {
-    if (typeof obj !== 'object' || obj === null) {
-        return obj;
-    }
-
-    if (Array.isArray(obj)) {
-        return obj.map(item => replaceProcessDomainInJson(item, targetDomain, sourceDomain));
-    }
-
-    const result = { ...obj };
-
-    // Replace domain only when it matches the source domain and is not cross-domain
+    // Replace domain only when it matches the source domain and is not cross-domain.
+    // A differing domain is a genuine cross-domain reference and is preserved as-is.
     if (typeof result.domain === 'string' && result.crossDomain !== true && result.domain === sourceDomain) {
         result.domain = targetDomain;
     }
 
+    // Recursively process all properties to find nested domain fields.
+    // "config" is always skipped; every other key (including "process") follows the
+    // same same-domain-only replacement rule.
     for (const [key, value] of Object.entries(result)) {
         if (key === 'domain' || key === 'config') {
             continue;
         }
-        result[key] = replaceProcessDomainInJson(value, targetDomain, sourceDomain);
+        result[key] = replaceDomainInJson(value, targetDomain, sourceDomain);
     }
 
     return result;
@@ -1123,8 +1077,9 @@ async function handleRuntimePublish(req, res) {
  * Processing runs in the background; poll GET /api/package/publish/status/:jobId for progress.
  *
  * Domain replacement is opt-in: set `replaceDomain: true` together with a non-empty
- * `appDomain` to replace domain fields in all components.  Components (or nested
- * references) that carry `crossDomain: true` are exempt from replacement.
+ * `appDomain` to replace domain fields. Only references whose `domain` equals the
+ * package's own (source) domain are rewritten; references on a different domain are
+ * cross-domain and preserved. Components/references with `crossDomain: true` are exempt.
  */
 async function handlePackagePublish(req, res) {
     try {
@@ -1529,7 +1484,8 @@ function startServer() {
         log.info(`Package Publish: POST http://localhost:${PORT}/api/package/publish`);
         log.detail(`  - For any npm package`);
         log.detail(`  - replaceDomain: true + appDomain to enable domain replacement`);
-        log.detail(`  - Components with crossDomain:true are exempt from replacement`);
+        log.detail(`  - Only references on the package's own (source) domain are rewritten`);
+        log.detail(`  - Cross-domain references and crossDomain:true are preserved`);
         log.info(`Job Status: GET http://localhost:${PORT}/api/package/publish/status/:jobId`);
         log.detail(`  - Poll for job progress after publish`);
         log.info(`Cancel Job: POST http://localhost:${PORT}/api/package/publish/cancel/:jobId`);
@@ -1561,4 +1517,4 @@ if (require.main === module) {
     startServer();
 }
 
-module.exports = { startServer, processPackage, downloadPackage, runAutomaticInit, replaceDomainInJson, replaceProcessDomainInJson };
+module.exports = { startServer, processPackage, downloadPackage, runAutomaticInit, replaceDomainInJson };
