@@ -19,13 +19,15 @@ public sealed class WorkflowTimeout : IHasKey
         string key,
         string target,
         VersionStrategy versionStrategy,
-        TimerConfig timer
+        TimerConfig timer,
+        ScriptCode? mapping = null
     )
     {
         Key = Check.NotNullOrWhiteSpace(key, nameof(Key), WorkflowConstants.MaxKeyLength);
         Target = Check.NotNullOrWhiteSpace(target, nameof(Target), StateConstants.MaxKeyLength);
         VersionStrategy = versionStrategy;
         Timer = timer;
+        Mapping = mapping;
     }
 
     /// <summary>
@@ -46,19 +48,28 @@ public sealed class WorkflowTimeout : IHasKey
 
     public TimerConfig Timer { get; private set; }
 
+    /// <summary>
+    /// Optional mapping script for dynamic timeout duration calculation.
+    /// When provided, the script is executed at runtime to determine the timeout schedule.
+    /// If the mapping fails (compile or runtime error), the static Timer.Duration is used as fallback.
+    /// </summary>
+    public ScriptCode? Mapping { get; private set; }
+
     public static WorkflowTimeout Create(
         string key,
         string target,
         string versionStrategy,
         string reset,
-        string duration
+        string duration,
+        ScriptCode? mapping = null
     )
     {
         return new WorkflowTimeout(
             key,
             target,
             VersionStrategy.FromCode(versionStrategy),
-            new TimerConfig(reset, duration)
+            new TimerConfig(reset, duration),
+            mapping
         );
     }
 }

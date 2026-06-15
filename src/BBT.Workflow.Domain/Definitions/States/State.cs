@@ -34,7 +34,7 @@ public sealed class State : IHasKey
         VersionStrategy versionStrategy,
         List<LanguageLabel>? labels,
         List<OnExecuteTask>? onEntries,
-         List<OnExecuteTask>? onExits,
+        List<OnExecuteTask>? onExits,
         List<RoleGrant>? queryRoles = null)
         : this(key, stateType, subType)
     {
@@ -43,6 +43,7 @@ public sealed class State : IHasKey
         this.onEntries = onEntries ?? [];
         this.onExits = onExits ?? [];
         this.queryRoles = queryRoles ?? [];
+        // aliases field is populated directly by System.Text.Json via [JsonInclude] (see `transitions` pattern)
         // view property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
 
@@ -81,6 +82,9 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("queryRoles")]
     private List<RoleGrant> queryRoles = new();
 
+    [JsonInclude] [JsonPropertyName("alias")]
+    private List<StateAlias> aliases = new();
+
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
@@ -105,6 +109,14 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<RoleGrant> QueryRoles => queryRoles.AsReadOnly();
+
+    /// <summary>
+    /// Role-aware display aliases for this state. When present, the state function returns the
+    /// name of the first alias whose roles resolve to the caller instead of the raw state key.
+    /// Evaluated in declaration order, first match wins.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<StateAlias> Aliases => aliases.AsReadOnly();
 
     /// <summary>
     /// Languages
@@ -165,6 +177,11 @@ public sealed class State : IHasKey
         onExits.Add(task);
     }
 
+    public void AddAlias(StateAlias alias)
+    {
+        aliases.Add(alias);
+    }
+
     public void SetView(ViewDefinition viewDefinition)
     {
         view = viewDefinition;
@@ -195,12 +212,12 @@ public sealed class State : IHasKey
     public IEnumerable<Transition> ScheduledTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Scheduled);
 
     /// <summary>
-    /// Returns true if the state has only manual/event transitions or no transitions at all.
+    /// Returns true if the state has only manual/event/scheduled transitions or no transitions at all.
     /// Used to determine if instance should become Available after transition.
     /// </summary>
     public bool HasOnlyManualOrEventTransitions => 
         !Transitions.Any() || 
-        Transitions.Any(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event);
+        Transitions.Any(t => t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event || t.TriggerType == TriggerType.Scheduled);
 
     public IReadOnlyList<string> TransitionKeys() => Transitions.Select(t => t.Key).ToList();
 

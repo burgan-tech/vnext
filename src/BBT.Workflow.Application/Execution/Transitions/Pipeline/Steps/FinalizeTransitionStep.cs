@@ -2,9 +2,9 @@ using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -38,9 +38,26 @@ public sealed class FinalizeTransitionStep(
                 .TapAsync(transition => UpdateTransitionIfExistsAsync(transition, cancellationToken));
         }
 
+        ResolveIncidentOnSuccessfulErrorBoundaryTransition(context);
+
         PerformCleanup(context);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
+    }
+
+    /// <summary>
+    /// If this pipeline run was an error-boundary transition and it completed successfully
+    /// (no new fault), resolve the active incident that triggered it.
+    /// </summary>
+    private static void ResolveIncidentOnSuccessfulErrorBoundaryTransition(TransitionExecutionContext context)
+    {
+        if (!context.IsErrorBoundaryTransition)
+            return;
+
+        if (context.Instance.Status.Equals(Instances.InstanceStatus.Faulted))
+            return;
+
+        context.Instance.ResolveActiveIncident();
     }
 
     /// <summary>
@@ -48,7 +65,7 @@ public sealed class FinalizeTransitionStep(
     /// </summary>
     private static Guid GetTransitionRecordId(TransitionExecutionContext context)
     {
-        return context.Items.TryGetValue("TransitionRecordId", out var record) && record is Guid recordId
+        return context.Items.TryGetValue(WellKnownItems.TransitionRecordId, out var record) && record is Guid recordId
             ? recordId
             : Guid.Empty;
     }

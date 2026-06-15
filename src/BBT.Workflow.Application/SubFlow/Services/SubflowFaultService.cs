@@ -1,0 +1,359 @@
+using BBT.Aether.Uow;
+using BBT.Workflow.Caching;
+using BBT.Workflow.Definitions;
+using BBT.Workflow.ExceptionHandling;
+using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.Services;
+using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
+using BBT.Workflow.Shared;
+using Microsoft.Extensions.Logging;
+
+namespace BBT.Workflow.SubFlow;
+
+/// <inheritdoc cref="ISubflowFaultService" />
+public sealed class SubflowFaultService(
+    IUnitOfWorkManager uowManager,
+    IComponentCacheStore componentCacheStore,
+    IInstanceRepository instanceRepository,
+    IWorkflowExecutionService workflowExecutionService,
+    ISubflowOutputMappingService outputMappingService,
+    IErrorBoundaryResolver errorBoundaryResolver,
+    IErrorActionExecutor errorActionExecutor,
+    ILogger<SubflowFaultService> logger)
+    : ISubflowFaultService
+{
+    /// <inheritdoc />
+    public async Task FaultAsync(
+        SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Fault/{input.Domain}/{input.Flow}");
+        SubFlowActivityHelper.EnrichWithCompletion(
+            activity,
+            input.SubInstanceId,
+            input.InstanceId,
+            input.Domain,
+            input.Flow);
+
+        using (logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.Domain] = input.Domain,
+            [TelemetryConstants.TagNames.Flow] = input.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = input.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = input.InstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = input.SubInstanceId
+        }))
+        {
+            try
+            {
+                Instance? parentInstance;
+                Definitions.Workflow? parentWorkflow = null;
+                InstanceCorrelation? correlation;
+                ActionExecutionResult? actionResult = null;
+
+                await using (var uow = await uowManager.BeginAsync(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                    cancellationToken))
+                {
+                    parentInstance = await instanceRepository.FindAsync(
+                        input.InstanceId, true, cancellationToken);
+
+                    if (parentInstance == null)
+                    {
+                        logger.InstanceNotFound(input.InstanceId, input.Flow);
+                        activity?.SetTag("vnext.subflow.result", "parent_not_found");
+                        return;
+                    }
+
+                    // Idempotency: skip if parent is already in a terminal state
+                    if (parentInstance.Status.Equals(InstanceStatus.Faulted) ||
+                        parentInstance.Status.Equals(InstanceStatus.Completed))
+                    {
+                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
+                        return;
+                    }
+
+                    // Verify the correlation exists and is still open
+                    correlation = parentInstance.FindCorrelationBySubInstanceId(input.SubInstanceId);
+                    if (correlation == null || correlation.IsCompleted)
+                    {
+                        logger.SubFlowCorrelationNotFound(input.SubInstanceId);
+                        activity?.SetTag("vnext.subflow.result", "correlation_not_found_or_completed");
+                        return;
+                    }
+
+                    correlation.UpdateSubFlowState(input.FaultedState, input.FaultedAt);
+                    parentInstance.CompleteCorrelation(input.SubInstanceId);
+                    parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+
+                    var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
+                        input.Domain,
+                        input.Flow,
+                        input.Version,
+                        cancellationToken);
+
+                    if (!parentWorkflowResult.IsSuccess)
+                    {
+                        RecordIncident(parentInstance, input, ErrorAction.Abort, null);
+                        parentInstance.Fault(input.Domain);
+                        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                        await uow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    parentWorkflow = parentWorkflowResult.Value!;
+
+                    await outputMappingService.ApplyAsync(
+                        parentInstance,
+                        parentWorkflow,
+                        correlation.ParentState,
+                        input.InstanceData,
+                        cancellationToken);
+
+                    var executionError = BuildExecutionError(input);
+                    var currentState = parentWorkflow.GetState(parentInstance.GetCurrentState).Value;
+                    var resolution = errorBoundaryResolver.Resolve(
+                        executionError.NormalizedError,
+                        taskBoundary: null,
+                        stateBoundary: currentState?.ErrorBoundary,
+                        globalBoundary: parentWorkflow.ErrorBoundary);
+
+                    actionResult = await errorActionExecutor.ExecuteAsync(
+                        resolution,
+                        executionError,
+                        retryExecutor: null,
+                        cancellationToken);
+
+                    var incident = RecordIncident(
+                        parentInstance,
+                        input,
+                        actionResult.ExecutedAction,
+                        actionResult.ResolvedAtLevel);
+
+                    if (actionResult.ShouldContinue)
+                    {
+                        incident.Resolve();
+                    }
+                    else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
+                    {
+                        parentInstance.Fault(input.Domain);
+                    }
+
+                    await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                    await uow.CommitAsync(cancellationToken);
+                }
+
+                if (!string.IsNullOrWhiteSpace(actionResult?.TransitionKey))
+                {
+                    await ExecuteErrorBoundaryTransitionAsync(
+                        parentInstance,
+                        parentWorkflow!,
+                        actionResult.TransitionKey,
+                        input.SubInstanceId,
+                        cancellationToken);
+                }
+                else if (actionResult?.ShouldContinue == true)
+                {
+                    await ResumePipelineAsync(
+                        parentInstance,
+                        parentWorkflow!,
+                        input.SubInstanceId,
+                        cancellationToken);
+                }
+
+                logger.SubFlowFaultPropagatedToParent(input.SubInstanceId, input.InstanceId);
+                SubFlowActivityHelper.SetSuccess(activity);
+            }
+            catch (Exception ex)
+            {
+                SubFlowActivityHelper.SetError(activity, ex.Message, ex);
+                logger.SubFlowFaultProcessingFailed(ex, input.SubInstanceId, input.InstanceId);
+                throw;
+            }
+        }
+    }
+
+    private static ExecutionError BuildExecutionError(SubFlowFaultedInput input)
+    {
+        var errorLayer = Enum.TryParse<ErrorLayer>(input.IncidentErrorLayer, ignoreCase: true, out var parsedLayer)
+            ? parsedLayer
+            : ErrorLayer.Task;
+
+        var code = input.IncidentErrorCode ?? $"SubFlow:Faulted:{input.SubFlowName ?? input.Flow}";
+        var message = input.IncidentMessage ?? "SubFlow faulted.";
+
+        return new ExecutionError
+        {
+            TaskKey = input.IncidentTaskKey ?? input.SubFlowName ?? input.Flow,
+            TaskType = "SubFlow",
+            StatusCode = input.IncidentStatusCode,
+            ErrorMessage = message,
+            NormalizedError = new NormalizedError
+            {
+                Code = code,
+                Layer = errorLayer,
+                StatusCode = input.IncidentStatusCode,
+                Message = message,
+                Source = ErrorSource.ResultFailure,
+                OriginalCode = input.IncidentErrorCode,
+                IsTransient = false
+            },
+            ExecutionDurationMs = 0,
+            Metadata = new Dictionary<string, object>
+            {
+                ["SubFlowName"] = input.SubFlowName ?? input.Flow,
+                ["SubFlowInstanceId"] = input.SubInstanceId,
+                ["FaultedState"] = input.FaultedState
+            }
+        };
+    }
+
+    private static InstanceIncident RecordIncident(
+        Instance parentInstance,
+        SubFlowFaultedInput input,
+        ErrorAction boundaryAction,
+        ErrorBoundaryLevel? boundaryLevel)
+    {
+        var incident = InstanceIncidentFactory.Create(
+            state: parentInstance.GetCurrentState,
+            transition: input.IncidentTransition ?? string.Empty,
+            taskKey: input.IncidentTaskKey,
+            message: $"SubFlow '{input.SubFlowName ?? input.Flow}' faulted: {input.IncidentMessage ?? "Unknown error"}",
+            errorCode: $"SubFlow:Faulted:{input.IncidentErrorCode ?? "Unknown"}",
+            errorLayer: "SubFlow",
+            statusCode: input.IncidentStatusCode,
+            stackTrace: null,
+            boundaryAction: boundaryAction.ToString(),
+            boundaryLevel: boundaryLevel?.ToString(),
+            traceId: input.IncidentTraceId);
+
+        parentInstance.AddIncident(incident);
+        return incident;
+    }
+
+    private async Task ExecuteErrorBoundaryTransitionAsync(
+        Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
+        string transitionKey,
+        Guid subInstanceId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var input = CreateWorkflowExecutionContext(
+                parentInstance,
+                parentWorkflow,
+                transitionKey,
+                isErrorBoundaryTransition: true);
+
+            var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
+            if (!result.IsSuccess)
+            {
+                throw new SubflowCompletionException(
+                    parentWorkflow.Domain,
+                    parentWorkflow.Key,
+                    parentInstance.Id.ToString(),
+                    result.Error.Code,
+                    result.Error.Message ?? "Unknown error");
+            }
+        }
+        catch
+        {
+            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            throw;
+        }
+    }
+
+    private async Task ResumePipelineAsync(
+        Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
+        Guid subInstanceId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var input = CreateWorkflowExecutionContext(
+                parentInstance,
+                parentWorkflow,
+                transitionKey: string.Empty,
+                isErrorBoundaryTransition: false);
+            input.Mode = ExecMode.Resume;
+            input.Execution!.ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep;
+            input.Execution.IsSubFlowResume = true;
+
+            var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
+            if (!result.IsSuccess && result.Error.Code != WorkflowErrorCodes.AutoTransitionConditionNotMet)
+            {
+                throw new SubflowCompletionException(
+                    parentWorkflow.Domain,
+                    parentWorkflow.Key,
+                    parentInstance.Id.ToString(),
+                    result.Error.Code,
+                    result.Error.Message ?? "Unknown error");
+            }
+        }
+        catch
+        {
+            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            throw;
+        }
+    }
+
+    private static WorkflowExecutionContext CreateWorkflowExecutionContext(
+        Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
+        string transitionKey,
+        bool isErrorBoundaryTransition)
+    {
+        return new WorkflowExecutionContext
+        {
+            Domain = parentWorkflow.Domain,
+            WorkflowKey = parentWorkflow.Key,
+            WorkflowVersion = parentWorkflow.Version,
+            InstanceId = parentInstance.Id.ToString(),
+            TransitionKey = transitionKey,
+            TriggerType = TriggerType.Automatic,
+            Mode = ExecMode.Sync,
+            CallerMode = ExecMode.Async,
+            Headers = new Dictionary<string, string?>(),
+            Actor = ExecutionActor.System,
+            RequestedAt = DateTimeOffset.UtcNow,
+            Execution = new ExecutionInfo
+            {
+                ExecutionChainId = Guid.NewGuid().ToString("N"),
+                ChainDepth = 0
+            },
+            IsReentry = isErrorBoundaryTransition,
+            IsErrorBoundaryTransition = isErrorBoundaryTransition
+        };
+    }
+
+    private async Task RevertCorrelationInNewUowAsync(
+        Instance parentInstance,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var revertUow = await uowManager.BeginAsync(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
+                cancellationToken);
+
+            var correlation = parentInstance.RevertCorrelation(subInstanceId);
+            if (correlation != null)
+            {
+                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+            }
+
+            await revertUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception revertEx)
+        {
+            logger.SubFlowCompletionFailed(revertEx, subInstanceId, parentInstanceId);
+        }
+    }
+}

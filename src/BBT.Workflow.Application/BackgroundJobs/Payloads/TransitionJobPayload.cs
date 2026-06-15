@@ -56,6 +56,11 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// Gets or sets the instance tags (Optional).
     /// </summary>
     public string[]? Tags { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the instance stage (Optional).
+    /// </summary>
+    public string? Stage { get; set; }
 
     /// <summary>
     /// Gets or sets the request headers.
@@ -71,6 +76,12 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// Gets or sets the execution context for the transition.
     /// </summary>
     public ExecutionActor ExecutionActor { get; set; } = ExecutionActor.User;
+
+    /// <summary>
+    /// Preserves the original caller's sync/async intent.
+    /// When false, subflows started from this transition will also run asynchronously.
+    /// </summary>
+    public bool CallerSync { get; set; }
 
     /// <summary>
     /// Gets or sets the W3C Trace Context traceparent header for distributed tracing correlation.

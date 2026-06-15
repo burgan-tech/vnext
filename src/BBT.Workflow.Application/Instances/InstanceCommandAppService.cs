@@ -21,7 +21,9 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Definitions.Timer;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Evaluation;
 using Dapr.Jobs.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -44,11 +46,13 @@ public sealed class InstanceCommandAppService(
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
+    ITransitionContextFactory transitionContextFactory,
     IWorkflowContext workflowContext,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
+    ITimerEvaluator timerEvaluator,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -74,14 +78,19 @@ public sealed class InstanceCommandAppService(
             return existingInstanceResult.Value;
         }
 
-        // Step 3-6: Continue with normal railway flow for NEW instances
+        // Step 3-6: Continue with normal railway flow for NEW instances.
+        // Order matters: PrepareInstanceAsync runs schema validation before persisting the instance,
+        // ExecuteStartTransitionAsync dispatches the (sync or async) execution, and only after a
+        // successful dispatch do we schedule the workflow timeout — otherwise a failed enqueue or
+        // a 409 lock conflict would leave a dangling timeout job for an instance that never started.
         return await PrepareInstanceAsync(workflow, input, cancellationToken)
-            .ThenAsync(async data =>
-            {
-                await ScheduleWorkflowTimeoutIfConfiguredAsync(data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
-                return Result<(Definitions.Workflow Workflow, Instance Instance)>.Ok(data);
-            })
-            .ThenAsync(data => ExecuteStartTransitionAsync(data, input, cancellationToken))
+            .ThenAsync(data => ExecuteStartTransitionAsync(data, input, cancellationToken)
+                .ThenAsync(async output =>
+                {
+                    await ScheduleWorkflowTimeoutIfConfiguredAsync(
+                        data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
+                    return Result<StartInstanceOutput>.Ok(output);
+                }))
             .OnSuccess(output => AddWorkflowHeader(output, input));
     }
 
@@ -180,6 +189,7 @@ public sealed class InstanceCommandAppService(
                 input.Instance.Id ?? guidGenerator.Create(),
                 input.Instance.Key,
                 input.Instance.Tags?.ToList(),
+                input.Instance.Stage,
                 input.Instance.ExtraProperties,
                 input.Sync,
                 input.Instance.Callback,
@@ -294,6 +304,8 @@ public sealed class InstanceCommandAppService(
     /// <summary>
     /// Schedules a workflow timeout job if the workflow has a timeout configuration.
     /// When extraProperties contains a timeout override (set by SubflowStarter), it takes precedence over the workflow's own timeout.
+    /// When a mapping script is configured, it is evaluated to determine the timeout schedule dynamically.
+    /// If mapping fails, the static Timer.Duration is used as fallback.
     /// </summary>
     private async Task ScheduleWorkflowTimeoutIfConfiguredAsync(
         Definitions.Workflow workflow,
@@ -332,19 +344,23 @@ public sealed class InstanceCommandAppService(
                 TraceState = activity?.TraceStateString
             };
 
-            // Parse ISO 8601 duration string to TimeSpan
-            var timeoutDuration = System.Xml.XmlConvert.ToTimeSpan(effectiveTimeout.Timer.Duration);
+            var resolvedSchedule = await ResolveTimeoutScheduleAsync(
+                effectiveTimeout, workflow, instance, cancellationToken);
 
-            // Calculate timeout schedule - workflow timeout should be evaluated from creation time
-            var timeoutDateTime = DateTime.UtcNow.Add(timeoutDuration);
-            var schedule = DaprJobSchedule.FromDateTime(timeoutDateTime).ExpressionValue;
+            var schedule = resolvedSchedule.ToDaprJobSchedule().ExpressionValue;
+
+            var timeoutAt = resolvedSchedule.ScheduleType == TimerScheduleType.DateTime
+                ? resolvedSchedule.ScheduledDateTime!.Value
+                : resolvedSchedule.Duration.HasValue
+                    ? DateTime.UtcNow.Add(resolvedSchedule.Duration.Value)
+                    : DateTime.UtcNow;
 
             var metadata = new Dictionary<string, object>
             {
                 ["domain"] = workflow.Domain,
                 ["flowName"] = workflow.Key,
                 ["instanceId"] = instance.Id.ToString(),
-                ["timeoutAt"] = timeoutDateTime.ToString("O")
+                ["timeoutAt"] = timeoutAt.ToString("O")
             };
 
             // Enqueue the timeout job
@@ -354,7 +370,7 @@ public sealed class InstanceCommandAppService(
                 payload,
                 schedule,
                 metadata,
-                cancellationToken);
+                cancellationToken: cancellationToken);
 
             // Track the job in the database
             await instanceJobRepository.InsertAsync(
@@ -369,13 +385,53 @@ public sealed class InstanceCommandAppService(
                 true,
                 cancellationToken);
 
-            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutDateTime);
+            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutAt);
         }
         catch (Exception ex)
         {
             logger.WorkflowTimeoutSchedulingFailed(ex, instance.Id);
             // Don't throw - timeout scheduling failure should not prevent workflow start
         }
+    }
+
+    /// <summary>
+    /// Resolves the timeout schedule, trying mapping first (if configured) with static duration as fallback.
+    /// </summary>
+    private async Task<TimerSchedule> ResolveTimeoutScheduleAsync(
+        WorkflowTimeout effectiveTimeout,
+        Definitions.Workflow workflow,
+        Instance instance,
+        CancellationToken cancellationToken)
+    {
+        if (effectiveTimeout.Mapping != null)
+        {
+            var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+                .WithWorkflow(workflow)
+                .WithInstance(instance)
+                .WithRuntime(runtimeInfoProvider)
+                .WithTransition(effectiveTimeout.Key)
+                .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
+                .BuildAsync(cancellationToken);
+
+            var mappingResult = await timerEvaluator.EvaluateAsync(
+                effectiveTimeout.Mapping, scriptContext, cancellationToken);
+
+            if (mappingResult.IsSuccess)
+            {
+                logger.TimeoutMappingResolved(instance.Id, mappingResult.Value!.ScheduleType.ToString());
+                return mappingResult.Value!;
+            }
+
+            logger.TimeoutMappingFallback(
+                instance.Id,
+                effectiveTimeout.Timer.Duration,
+                mappingResult.Error.Message ?? mappingResult.Error.Code);
+        }
+
+        // Static fallback: parse ISO 8601 duration
+        var timeoutDuration = System.Xml.XmlConvert.ToTimeSpan(effectiveTimeout.Timer.Duration);
+        var timeoutDateTime = DateTime.UtcNow.Add(timeoutDuration);
+        return TimerSchedule.FromDateTime(timeoutDateTime);
     }
 
     /// <summary>
@@ -417,6 +473,21 @@ public sealed class InstanceCommandAppService(
 
         var workflowDefinition = workflowResult.Value;
 
+        // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
+        // dispatching to the execution service. This guarantees consistent 400 Bad Request
+        // behaviour for both sync=true and sync=false callers — the async path would otherwise
+        // accept the request, flip the instance to Busy and discover the schema violation
+        // later in the background job (leaving the instance Faulted). The same check is also
+        // performed inside AsyncTransitionStrategy as defense in depth for callers that
+        // bypass the AppService and invoke WorkflowExecutionService directly.
+        var preValidation = await ValidateTransitionRequestAsync(
+            context, resolvedInstance, workflowDefinition!, cancellationToken);
+        if (!preValidation.IsSuccess)
+        {
+            logger.TransitionValidationFailed(resolvedInstance.Id, transitionKey, preValidation.Error.Code);
+            return Result<TransitionOutput>.Fail(preValidation.Error);
+        }
+
         return await workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
             .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion))
@@ -427,6 +498,26 @@ public sealed class InstanceCommandAppService(
                 output.Key = resolvedInstance.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
+    }
+
+    /// <summary>
+    /// Pre-dispatch schema + state-machine validation for a transition request.
+    /// Builds the execution context from pre-loaded instance and workflow (zero DB calls)
+    /// and runs the same <see cref="ITransitionValidationService.ValidateAsync"/>
+    /// that the sync pipeline uses, so both sync=true and sync=false callers get the same
+    /// validation error contract before any state mutation or background-job enqueue.
+    /// </summary>
+    private async Task<Result> ValidateTransitionRequestAsync(
+        WorkflowExecutionContext context,
+        Instance instance,
+        Definitions.Workflow workflow,
+        CancellationToken cancellationToken)
+    {
+        var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
+        if (!contextResult.IsSuccess)
+            return Result.Fail(contextResult.Error);
+
+        return await transitionValidationService.ValidateAsync(contextResult.Value!, cancellationToken);
     }
 
     /// <summary>
@@ -446,15 +537,17 @@ public sealed class InstanceCommandAppService(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = input.Headers,
             RouteValues = input.RouteValues,
             Data = new TransitionDataInfo(input.Data?.Key, input.Data?.Attributes)
             {
+                Stage = input.Data?.Stage,
                 Tags = input.Data?.Tags,
             },
-            IsReentry = false,
+            IsReentry = false
         };
     }
 
@@ -501,15 +594,20 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken)
         where TOutput : class
     {
-        var freshInstance = await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
-        if (freshInstance is null)
+        // Use pipeline instance if available (already committed, avoids redundant DB read).
+        // Falls back to DB read when PipelineInstance is not set (e.g. idempotent existing-instance path).
+        var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
+        var instance = pipelineInstance
+            ?? await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
+
+        if (instance is null)
             return Result<TOutput>.Ok(output);
 
-        var latestData = freshInstance.LatestData;
+        var latestData = instance.LatestData;
         var rawAttributes = latestData?.Data.JsonElement;
-        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, freshInstance, cancellationToken);
+        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, instance, cancellationToken);
 
-        var key = freshInstance.Key;
+        var key = instance.Key;
         var entityEtag = latestData?.ETag;
         var attributes = filteredAttributes ?? rawAttributes;
 
@@ -518,7 +616,7 @@ public sealed class InstanceCommandAppService(
         {
             var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
                 .WithWorkflow(workflow)
-                .WithInstance(freshInstance)
+                .WithInstance(instance)
                 .WithRuntime(runtimeInfoProvider)
                 .WithTransition(string.Empty)
                 .WithBody(latestData?.Data ?? new JsonData("{}"))
@@ -543,7 +641,7 @@ public sealed class InstanceCommandAppService(
             start.Attributes = attributes;
             start.EntityEtag = entityEtag;
             start.Extensions = extensions;
-            // ETag must be generated after all other fields are set (ETag itself is null at generation time)
+            start.PipelineInstance = null;
             start.ETag = representationEtagService.Generate(start);
         }
         else if (output is TransitionOutput transition)
@@ -552,7 +650,7 @@ public sealed class InstanceCommandAppService(
             transition.Attributes = attributes;
             transition.EntityEtag = entityEtag;
             transition.Extensions = extensions;
-            // ETag must be generated after all other fields are set (ETag itself is null at generation time)
+            transition.PipelineInstance = null;
             transition.ETag = representationEtagService.Generate(transition);
         }
 
@@ -568,6 +666,7 @@ public sealed class InstanceCommandAppService(
         Guid instanceId,
         string? instanceKey,
         List<string>? tags,
+        string? stage,
         ExtraPropertyDictionary metadata,
         bool isSync,
         string? callback,
@@ -581,8 +680,14 @@ public sealed class InstanceCommandAppService(
                 instance.SetInfoMetadata(isSync, callback, workflow.Type.Code, metadata);
                 instance.ChangeState(initialState);
 
+                if (instance.IsSubItem)
+                    instance.Busy();
+
                 if (tags?.Any() == true)
                     instance.AddTags(tags.ToArray());
+
+                if (!string.IsNullOrWhiteSpace(stage))
+                    instance.SetStage(stage);
 
                 return instance;
             }));

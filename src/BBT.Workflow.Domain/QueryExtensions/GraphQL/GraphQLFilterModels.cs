@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using BBT.Workflow.Definitions.Schemas;
 
 namespace BBT.Workflow.Definitions.GraphQL;
 
@@ -31,6 +33,14 @@ public sealed class GraphQLFilterRequest
     /// </summary>
     [JsonPropertyName("orderBy")]
     public OrderByRequest? OrderBy { get; set; }
+
+    /// <summary>
+    /// Schema-driven filter/sort metadata resolved from the workflow's JSON Schema.
+    /// When set, enables field filterability validation, operator whitelisting,
+    /// sortability checks, and type-aware SQL casting.
+    /// </summary>
+    [JsonIgnore]
+    public SchemaFilterContext? SchemaContext { get; set; }
 }
 
 /// <summary>
@@ -228,6 +238,14 @@ public class FieldCondition
     public bool? IsNull { get; set; }
 
     /// <summary>
+    /// JSON array containment at this field path: the document must contain the path as a JSON array
+    /// with at least one element that matches this partial object (PostgreSQL <c>jsonb @&gt;</c>).
+    /// Cannot be combined with other operators on the same field.
+    /// </summary>
+    [JsonPropertyName("includes")]
+    public JsonElement? Includes { get; set; }
+
+    /// <summary>
     /// Nested field conditions for dot notation support
     /// Example: {"parent": {"child": {"eq": "value"}}}
     /// </summary>
@@ -253,6 +271,8 @@ public class FieldCondition
         if (In != null) yield return ("in", In);
         if (NotIn != null) yield return ("nin", NotIn);
         if (IsNull.HasValue) yield return ("isNull", IsNull.Value);
+        if (Includes is { ValueKind: JsonValueKind.Object } inc)
+            yield return ("includes", inc);
     }
 }
 

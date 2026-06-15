@@ -34,6 +34,11 @@ public class InstanceCanceledEvent : IDistributedEvent
     public required string Flow { get; init; }
     
     /// <summary>
+    /// The workflow version of the canceled instance
+    /// </summary>
+    public required string Version { get; init; }
+    
+    /// <summary>
     /// The state where the instance was canceled
     /// </summary>
     public required string CanceledState { get; init; }

@@ -12,6 +12,9 @@ namespace BBT.Workflow.Validation;
 /// </summary>
 public sealed class JsonSchemaValidator : IJsonSchemaValidator
 {
+    public Result Validate(JsonElement jsonSchema, JsonElement? data)
+        => Validate(jsonSchema, data, SchemaValidationOptions.Default);
+
     /// <summary>
     /// Validates the given JSON data against the specified JSON schema using Result Pattern.
     /// Uses hierarchical output format and requires format validation for comprehensive validation.
@@ -20,9 +23,10 @@ public sealed class JsonSchemaValidator : IJsonSchemaValidator
     /// <param name="jsonSchema">JSON schema to be used for validation</param>
     /// <param name="data">JSON data to be validated. If null, an empty JSON object "{}" is used for validation</param>
     /// <returns>Result containing validation outcome. On failure, Error.ValidationErrors contains detailed field-level errors.</returns>
-    public Result Validate(JsonElement jsonSchema, JsonElement? data)
+    public Result Validate(JsonElement jsonSchema, JsonElement? data, SchemaValidationOptions options)
     {
-        var schema = JsonSchema.FromText(jsonSchema.GetRawText());
+        var schemaWithoutVocabulary = JsonSchemaVocabularySanitizer.RemoveVocabularyKeywords(jsonSchema);
+        var schema = JsonSchema.FromText(schemaWithoutVocabulary.GetRawText());
         var json = JsonDocument.Parse(data?.GetRawText() ?? "{}");
 
         var validationResult = schema.Evaluate(json.RootElement, new EvaluationOptions()
@@ -34,6 +38,20 @@ public sealed class JsonSchemaValidator : IJsonSchemaValidator
         if (validationResult.IsValid)
         {
             return Result.Ok();
+        }
+
+        if (options.IncludeVocabularyDetails)
+        {
+            var details = validationResult.ToSchemaValidationProblemDetails(jsonSchema, options);
+            return Result.Fail(
+                Error.Validation(
+                    WorkflowErrorCodes.ValidationErrors,
+                    "JSON schema validation failed",
+                    details.ToValidationResults().AsReadOnly())
+                    with
+                    {
+                        Detail = JsonSerializer.Serialize(details)
+                    });
         }
 
         var validationErrors = validationResult.ToValidationResults();

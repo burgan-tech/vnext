@@ -56,6 +56,7 @@ public static class WorkflowHealthCheckMapExtensions
             {
                 Status = report.Status.ToString(),
                 Duration = report.TotalDuration,
+                Domain = runtimeInfoProvider?.Domain,
                 Version = runtimeInfoProvider?.Version,
                 Info = report.Entries
                     .Select(e =>

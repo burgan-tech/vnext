@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Remote;
 using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.SubFlow;
@@ -72,6 +73,7 @@ public sealed class RemoteInstanceCommandAppService(
             var requestBody = new CreateInstanceInput
             {
                 Key = input.Instance.Key,
+                Stage = input.Instance.Stage,
                 Tags = input.Instance.Tags,
                 Attributes = input.Instance.Attributes
             };
@@ -147,6 +149,7 @@ public sealed class RemoteInstanceCommandAppService(
                 Id = input.Instance.Id,
                 Key = input.Instance.Key,
                 Tags = input.Instance.Tags,
+                Stage = input.Instance.Stage,
                 Attributes = input.Instance.Attributes,
                 Callback = input.Instance.Callback,
                 ExtraProperties = input.Instance.ExtraProperties
@@ -337,6 +340,97 @@ public sealed class RemoteInstanceCommandAppService(
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
             // Network errors → Transient error (per Railway Pattern)
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Propagates SubFlow fault to parent instance by calling the remote API.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/sub/fault
+    /// </summary>
+    public async Task<Result> FaultAsync(
+        SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            if (!endpointResult.IsSuccess)
+            {
+                return Result.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
+
+            var relativePath = InstanceUrlTemplates.SubFlowFault(
+                input.Domain,
+                input.Flow,
+                input.InstanceId.ToString(),
+                ApiVersionPrefix);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+
+            var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
+            var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = content
+            };
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Marks instance Busy recursively by calling the remote API.
+    /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
+    /// </summary>
+    public async Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            if (!endpointResult.IsSuccess)
+                return Result.Fail(endpointResult.Error);
+
+            var endpoint = endpointResult.Value!;
+
+            var relativePath = InstanceUrlTemplates.MarkBusy(
+                input.Domain,
+                input.Workflow,
+                input.InstanceId.ToString(),
+                ApiVersionPrefix);
+
+            if (!string.IsNullOrEmpty(input.Version))
+                relativePath += $"?version={Uri.EscapeDataString(input.Version)}";
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Put, requestUri);
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
             return Result.Fail(Error.Transient("remote_network_error", ex.Message));
         }
     }

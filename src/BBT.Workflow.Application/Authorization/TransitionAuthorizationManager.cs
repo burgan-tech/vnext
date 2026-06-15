@@ -79,6 +79,48 @@ public sealed class TransitionAuthorizationManager(
     }
 
     /// <inheritdoc />
+    public async Task<bool> IsAnyRoleAllowedForGrantsAsync(
+        IReadOnlyCollection<string>? callerRoles,
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        Instance? instance,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (roleGrants.Count == 0)
+            return true; // No roles defined → allow
+
+        // No caller roles: still evaluate predefined/dynamic grants once.
+        if (callerRoles is null || callerRoles.Count == 0)
+            return await IsRoleAllowedForGrantsAsync(null, roleGrants, instance, requestContext, cancellationToken);
+
+        // Multi-role: any allowed role grants access.
+        foreach (var role in callerRoles)
+        {
+            if (string.IsNullOrWhiteSpace(role))
+                continue;
+            if (await IsRoleAllowedForGrantsAsync(role.Trim(), roleGrants, instance, requestContext, cancellationToken))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsQueryAllowedAsync(
+        WorkflowDefinition workflow,
+        Instance instance,
+        IReadOnlyCollection<string>? callerRoles,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        var currentStateKey = instance.GetEffectiveState;
+        var state = string.IsNullOrWhiteSpace(currentStateKey) ? null : workflow.FindState(currentStateKey);
+        var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
+
+        return await IsAnyRoleAllowedForGrantsAsync(callerRoles, queryRoles, instance, requestContext, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetEffectiveCallerRolesForFieldVisibilityAsync(
         Instance? instance,
         CancellationToken cancellationToken = default)
@@ -391,6 +433,73 @@ public sealed class TransitionAuthorizationManager(
             if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsAllow)
                 return true;
         }
+        return false;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsPredefinedRoleMatchAsync(
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        Instance instance,
+        CancellationToken cancellationToken = default)
+    {
+        var predefinedGrants = roleGrants;
+
+        if (predefinedGrants.Count == 0)
+            return true;
+
+        var actorUserName = currentUser.ActorUserName?.Trim();
+
+        if (string.IsNullOrEmpty(actorUserName))
+            return false;
+
+        string? previousUserCreatedBy = null;
+        string? previousBehalfOf = null;
+
+
+        var needsPreviousUser = predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal));
+        var needsPreviousBehalfOf = predefinedGrants.Any(g => string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal));
+
+        if (needsPreviousUser || needsPreviousBehalfOf)
+        {
+            var lastTransition = await instanceTransitionRepository.GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken);
+
+            if (needsPreviousUser)
+                previousUserCreatedBy = lastTransition?.CreatedBy?.Trim();
+
+            if (needsPreviousBehalfOf)
+                previousBehalfOf = lastTransition?.CreatedByBehalfOf?.Trim();
+        }
+
+
+        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)
+                                      && !string.IsNullOrEmpty(previousUserCreatedBy)
+                                      && string.Equals(actorUserName, previousUserCreatedBy, StringComparison.Ordinal)))
+            return false;
+
+        if (predefinedGrants.Any(g => g.IsDeny && string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal)
+                                      && !string.IsNullOrEmpty(previousBehalfOf)
+                                      && string.Equals(actorUserName, previousBehalfOf, StringComparison.Ordinal)))
+            return false;
+
+        if (predefinedGrants.Any(g => g.IsAllow && string.Equals(g.Role, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal)
+                                      && string.Equals(actorUserName, instance.CreatedBy?.Trim(), StringComparison.Ordinal)))
+            return true;
+
+        if (predefinedGrants.Any(g => g.IsAllow && string.Equals(g.Role, PredefinedInstanceRoles.InstanceBehalfOfStarter, StringComparison.Ordinal)
+                                      && string.Equals(actorUserName, instance.CreatedByBehalfOf?.Trim(), StringComparison.Ordinal)))
+            return true;
+
+        if (predefinedGrants.Any(g => g.IsAllow && string.Equals(g.Role, PredefinedInstanceRoles.PreviousBehalfOfUser, StringComparison.Ordinal)
+                                      && !string.IsNullOrEmpty(previousBehalfOf)
+                                      && string.Equals(actorUserName, previousBehalfOf, StringComparison.Ordinal)))
+            return true;
+
+        if (predefinedGrants.Any(g => g.IsAllow && string.Equals(g.Role, PredefinedInstanceRoles.PreviousUser, StringComparison.Ordinal)
+                                      && !string.IsNullOrEmpty(previousUserCreatedBy)
+                                      && string.Equals(actorUserName, previousUserCreatedBy, StringComparison.Ordinal)))
+            return true;
+
+        
         return false;
     }
 }

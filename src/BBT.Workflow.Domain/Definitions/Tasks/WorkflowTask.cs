@@ -22,6 +22,7 @@ namespace BBT.Workflow.Definitions;
 [JsonDerivedType(typeof(GetInstanceDataTask), typeDiscriminator: "13")]
 [JsonDerivedType(typeof(SubProcessTask), typeDiscriminator: "14")]
 [JsonDerivedType(typeof(GetInstancesTask), typeDiscriminator: "15")]
+[JsonDerivedType(typeof(SoapTask), typeDiscriminator: "16")]
 public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSetter, ITaskClonable
 {
     protected WorkflowTask()
@@ -69,7 +70,8 @@ public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSe
     /// </summary>
     public JsonElement Config { get; private set; }
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Tasks;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Tasks;
+    public string ComponentKey => ComponentTypeKey;
 
     private void SetKey(string key)
     {

@@ -226,6 +226,20 @@ public static class WorkflowErrors
 
     #endregion
 
+    #region Timeout Errors
+
+    /// <summary>
+    /// Workflow timeout configuration is missing.
+    /// </summary>
+    /// <param name="workflowKey">The key of the workflow with missing timeout config.</param>
+    public static Error TimeoutConfigMissing(string workflowKey)
+        => Error.Validation(
+            WorkflowErrorCodes.TimeoutConfigMissing,
+            $"Timeout configuration is missing for workflow '{workflowKey}'",
+            target: workflowKey);
+
+    #endregion
+
     #region Configuration Errors
 
     /// <summary>
@@ -289,6 +303,19 @@ public static class WorkflowErrors
         => Error.Conflict(
             WorkflowErrorCodes.ConflictWorkflow,
             "Failed to acquire lock for instance",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// A background job for this transition is already active.
+    /// Returned when sync=false is requested but an active job with the same
+    /// instance and transition key already exists in the queue.
+    /// </summary>
+    /// <param name="instanceId">The instance being processed.</param>
+    /// <param name="transitionKey">The transition key that is already queued.</param>
+    public static Error TransitionJobAlreadyActive(Guid instanceId, string transitionKey)
+        => Error.Conflict(
+            WorkflowErrorCodes.TransitionLocked,
+            $"Transition '{transitionKey}' is already being processed for instance",
             target: instanceId.ToString());
 
     #endregion
@@ -394,6 +421,18 @@ public static class WorkflowErrors
             $"Function '{functionKey}' is not defined for workflow '{workflowKey}'",
             target: functionKey);
 
+    /// <summary>
+    /// The function's scope requirements are not satisfied for the current request
+    /// (e.g. an Instance/Flow-scoped function invoked without an instance, or a
+    /// Flow-scoped function not declared in the instance's flow). Maps to HTTP 403.
+    /// </summary>
+    /// <param name="functionKey">The key of the function whose scope was violated.</param>
+    /// <param name="scope">The scope description of the function.</param>
+    public static Error FunctionScopeNotSatisfied(string functionKey, string scope)
+        => Error.Forbidden(
+            WorkflowErrorCodes.FunctionScopeNotSatisfied,
+            $"Function '{functionKey}' with scope '{scope}' cannot be invoked in this context.");
+
     #endregion
 
     #region Authorization Errors
@@ -415,6 +454,23 @@ public static class WorkflowErrors
             WorkflowErrorCodes.AuthorizeQueryRolesRequiresInstance,
             "Query roles check is only valid for instance-level authorize",
             target: "authorize");
+
+    /// <summary>
+    /// The current roles are not permitted to query the instance in its current state (state/workflow queryRoles).
+    /// Maps to HTTP 403.
+    /// </summary>
+    public static Error QueryAccessDenied(string stateKey)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Access to state '{stateKey}' is not permitted for the current roles.");
+
+    /// <summary>
+    /// The current roles are not permitted to invoke the custom function (function-level roles). Maps to HTTP 403.
+    /// </summary>
+    public static Error FunctionAccessDenied(string functionKey)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Access to function '{functionKey}' is not permitted for the current roles.");
 
     #endregion
 

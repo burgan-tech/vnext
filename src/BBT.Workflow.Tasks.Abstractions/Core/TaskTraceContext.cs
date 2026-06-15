@@ -2,7 +2,7 @@ namespace BBT.Workflow.Tasks;
 
 /// <summary>
 /// Trace context for distributed tracing of task execution.
-/// Contains information needed for observability and correlation.
+/// Contains information needed for observability, correlation, and placeholder resolution.
 /// </summary>
 public sealed record TaskTraceContext
 {
@@ -30,6 +30,16 @@ public sealed record TaskTraceContext
     /// Optional correlation ID for cross-service tracing.
     /// </summary>
     public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// Original HTTP request headers forwarded from orchestration.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
+
+    /// <summary>
+    /// Serialized instance latest data JSON for placeholder resolution.
+    /// </summary>
+    public string? InstanceDataJson { get; init; }
     
     /// <summary>
     /// Creates a trace context from workflow and instance information.
@@ -39,13 +49,17 @@ public sealed record TaskTraceContext
         string domain,
         string workflowKey,
         string workflowVersion,
-        string? correlationId = null) => new()
+        string? correlationId = null,
+        IReadOnlyDictionary<string, string>? headers = null,
+        string? instanceDataJson = null) => new()
     {
         InstanceId = instanceId,
         Domain = domain,
         WorkflowKey = workflowKey,
         WorkflowVersion = workflowVersion,
-        CorrelationId = correlationId
+        CorrelationId = correlationId,
+        RequestHeaders = headers,
+        InstanceDataJson = instanceDataJson
     };
 }
 

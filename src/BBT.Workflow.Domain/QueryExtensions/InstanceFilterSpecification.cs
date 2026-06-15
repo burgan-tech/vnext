@@ -17,7 +17,7 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
     {
         return new Dictionary<string, Func<string, Expression<Func<Instance, bool>>>>
         {
-            ["attributes"] = value => 
+            ["attributes"] = value =>
             {
                 try
                 {
@@ -25,38 +25,55 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
                     if (!match.Success) return x => false;
 
                     var jsonString = match.Groups[2].Value;
-                    return x=> x.DataList != null && x.DataList.Any(dtList=>EF.Functions.JsonContains(dtList.Data.Json, jsonString));
+                    return x => x.DataList != null &&
+                                x.DataList.Any(dtList => EF.Functions.JsonContains(dtList.Data.Json, jsonString));
                 }
                 catch
                 {
                     return x => false;
                 }
             },
-            ["status"] = value => 
+            ["status"] = value =>
             {
                 var status = (InstanceStatus)Enum.Parse(typeof(InstanceStatus), value, true);
                 return x => x.Status == status;
             },
-            ["effectiveStateType"] = value => 
+            ["effectiveStateType"] = value =>
             {
                 var stateType = (StateType)Enum.Parse(typeof(StateType), value, true);
                 return x => x.EffectiveStateType == stateType;
             },
-            ["effectiveStateSubType"] = value => 
+            ["effectiveStateSubType"] = value =>
             {
                 var stateSubType = (StateSubType)Enum.Parse(typeof(StateSubType), value, true);
                 return x => x.EffectiveStateSubType == stateSubType;
             },
+            ["currentStateType"] = value =>
+            {
+                var stateType = (StateType)Enum.Parse(typeof(StateType), value, true);
+                return x => x.CurrentStateType == stateType;
+            },
+            ["currentStateSubType"] = value =>
+            {
+                var stateSubType = (StateSubType)Enum.Parse(typeof(StateSubType), value, true);
+                return x => x.CurrentStateSubType == stateSubType;
+            },
+            ["stage"] = value => x => x.Stage == value,
             ["flow"] = value => x => x.Flow == value,
             ["flowVersion"] = value => x => x.FlowVersion == value,
-            ["key"] = value => 
+            ["id"] = value =>
+            {
+                var id = Guid.TryParse(value, out var guid) ? guid : Guid.Empty;
+                return x => x.Id == id;
+            },
+            ["key"] = value =>
             {
                 var match = KeyValueRegex.Match(value);
                 if (!match.Success) return x => false;
                 var keyValue = match.Groups[2].Value;
                 return x => x.Key == keyValue;
             },
-            ["tag"] = value => 
+            ["tag"] = value =>
             {
                 var match = KeyValueRegex.Match(value);
                 if (!match.Success) return x => false;
@@ -65,4 +82,4 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
             }
         };
     }
-} 
+}

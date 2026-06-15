@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Json.Schema;
 
@@ -11,6 +12,64 @@ namespace BBT.Workflow.Validation;
 /// </summary>
 public static class JsonSchemaValidationMapper
 {
+    public static SchemaValidationProblemDetails ToSchemaValidationProblemDetails(
+        this EvaluationResults evaluation,
+        JsonElement schemaRoot,
+        SchemaValidationOptions options,
+        IEnumerable<SchemaValidationErrorDetail>? additionalErrors = null)
+    {
+        var culture = options.EffectiveCulture;
+        var metadata = JsonSchemaVocabularyMetadataResolver.Resolve(schemaRoot);
+        var errors = new List<SchemaValidationErrorDetail>();
+
+        if (!evaluation.IsValid)
+        {
+            foreach (var detail in FlattenErrors(evaluation))
+            {
+                var path = ToMemberPath(detail.InstanceLocation.ToString());
+                if (detail.Errors is null || detail.Errors.Count == 0)
+                {
+                    errors.Add(new SchemaValidationErrorDetail(
+                        Path: path,
+                        Keyword: "validation",
+                        Code: "schema.validation",
+                        Message: "Validation failed",
+                        Label: metadata.FindField(path)?.ResolveLabel(culture),
+                        SchemaPath: detail.EvaluationPath.ToString(),
+                        Parameters: new Dictionary<string, JsonElement>(StringComparer.Ordinal)));
+                    continue;
+                }
+
+                foreach (var error in detail.Errors)
+                {
+                    var field = metadata.FindField(path);
+                    var message = field?.ResolveErrorMessage(error.Key, culture) ?? Regex.Unescape(error.Value);
+                    errors.Add(new SchemaValidationErrorDetail(
+                        Path: path,
+                        Keyword: error.Key,
+                        Code: $"schema.{error.Key}",
+                        Message: message,
+                        Label: field?.ResolveLabel(culture),
+                        SchemaPath: detail.EvaluationPath.ToString(),
+                        Parameters: field?.GetKeywordParameters(error.Key) ??
+                                    new Dictionary<string, JsonElement>(StringComparer.Ordinal)));
+                }
+            }
+        }
+
+        if (additionalErrors is not null)
+            errors.AddRange(additionalErrors);
+
+        return new SchemaValidationProblemDetails(culture, errors);
+    }
+
+    public static List<ValidationResult> ToValidationResults(this SchemaValidationProblemDetails details)
+    {
+        return details.Errors
+            .Select(error => new ValidationResult(error.Message, [error.Path]))
+            .ToList();
+    }
+
     /// <summary>
     /// Converts JSON schema evaluation results into a collection of ValidationResult objects.
     /// This extension method flattens the hierarchical validation errors and maps them to 
@@ -84,4 +143,20 @@ public static class JsonSchemaValidationMapper
 
         return list;
     }
+
+    private static string ToMemberPath(string instanceLocation)
+    {
+        var path = instanceLocation.TrimStart('/');
+        if (string.IsNullOrWhiteSpace(path))
+            return "root";
+
+        return string.Join(
+            ".",
+            path.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Select(UnescapePointerSegment));
+    }
+
+    private static string UnescapePointerSegment(string segment)
+        => segment.Replace("~1", "/", StringComparison.Ordinal)
+            .Replace("~0", "~", StringComparison.Ordinal);
 }

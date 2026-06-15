@@ -28,6 +28,11 @@ public class InstanceColumnFilterTests
     [InlineData("ModifiedAt", true)]
     [InlineData("CompletedAt", true)]
     [InlineData("IsTransient", true)]
+    [InlineData("CreatedBy", true)]
+    [InlineData("createdby", true)]
+    [InlineData("CreatedByBehalfOf", true)]
+    [InlineData("ModifiedBy", true)]
+    [InlineData("ModifiedByBehalfOf", true)]
     [InlineData("attributes", false)]
     [InlineData("triggerId", false)]
     [InlineData("customField", false)]
@@ -46,10 +51,15 @@ public class InstanceColumnFilterTests
     [InlineData("key", "Key")]
     [InlineData("Status", "Status")]
     [InlineData("status", "Status")]
-    [InlineData("State", "CurrentState")] // Alias mapping
-    [InlineData("state", "CurrentState")]
+    [InlineData("State", "EffectiveState")] // Alias mapping
+    [InlineData("state", "EffectiveState")]
     [InlineData("CreatedAt", "CreatedAt")]
     [InlineData("createdat", "CreatedAt")]
+    [InlineData("CreatedBy", "CreatedBy")]
+    [InlineData("createdby", "CreatedBy")]
+    [InlineData("CreatedByBehalfOf", "CreatedByBehalfOf")]
+    [InlineData("ModifiedBy", "ModifiedBy")]
+    [InlineData("ModifiedByBehalfOf", "ModifiedByBehalfOf")]
     public void GetInstanceColumnName_ShouldReturnProperCaseName(string input, string expected)
     {
         // Act

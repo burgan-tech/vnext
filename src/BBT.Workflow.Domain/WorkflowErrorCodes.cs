@@ -14,6 +14,7 @@ public static class WorkflowErrorCodes
     public const string Dependency = "App:900000";
     public const string Locked = "App:900001";
     public const string ValidationErrors = "App:900002";
+    public const string SchemaFilterValidation = "Validation:900010";
     public const string ExecutionStrategyNotSupported = "App:900003";
     public const string TransitionHandlerNotSupported = "App:900004";
     public const string InvalidSchema = "App:900005";
@@ -43,7 +44,8 @@ public static class WorkflowErrorCodes
     public const string ExitNotConfiguredForWorkflow = "Instance:100026";
     public const string InstanceNotFaulted = "Instance:100027";
     public const string NoIncompleteTransitionFound = "Instance:100028";
-    
+    public const string TimeoutConfigMissing = "Instance:100029";
+
     #endregion
     
     #region Transition Errors (100xxx)
@@ -67,6 +69,11 @@ public static class WorkflowErrorCodes
     #region Execution Errors (200xxx)
     
     public const string ExecutionStepFailed = "Execution:200002";
+    public const string ResourceLockConflict = "Execution:200010";
+    public const string ResourceLockKeyEmpty = "Execution:200011";
+    public const string ResourceLockKeyResolutionFailed = "Execution:200012";
+    public const string ResourceLockInvalidAction = "Execution:200013";
+    public const string ResourceLockReleaseFailed = "Execution:200014";
     
     #endregion
     
@@ -120,7 +127,8 @@ public static class WorkflowErrorCodes
     #region Function Errors (800xxx)
     
     public const string FunctionNotInWorkflow = "Function:800001";
-    
+    public const string FunctionScopeNotSatisfied = "Function:800002";
+
     #endregion
 
     #region Authorization Errors (110xxx)

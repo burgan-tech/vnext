@@ -2,7 +2,7 @@
     <PropertyGroup>
 
         <!-- All Prism packages -->
-        <AetherPackageVersion>1.0.20</AetherPackageVersion>
+        <AetherPackageVersion>1.0.25</AetherPackageVersion>
         <!-- Elastic Apm packages -->
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
         <!-- Microsoft packages -->
@@ -12,7 +12,7 @@
         <!-- HealthChecks packages - currently only support .NET 9.0 -->
         <HealthChecksPackageVersion>9.0.0</HealthChecksPackageVersion>
         <!-- Dapr packages -->
-        <DaprPackageVersion>1.16.1</DaprPackageVersion>
+        <DaprPackageVersion>1.17.9</DaprPackageVersion>
         <!-- Ulid -->
         <UlidPackageVersion>1.4.1</UlidPackageVersion>
         <!-- JsonSchema.NET -->
@@ -22,7 +22,7 @@
         <PollyPackageVersion>8.6.5</PollyPackageVersion>
 
         <!-- OpenTelemetry packages -->
-        <OpenTelemetryPackageVersion>1.14.0</OpenTelemetryPackageVersion>
+        <OpenTelemetryPackageVersion>1.15.3</OpenTelemetryPackageVersion>
       
         <!-- Microsot Test SDK packages -->
         <TestSdkPackageVersion>18.0.1</TestSdkPackageVersion>

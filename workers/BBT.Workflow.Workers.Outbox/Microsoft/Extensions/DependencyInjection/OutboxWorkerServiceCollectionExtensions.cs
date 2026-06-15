@@ -1,40 +1,28 @@
 using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Outbox.HostedServices;
-using Dapr.Jobs.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Service collection extensions specific to the Outbox worker.
-/// Composes modular extensions for the event-publishing Outbox host.
+/// Service collection extensions specific to Worker Outbox
 /// </summary>
 public static class OutboxWorkerServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds all services required by the Outbox worker host.
+    /// Adds Worker Outbox specific services
     /// </summary>
-    /// <param name="services">The service collection.</param>
-    /// <returns>The service collection for chaining.</returns>
+    /// <param name="services">The service collection</param>
+    /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddWorkerOutboxModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
-
-        // Core domain/application/infrastructure modules
         services
             .AddDomainModule()
             .AddApplicationModule()
             .AddInfrastructureModule(configuration)
-            .AddInfrastructureRuntimeServices()
-            .AddResultResilience(configuration);
-
-        // ASP.NET Core, serialization
-        services
-            .AddWorkflowAspNetCore(configuration)
-            .AddWorkflowMapper();
-
-        // Dapr, event bus, domain events, event hooks
-        services
-            .AddWorkflowDapr()
+            .AddAspNetCoreModules(configuration)
+            .AddResultResilience(configuration)
+            .AddDaprClients()
             .AddAetherEventBus(options =>
             {
                 options.DefaultSource =
@@ -42,35 +30,28 @@ public static class OutboxWorkerServiceCollectionExtensions
                 options.PrefixEnvironmentToTopic = true;
                 options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
             })
-            .AddWorkflowDomainEvents()
-            .AddWorkflowEventHooks();
-
-        // Database, caching, locking
-        services
-            .AddWorkflowDbContext(configuration)
-            .AddWorkflowDistributedCache(configuration)
-            .AddWorkflowDistributedLock(configuration)
-            .AddRedis();
-
-        // Outbox-specific background jobs (uses raw AetherBackgroundJob without workflow handlers)
-        services
+            .AddWorkflowEventHooks()
+            .AddDomainEventsInfrastructure()
+            .AddInfrastructureRuntimeServices()
+            .AddDbContext(configuration)
+            .AppMapper()
+            .AddTelemetry(configuration)
+            .AddDistributedCache(configuration)
+            .AddDistributedLock(configuration)
+            .AddTransitionLockScope()
             .AddAetherBackgroundJob<WorkflowDbContext>()
-            .AddDaprJobScheduler();
-
-        // Telemetry, exception handling
-        services
-            .AddWorkflowTelemetry(configuration)
-            .AddWorkflowExceptionHandling();
-
-        // Runtime middleware, headers, health checks
-        services
-            .AddWorkflowRuntimeMiddleware()
-            .AddWorkflowHeaderService()
+            .AddDaprJobScheduler()
+            .AddRedis()
+            .AddExceptionHandling()
+            .AddRuntimeMiddleware()
+            .AddHeaderService()
+            .AddHostedServices()
             .AddAppHealthChecks();
-
-        // Outbox-specific
+        return services;
+    }
+    private static IServiceCollection AddHostedServices(this IServiceCollection services)
+    {
         services.AddHostedService<OutboxProcessorHostedService>();
-
         return services;
     }
 }

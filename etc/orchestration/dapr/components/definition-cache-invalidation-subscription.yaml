@@ -1,8 +1,0 @@
-apiVersion: dapr.io/v1alpha1
-kind: Subscription
-metadata:
-  name: vnext-definition-cache-invalidation-subscription
-spec:
-  topic: definition.cache.invalidate
-  route: /api/v1/utilities/cache/invalidate
-  pubsubname: vnext-pubsub-broadcast

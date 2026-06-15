@@ -11,6 +11,12 @@ public class CreateInstanceDto
     public string? Key { get; set; }
     public string[]? Tags { get; set; }
     public JsonElement? Attributes { get; set; }
+
+    /// <summary>
+    /// Optional stage label for the instance (max 120 characters).
+    /// </summary>
+    [StringLength(InstanceConstants.MaxStageLength)]
+    public string? Stage { get; set; }
 }
 
 public class CreateSubInstanceDto : CreateInstanceDto

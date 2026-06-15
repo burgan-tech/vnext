@@ -6,6 +6,7 @@ public class InstanceConstants
 {
     public const int MaxKeyLength = WorkflowConstants.MaxKeyLength;
     public const int MaxStatusLength = 3;
+    public const int MaxStageLength = 120;
     public const int TransitionLockExpiryInSeconds = 300; // 5 minutes
 }
 

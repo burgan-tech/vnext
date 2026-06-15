@@ -35,6 +35,7 @@ namespace BBT.Workflow.Instances;
 ///     <item><description>"latest" or null/empty → Returns the highest available version</description></item>
 ///     <item><description>"1.0.0-pkg.1.17.0+account" (full version) → Exact match only</description></item>
 ///     <item><description>"1.0.0" (artifact version) → Finds highest pkg version for that artifact</description></item>
+///     <item><description>"00.01.417" (package version) → Falls back to matching against package version part of stored versions</description></item>
 ///     <item><description>"1.0" (partial version) → Finds highest version matching the prefix</description></item>
 ///     <item><description>"1" (major-only version) → Finds highest version matching the major</description></item>
 /// </list>
@@ -220,6 +221,23 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     }
 
     /// <summary>
+    /// Strips leading zeros from each dot-separated segment of a version string.
+    /// For example, "00.01.417" becomes "0.1.417".
+    /// </summary>
+    private static string NormalizeLeadingZeros(string version)
+    {
+        var parts = version.Split('.');
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (int.TryParse(parts[i], out var number))
+            {
+                parts[i] = number.ToString();
+            }
+        }
+        return string.Join('.', parts);
+    }
+
+    /// <summary>
     /// Checks if a version string contains package version information.
     /// </summary>
     /// <param name="version">Version string to check</param>
@@ -331,6 +349,33 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     }
 
     /// <summary>
+    /// Checks if a full version matches the given package version.
+    /// Normalizes both versions by stripping leading zeros from each segment before comparison.
+    /// </summary>
+    /// <param name="fullVersion">Full version string (e.g., "1.0.0-pkg.00.01.417+onboarding")</param>
+    /// <param name="packageVersion">Package version to match (e.g., "00.01.417")</param>
+    /// <returns>True if the full version's package part matches the given package version</returns>
+    /// <example>
+    /// MatchesPackage("1.0.0-pkg.00.01.417+onboarding", "00.01.417") → true
+    /// MatchesPackage("1.0.0-pkg.1.17.0+account", "1.17.0") → true
+    /// MatchesPackage("1.0.0-pkg.00.01.417+onboarding", "0.1.417") → true (normalized match)
+    /// </example>
+    public static bool MatchesPackage(string? fullVersion, string? packageVersion)
+    {
+        if (string.IsNullOrWhiteSpace(fullVersion) || string.IsNullOrWhiteSpace(packageVersion))
+            return false;
+
+        var parsed = ParseVersion(fullVersion);
+        if (parsed.PackageVersion == null)
+            return false;
+
+        return string.Equals(
+            NormalizeLeadingZeros(parsed.PackageVersion),
+            NormalizeLeadingZeros(packageVersion),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Checks if a full version matches the given partial version (MAJOR.MINOR format).
     /// Uses explicit MAJOR.MINOR extraction to avoid false positives with multi-digit versions.
     /// </summary>
@@ -400,7 +445,7 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// <list type="number">
     ///     <item><description>If requestedVersion is null/empty or "latest" → returns the latest version</description></item>
     ///     <item><description>If requestedVersion is a full version → exact match only</description></item>
-    ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact</description></item>
+    ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact; if no artifact match, falls back to package version matching</description></item>
     ///     <item><description>If requestedVersion is a partial version (MAJOR.MINOR) → finds highest version matching the prefix</description></item>
     ///     <item><description>If requestedVersion is a major-only version (e.g., "1") → finds highest version matching the major</description></item>
     /// </list>
@@ -429,7 +474,10 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
         if (IsFullVersion(requestedVersion))
             return null;
 
-        // 4. If requestedVersion is an artifact version → find highest pkg version
+        // 4. If requestedVersion is an artifact version → find highest pkg version,
+        //    falling back to package-version-only match if no artifact match is found.
+        //    This handles cases where the request contains only the package version part
+        //    (e.g., "00.01.417" matching "1.0.0-pkg.00.01.417+onboarding").
         if (IsArtifactVersion(requestedVersion))
         {
             var artifactPrefix = $"{requestedVersion}-pkg.";
@@ -439,7 +487,16 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
                 .OrderByDescending(v => v, StringVersionComparer.Instance)
                 .FirstOrDefault();
 
-            return matched;
+            if (matched != null)
+                return matched;
+
+            // No artifact match found; try matching as a package version
+            var packageMatched = versionList
+                .Where(v => MatchesPackage(v, requestedVersion))
+                .OrderByDescending(v => v, StringVersionComparer.Instance)
+                .FirstOrDefault();
+
+            return packageMatched;
         }
 
         // 5. If requestedVersion is a partial version (MAJOR.MINOR) → find highest version matching prefix

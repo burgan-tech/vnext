@@ -85,4 +85,71 @@ public class ViewWorkflowCastHandlerTests
                 It.IsAny<CancellationToken>()), 
             Times.Once);
     }
+
+    [Fact]
+    public async Task HandleAsync_ShouldDeserializeAndCacheView_WithRenderer()
+    {
+        // Arrange
+        var reference = new Reference("renderer-view", "test-domain", "sys-views", "2.0.0");
+
+        var viewJson = """
+        {
+            "type": 1,
+            "content": "{}",
+            "display": "test-display",
+            "renderer": "flutter"
+        }
+        """;
+
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        _mockViewsCacheSet
+            .Setup(x => x.SetAsync(It.IsAny<View>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        // Act
+        await _handler.HandleAsync(reference, attributes, CancellationToken.None);
+
+        // Assert
+        _mockViewsCacheSet.Verify(
+            x => x.SetAsync(It.Is<View>(v =>
+                v.Key == "renderer-view" &&
+                v.Domain == "test-domain" &&
+                v.Version == "2.0.0" &&
+                v.Renderer == "flutter"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ShouldDeserializeAndCacheView_WithoutRenderer()
+    {
+        // Arrange
+        var reference = new Reference("no-renderer-view", "test-domain", "sys-views", "1.0.0");
+
+        var viewJson = """
+        {
+            "type": 1,
+            "content": "{}",
+            "display": "test-display"
+        }
+        """;
+
+        var attributes = JsonDocument.Parse(viewJson).RootElement;
+
+        _mockViewsCacheSet
+            .Setup(x => x.SetAsync(It.IsAny<View>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        // Act
+        await _handler.HandleAsync(reference, attributes, CancellationToken.None);
+
+        // Assert
+        _mockViewsCacheSet.Verify(
+            x => x.SetAsync(It.Is<View>(v =>
+                v.Key == "no-renderer-view" &&
+                v.Renderer == null),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 }

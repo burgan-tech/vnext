@@ -37,6 +37,7 @@ public class WorkflowValidator
 
         // State level validations
         ValidateStateLabels(workflow, result);
+        ValidateStateAliases(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
         foreach (var state in workflow.States)
@@ -79,6 +80,13 @@ public class WorkflowValidator
                 result.AddError(new ValidationResult(
                     $"The 'target' value in the timeout does not match any state '{workflow.Timeout.Target}'.",
                     [$"{nameof(Workflow)}.{nameof(WorkflowTimeout)}.{nameof(WorkflowTimeout.Target)}"]));
+            }
+
+            if (workflow.Timeout.Mapping != null && workflow.Timeout.Timer == null)
+            {
+                result.AddError(new ValidationResult(
+                    "When timeout mapping is defined, static timer configuration is also required as fallback.",
+                    [$"{nameof(Workflow)}.{nameof(WorkflowTimeout)}.{nameof(WorkflowTimeout.Timer)}"]));
             }
         }
     }
@@ -216,6 +224,53 @@ public class WorkflowValidator
     }
 
     /// <summary>
+    /// Validates state aliases. The alias array is optional, but when present each entry must
+    /// declare a name, at least one label, and at least one role grant. Dynamic role references
+    /// are additionally validated for correct path format.
+    /// </summary>
+    private void ValidateStateAliases(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            if (state.Aliases.Count == 0)
+                continue;
+
+            var index = 0;
+            foreach (var alias in state.Aliases)
+            {
+                var aliasPath = $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Aliases)}[{index}]";
+
+                if (string.IsNullOrWhiteSpace(alias.Name))
+                {
+                    result.AddError(new ValidationResult(
+                        $"Alias at index {index} in state '{state.Key}' must have a name defined.",
+                        [$"{aliasPath}.{nameof(StateAlias.Name)}"]));
+                }
+
+                if (alias.Labels.Count == 0)
+                {
+                    result.AddError(new ValidationResult(
+                        $"Alias '{alias.Name}' in state '{state.Key}' must have at least one label defined.",
+                        [$"{aliasPath}.{nameof(StateAlias.Labels)}"]));
+                }
+
+                if (alias.Roles.Count == 0)
+                {
+                    result.AddError(new ValidationResult(
+                        $"Alias '{alias.Name}' in state '{state.Key}' must have at least one role defined.",
+                        [$"{aliasPath}.{nameof(StateAlias.Roles)}"]));
+                }
+                else
+                {
+                    ValidateRoleGrants(alias.Roles, $"{aliasPath}.{nameof(StateAlias.Roles)}", result);
+                }
+
+                index++;
+            }
+        }
+    }
+
+    /// <summary>
     /// Validates that wizard states have at most one transition.
     /// </summary>
     private void ValidateWizardStateTransitions(Workflow workflow, WorkflowValidationResult result)
@@ -331,10 +386,10 @@ public class WorkflowValidator
             ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false);
         }
 
-        // Validate Cancel transition
+        // Validate Cancel transition — AvailableIn is allowed (same as shared transitions)
         if (workflow.Cancel != null)
         {
-            ValidateSingleTransition(workflow.Cancel, "Cancel", result, isSharedTransition: false);
+            ValidateSingleTransition(workflow.Cancel, "Cancel", result, isSharedTransition: true);
         }
 
         // Validate SharedTransitions - AvailableIn is allowed here

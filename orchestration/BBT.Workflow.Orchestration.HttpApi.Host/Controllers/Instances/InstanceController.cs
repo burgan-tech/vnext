@@ -1,11 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
-using BBT.Aether.AspNetCore.Pagination;
 using BBT.Aether.AspNetCore.Results;
-using BBT.Aether.Results;
-using BBT.Workflow.Definitions;
 using BBT.Workflow.Domain.Shared;
+using BBT.Workflow.Gateway;
+using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -24,8 +23,8 @@ public sealed class InstanceController(
     IHttpContextAccessor httpContextAccessor,
     ISubflowCompletionService subflowCompletionService,
     ISubflowStateService subflowStateService,
-    IPaginationLinkGenerator linkGenerator,
-    IUrlTemplateBuilder urlTemplateBuilder) : AetherControllerBase
+    ISubflowFaultService subflowFaultService,
+    IInstanceCommandGateway instanceCommandGateway) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -55,7 +54,8 @@ public sealed class InstanceController(
             {
                 Key = request?.Key,
                 Tags = request?.Tags,
-                Attributes = request?.Attributes
+                Attributes = request?.Attributes,
+                Stage = request?.Stage
             },
             Extensions = extensions
         };
@@ -67,7 +67,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -90,6 +90,7 @@ public sealed class InstanceController(
                 Key = request.Key,
                 Tags = request.Tags,
                 Attributes = request.Attributes,
+                Stage = request.Stage,
                 Callback = request.Callback,
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
             },
@@ -104,7 +105,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -137,6 +138,56 @@ public sealed class InstanceController(
     {
         await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
         return Ok();
+    }
+
+    /// <summary>
+    /// Propagates SubFlow fault to parent instance.
+    /// Internal endpoint for cross-domain SubFlow fault propagation.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/sub/fault")]
+    public async Task<IActionResult> FaultSubAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromBody] SubFlowFaultedInput request,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await subflowFaultService.FaultAsync(request, cancellationToken);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Marks an instance Busy and recursively propagates to nested SubFlows.
+    /// Internal endpoint for cross-domain SubFlow busy propagation.
+    /// </summary>
+    /// <param name="domain">Target workflow domain.</param>
+    /// <param name="workflow">Target workflow definition key.</param>
+    /// <param name="instance">Instance identifier (GUID).</param>
+    /// <param name="version">Optional workflow version for schema resolution.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Operation completed successfully or instance was absent (no-op).</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPut("{domain}/workflows/{workflow}/instances/{instance}/busy")]
+    public async Task<IActionResult> MarkBusyAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await instanceCommandGateway.MarkBusyAsync(
+            new MarkBusyInput
+            {
+                Domain = domain,
+                Workflow = workflow,
+                InstanceId = instance,
+                Version = version
+            },
+            cancellationToken);
+
+        return FromResult(result);
     }
 
     /// <summary>
@@ -183,7 +234,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
         
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     /// <summary>
@@ -230,7 +281,7 @@ public sealed class InstanceController(
         };
 
         var result = await retryAppService.RetryAsync(input, cancellationToken);
-        return FromResult(result);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
     
     /// <summary>
@@ -309,7 +360,6 @@ public sealed class InstanceController(
             Extensions = extensions,
             Page = page,
             PageSize = pageSize,
-            PageUrl = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow),
             Filter = filter,
             Sort = orderBy ?? sort,
             Version = version,
@@ -318,42 +368,6 @@ public sealed class InstanceController(
         };
 
         var response = await queryAppService.GetInstanceListAsync(input, cancellationToken);
-        if (response.IsSuccess)
-        {
-            var route = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow);
-
-            // Check if items contain GroupSummary objects (groupBy case) or GetInstanceOutput objects (normal case)
-            var firstItem = response.Value!.Items.FirstOrDefault();
-            var isGroupByResponse = firstItem is GroupSummary;
-
-            if (isGroupByResponse)
-            {
-                // For groupBy responses, create a simple paged list structure for HATEOAS links
-                var groupSummaries = response.Value!.Items.Cast<GroupSummary>().ToList();
-                var tempPagedList = new HateoasPagedList<GroupSummary>(
-                    groupSummaries,
-                    input.Page,
-                    input.PageSize,
-                    groupSummaries.Count == input.PageSize);
-
-                var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, groupSummaries, route);
-                response.Value!.Links = hateoasResult.Links;
-            }
-            else
-            {
-                // Normal case: items are GetInstanceOutput objects
-                var instanceOutputs = response.Value!.Items.Cast<GetInstanceOutput>().ToList();
-                var tempPagedList = new HateoasPagedList<GetInstanceOutput>(
-                    instanceOutputs,
-                    input.Page,
-                    input.PageSize,
-                    instanceOutputs.Count == input.PageSize);
-
-                var hateoasResult = linkGenerator.CreateHateoasResult(tempPagedList, instanceOutputs, route);
-                response.Value!.Links = hateoasResult.Links;
-            }
-        }
-
         return response.ToActionResult(HttpContext);
     }
 
@@ -362,8 +376,6 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
-        [FromQuery] string[]? extensions = null,
-        [FromQuery] string? version = null,
         CancellationToken cancellationToken = default)
     {
         var requestContext = HttpContext.GetRequestBindingContext();
@@ -373,8 +385,6 @@ public sealed class InstanceController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            Extensions = extensions,
-            Version = version,
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters
         };
@@ -421,4 +431,4 @@ public sealed class InstanceController(
 
         return FromResult(result.Result);
     }
-} 
+}

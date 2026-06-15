@@ -2,10 +2,12 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Instances.Events;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
@@ -833,6 +835,80 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void Fault_WhenInstanceIsSubFlow_ShouldPublishFaultEventWithLatestDataAndIncidentMetadata()
+    {
+        // Arrange
+        var parentInstanceId = Guid.NewGuid();
+        var instance = InstanceFactory.CreateDefault();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = parentInstanceId.ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "test-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        instance.ChangeState(StateFactory.CreateDefault(
+            "faulted-child-state",
+            StateType.Intermediate,
+            StateSubType.Error));
+        AddLatestDataForTest(instance, JsonData.CreateFrom("{\"childValue\":42}"));
+        instance.AddIncident(InstanceIncidentFactory.Create(
+            state: "faulted-child-state",
+            transition: "submit",
+            taskKey: "call-external",
+            message: "not found",
+            errorCode: "Task:Http:404",
+            errorLayer: "Task",
+            statusCode: 404,
+            boundaryAction: "Abort",
+            boundaryLevel: "Global",
+            traceId: "trace-1"));
+
+        // Act
+        instance.Fault("child-domain");
+
+        // Assert
+        var faultedEvent = instance.GetDomainEvents()
+            .Select(e => e.Event)
+            .OfType<InstanceSubFaultedEvent>()
+            .Single();
+
+        Assert.Equal(parentInstanceId, faultedEvent.InstanceId);
+        Assert.Equal(instance.Id, faultedEvent.SubInstanceId);
+        Assert.Equal("faulted-child-state", faultedEvent.FaultedState);
+        Assert.Equal((int)StateType.Intermediate, faultedEvent.FaultedStateType);
+        Assert.Equal((int)StateSubType.Error, faultedEvent.FaultedStateSubType);
+        Assert.Equal(404, faultedEvent.IncidentStatusCode);
+        Assert.Equal("Task:Http:404", faultedEvent.IncidentErrorCode);
+        Assert.Equal("Abort", faultedEvent.IncidentBoundaryAction);
+        Assert.True(faultedEvent.InstanceData.HasValue);
+        Assert.Equal(42, faultedEvent.InstanceData.Value.GetProperty("childValue").GetInt32());
+    }
+
+    private static void AddLatestDataForTest(Instance instance, JsonData data)
+    {
+        var ctor = typeof(InstanceData).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            null,
+            [typeof(Guid), typeof(Guid), typeof(string), typeof(JsonData), typeof(bool), typeof(int)],
+            null);
+        Assert.NotNull(ctor);
+
+        var instanceData = (InstanceData)ctor.Invoke(
+        [
+            Guid.NewGuid(),
+            instance.Id,
+            WorkflowConstants.DefaultVersion,
+            data,
+            true,
+            0
+        ]);
+
+        var field = typeof(Instance).GetField("_dataList", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var list = Assert.IsType<List<InstanceData>>(field.GetValue(instance));
+        list.Add(instanceData);
+    }
+
+    [Fact]
     public void AddCorrelation_ShouldAddToChildCorrelations()
     {
         // Arrange
@@ -902,6 +978,32 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.Equal(InstanceStatus.Active, instance.Status);
         Assert.True(instance.IsActive);
+    }
+
+    [Fact]
+    public void CompleteCorrelation_SubFlow_ShouldRemainBusy()
+    {
+        // Arrange
+        var subInstanceId = Guid.NewGuid();
+        var instance = InstanceFactory.CreateDefault();
+        var correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            instance.Id,
+            "parent-state",
+            subInstanceId,
+            "S", // SubFlow
+            "domain",
+            "flow",
+            null
+        );
+        instance.AddCorrelation(correlation); // sets instance to Busy
+
+        // Act
+        instance.CompleteCorrelation(subInstanceId);
+
+        // Assert — must remain Busy; ClearBusyOnResumeStep will transition to Active
+        Assert.Equal(InstanceStatus.Busy, instance.Status);
+        Assert.True(instance.IsBusy);
     }
 
     [Fact]

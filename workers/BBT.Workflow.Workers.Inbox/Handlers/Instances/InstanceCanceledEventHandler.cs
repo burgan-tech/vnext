@@ -37,35 +37,45 @@ internal sealed class InstanceCanceledEventHandler(
             return;
         }
 
-        logger.InstanceCanceledEventReceived(
-            eventData.InstanceId,
-            eventData.Flow);
-
-        using (currentSchema.Use(eventData.Flow))
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            await scopeFactory.ExecuteInNewScopeAsync(async sp =>
+            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+        }))
+        {
+            logger.InstanceCanceledEventReceived(
+                eventData.InstanceId,
+                eventData.Flow);
+
+            using (currentSchema.Use(eventData.Flow))
             {
-                var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
-
-                await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+                await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
+                    async (sp, ct) =>
                 {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
+                    var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+                    var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
+
+                    await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+                    {
+                        Scope = UnitOfWorkScopeOption.RequiresNew
+                    }, ct);
+
+                    var result = await cancellationService.ProcessCancellationAsync(
+                        eventData.InstanceId,
+                        ct);
+
+                    await uow.CommitAsync(ct);
+
+                    if (!result.IsSuccess)
+                    {
+                        logger.InstanceCanceledProcessingFailed(
+                            new InvalidOperationException(result.Error.Message),
+                            eventData.InstanceId);
+                    }
                 }, cancellationToken);
-
-                var result = await cancellationService.ProcessCancellationAsync(
-                    eventData.InstanceId,
-                    cancellationToken);
-
-                await uow.CommitAsync(cancellationToken);
-
-                if (!result.IsSuccess)
-                {
-                    logger.InstanceCanceledProcessingFailed(
-                        new InvalidOperationException(result.Error.Message),
-                        eventData.InstanceId);
-                }
-            });
+            }
         }
     }
 }

@@ -58,7 +58,8 @@ public sealed class Extension : IDomainEntity, IExtensionReference, IReferenceSe
 
     [JsonInclude] public OnExecuteTask Task { get; private set; }
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Extensions;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Extensions;
+    public string ComponentKey => ComponentTypeKey;
 
     public void SetReference(IReference reference)
     {

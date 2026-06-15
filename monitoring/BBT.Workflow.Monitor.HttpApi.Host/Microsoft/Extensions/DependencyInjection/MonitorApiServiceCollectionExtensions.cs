@@ -33,24 +33,24 @@ public static class MonitorApiServiceCollectionExtensions
 
         // ASP.NET Core, serialization, controllers
         services
-            .AddWorkflowAspNetCore(configuration)
-            .AddWorkflowMapper();
+            .AddAspNetCoreModules(configuration)
+            .AppMapper();
 
-        // Dapr client: required by AddWorkflowDistributedCache (Dapr-backed cache)
-        services.AddWorkflowDapr();
+        // Dapr client: required by AddDistributedCache (Dapr-backed cache)
+        services.AddDaprClients();
 
         // Database, caching, locking, telemetry
         services
-            .AddWorkflowDbContext(configuration)
-            .AddWorkflowDistributedCache(configuration)
-            .AddWorkflowDistributedLock(configuration)
-            .AddWorkflowTelemetry(configuration);
+            .AddDbContext(configuration)
+            .AddDistributedCache(configuration)
+            .AddDistributedLock(configuration)
+            .AddTelemetry(configuration);
 
         // Exception handling, runtime, headers
         services
-            .AddWorkflowExceptionHandling()
-            .AddWorkflowRuntimeMiddleware()
-            .AddWorkflowHeaderService();
+            .AddExceptionHandling()
+            .AddRuntimeMiddleware()
+            .AddHeaderService();
 
         // Health checks
         services

@@ -1,0 +1,42 @@
+using BBT.Aether.Events;
+
+namespace BBT.Workflow.Instances.Events;
+
+/// <summary>
+/// Event published when a parent instance faults, requesting its active SubFlow children to fault as well.
+/// Mirrors the <see cref="ChildSubflowCancelRequestedEvent"/> pattern for downward fault propagation.
+/// </summary>
+[EventName("instance.faulted.child")]
+public class ChildSubflowFaultRequestedEvent : IDistributedEvent
+{
+    /// <summary>
+    /// The ID of the child SubFlow instance that should be faulted
+    /// </summary>
+    [EventSubject]
+    public required Guid InstanceId { get; init; }
+
+    /// <summary>
+    /// The ID of the parent instance that faulted
+    /// </summary>
+    public required Guid ParentInstanceId { get; init; }
+
+    /// <summary>
+    /// The domain of the child SubFlow
+    /// </summary>
+    public required string Domain { get; init; }
+
+    /// <summary>
+    /// The workflow name of the child SubFlow
+    /// </summary>
+    public required string Flow { get; init; }
+
+    /// <summary>
+    /// The version of the child SubFlow workflow
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
+    /// When the parent instance faulted
+    /// </summary>
+    public required DateTime FaultedAt { get; init; }
+}

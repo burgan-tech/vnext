@@ -35,6 +35,12 @@ public static class LifecycleOrder
     public const int CreateTransition = 20;
     
     /// <summary>
+    /// Order for executing resource lock operations (Acquire / Release / Extend).
+    /// Runs after the transition record is created and before OnExecute tasks.
+    /// </summary>
+    public const int ResourceLock = 25;
+
+    /// <summary>
     /// Order for executing transition's OnExecute tasks.
     /// These tasks run before the state change occurs.
     /// </summary>
@@ -53,6 +59,12 @@ public static class LifecycleOrder
     /// </summary>
     public const int OnExit = 40;
     
+    /// <summary>
+    /// Order for applying the timeout target state.
+    /// Runs before CancelScheduledJobs so context.Target is set when OnExit and subsequent steps execute.
+    /// </summary>
+    public const int ApplyTimeoutState = CancelScheduledJobs - 1;
+
     /// <summary>
     /// Order for changing the instance state.
     /// This is the core state transition operation.

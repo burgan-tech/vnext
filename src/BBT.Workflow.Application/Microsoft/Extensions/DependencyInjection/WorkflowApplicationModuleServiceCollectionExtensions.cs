@@ -61,6 +61,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
     /// </summary>
     private static void AddApplicationServices(this IServiceCollection services)
     {
+           services.AddOptions<InstanceFilteringOptions>()
+            .BindConfiguration(InstanceFilteringOptions.SectionName);
         // Application Services
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
@@ -73,10 +75,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
+        services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
+        services.AddScoped<ISubflowFaultService, SubflowFaultService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();
+        services.AddScoped<IInstanceBusyPropagationService, InstanceBusyPropagationService>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
         
         // Instance Services
@@ -84,8 +89,6 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         
         // Runtime Services
         services.AddScoped<IRuntimeService, RuntimeService>();
-        services.AddScoped<IRuntimeCacheInitializer, RuntimeCacheInitializer>();
-        services.AddSingleton<CacheInitializationGate>();
     }
 
     /// <summary>

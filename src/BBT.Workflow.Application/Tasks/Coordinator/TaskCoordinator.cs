@@ -7,6 +7,7 @@ using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Coordinator;
@@ -20,10 +21,13 @@ namespace BBT.Workflow.Tasks.Coordinator;
 /// Refactored to follow SRP - only handles orchestration.
 /// Task execution logic is delegated to TaskExecutionEngine.
 /// Error boundary handling is delegated to consolidated services in Execution/ErrorHandling.
+/// For parallel task groups, each task runs in its own DI scope to isolate DbContext instances
+/// and avoid EF Core thread-safety violations.
 /// </remarks>
 public sealed class TaskCoordinator : ITaskCoordinatorExtended
 {
     private readonly ITaskExecutionEngine _executionEngine;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly IConditionEvaluator _conditionEvaluator;
     private readonly ITimerEvaluator _timerEvaluator;
     private readonly IExecutionErrorFactory _errorFactory;
@@ -43,12 +47,14 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     /// </summary>
     public TaskCoordinator(
         ITaskExecutionEngine executionEngine,
+        IServiceScopeFactory serviceScopeFactory,
         IConditionEvaluator conditionEvaluator,
         ITimerEvaluator timerEvaluator,
         IExecutionErrorFactory errorFactory,
         ILogger<TaskCoordinator> logger)
     {
         _executionEngine = executionEngine;
+        _serviceScopeFactory = serviceScopeFactory;
         _conditionEvaluator = conditionEvaluator;
         _timerEvaluator = timerEvaluator;
         _errorFactory = errorFactory;
@@ -272,6 +278,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
     /// <summary>
     /// Executes a group of tasks with same Order in parallel.
+    /// Each task runs in its own DI scope to isolate DbContext instances and avoid
+    /// EF Core thread-safety violations during concurrent SaveChanges/change-tracker operations.
     /// If one task fails, cancels all other tasks and triggers error boundary.
     /// </summary>
     private async Task<Result<TasksExecutionResult>> ExecuteTaskGroupInParallelAsync(
@@ -298,20 +306,23 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         {
             try
             {
-                var result = await _executionEngine.ExecuteAsync(
+                // Each parallel task gets its own DI scope with an isolated DbContext.
+                // This prevents EF Core thread-safety violations when multiple tasks
+                // perform concurrent InsertAsync/UpdateAsync on InstanceTask entities.
+                await using var scope = _serviceScopeFactory.CreateAsyncScope();
+                var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
+
+                var result = await scopedEngine.ExecuteAsync(
                     task, instanceTransitionId, taskTrigger, context, linkedToken);
 
                 if (!result.IsSuccess || !result.Value!.IsSuccess)
                 {
-                    // Use class-level lock per Microsoft guidelines
-                    // https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock#guidelines
                     lock (_parallelTaskLock)
                     {
                         if (firstFailure == null)
                         {
                             firstFailure = result.Value;
                             firstFailedTask = task;
-                            // Cancel other tasks
                             linkedCts.CancelAsync();
                         }
                     }
@@ -321,7 +332,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             }
             catch (OperationCanceledException)
             {
-                // Task was cancelled due to another task failure
                 return (Task: task, Result: Result<TasksExecutionResult>.Fail(
                     Error.Failure("TaskCancelled", $"Task {task.Task.Key} was cancelled")));
             }

@@ -43,7 +43,7 @@ public sealed class CreateTransitionRecordStep(
 
         // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist
         return await MapTransitionDataAsync(context, transition, cancellationToken)
-            .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition))
+            .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition, instanceTransition))
             .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
             .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, true, cancellationToken))
             .TapAsync(_ =>
@@ -54,14 +54,18 @@ public sealed class CreateTransitionRecordStep(
 
     /// <summary>
     /// Gets the transition key from context items or uses the default transition key.
+    /// Well-known virtual keys (e.g. "$timeout") are resolved to their configured key values
+    /// so the audit record stores the meaningful key instead of the virtual placeholder.
     /// </summary>
     private static string GetTransitionKey(TransitionExecutionContext context)
     {
-        return context.Items.TryGetValue("NextTransitionKey", out var v) &&
+        var rawKey = context.Items.TryGetValue("NextTransitionKey", out var v) &&
                v is string next &&
                !string.IsNullOrEmpty(next)
             ? next
             : context.TransitionKey;
+
+        return context.Workflow.ResolveTransitionKey(rawKey);
     }
 
     /// <summary>
@@ -105,12 +109,13 @@ public sealed class CreateTransitionRecordStep(
     }
 
     /// <summary>
-    /// Adds mapped data to instance if available.
+    /// Adds mapped data to instance and updates the transition body when a mapping script was applied.
     /// </summary>
     private void AddMappedDataToInstance(
         TransitionExecutionContext context,
         object? mappedData,
-        Definitions.Transition? transition)
+        Definitions.Transition? transition,
+        InstanceTransition instanceTransition)
     {
         if (mappedData != null)
         {
@@ -118,11 +123,21 @@ public sealed class CreateTransitionRecordStep(
                 guidGenerator.Create(),
                 new JsonData(mappedData),
                 transition?.VersionStrategy);
+
+            if (transition?.Mapping is not null)
+            {
+                instanceTransition.SetBody(new JsonData(mappedData));
+            }
         }
 
         if (context.Tags != null)
         {
             context.Instance.AddTags(context.Tags);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.Stage))
+        {
+            context.Instance.SetStage(context.Stage);
         }
     }
 

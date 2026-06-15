@@ -286,12 +286,16 @@ public static class InstanceColumnConditionBuilder
     {
         return columnName switch
         {
+            "Id" => ColumnType.String,
             "Key" => ColumnType.String,
             "Flow" => ColumnType.String,
             "CurrentState" => ColumnType.String,
             "EffectiveState" => ColumnType.String,
             "EffectiveStateType" => ColumnType.Integer,
             "EffectiveStateSubType" => ColumnType.Integer,
+            "CurrentStateType" => ColumnType.Integer,
+            "CurrentStateSubType" => ColumnType.Integer,
+            "Stage" => ColumnType.String,
             "Status" => ColumnType.String,
             "CreatedAt" => ColumnType.DateTime,
             "ModifiedAt" => ColumnType.DateTime,

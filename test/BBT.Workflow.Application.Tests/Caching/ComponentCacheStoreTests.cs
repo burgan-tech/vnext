@@ -41,6 +41,13 @@ public class ComponentCacheStoreTests
         mockCacheContext.Setup(x => x.Views).Returns(_mockViewsCacheSet.Object);
         mockCacheContext.Setup(x => x.Extensions).Returns(_mockExtensionsCacheSet.Object);
 
+        mockCacheContext.Setup(x => x.Set<Definitions.Workflow>()).Returns(_mockWorkflowsCacheSet.Object);
+        mockCacheContext.Setup(x => x.Set<WorkflowTask>()).Returns(_mockTasksCacheSet.Object);
+        mockCacheContext.Setup(x => x.Set<SchemaDefinition>()).Returns(_mockSchemasCacheSet.Object);
+        mockCacheContext.Setup(x => x.Set<Function>()).Returns(_mockFunctionsCacheSet.Object);
+        mockCacheContext.Setup(x => x.Set<View>()).Returns(_mockViewsCacheSet.Object);
+        mockCacheContext.Setup(x => x.Set<Extension>()).Returns(_mockExtensionsCacheSet.Object);
+
         _store = new ComponentCacheStore(mockCacheContext.Object);
     }
 
@@ -53,12 +60,11 @@ public class ComponentCacheStoreTests
         var domain = "test-domain";
         var key = "test-flow";
         var version = "1.0.0";
-        var expectedCacheKey = $"Workflow:{domain}:{RuntimeSysSchemaInfo.Flows}:{key}:{version}";
         
         var workflow = CreateMockWorkflow(key, domain, version);
         
         _mockWorkflowsCacheSet
-            .Setup(x => x.GetAsync(expectedCacheKey, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
 
         // Act
@@ -81,7 +87,7 @@ public class ComponentCacheStoreTests
         var workflow = CreateMockWorkflow(key, domain, "2.0.0");
         
         _mockWorkflowsCacheSet
-            .Setup(x => x.GetLatestByNameAsync(domain, key, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
 
         // Act
@@ -103,7 +109,7 @@ public class ComponentCacheStoreTests
         var version = "1.0.0";
         
         _mockWorkflowsCacheSet
-            .Setup(x => x.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Definitions.Workflow>.Fail(
                 Error.NotFound("Workflow.NotFound", "Workflow not found")));
 
@@ -126,12 +132,11 @@ public class ComponentCacheStoreTests
         var domain = "test-domain";
         var key = "test-task";
         var version = "1.0.0";
-        var expectedCacheKey = $"WorkflowTask:{domain}:{RuntimeSysSchemaInfo.Tasks}:{key}:{version}";
         
         var task = CreateMockTask(key, domain, version);
         
         _mockTasksCacheSet
-            .Setup(x => x.GetAsync(expectedCacheKey, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<WorkflowTask>.Ok(task));
 
         // Act
@@ -152,7 +157,7 @@ public class ComponentCacheStoreTests
         var key = "nonexistent-task";
         
         _mockTasksCacheSet
-            .Setup(x => x.GetLatestByNameAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<WorkflowTask>.Fail(
                 Error.NotFound("WorkflowTask.NotFound", "Task not found")));
 
@@ -175,12 +180,11 @@ public class ComponentCacheStoreTests
         var domain = "test-domain";
         var key = "test-schema";
         var version = "1.0.0";
-        var expectedCacheKey = $"SchemaDefinition:{domain}:{RuntimeSysSchemaInfo.Schemas}:{key}:{version}";
         
         var schema = CreateMockSchema(key, domain, version);
         
         _mockSchemasCacheSet
-            .Setup(x => x.GetAsync(expectedCacheKey, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<SchemaDefinition>.Ok(schema));
 
         // Act
@@ -203,12 +207,11 @@ public class ComponentCacheStoreTests
         var domain = "test-domain";
         var key = "test-function";
         var version = "1.0.0";
-        var expectedCacheKey = $"Function:{domain}:{RuntimeSysSchemaInfo.Functions}:{key}:{version}";
         
         var function = CreateMockFunction(key, domain, version);
         
         _mockFunctionsCacheSet
-            .Setup(x => x.GetAsync(expectedCacheKey, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Function>.Ok(function));
 
         // Act
@@ -231,12 +234,11 @@ public class ComponentCacheStoreTests
         var domain = "test-domain";
         var key = "test-view";
         var version = "1.0.0";
-        var expectedCacheKey = $"View:{domain}:{RuntimeSysSchemaInfo.Views}:{key}:{version}";
         
         var view = CreateMockView(key, domain, version);
         
         _mockViewsCacheSet
-            .Setup(x => x.GetAsync(expectedCacheKey, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<View>.Ok(view));
 
         // Act
@@ -259,12 +261,11 @@ public class ComponentCacheStoreTests
         var domain = "test-domain";
         var key = "test-extension";
         var version = "1.0.0";
-        var expectedCacheKey = $"Extension:{domain}:{RuntimeSysSchemaInfo.Extensions}:{key}:{version}";
         
         var extension = CreateMockExtension(key, domain, version);
         
         _mockExtensionsCacheSet
-            .Setup(x => x.GetAsync(expectedCacheKey, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetByVersionAsync(domain, key, version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Extension>.Ok(extension));
 
         // Act
@@ -274,37 +275,6 @@ public class ComponentCacheStoreTests
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldNotBeNull();
         result.Value!.Key.ShouldBe(key);
-    }
-
-    #endregion
-
-    #region GetAllExtensionsAsync Tests
-
-    [Fact]
-    public async Task GetAllExtensionsAsync_ShouldReturnAllExtensions()
-    {
-        // Arrange
-        var domain = "test-domain";
-        var extensions = new System.Collections.Generic.List<Extension>
-        {
-            CreateMockExtension("ext1", domain, "1.0.0"),
-            CreateMockExtension("ext2", domain, "1.0.0"),
-            CreateMockExtension("ext3", domain, "2.0.0")
-        };
-        
-        _mockExtensionsCacheSet
-            .Setup(x => x.GetAllByDomainAsync(domain, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<System.Collections.Generic.List<Extension>>.Ok(extensions));
-
-        // Act
-        var result = await _store.GetAllExtensionsAsync(domain, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-        result.Value.ShouldNotBeNull();
-        var enumerable = result.Value!.ToArray();
-        enumerable.ShouldNotBeNull();
-        enumerable.Length.ShouldBe(3);
     }
 
     #endregion

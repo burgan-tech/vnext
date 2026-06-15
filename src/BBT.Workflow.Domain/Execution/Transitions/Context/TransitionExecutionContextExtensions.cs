@@ -7,35 +7,55 @@ public static class TransitionExecutionContextExtensions
 {
     /// <summary>
     /// Determines whether the current transition is a cancel transition.
-    /// A transition is considered a cancel transition if it matches the workflow's configured cancel transition key.
+    /// Matches both the workflow's configured cancel key and the well-known reserved key.
     /// </summary>
-    /// <param name="ctx">The transition execution context</param>
-    /// <returns>True if this is a cancel transition, false otherwise</returns>
     public static bool IsCancelTransition(this TransitionExecutionContext ctx)
     {
-        return ctx.Workflow.Cancel?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
+        var key = ctx.Transition?.Key;
+        if (key is null) return false;
+
+        return key.Equals(Definitions.WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase)
+            || ctx.Workflow.Cancel?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     /// <summary>
     /// Determines whether the current transition is an updateData transition.
-    /// A transition is considered an updateData transition if it matches the workflow's configured updateData transition key.
+    /// Matches both the workflow's configured updateData key and the well-known reserved key.
     /// </summary>
-    /// <param name="ctx">The transition execution context</param>
-    /// <returns>True if this is an updateData transition, false otherwise</returns>
     public static bool IsUpdateDataTransition(this TransitionExecutionContext ctx)
     {
-        return ctx.Workflow.UpdateData?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
+        var key = ctx.Transition?.Key;
+        if (key is null) return false;
+
+        return key.Equals(Definitions.WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase)
+            || ctx.Workflow.UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     /// <summary>
     /// Determines whether the current transition is an exit transition.
-    /// A transition is considered an exit transition if it matches the workflow's configured exit transition key.
+    /// Matches both the workflow's configured exit key and the well-known reserved key.
     /// </summary>
-    /// <param name="ctx">The transition execution context</param>
-    /// <returns>True if this is an exit transition, false otherwise</returns>
     public static bool IsExitTransition(this TransitionExecutionContext ctx)
     {
-        return ctx.Workflow.Exit?.Key.Equals(ctx.Transition?.Key, StringComparison.OrdinalIgnoreCase) == true;
+        var key = ctx.Transition?.Key;
+        if (key is null) return false;
+
+        return key.Equals(Definitions.WellKnownTransitionKeys.Exit, StringComparison.OrdinalIgnoreCase)
+            || ctx.Workflow.Exit?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    /// <summary>
+    /// Determines whether the current transition is a shared transition.
+    /// Shared transitions are triggered against the parent (main) flow — e.g. from an
+    /// active subflow — and are reserved relative to instance locking so they can proceed
+    /// even while the main flow holds the base instance lock.
+    /// </summary>
+    public static bool IsSharedTransition(this TransitionExecutionContext ctx)
+    {
+        var key = ctx.Transition?.Key;
+        if (key is null) return false;
+
+        return ctx.Workflow.FindSharedTransition(key) != null;
     }
 }
 

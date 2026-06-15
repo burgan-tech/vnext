@@ -255,13 +255,15 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         var responseData = InvokerHelpers.TryParseJson(content);
-        var metadata = response.IsSuccessStatusCode
+        var isSuccess = response.IsSuccessStatusCode
+            || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
+        var metadata = isSuccess
             ? CreateMetadata(binding)
             : CreateMetadata(binding, statusCode: (int)response.StatusCode);
 
-        _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
 
-        return response.IsSuccessStatusCode
+        return isSuccess
             ? TaskInvocationResult.Success(
                 data: responseData,
                 body: content,
@@ -399,7 +401,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
         if (!binding.ValidateSSL)
         {
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
                 TaskType, taskKey);
         }

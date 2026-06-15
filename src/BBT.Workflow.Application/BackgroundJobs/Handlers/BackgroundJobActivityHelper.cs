@@ -18,27 +18,28 @@ public static class BackgroundJobActivityHelper
     public static readonly ActivitySource ActivitySource = new("BBT.Workflow.BackgroundJobs");
 
     /// <summary>
-    /// Starts a new activity linked to the original trace context from the payload.
-    /// This ensures the background job execution is correlated with the original request trace.
+    /// Starts a new activity as a child of the current ambient span (e.g. the Dapr HTTP
+    /// invocation span), so the full execution tree is visible under the caller's trace.
+    /// If the payload carries a TraceParent from when the job was originally enqueued,
+    /// that context is attached as an ActivityLink for cross-trace correlation.
     /// </summary>
-    /// <param name="activityName">The name of the activity to start.</param>
-    /// <param name="payload">The job payload containing trace context information.</param>
-    /// <returns>A new Activity linked to the parent trace context, or null if tracing is disabled.</returns>
-    public static Activity? StartActivityWithTraceContext(string activityName, ITraceableJobPayload payload)
+    public static Activity? StartActivityAsChildWithLink(string activityName, ITraceableJobPayload payload)
     {
-        ActivityContext parentContext = default;
+        IEnumerable<ActivityLink>? links = null;
 
-        // Try to restore the parent trace context from the payload
         if (!string.IsNullOrEmpty(payload.TraceParent) &&
-            ActivityContext.TryParse(payload.TraceParent, payload.TraceState, out var parsedContext))
+            ActivityContext.TryParse(payload.TraceParent, payload.TraceState, out var originalContext) &&
+            originalContext.TraceId != Activity.Current?.Context.TraceId)
         {
-            parentContext = parsedContext;
+            links = [new ActivityLink(originalContext)];
         }
 
         return ActivitySource.StartActivity(
             activityName,
             ActivityKind.Consumer,
-            parentContext);
+            parentContext: Activity.Current?.Context ?? default,
+            tags: null,
+            links: links);
     }
 
     /// <summary>

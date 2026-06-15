@@ -36,29 +36,39 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
             return;
         }
 
-        logger.ChildSubflowCancelRequestReceived(
-            eventData.InstanceId,
-            eventData.Domain,
-            eventData.Flow);
-
-        await scopeFactory.ExecuteInNewScopeAsync(async sp =>
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-            var cancellationService = sp.GetRequiredService<IChildSubflowCancellationService>();
-
-            await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-            {
-                Scope = UnitOfWorkScopeOption.RequiresNew
-            }, cancellationToken);
-
-            await cancellationService.CancelChildSubflowAsync(
+            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+        }))
+        {
+            logger.ChildSubflowCancelRequestReceived(
                 eventData.InstanceId,
                 eventData.Domain,
-                eventData.Flow,
-                eventData.Version,
-                cancellationToken);
+                eventData.Flow);
 
-            await uow.CommitAsync(cancellationToken);
-        });
+            await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
+                async (sp, ct) =>
+                {
+                    var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
+                    var cancellationService = sp.GetRequiredService<IChildSubflowCancellationService>();
+
+                    await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
+                    {
+                        Scope = UnitOfWorkScopeOption.RequiresNew
+                    }, ct);
+
+                    await cancellationService.CancelChildSubflowAsync(
+                        eventData.InstanceId,
+                        eventData.Domain,
+                        eventData.Flow,
+                        eventData.Version,
+                        ct);
+
+                    await uow.CommitAsync(ct);
+                }, cancellationToken);
+        }
     }
 }

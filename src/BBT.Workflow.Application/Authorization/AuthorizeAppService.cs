@@ -426,13 +426,7 @@ public sealed class AuthorizeAppService(
     {
         if (instance == null)
             return false;
-        var currentStateKey = instance.GetEffectiveState;
-        if (string.IsNullOrWhiteSpace(currentStateKey))
-            return false;
-        var state = workflow.FindState(currentStateKey);
-        var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
-        if (queryRoles.Count == 0)
-            return true; // No query roles defined → allow
-        return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, queryRoles, instance, requestContext, cancellationToken);
+        return await transitionAuthorizationManager.IsQueryAllowedAsync(
+            workflow, instance, role is null ? null : [role], requestContext, cancellationToken);
     }
 }

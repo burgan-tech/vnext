@@ -8,7 +8,8 @@ Node.js service for downloading npm packages and publishing them to the vnext AP
 - Processes component files (workflows, tasks, views, etc.)
 - Merges with custom components if available
 - **Automatic version generation** using extended SemVer format
-- **Full domain replacement** at all levels when `appDomain` is provided
+- **Opt-in domain replacement** via `replaceDomain: true` + `appDomain` (standard publish)
+- **Cross-domain exclusion** — components/references marked `crossDomain: true` are skipped during replacement
 - Publishes to vnext API endpoint
 - Provides REST API for package management
 - **Two specialized endpoints** for different package types
@@ -111,6 +112,7 @@ This endpoint is for publishing any npm package with optional domain replacement
   "packageName": "@my-org/my-workflow-package",
   "version": "latest",
   "appDomain": "my-domain",
+  "replaceDomain": true,
   "npmRegistry": "https://registry.npmjs.org/",
   "npmToken": "optional-token",
   "npmUsername": "optional-username",
@@ -122,7 +124,8 @@ This endpoint is for publishing any npm package with optional domain replacement
 | Field | Required | Description |
 |-------|----------|-------------|
 | `packageName` | ✅ **Yes** | The npm package name to download |
-| `appDomain` | No | If provided, replaces all domains. If omitted, no replacement. |
+| `replaceDomain` | No | Set `true` to enable domain replacement. Requires `appDomain`. Default: `false` |
+| `appDomain` | No | Target domain for replacement. Only used when `replaceDomain: true`. |
 | `version` | No | Package version (default: `latest`) |
 | `npmRegistry` | No | NPM registry URL |
 | `npmToken` | No | NPM token for token-based auth (npmjs.org compatible) |
@@ -171,27 +174,91 @@ This endpoint is for publishing any npm package with optional domain replacement
 | Feature | `/api/package/runtime/publish` | `/api/package/publish` |
 |---------|-------------------------------|------------------------|
 | Package | `@burgan-tech/vnext-core-runtime` only | Any npm package |
-| `appDomain` | ✅ **Required** | ⭕ Optional |
-| Domain Replacement | Always (when appDomain provided) | Only if appDomain provided |
+| `appDomain` | ✅ **Required** | ⭕ Only with `replaceDomain: true` |
+| `replaceDomain` | N/A (always active) | Set `true` to enable replacement |
+| Domain Replacement | Always (when appDomain provided) | Only if `replaceDomain: true` + `appDomain` |
+| Cross-domain exclusion | ✅ Yes | ✅ Yes |
 | Special Ordering | Yes (Workflows first, sys-flows first) | No |
 
 ---
 
 ## Domain Replacement
 
-When `appDomain` is provided, **ALL** domain fields are replaced at every level:
+### Standard Package (`/api/package/publish`)
+
+Domain replacement is **opt-in**. It is enabled only when **both** conditions are met:
+- `replaceDomain: true` is set in the request body
+- `appDomain` contains a non-empty target domain
+
+When enabled, **all** domain fields are replaced at every level:
 
 | Field | Replaced? |
 |-------|-----------|
-| Root `domain` | ✅ Yes |
-| `attributes.domain` | ✅ Yes |
-| `data[].domain` | ✅ Yes |
-| `data[].attributes.domain` | ✅ Yes |
-| Any nested `domain` field | ✅ Yes |
+| Root `domain` | ✅ Yes (unless `crossDomain: true` on root) |
+| `attributes.domain` | ✅ Yes (unless enclosing object has `crossDomain: true`) |
+| `data[].domain` | ✅ Yes (unless `crossDomain: true` on the data item) |
+| `data[].attributes.domain` | ✅ Yes (unless enclosing object has `crossDomain: true`) |
+| Any nested `domain` field | ✅ Yes (unless enclosing object has `crossDomain: true`) |
+| Any field inside `config` | ❌ Never (preserved as-is) |
+| Any field inside `process` | ❌ Never (preserved as-is) |
+
+### Runtime Package (`/api/package/runtime/publish`)
+
+Domain replacement is **always active** when `appDomain` is provided (required). The same cross-domain exclusion rules apply.
+
+### Cross-Domain Exclusion
+
+Components or references that intentionally target a different domain can opt out of domain replacement by setting `crossDomain: true` on the relevant object.
+
+**Root-level exclusion** — the entire component is skipped:
+```json
+{
+  "key": "cross-domain-task",
+  "domain": "payments",
+  "crossDomain": true,
+  "flow": "sys-tasks",
+  "version": "1.0.0"
+}
+```
+
+**Reference-level exclusion** — only that reference is skipped; the rest of the component is processed normally:
+```json
+{
+  "key": "my-workflow",
+  "domain": "account",
+  "flow": "sys-flows",
+  "attributes": {
+    "steps": [
+      {
+        "task": {
+          "key": "cross-domain-task",
+          "domain": "payments",
+          "crossDomain": true,
+          "version": "1.0.0",
+          "flow": "sys-tasks"
+        }
+      },
+      {
+        "task": {
+          "key": "local-task",
+          "domain": "account",
+          "version": "1.0.0",
+          "flow": "sys-tasks"
+        }
+      }
+    ]
+  }
+}
+```
+
+After replacement with `appDomain: "my-domain"`:
+- `my-workflow.domain` → `"my-domain"`
+- `local-task.domain` → `"my-domain"`
+- `cross-domain-task.domain` → `"payments"` (unchanged)
 
 ### Example
 
-**Before (appDomain: "my-domain"):**
+**Before (`replaceDomain: true`, `appDomain: "my-domain"`):**
 ```json
 {
   "key": "my-flow",

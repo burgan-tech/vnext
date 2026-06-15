@@ -3,15 +3,21 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
-using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.BackgroundJobs.Options;
+using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Strategies;
+using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -27,6 +33,12 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IBackgroundJobService> _mockBackgroundJobService;
     private readonly Mock<ITransitionContextFactory> _mockContextFactory;
     private readonly Mock<IInstanceJobRepository> _mockJobRepository;
+    private readonly Mock<IInstanceRepository> _mockInstanceRepository;
+    private readonly Mock<IDistributedLockService> _mockDistributedLockRepository;
+    private readonly ReservedTransitionResolver _reservedTransitionResolver;
+    private readonly Mock<ITransitionValidationService> _mockValidationService;
+    private readonly Mock<IUnitOfWorkManager> _uowManager;
+    private readonly Mock<IInstanceCommandGateway> _mockInstanceCommandGateway;
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger;
     private readonly AsyncTransitionStrategy _strategy;
 
@@ -35,12 +47,44 @@ public class AsyncTransitionStrategyTests
         _mockBackgroundJobService = new Mock<IBackgroundJobService>();
         _mockContextFactory = new Mock<ITransitionContextFactory>();
         _mockJobRepository = new Mock<IInstanceJobRepository>();
+        _mockInstanceRepository = new Mock<IInstanceRepository>();
+        _mockDistributedLockRepository = new Mock<IDistributedLockService>();
+        _reservedTransitionResolver = new ReservedTransitionResolver();
+        _mockValidationService = new Mock<ITransitionValidationService>();
+        _uowManager = new Mock<IUnitOfWorkManager>();
+        _mockInstanceCommandGateway = new Mock<IInstanceCommandGateway>();
         _mockLogger = new Mock<ILogger<AsyncTransitionStrategy>>();
+
+        var executionOptions = Options.Create(new WorkflowExecutionOptions());
+
+        _mockInstanceCommandGateway
+            .Setup(x => x.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        var innerUow = new Mock<IUnitOfWork>();
+        innerUow.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        innerUow.Setup(x => x.CommitAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _uowManager
+            .Setup(x => x.BeginAsync(It.IsAny<UnitOfWorkOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(innerUow.Object);
+
+        // Default: validation passes — individual tests override this when they need to
+        // exercise the schema/policy rejection path.
+        _mockValidationService
+            .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
 
         _strategy = new AsyncTransitionStrategy(
             _mockBackgroundJobService.Object,
             _mockContextFactory.Object,
             _mockJobRepository.Object,
+            _mockInstanceRepository.Object,
+            _mockDistributedLockRepository.Object,
+            _reservedTransitionResolver,
+            _mockValidationService.Object,
+            _uowManager.Object,
+            _mockInstanceCommandGateway.Object,
+            executionOptions,
             _mockLogger.Object);
     }
 
@@ -69,6 +113,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -90,9 +135,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, payload, _, _, _) => capturedPayload = payload)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, payload, _, _, _, _) => capturedPayload = payload)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -105,6 +151,7 @@ public class AsyncTransitionStrategyTests
         capturedPayload.Domain.ShouldBe(workflowContext.Domain);
         capturedPayload.Workflow.ShouldBe(workflowContext.WorkflowKey);
         capturedPayload.ExecutionActor.ShouldBe(workflowContext.Actor);
+        capturedPayload.CallerSync.ShouldBeFalse();
     }
 
     [Fact]
@@ -124,9 +171,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, _, _, metadata, _) => capturedMetadata = metadata)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, _, _, metadata, _, _) => capturedMetadata = metadata)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -142,12 +190,15 @@ public class AsyncTransitionStrategyTests
     [Fact]
     public async Task ExecuteAsync_ShouldGenerateUniqueJobId()
     {
-        // Arrange
-        var workflowContext = CreateWorkflowExecutionContext();
-        var transitionContext = CreateTransitionExecutionContext();
-        var jobIds = new List<string>();
+        var workflowContextOne = CreateWorkflowExecutionContext();
+        var transitionContextOne = CreateTransitionExecutionContext();
+        SetupSuccessfulExecution(workflowContextOne, transitionContextOne);
 
-        SetupSuccessfulExecution(workflowContext, transitionContext);
+        var workflowContextTwo = CreateWorkflowExecutionContext();
+        var transitionContextTwo = CreateTransitionExecutionContext();
+        SetupSuccessfulExecution(workflowContextTwo, transitionContextTwo);
+
+        var jobIds = new List<string>();
 
         _mockBackgroundJobService
             .Setup(x => x.EnqueueAsync(
@@ -156,16 +207,15 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, jobId, _, _, _, _) => jobIds.Add(jobId))
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, jobId, _, _, _, _, _) => jobIds.Add(jobId))
             .ReturnsAsync(It.IsAny<Guid>());
 
-        // Act
-        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
-        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+        await _strategy.ExecuteAsync(workflowContextOne, CancellationToken.None);
+        await _strategy.ExecuteAsync(workflowContextTwo, CancellationToken.None);
 
-        // Assert
         jobIds.Count.ShouldBe(2);
         jobIds[0].ShouldNotBe(jobIds[1]);
     }
@@ -195,6 +245,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -217,6 +268,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Job service unavailable"));
 
@@ -245,9 +297,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, _, schedule, _, _) => capturedSchedule = schedule)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, _, schedule, _, _, _) => capturedSchedule = schedule)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -258,26 +311,27 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldLogExecutionStartAndComplete()
+    public async Task ExecuteAsync_WhenEnqueueSucceeds_LogsWereElidedBySourceGenerators()
     {
-        // Arrange
+        // Structured logging extensions on ILogger<AsyncTransitionStrategy> bypass the mock's Log() pipeline.
         var workflowContext = CreateWorkflowExecutionContext();
         var transitionContext = CreateTransitionExecutionContext();
 
         SetupSuccessfulExecution(workflowContext, transitionContext);
 
-        // Act
-        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+        var result = await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
 
-        // Assert
-        _mockLogger.Verify(
-            x => x.Log(
-                It.IsAny<LogLevel>(),
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("enqueued") || v.ToString()!.Contains("Successfully")),
-                null,
-                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.AtLeast(1));
+        result.IsSuccess.ShouldBeTrue();
+        _mockBackgroundJobService.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<string>(),
+                It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -321,9 +375,10 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, CancellationToken>(
-                (_, _, payload, _, _, _) => capturedPayload = payload)
+            .Callback<string, string, TransitionJobPayload, string, Dictionary<string, object>, JobScheduleFailurePolicy?, CancellationToken>(
+                (_, _, payload, _, _, _, _) => capturedPayload = payload)
             .ReturnsAsync(It.IsAny<Guid>());
 
         // Act
@@ -337,10 +392,166 @@ public class AsyncTransitionStrategyTests
 
     #endregion
 
+    #region SubFlow Busy propagation
+
+    [Fact]
+    public async Task ExecuteAsync_WithActiveSubFlowCorrelation_CallsGatewayMarkBusyAndSkipsSelfPersistence()
+    {
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+        var subInstanceId = Guid.NewGuid();
+
+        transitionContext.Instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            transitionContext.Instance.Id,
+            "parent-state",
+            subInstanceId,
+            "S",
+            "child-domain",
+            "child-flow",
+            "1.0.0"));
+
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var result = await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockInstanceCommandGateway.Verify(
+            x => x.MarkBusyAsync(
+                It.Is<MarkBusyInput>(
+                    i => i.Domain == "child-domain"
+                         && i.Workflow == "child-flow"
+                         && i.InstanceId == subInstanceId
+                         && i.Version == "1.0.0"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithNoActiveSubFlow_DoesNotCallGatewayMarkBusy()
+    {
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var result = await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        _mockInstanceCommandGateway.Verify(
+            x => x.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenGatewayMarkBusyFails_TransitionEnqueueStillSucceeds()
+    {
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+        transitionContext.Instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            transitionContext.Instance.Id,
+            "parent-state",
+            Guid.NewGuid(),
+            "S",
+            "d",
+            "f",
+            null));
+
+        _mockInstanceCommandGateway
+            .Setup(x => x.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(Error.Dependency("mark-busy.failed", "Remote busy failed")));
+
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var result = await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockBackgroundJobService.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<string>(),
+                It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    #endregion
+
+    #region Reserved transition lock key
+
+    [Fact]
+    public async Task ExecuteAsync_WithNormalTransition_ShouldLockOnBaseInstanceKey()
+    {
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var capturedKey = CaptureLockKey();
+
+        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        capturedKey().ShouldBe(transitionContext.LockKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithReservedTransition_ShouldLockOnOwnTypeScopedKey()
+    {
+        // A reserved transition (cancel) must lock on its own type-scoped key — independent of
+        // the base instance lock — so the async request is accepted even while the parent is Busy.
+        var workflowContext = CreateWorkflowExecutionContext();
+        workflowContext.TransitionKey = "cancel";
+        var transitionContext = CreateTransitionExecutionContext(transitionKey: "cancel");
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var capturedKey = CaptureLockKey();
+
+        await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        _reservedTransitionResolver.IsReserved(transitionContext).ShouldBeTrue();
+        capturedKey().ShouldBe(transitionContext.LockKey + ":cancel");
+        capturedKey().ShouldNotBe(transitionContext.LockKey);
+    }
+
+    #endregion
+
     #region Helper Methods
+
+    /// <summary>
+    /// Overrides the lock service setup to capture the lock key passed to ExecuteWithLockAsync
+    /// while still executing the inner action and reporting acquisition success.
+    /// </summary>
+    private Func<string?> CaptureLockKey()
+    {
+        string? captured = null;
+        _mockDistributedLockRepository
+            .Setup(x => x.ExecuteWithLockAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<Task>>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task>, int, CancellationToken>(async (key, action, _, _) =>
+            {
+                captured = key;
+                await action();
+                return true;
+            });
+        return () => captured;
+    }
 
     private void SetupSuccessfulExecution(WorkflowExecutionContext workflowContext, TransitionExecutionContext transitionContext)
     {
+        workflowContext.InstanceId = transitionContext.InstanceId.ToString();
+
         _mockContextFactory
             .Setup(x => x.CreateAsync(workflowContext, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<TransitionExecutionContext>.Ok(transitionContext));
@@ -352,6 +563,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(It.IsAny<Guid>());
 
@@ -361,6 +573,74 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(It.IsAny<InstanceJob>());
+
+        // Default lock service behavior — execute the inner action and report acquisition success.
+        // Without this, ExecuteWithLockAsync returns false by default and the strategy short-circuits
+        // to InstanceLockConflict before any enqueue happens (which masked real signal in earlier runs).
+        _mockDistributedLockRepository
+            .Setup(x => x.ExecuteWithLockAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<Task>>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task>, int, CancellationToken>(async (_, action, _, _) =>
+            {
+                await action();
+                return true;
+            });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSchemaValidationFails_ShouldReturnFailureWithoutEnqueue()
+    {
+        // Arrange — context creation succeeds but the validation service rejects the payload
+        // (mirrors the sync pipeline's schema-violation behaviour for the async path).
+        var workflowContext = CreateWorkflowExecutionContext();
+        var transitionContext = CreateTransitionExecutionContext();
+        SetupSuccessfulExecution(workflowContext, transitionContext);
+
+        var validationError = Error.Validation(
+            "schema.invalid",
+            "Field 'amount' is required");
+
+        _mockValidationService
+            .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(validationError));
+
+        // Act
+        var result = await _strategy.ExecuteAsync(workflowContext, CancellationToken.None);
+
+        // Assert — request must be rejected with the validation error and NO side effects:
+        // no Busy flip, no lock attempt, no Dapr enqueue, no job record.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.ShouldBe(validationError);
+
+        _mockBackgroundJobService.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<string>(),
+                It.IsAny<Dictionary<string, object>>(),
+                It.IsAny<JobScheduleFailurePolicy?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _mockDistributedLockRepository.Verify(
+            x => x.ExecuteWithLockAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<Task>>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     private WorkflowExecutionContext CreateWorkflowExecutionContext()
@@ -379,7 +659,7 @@ public class AsyncTransitionStrategyTests
         };
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext()
+    private TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -388,14 +668,14 @@ public class AsyncTransitionStrategyTests
         var workflow = CreateMockWorkflow(workflowKey, domain);
         var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
-        var transition = Transition.Create("test-transition", null, "state1", TriggerType.Manual, "Patch");
+        var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
 
         return new TransitionExecutionContext
         {
             InstanceId = instanceId,
             Domain = domain,
             WorkflowKey = workflowKey,
-            TransitionKey = "test-transition",
+            TransitionKey = transitionKey,
             Trigger = TriggerType.Manual,
             Actor = ExecutionActor.User,
             CorrelationId = Guid.NewGuid().ToString("N"),

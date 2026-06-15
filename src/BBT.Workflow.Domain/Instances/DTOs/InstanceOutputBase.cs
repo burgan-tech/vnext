@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BBT.Workflow.Instances;
 
@@ -48,4 +49,12 @@ public abstract class InstanceOutputBase
     /// Computed extension fields. Populated only when sync=true.
     /// </summary>
     public Dictionary<string, object>? Extensions { get; set; }
+
+    /// <summary>
+    /// Carries the pipeline's committed instance for sync enrichment.
+    /// Avoids an additional DB round-trip when building the sync response.
+    /// Not serialized — internal transport between pipeline and AppService only.
+    /// </summary>
+    [JsonIgnore]
+    public Instance? PipelineInstance { get; set; }
 }

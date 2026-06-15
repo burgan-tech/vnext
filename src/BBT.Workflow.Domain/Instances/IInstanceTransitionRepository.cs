@@ -31,6 +31,14 @@ public interface IInstanceTransitionRepository : IRepository<InstanceTransition,
     Task<InstanceTransition?> GetLastCompletedManualTransitionAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets all transitions for an instance ordered by <see cref="InstanceTransition.StartedAt"/> ascending.
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>List of transitions for the instance.</returns>
+    Task<List<InstanceTransition>> GetByInstanceIdAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns all transitions for the given instance ordered by <see cref="InstanceTransition.StartedAt"/> ascending.
     /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
     /// </summary>

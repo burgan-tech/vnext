@@ -47,7 +47,7 @@ public class FunctionComponentValidatorTests
         // Arrange
         var functionJson = """
         {
-            "scope": "W",
+            "scope": "F",
             "task": {
                 "type": "6",
                 "config": {
@@ -72,7 +72,7 @@ public class FunctionComponentValidatorTests
         // Arrange
         var functionJson = """
         {
-            "scope": "W"
+            "scope": "F"
         }
         """;
         var attributes = JsonDocument.Parse(functionJson).RootElement;

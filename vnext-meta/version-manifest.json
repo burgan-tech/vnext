@@ -1,0 +1,299 @@
+{
+  "versions": {
+    "0.0.58": {
+      "schemaVersion": "0.0.43",
+      "releasedAt": "2026-06-02",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.57": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.56": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.55": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.54": {
+      "schemaVersion": "0.0.42",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.53": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.52": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-05-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.51": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-05-05",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.50": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-25",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.49": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-15",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.48": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-13",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.47": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-12",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.46": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-09",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.45": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-08",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.44": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-04-07",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.44-50.md"
+    },
+    "0.0.43": {
+      "schemaVersion": "0.0.39",
+      "releasedAt": "2026-04-06",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-43"
+    },
+    "0.0.42": {
+      "schemaVersion": "0.0.39",
+      "releasedAt": "2026-03-26",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-42"
+    },
+    "0.0.41": {
+      "schemaVersion": "0.0.41",
+      "releasedAt": "2026-03-11",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.40": {
+      "schemaVersion": "0.0.38",
+      "releasedAt": "2026-03-09",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-40"
+    },
+    "0.0.39": {
+      "schemaVersion": "0.0.37",
+      "releasedAt": "2026-03-08",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-39"
+    },
+    "0.0.38": {
+      "schemaVersion": "0.0.36",
+      "releasedAt": "2026-02-26",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-38"
+    },
+    "0.0.37": {
+      "schemaVersion": "0.0.36",
+      "releasedAt": "2026-02-17",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.37.md"
+    },
+    "0.0.36": {
+      "schemaVersion": "0.0.35",
+      "releasedAt": "2026-02-05",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.36.md"
+    },
+    "0.0.35": {
+      "schemaVersion": "0.0.34",
+      "releasedAt": "2026-02-03",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.34-35.md"
+    },
+    "0.0.34": {
+      "schemaVersion": "0.0.34",
+      "releasedAt": "2026-02-01",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.34-35.md"
+    },
+    "0.0.33": {
+      "schemaVersion": "0.0.33",
+      "releasedAt": "2026-01-28",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.33.md"
+    },
+    "0.0.32": {
+      "schemaVersion": "0.0.32",
+      "releasedAt": "2026-01-26",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.31": {
+      "schemaVersion": "0.0.30",
+      "releasedAt": "2026-01-13",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.31.md"
+    },
+    "0.0.30": {
+      "schemaVersion": "0.0.30",
+      "releasedAt": "2026-01-07",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.29": {
+      "schemaVersion": "0.0.29",
+      "releasedAt": "2026-01-04",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.29.md"
+    },
+    "0.0.28": {
+      "schemaVersion": "0.0.28",
+      "releasedAt": "2025-12-23",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.27": {
+      "schemaVersion": "0.0.28",
+      "releasedAt": "2025-12-19",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.27.md"
+    },
+    "0.0.26": {
+      "schemaVersion": "0.0.28",
+      "releasedAt": "2025-12-16",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.23-26.md"
+    },
+    "0.0.25": {
+      "schemaVersion": "0.0.25",
+      "releasedAt": "2025-12-15",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.23-26.md"
+    },
+    "0.0.24": {
+      "schemaVersion": "0.0.24",
+      "releasedAt": "2025-12-15",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.23-26.md"
+    },
+    "0.0.23": {
+      "schemaVersion": "0.0.23",
+      "releasedAt": "2025-12-15",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.23-26.md"
+    },
+    "0.0.22": {
+      "schemaVersion": "0.0.27",
+      "releasedAt": "2025-12-03",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.22.md"
+    },
+    "0.0.21": {
+      "schemaVersion": "0.0.26",
+      "releasedAt": "2025-11-27",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.21.md"
+    },
+    "0.0.20": {
+      "schemaVersion": "0.0.25",
+      "releasedAt": "2025-11-19",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.20.md"
+    },
+    "0.0.19": {
+      "schemaVersion": "0.0.24",
+      "releasedAt": "2025-11-11",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.19.md"
+    },
+    "0.0.18": {
+      "schemaVersion": "0.0.17",
+      "releasedAt": "2025-11-06",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.18.md"
+    },
+    "0.0.17": {
+      "schemaVersion": "0.0.17",
+      "releasedAt": "2025-11-05",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.16": {
+      "schemaVersion": "0.0.16",
+      "releasedAt": "2025-10-24",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.16.md"
+    },
+    "0.0.15": {
+      "schemaVersion": "0.0.15",
+      "releasedAt": "2025-10-24",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.14": {
+      "schemaVersion": "0.0.14",
+      "releasedAt": "2025-10-24",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.14.md"
+    },
+    "0.0.13": {
+      "schemaVersion": "0.0.13",
+      "releasedAt": "2025-10-23",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/blob/main/release/RELEASE-NOTES-v0.0.13.md"
+    },
+    "0.0.12": {
+      "schemaVersion": "0.0.12",
+      "releasedAt": "2025-10-01",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.11": {
+      "schemaVersion": "0.0.11",
+      "releasedAt": "2025-09-25",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.10": {
+      "schemaVersion": "0.0.10",
+      "releasedAt": "2025-09-22",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.9": {
+      "schemaVersion": "0.0.9",
+      "releasedAt": "2025-08-25",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.8": {
+      "schemaVersion": "0.0.8",
+      "releasedAt": "2025-08-25",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.7": {
+      "schemaVersion": "0.0.7",
+      "releasedAt": "2025-08-25",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.6": {
+      "schemaVersion": "0.0.6",
+      "releasedAt": "2025-08-19",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.5": {
+      "schemaVersion": "0.0.5",
+      "releasedAt": "2025-08-19",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.4": {
+      "schemaVersion": "0.0.4",
+      "releasedAt": "2025-08-19",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.3": {
+      "schemaVersion": "0.0.3",
+      "releasedAt": "2025-08-15",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.2": {
+      "schemaVersion": "0.0.2",
+      "releasedAt": "2025-08-15",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.1": {
+      "schemaVersion": "0.0.1",
+      "releasedAt": "2025-08-12",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    },
+    "0.0.0": {
+      "schemaVersion": "0.0.0",
+      "releasedAt": "2025-08-12",
+      "releaseNotes": "https://github.com/burgan-tech/vnext-runtime/tree/main/release"
+    }
+  }
+}

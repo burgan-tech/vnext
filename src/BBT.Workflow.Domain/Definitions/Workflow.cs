@@ -96,7 +96,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public string SemanticVersion =>
         Version.Contains('+') ? Regex.Match(Version, @"^([^+]+)").Groups[1].Value : Version;
 
-    public string ComponentKey => RuntimeSysSchemaInfo.Flows;
+    public static string ComponentTypeKey => RuntimeSysSchemaInfo.Flows;
+    public string ComponentKey => ComponentTypeKey;
     
     /// <summary>
     /// When the workflow starts, a timer counts down.
@@ -185,8 +186,11 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public IReadOnlyCollection<IReference> Features => features.AsReadOnly();
 
     /// <summary>
-    /// It is used for common transition definitions such as Cancel in the flow.
-    /// It is to prevent redefinition in each state that passes.
+    /// Common transition definitions available across multiple states (e.g. Cancel, AddNote).
+    /// Prevents redefinition in each state.
+    /// Each shared transition may optionally specify an <see cref="Transition.AvailableIn"/> list
+    /// to restrict which states it can be executed from. When <c>AvailableIn</c> is empty or null,
+    /// the transition is available from all states.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<Transition> SharedTransitions => sharedTransitions.AsReadOnly();
@@ -364,7 +368,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                ?? (StartTransition.Key == key ? StartTransition : null)
                ?? (Cancel?.Key == key ? Cancel : null)
                ?? (UpdateData?.Key == key ? UpdateData : null)
-               ?? (Exit?.Key == key ? Exit : null);
+               ?? (Exit?.Key == key ? Exit : null)
+               ?? (Timeout?.Key == key ? Transition.Create(Timeout.Key, null, Timeout.Target, TriggerType.Manual, Timeout.VersionStrategy.Code) : null);
     }
 
     public Transition? ResolveTransition(string key, State currentState)
@@ -372,6 +377,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         var requestedKey = ResolveWellKnownKey(key);
         return currentState.FindTransition(requestedKey) ?? FindTransition(requestedKey);
     }
+
+    /// <summary>
+    /// Resolves a well-known transition key to the configured transition key.
+    /// Used when only the resolved key string is needed (e.g. audit records),
+    /// without looking up the actual <see cref="Transition"/> object.
+    /// </summary>
+    public string ResolveTransitionKey(string key) => ResolveWellKnownKey(key);
 
     /// <summary>
     /// Resolves well-known transition keys to their configured transition keys.
@@ -408,6 +420,15 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
             return Exit.Key;
         }
 
+        if (string.Equals(requestedKey, WellKnownTransitionKeys.Timeout, StringComparison.OrdinalIgnoreCase))
+        {
+            // If this flow does not have timeout configuration, "timeout" is not supported
+            if (Timeout is null)
+                throw new TimeoutNotConfiguredForWorkflowException(Key);
+
+            return Timeout.Key;
+        }
+
         return requestedKey;
     }
 
@@ -433,7 +454,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         // Get manual shared transitions (AvailableIn empty/null = available in all states, aligned with SharedTransitionAvailabilitySpecification)
         var manualSharedTransitions = GetAvailableSharedTransitionKeysOnly(currentState);
         manualTransitions.AddRange(manualSharedTransitions);
+
+        AppendCancelTransitionKey(manualTransitions, currentState);
+
         return manualTransitions;
+    }
+
+    /// <summary>
+    /// Appends the cancel transition key if configured with Manual or Event trigger type
+    /// and the current state satisfies the AvailableIn constraint.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// </summary>
+    private void AppendCancelTransitionKey(List<string> transitions, State currentState)
+    {
+        if (Cancel is { TriggerType: TriggerType.Manual or TriggerType.Event }
+            && (Cancel.AvailableIn == null || !Cancel.AvailableIn.Any() || Cancel.AvailableIn.Contains(currentState.Key))
+            && !transitions.Contains(Cancel.Key))
+            transitions.Add(Cancel.Key);
     }
 
     /// <summary>
@@ -447,6 +484,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                         (t.TriggerType == TriggerType.Manual || t.TriggerType == TriggerType.Event))
             .Select(t => t.Key)
             .ToList();
+    }
+
+    /// <summary>
+    /// Gets the cancel transition key if configured with Manual or Event trigger type
+    /// and the given state satisfies the AvailableIn constraint.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// Used when merging parent transitions into SubFlow available transitions.
+    /// </summary>
+    public string? GetCancelTransitionKey(State currentState)
+    {
+        if (Cancel is not { TriggerType: TriggerType.Manual or TriggerType.Event })
+            return null;
+
+        if (Cancel.AvailableIn != null && Cancel.AvailableIn.Any() && !Cancel.AvailableIn.Contains(currentState.Key))
+            return null;
+
+        return Cancel.Key;
     }
 
     public static Workflow Create()

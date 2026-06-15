@@ -49,6 +49,9 @@ public sealed class ScriptEngine(
         MetadataReference.CreateFromFile(typeof(Microsoft.CSharp.RuntimeBinder.CSharpArgumentInfo).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(JsonSerializableAttribute).Assembly.Location),
+        MetadataReference.CreateFromFile(typeof(System.Text.Encodings.Web.JavaScriptEncoder).Assembly.Location),
+        MetadataReference.CreateFromFile(typeof(System.Xml.XmlDocument).Assembly.Location),
+        MetadataReference.CreateFromFile(typeof(System.Xml.Linq.XDocument).Assembly.Location),
     ]);
 
     /// <summary>
@@ -66,13 +69,17 @@ public sealed class ScriptEngine(
         "System.Dynamic",
         "System.Text.Json",
         "System.Text.Json.Serialization",
+        "System.Text.Encodings.Web",
+        "System.Text.Unicode",
         "BBT.Workflow.Shared",
         "BBT.Workflow.Scripting",
         "BBT.Workflow.Definitions",
         "BBT.Workflow.Instances",
         "BBT.Workflow.Runtime",
         "BBT.Workflow.Scripting.Functions",
-        "BBT.Workflow.Definitions.Timer"
+        "BBT.Workflow.Definitions.Timer",
+        "System.Xml",
+        "System.Xml.Linq"
     };
     
     /// <summary>

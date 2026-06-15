@@ -25,6 +25,11 @@ public sealed class TransitionItem : HrefBase
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
+    /// Transition category for client behavior, e.g. stateTransition, sharedTransition, cancel, exit, updateData, timeout.
+    /// </summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>
     /// View href for this transition. When HasView is true, the view endpoint returns meaningful content when called with this transition key.
     /// </summary>
     public ViewHref? View { get; set; }
@@ -33,6 +38,12 @@ public sealed class TransitionItem : HrefBase
     /// Schema href for this transition. When HasSchema is true, the schema endpoint returns meaningful content for this transition key.
     /// </summary>
     public SchemaHref? Schema { get; set; }
+
+    /// <summary>
+    /// Optional key-value metadata for client-side filtering and UI context.
+    /// Use namespaced keys to avoid collisions (e.g., <c>ui/visible-in</c>, <c>ui/priority</c>).
+    /// </summary>
+    public Dictionary<string, string>? Annotations { get; set; }
 }
 
 /// <summary>

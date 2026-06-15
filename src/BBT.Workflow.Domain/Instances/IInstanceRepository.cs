@@ -1,49 +1,47 @@
 using BBT.Aether;
 using BBT.Aether.Domain.Repositories;
 using BBT.Aether.Results;
+using BBT.Workflow.Definitions.Schemas;
 using Microsoft.AspNetCore.Http;
 
 namespace BBT.Workflow.Instances;
 
 public interface IInstanceRepository : IRepository<Instance, Guid>
 {
-    Task<Instance?> FindByIdentifierAsync(
-        string? identifier,
-        CancellationToken cancellationToken = default
-    );
+    Task<Instance?> FindByIdentifierAsync(string? identifier,
+        CancellationToken cancellationToken = default);
 
-    Task<Instance?> FindByIdentifierAsReadOnlyAsync(
-        string identifier,
-        CancellationToken cancellationToken = default
-    );
+    Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
+        CancellationToken cancellationToken = default);
 
-    Task<Result<Instance>> GetActiveAsync(
-        string identifier,
-        CancellationToken cancellationToken = default
-    );
+    /// <summary>
+    /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
+    /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
+    /// </summary>
+    Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,
+        CancellationToken cancellationToken = default);
 
-    Task<List<InstanceAndDataModel>> GetActiveDataListAsync(
-        CancellationToken cancellationToken = default
-    );
+    /// <summary>
+    /// Loads a change-tracked instance with the full <see cref="Instance.DataList"/>.
+    /// Use for write paths that need to inspect non-latest versions
+    /// (e.g. duplicate version checks during publish).
+    /// </summary>
+    Task<Instance?> FindByIdentifierWithFullDataAsync(string? identifier,
+        CancellationToken cancellationToken = default);
 
-    Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(
-        int skip,
-        int take,
-        CancellationToken cancellationToken = default
-    );
+    Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default);
 
-    Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
-        DateTime since,
-        int skip,
-        int take,
-        CancellationToken cancellationToken = default
-    );
+    Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default);
 
-    Task<InstanceAndDataModel?> FindActiveDataAsync(
-        string key,
-        string version,
-        CancellationToken cancellationToken = default
-    );
+    Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(int skip, int take, CancellationToken cancellationToken = default);
+
+    Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(DateTime since, int skip, int take, CancellationToken cancellationToken = default);
+
+    Task<InstanceAndDataModel?> FindActiveDataAsync(string key, string version,
+        CancellationToken cancellationToken = default);
+
+    Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
+        CancellationToken cancellationToken = default);
 
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page,
@@ -51,44 +49,35 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         string? filter,
         string? groupBy = null,
         string? aggregations = null,
-        CancellationToken cancellationToken = default
-    );
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null);
 
     /// <summary>
     /// Gets paged results with optional groups for groupBy queries
     /// </summary>
     /// <param name="sort">Optional orderBy JSON (e.g. {"field":"createdAt","direction":"desc"} or {"fields":[...]})</param>
-    Task<(
-        HateoasPagedList<Instance> PagedList,
-        List<GroupSummary>? Groups
-    )> GetPagedResultsWithGroupsAsync(
+    /// <param name="schemaContext">Optional schema-driven filter/sort metadata</param>
+    Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
         string? filter,
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default
-    );
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null);
 
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
     /// </summary>
-    Task<(
-        HateoasPagedList<Instance> PagedList,
-        List<GroupSummary>? Groups
-    )> GetPagedResultsWithGroupsAsync(
+    Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
         Definitions.GraphQL.GraphQLFilterRequest? request,
-        CancellationToken cancellationToken = default
-    );
+        CancellationToken cancellationToken = default);
 
-    Task<Result<Instance>> GetResultAsync(
-        string identifier,
-        bool includeDetails = true,
-        CancellationToken cancellationToken = default
-    );
+    Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Checks if an active instance exists with the specified key, excluding the given instance ID.
@@ -97,11 +86,30 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <param name="excludeInstanceId">The instance ID to exclude from the check.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>True if an active instance with the same key exists, false otherwise.</returns>
-    Task<bool> AnyActiveByKeyAsync(
-        string key,
-        Guid excludeInstanceId,
-        CancellationToken cancellationToken = default
-    );
+    Task<bool> AnyActiveByKeyAsync(string key, Guid excludeInstanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads a change-tracked instance with only active SubFlow-type correlations.
+    /// DataList and SubProcess correlations are NOT loaded.
+    /// Designed for lightweight operations that need SubFlow chain traversal
+    /// (e.g. recursive busy propagation).
+    /// </summary>
+    Task<Instance?> FindWithActiveSubFlowAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns active instances with Human state subtype.
+    /// Includes DataList for JSON data extraction.
+    /// </summary>
+    Task<List<Instance>> GetHumanTaskInstancesAsync(CancellationToken cancellationToken = default);
+
+
+    /// <summary>
+    /// Returns the key and version of every active instance without loading <c>InstanceData.Data</c>.
+    /// Used by broadcast-receiving pods to discover what to warm from the distributed cache.
+    /// </summary>
+    Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the total number of instances matching the optional GraphQL filter.

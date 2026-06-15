@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.Users;
 using BBT.Workflow.Functions;
@@ -17,7 +18,8 @@ namespace BBT.Workflow.Controllers.Instances;
 public sealed class FunctionController(
     IFunctionAppService functionAppService,
     ICurrentUser currentUser,
-    IInstanceFunctionHandlerFactory handlerFactory) : AetherControllerBase
+    IInstanceFunctionHandlerFactory handlerFactory,
+    IDomainFunctionHandlerFactory domainHandlerFactory) : AetherControllerBase
 {
     [HttpGet("{domain}/functions")]
     public async Task<IActionResult> GetDomainFunctionsAsync(
@@ -37,14 +39,16 @@ public sealed class FunctionController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
-        var response = await functionAppService.GetFunctionByKeyAsync(
-            function,
+        var request = new DomainFunctionRequest(
             domain,
+            function,
             version,
             requestContext.Headers,
             requestContext.QueryParameters,
-            cancellationToken);
-        return FromResult(response);
+            HttpContext);
+
+        var handler = domainHandlerFactory.Get(function.ToLowerInvariant());
+        return await handler.HandleAsync(request, cancellationToken);
     }
 
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/functions/{function}")]
@@ -77,8 +81,75 @@ public sealed class FunctionController(
             return await handler.HandleAsync(request, cancellationToken);
         }
 
-        return FromResult(await functionAppService.GetFunctionByInstanceAsync(
+        var result = await functionAppService.GetFunctionByInstanceAsync(
             function, workflow, domain, instance,
-            requestContext.Headers, requestContext.QueryParameters, cancellationToken));
+            requestContext.Headers, requestContext.QueryParameters, null, cancellationToken);
+
+        return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
+    }
+
+    [HttpPost("{domain}/functions/{function}")]
+    [HttpPatch("{domain}/functions/{function}")]
+    [HttpDelete("{domain}/functions/{function}")]
+    public async Task<IActionResult> InvokeDomainFunctionAsync(
+        [FromRoute] string domain,
+        [FromRoute] string function,
+        [FromBody] JsonElement? body = null,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        var request = new DomainFunctionRequest(
+            domain,
+            function,
+            version,
+            requestContext.Headers,
+            requestContext.QueryParameters,
+            HttpContext,
+            body);
+
+        var handler = domainHandlerFactory.Get(function.ToLowerInvariant());
+        return await handler.HandleAsync(request, cancellationToken);
+    }
+
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/functions/{function}")]
+    [HttpPatch("{domain}/workflows/{workflow}/instances/{instance}/functions/{function}")]
+    [HttpDelete("{domain}/workflows/{workflow}/instances/{instance}/functions/{function}")]
+    public async Task<IActionResult> InvokeInstanceFunctionAsync(
+        [FromRoute] string domain,
+        [FromRoute] string function,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] FunctionQueryParameters parameters,
+        [FromBody] JsonElement? body = null,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+        var functionType = function.ToLowerInvariant();
+
+        var handler = handlerFactory.Get(functionType);
+        if (handler != null)
+        {
+            var request = new InstanceFunctionRequest(
+                domain,
+                workflow,
+                instance,
+                parameters,
+                null,
+                requestContext.Headers,
+                requestContext.QueryParameters,
+                currentUser,
+                HttpContext,
+                body);
+
+            return await handler.HandleAsync(request, cancellationToken);
+        }
+
+        var result = await functionAppService.GetFunctionByInstanceAsync(
+            function, workflow, domain, instance,
+            requestContext.Headers, requestContext.QueryParameters, body, cancellationToken);
+
+        return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 }

@@ -36,16 +36,12 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(domain, workflow, version, async (sp, ct) =>
         {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
             var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
-
-            using (currentSchema.Use(workflow))
-            {
-                return await authorizeAppService.GetAuthorizeResultForInstanceAsync(
-                    domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, requestContext, ct);
-            }
+            return await authorizeAppService.GetAuthorizeResultForInstanceAsync(
+                domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles,
+                requestContext, ct);
         }, cancellationToken);
     }
 
@@ -57,16 +53,11 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         string? version,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteInScopeAsync(async (sp, ct) =>
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(domain, workflow, version, async (sp, ct) =>
         {
-            var currentSchema = sp.GetRequiredService<ICurrentSchema>();
             var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
-
-            using (currentSchema.Use(workflow))
-            {
-                return await authorizeAppService.GetAuthorizationMatrixForInstanceAsync(
-                    domain, workflow, instanceId, version, ct);
-            }
+            return await authorizeAppService.GetAuthorizationMatrixForInstanceAsync(
+                domain, workflow, instanceId, version, ct);
         }, cancellationToken);
     }
 }

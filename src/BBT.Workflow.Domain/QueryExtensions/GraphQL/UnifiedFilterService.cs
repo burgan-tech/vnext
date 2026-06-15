@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Security;
 
 namespace BBT.Workflow.Definitions.GraphQL;
@@ -27,41 +28,39 @@ public static class UnifiedFilterService
         string jsonColumnName = "Data",
         string tableName = "",
         string schema = "public",
-        ISchemaValidator? schemaValidator = null) where T : class
+        ISchemaValidator? schemaValidator = null,
+        SchemaFilterContext? schemaContext = null) where T : class
     {
         if (string.IsNullOrWhiteSpace(filter))
             return dbSet;
 
-        // Validate inputs
         InputValidator.ValidateFilters(filter);
 
         var format = FilterFormatDetector.DetectFormat(filter);
 
         return format switch
         {
-            FilterFormat.GraphQL => ApplyGraphQLFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator),
-            FilterFormat.Legacy => PostgreSqlJsonFilterService.ApplyJsonFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator),
+            FilterFormat.GraphQL => ApplyGraphQLFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator, schemaContext),
+            FilterFormat.Legacy => PostgreSqlJsonFilterService.ApplyJsonFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator, schemaContext),
             _ => dbSet
         };
     }
 
-    /// <summary>
-    /// Apply GraphQL-style filters
-    /// </summary>
     private static IQueryable<T> ApplyGraphQLFilters<T>(
         DbSet<T> dbSet,
         string? filter,
         string jsonColumnName,
         string tableName,
         string schema,
-        ISchemaValidator? schemaValidator) where T : class
+        ISchemaValidator? schemaValidator,
+        SchemaFilterContext? schemaContext = null) where T : class
     {
         var combinedNode = FilterFormatDetector.CombineFilters(filter);
 
         if (combinedNode == null)
             return dbSet;
 
-        return dbSet.ApplyGraphQLFilter(combinedNode, jsonColumnName, tableName, schema, schemaValidator);
+        return dbSet.ApplyGraphQLFilter(combinedNode, jsonColumnName, tableName, schema, schemaValidator, schemaContext: schemaContext);
     }
 
     /// <summary>
@@ -88,9 +87,11 @@ public static class UnifiedFilterService
         string schema = "public",
         Func<IQueryable<T>, IQueryable<T>>? includeFunc = null,
         ISchemaValidator? schemaValidator = null,
-        CancellationToken cancellationToken = default) where T : class
+        CancellationToken cancellationToken = default,
+        SchemaFilterContext? schemaContext = null) where T : class
     {
         var request = GraphQLFilterParser.ParseRequest(filter, groupBy, aggregations);
+        request.SchemaContext = schemaContext;
         return await ExecuteRequestAsync(dbContext, dbSet, request, jsonColumnName, schema, includeFunc, applyOrderBy: null, applyOrderByRaw: null, schemaValidator, cancellationToken);
     }
 
@@ -114,7 +115,6 @@ public static class UnifiedFilterService
     {
         var response = new GraphQLFilterResponse<T>();
 
-        // Handle GroupBy with aggregations
         if (request.GroupBy != null && request.GroupBy.GetFields().Count > 0)
         {
             response.Groups = await GraphQLAggregationService.ExecuteGroupByAsync(
@@ -124,12 +124,12 @@ public static class UnifiedFilterService
                 jsonColumnName,
                 schema,
                 schemaValidator,
-                cancellationToken);
+                cancellationToken,
+                request.SchemaContext);
             
             return response;
         }
 
-        // Handle aggregations without GroupBy
         if (request.Aggregations != null && request.Aggregations.HasAggregations)
         {
             response.Aggregations = await GraphQLAggregationService.ExecuteAggregationAsync(
@@ -139,19 +139,20 @@ public static class UnifiedFilterService
                 jsonColumnName,
                 schema,
                 schemaValidator,
-                cancellationToken);
+                cancellationToken,
+                request.SchemaContext);
             
             return response;
         }
 
-        // Handle regular filter (no aggregations)
-        var orderByClause = request.OrderBy != null ? GraphQLJsonFilterService.BuildOrderByClause(request.OrderBy, schema) : null;
+        var sc = request.SchemaContext;
+        var orderByClause = request.OrderBy != null ? GraphQLJsonFilterService.BuildOrderByClause(request.OrderBy, schema, schemaContext: sc) : null;
         var orderByHasAttributes = request.OrderBy != null && request.OrderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
 
         IQueryable<T> query;
         if (request.Filter != null)
         {
-            query = dbSet.ApplyGraphQLFilter(request.Filter, jsonColumnName, "", schema, schemaValidator, orderByClause: orderByClause);
+            query = dbSet.ApplyGraphQLFilter(request.Filter, jsonColumnName, "", schema, schemaValidator, orderByClause: orderByClause, schemaContext: sc);
         }
         else if (orderByHasAttributes && orderByClause != null && applyOrderByRaw != null)
         {

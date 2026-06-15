@@ -23,7 +23,9 @@ public sealed class ViewFunctionHandler(
             Instance = request.Instance,
             Version = request.Parameters.Version,
             Headers = request.Headers,
-            QueryParameters = request.QueryParameters
+            QueryParameters = request.QueryParameters,
+            Role = request.CurrentUser.Roles?.FirstOrDefault(),
+            Roles = request.CurrentUser.Roles
         };
 
         var result = await queryAppService.GetViewAsync(

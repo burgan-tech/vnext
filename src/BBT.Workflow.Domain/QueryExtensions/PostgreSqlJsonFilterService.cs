@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Security;
 
 namespace BBT.Workflow.Definitions;
@@ -35,6 +36,7 @@ public static class PostgreSqlJsonFilterService
         string tableName = "",
         string schema = "public",
         ISchemaValidator? schemaValidator = null,
+        SchemaFilterContext? schemaContext = null,
         ILogger? logger = null) where T : class
     {
         if (string.IsNullOrWhiteSpace(filter))
@@ -240,22 +242,21 @@ public static class PostgreSqlJsonFilterService
         string operatorType,
         string value,
         string jsonColumnName,
-        ref int parameterIndex)
+        ref int parameterIndex,
+        SchemaFilterContext? schemaContext = null)
     {
-        // Sanitize field name to prevent SQL injection
         var sanitizedField = SanitizeFieldName(field);
         var parameters = new List<NpgsqlParameter>();
         
-        // Pass sanitizedField directly - condition builders will handle nested vs single level
         return operatorType.ToLower() switch
         {
             "eq" => BuildEqualsCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "ne" => BuildNotEqualsCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
-            "gt" => BuildNumericCondition(sanitizedField, value, ">", jsonColumnName, parameters, ref parameterIndex),
-            "ge" => BuildNumericCondition(sanitizedField, value, ">=", jsonColumnName, parameters, ref parameterIndex),
-            "lt" => BuildNumericCondition(sanitizedField, value, "<", jsonColumnName, parameters, ref parameterIndex),
-            "le" => BuildNumericCondition(sanitizedField, value, "<=", jsonColumnName, parameters, ref parameterIndex),
-            "between" => BuildBetweenCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
+            "gt" => BuildComparisonCondition(sanitizedField, value, ">", jsonColumnName, parameters, ref parameterIndex, schemaContext),
+            "ge" => BuildComparisonCondition(sanitizedField, value, ">=", jsonColumnName, parameters, ref parameterIndex, schemaContext),
+            "lt" => BuildComparisonCondition(sanitizedField, value, "<", jsonColumnName, parameters, ref parameterIndex, schemaContext),
+            "le" => BuildComparisonCondition(sanitizedField, value, "<=", jsonColumnName, parameters, ref parameterIndex, schemaContext),
+            "between" => BuildBetweenCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex, schemaContext),
             "match" or "like" => BuildLikeCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "startswith" => BuildStartsWithCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
             "endswith" => BuildEndsWithCondition(sanitizedField, value, jsonColumnName, parameters, ref parameterIndex),
@@ -492,8 +493,33 @@ public static class PostgreSqlJsonFilterService
         return (condition, parameters);
     }
 
-    private static (string, List<NpgsqlParameter>) BuildNumericCondition(
+    private static string ResolveFieldType(string field, SchemaFilterContext? schemaContext)
+    {
+        if (schemaContext == null)
+            return "number";
+
+        var metadata = schemaContext.GetFieldMetadata(field);
+        return metadata?.Type ?? "number";
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildComparisonCondition(
         string field, string value, string sqlOperator, string jsonColumnName,
+        List<NpgsqlParameter> parameters, ref int parameterIndex,
+        SchemaFilterContext? schemaContext = null)
+    {
+        var fieldType = ResolveFieldType(field, schemaContext);
+        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+
+        return fieldType switch
+        {
+            "number" or "integer" => BuildNumericCompare(accessor, value, sqlOperator, parameters, ref parameterIndex),
+            "string" => BuildDateTimeCompare(accessor, value, sqlOperator, parameters, ref parameterIndex),
+            _ => BuildNumericCompare(accessor, value, sqlOperator, parameters, ref parameterIndex)
+        };
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildNumericCompare(
+        string accessor, string value, string sqlOperator,
         List<NpgsqlParameter> parameters, ref int parameterIndex)
     {
         if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var numValue))
@@ -503,19 +529,27 @@ public static class PostgreSqlJsonFilterService
 
         var paramIndex = parameterIndex++;
         parameters.Add(new NpgsqlParameter { Value = numValue });
-        
-        // Use BuildJsonTextAccessor for proper nested/single level handling
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        
-        // PostgreSQL native numeric comparison
-        var condition = $"{accessor}::numeric {sqlOperator} {{{paramIndex}}}";
-        
-        return (condition, parameters);
+        return ($"{accessor}::numeric {sqlOperator} {{{paramIndex}}}", parameters);
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildDateTimeCompare(
+        string accessor, string value, string sqlOperator,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        if (!DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var dateValue))
+        {
+            throw new ArgumentException($"Value '{value}' is not a valid date/datetime for comparison operator '{sqlOperator}'");
+        }
+
+        var paramIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = dateValue, NpgsqlDbType = NpgsqlDbType.TimestampTz });
+        return ($"{accessor}::timestamptz {sqlOperator} {{{paramIndex}}}", parameters);
     }
 
     private static (string, List<NpgsqlParameter>) BuildBetweenCondition(
         string field, string value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
+        List<NpgsqlParameter> parameters, ref int parameterIndex,
+        SchemaFilterContext? schemaContext = null)
     {
         var parts = value.Split(',');
         if (parts.Length != 2)
@@ -523,7 +557,22 @@ public static class PostgreSqlJsonFilterService
 
         var minValue = parts[0].Trim();
         var maxValue = parts[1].Trim();
-        
+
+        var fieldType = ResolveFieldType(field, schemaContext);
+        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
+
+        return fieldType switch
+        {
+            "number" or "integer" => BuildNumericBetween(accessor, minValue, maxValue, parameters, ref parameterIndex),
+            "string" => BuildDateTimeBetween(accessor, minValue, maxValue, parameters, ref parameterIndex),
+            _ => BuildNumericBetween(accessor, minValue, maxValue, parameters, ref parameterIndex)
+        };
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildNumericBetween(
+        string accessor, string minValue, string maxValue,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
         if (!decimal.TryParse(minValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var minNum) ||
             !decimal.TryParse(maxValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var maxNum))
         {
@@ -532,16 +581,26 @@ public static class PostgreSqlJsonFilterService
 
         var minIndex = parameterIndex++;
         var maxIndex = parameterIndex++;
-        
         parameters.Add(new NpgsqlParameter { Value = minNum });
         parameters.Add(new NpgsqlParameter { Value = maxNum });
-        
-        // Use BuildJsonTextAccessor for proper nested/single level handling
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        
-        var condition = $"{accessor}::numeric BETWEEN {{{minIndex}}} AND {{{maxIndex}}}";
-        
-        return (condition, parameters);
+        return ($"{accessor}::numeric BETWEEN {{{minIndex}}} AND {{{maxIndex}}}", parameters);
+    }
+
+    private static (string, List<NpgsqlParameter>) BuildDateTimeBetween(
+        string accessor, string minValue, string maxValue,
+        List<NpgsqlParameter> parameters, ref int parameterIndex)
+    {
+        if (!DateTime.TryParse(minValue, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var minDate) ||
+            !DateTime.TryParse(maxValue, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var maxDate))
+        {
+            throw new ArgumentException($"Between values must be valid date/datetime: '{minValue}', '{maxValue}'");
+        }
+
+        var minIndex = parameterIndex++;
+        var maxIndex = parameterIndex++;
+        parameters.Add(new NpgsqlParameter { Value = minDate, NpgsqlDbType = NpgsqlDbType.TimestampTz });
+        parameters.Add(new NpgsqlParameter { Value = maxDate, NpgsqlDbType = NpgsqlDbType.TimestampTz });
+        return ($"{accessor}::timestamptz BETWEEN {{{minIndex}}} AND {{{maxIndex}}}", parameters);
     }
 
     private static (string, List<NpgsqlParameter>) BuildLikeCondition(

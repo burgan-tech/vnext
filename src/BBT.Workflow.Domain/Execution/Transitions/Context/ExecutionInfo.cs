@@ -16,4 +16,7 @@ public sealed class ExecutionInfo
     
     /// <summary>Gets or sets whether this execution is resuming from a SubFlow completion.</summary>
     public bool IsSubFlowResume { get; set; }
+
+    /// <summary>Gets or sets whether this execution is triggered by a workflow timeout.</summary>
+    public bool IsTimeoutTransition { get; set; }
 }

@@ -24,7 +24,7 @@ public static class CurrentUserForwardHeadersHelper
         isRestrictedHeader ??= _ => false;
         foreach (var kv in forwardHeaders)
         {
-            if (string.IsNullOrEmpty(kv.Value) || isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
+            if (string.IsNullOrEmpty(kv.Value) || !IsAsciiSafe(kv.Value) || isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
                 continue;
             request.Headers.TryAddWithoutValidation(kv.Key, kv.Value);
         }
@@ -35,9 +35,17 @@ public static class CurrentUserForwardHeadersHelper
                 if (isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
                     continue;
                 request.Headers.Remove(kv.Key);
-                if (!string.IsNullOrEmpty(kv.Value))
+                if (!string.IsNullOrEmpty(kv.Value) && IsAsciiSafe(kv.Value))
                     request.Headers.TryAddWithoutValidation(kv.Key, kv.Value);
             }
         }
+    }
+
+    private static bool IsAsciiSafe(string? value)
+    {
+        if (value is null) return true;
+        foreach (var c in value)
+            if (c > 127) return false;
+        return true;
     }
 }

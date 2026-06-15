@@ -14,7 +14,6 @@ namespace BBT.Workflow.Execution.Services;
 /// </summary>
 public sealed class WorkflowExecutionService(
     IExecutionStrategyFactory execFactory,
-    IInstanceRepository instanceRepository,
     ITransitionRunner transitionRunner) : IWorkflowExecutionService, IWorkflowExecutionCore
 {
     /// <inheritdoc />
@@ -22,7 +21,7 @@ public sealed class WorkflowExecutionService(
     /// Executes a workflow transition by delegating to TransitionRunner.
     /// The runner manages UoW lifecycle and inline auto chain processing.
     /// </summary>
-    [Log]
+    // [Log]
     [Trace]
     public Task<Result<TransitionOutput>> ExecuteTransitionAsync(
         [Enrich] WorkflowExecutionContext context,
@@ -45,7 +44,7 @@ public sealed class WorkflowExecutionService(
     {
         return GetExecutionStrategy(context.Mode)
             .BindAsync(strategy => ExecuteStrategyAsync(strategy, context, cancellationToken))
-            .BindAsync(execCtx => BuildCoreOutputAsync(context, execCtx, cancellationToken));
+            .BindAsync(execCtx => BuildCoreOutputAsync(execCtx));
     }
 
     /// <summary>
@@ -65,42 +64,35 @@ public sealed class WorkflowExecutionService(
         => strategy.ExecuteAsync(context, cancellationToken);
 
     /// <summary>
-    /// Builds the core output including transition output and directives snapshot.
-    /// The snapshot captures inline auto queue for post-commit processing.
+    /// Builds the core output including transition output and deferred domain events.
+    /// Uses the pipeline's in-memory instance state (already committed via autoSave)
+    /// to avoid a redundant DB round-trip within the same UoW.
     /// </summary>
-    private async Task<Result<TransitionCoreOutput>> BuildCoreOutputAsync(
-        WorkflowExecutionContext context,
-        TransitionExecutionContext executionContext,
-        CancellationToken cancellationToken)
+    private static Task<Result<TransitionCoreOutput>> BuildCoreOutputAsync(
+        TransitionExecutionContext executionContext)
     {
-        // Build transition output
-        var outputResult = await BuildTransitionOutputAsync(context, executionContext, cancellationToken);
+        var outputResult = BuildTransitionOutput(executionContext);
         if (!outputResult.IsSuccess)
-        {
-            return Result<TransitionCoreOutput>.Fail(outputResult.Error);
-        }
-        
-        return Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!));
+            return Task.FromResult(Result<TransitionCoreOutput>.Fail(outputResult.Error));
+
+        var deferredEvents = executionContext.Directives.ConsumeDeferredEvents();
+        return Task.FromResult(
+            Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!, deferredEvents)));
     }
 
     /// <summary>
-    /// Builds the transition output response.
-    /// Uses Railway Programming with Map for type transformation.
+    /// Builds the transition output from the execution context's in-memory instance state.
+    /// Pipeline steps have already persisted all mutations via autoSave, so the context
+    /// holds the authoritative status — no additional DB read is needed.
     /// </summary>
-    private async Task<Result<TransitionOutput>> BuildTransitionOutputAsync(
-        WorkflowExecutionContext context,
-        TransitionExecutionContext executionContext,
-        CancellationToken cancellationToken)
+    private static Result<TransitionOutput> BuildTransitionOutput(
+        TransitionExecutionContext executionContext)
     {
-        // Early return if client response is available (no DB lookup needed)
         if (executionContext.ClientResponse is not null)
         {
-            // Check if client response contains an error
             if (executionContext.ClientResponse.Error is { } responseError)
-            {
                 return Result<TransitionOutput>.Fail(responseError);
-            }
-            
+
             return Result<TransitionOutput>.Ok(new TransitionOutput
             {
                 Id = executionContext.InstanceId,
@@ -108,32 +100,11 @@ public sealed class WorkflowExecutionService(
             });
         }
 
-        // Fetch fresh instance and transform to output using Map
-        return await FetchInstanceAsync(context.InstanceId, cancellationToken)
-            .MapAsync(MapInstanceToOutput);
-    }
-
-    /// <summary>
-    /// Fetches the workflow instance from repository.
-    /// Uses ToResult extension for null-safe Result conversion.
-    /// </summary>
-    private async Task<Result<Instance>> FetchInstanceAsync(
-        string instanceId,
-        CancellationToken cancellationToken)
-    {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceId, cancellationToken);
-        return instance.ToResult(
-            ExecutionErrors.InstanceNotFoundForResponse(instanceId));
-    }
-
-    /// <summary>
-    /// Maps a workflow instance to TransitionOutput.
-    /// Pure transformation function - no side effects.
-    /// </summary>
-    private static TransitionOutput MapInstanceToOutput(Instance instance)
-        => new()
+        return Result<TransitionOutput>.Ok(new TransitionOutput
         {
-            Id = instance.Id,
-            Status = instance.Status
-        };
+            Id = executionContext.InstanceId,
+            Status = executionContext.Instance.Status,
+            PipelineInstance = executionContext.Instance
+        });
+    }
 }

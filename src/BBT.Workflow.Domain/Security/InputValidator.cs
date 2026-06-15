@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 
 namespace BBT.Workflow.Security;
 
@@ -32,6 +33,21 @@ public static class InputValidator
     /// Maximum nesting depth for JSON field paths (e.g., a.b.c.d.e = depth 5)
     /// </summary>
     public const int MaxFieldDepth = 10;
+
+    /// <summary>
+    /// Maximum serialized length of the <c>includes</c> operator JSON object payload.
+    /// </summary>
+    public const int MaxIncludesPayloadJsonLength = 4096;
+
+    /// <summary>
+    /// Maximum nesting depth inside an <c>includes</c> payload (objects/arrays).
+    /// </summary>
+    public const int MaxIncludesPayloadNestingDepth = 8;
+
+    /// <summary>
+    /// Maximum number of object property names across the entire <c>includes</c> payload tree.
+    /// </summary>
+    public const int MaxIncludesPayloadPropertyCount = 40;
 
     /// <summary>
     /// Validates a single filter string
@@ -122,6 +138,59 @@ public static class InputValidator
 
         if (value.Length > MaxValueLength)
             throw new ArgumentException($"Value too long: {value.Length} characters. Maximum allowed: {MaxValueLength}");
+    }
+
+    /// <summary>
+    /// Validates the JSON object used as the <c>includes</c> filter payload (size, depth, property count).
+    /// </summary>
+    /// <param name="payload">Root element; must be a JSON object.</param>
+    /// <exception cref="ArgumentException">Thrown when validation fails</exception>
+    public static void ValidateIncludesObject(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("includes payload must be a JSON object.");
+
+        var raw = payload.GetRawText();
+        if (raw.Length > MaxIncludesPayloadJsonLength)
+            throw new ArgumentException(
+                $"includes payload too large: {raw.Length} characters. Maximum allowed: {MaxIncludesPayloadJsonLength}");
+
+        var propertyCount = 0;
+        ValidateIncludesSubtree(payload, depth: 0, ref propertyCount);
+    }
+
+    private static void ValidateIncludesSubtree(JsonElement element, int depth, ref int propertyCount)
+    {
+        if (depth > MaxIncludesPayloadNestingDepth)
+            throw new ArgumentException(
+                $"includes payload nesting too deep (>{MaxIncludesPayloadNestingDepth}).");
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var prop in element.EnumerateObject())
+                {
+                    propertyCount++;
+                    if (propertyCount > MaxIncludesPayloadPropertyCount)
+                        throw new ArgumentException(
+                            $"includes payload has too many properties (>{MaxIncludesPayloadPropertyCount}).");
+
+                    if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                        ValidateIncludesSubtree(prop.Value, depth + 1, ref propertyCount);
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    index++;
+                    if (index > MaxIncludesPayloadPropertyCount)
+                        throw new ArgumentException("includes payload array has too many elements.");
+                    if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                        ValidateIncludesSubtree(item, depth + 1, ref propertyCount);
+                }
+                break;
+        }
     }
 
     /// <summary>

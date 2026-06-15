@@ -106,6 +106,44 @@ public static class SubFlowActivityHelper
     }
 
     /// <summary>
+    /// Enriches the activity with SubFlow state change context.
+    /// </summary>
+    public static void EnrichWithStateChange(
+        Activity? activity,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string domain,
+        string flow,
+        string newState)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.Domain, domain);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        activity.SetTag(TelemetryConstants.TagNames.InstanceId, parentInstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subInstanceId);
+        activity.SetTag("vnext.subflow.operation", "state_change");
+        activity.SetTag("vnext.subflow.new_state", newState);
+    }
+
+    /// <summary>
+    /// Enriches the activity with child SubFlow cancellation context.
+    /// </summary>
+    public static void EnrichWithCancellation(
+        Activity? activity,
+        Guid instanceId,
+        string domain,
+        string flow)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.Domain, domain);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, instanceId);
+        activity.SetTag("vnext.subflow.operation", "cancellation");
+    }
+
+    /// <summary>
     /// Sets the activity status to OK.
     /// </summary>
     /// <param name="activity">The activity to update.</param>

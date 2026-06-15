@@ -117,8 +117,11 @@ public sealed class TransitionContextFactory(
             Data = input.Data?.Attributes,
             InstanceKey = input.Data?.Key,
             Tags = input.Data?.Tags,
+            Stage = input.Data?.Stage,
 
             // Flags
+            Mode = input.Mode,
+            CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
 
@@ -135,7 +138,20 @@ public sealed class TransitionContextFactory(
         if (input.Execution?.IsSubFlowResume == true)
             executionContext.Directives.MarkAsSubFlowResume();
 
+        if (input.Execution?.IsTimeoutTransition == true)
+            executionContext.Directives.MarkAsTimeoutTransition();
+
         return executionContext;
+    }
+
+    /// <inheritdoc />
+    public Result<TransitionExecutionContext> CreateFromPreloaded(
+        WorkflowExecutionContext input,
+        Definitions.Workflow workflow,
+        Instance instance)
+    {
+        return ResolveStateAndTransition((workflow, instance), input)
+            .Map(data => BuildExecutionContext(data, input));
     }
 
     /// <summary>

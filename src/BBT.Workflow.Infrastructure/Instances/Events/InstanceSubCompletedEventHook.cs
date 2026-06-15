@@ -34,46 +34,56 @@ public sealed class InstanceSubCompletedEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        logger.SubFlowEventReceived(eventData.SubInstanceId, eventData.InstanceId, eventData.Domain, eventData.Flow);
-        
-        try
+        using (logger.BeginScope(new Dictionary<string, object>
         {
-            var input = MapToFlowCompletedInput(eventData);
+            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+        }))
+        {
+            logger.SubFlowEventReceived(eventData.SubInstanceId, eventData.InstanceId, eventData.Domain, eventData.Flow);
 
-            // Gateway handles local/remote routing based on domain
-            var result = await instanceCommandGateway.CompleteAsync(input, cancellationToken);
-
-            if (!result.IsSuccess)
+            try
             {
-                logger.SubFlowCompletionFailed(
-                    new Exception(result.Error.Message),
-                    eventData.SubInstanceId,
-                    eventData.InstanceId);
+                var input = MapToFlowCompletedInput(eventData);
 
-                return EventHookResult.Fail(
-                    new Exception(result.Error.Message),
-                    new Dictionary<string, string>
-                    {
-                        ["hook_error"] = "SubFlowCompletionFailed",
-                        ["error_code"] = result.Error.Code ?? "unknown"
-                    });
+                // Gateway handles local/remote routing based on domain
+                var result = await instanceCommandGateway.CompleteAsync(input, cancellationToken);
+
+                if (!result.IsSuccess)
+                {
+                    logger.SubFlowCompletionFailed(
+                        new Exception(result.Error.Message),
+                        eventData.SubInstanceId,
+                        eventData.InstanceId);
+
+                    return EventHookResult.Fail(
+                        new Exception(result.Error.Message),
+                        new Dictionary<string, string>
+                        {
+                            ["hook_error"] = "SubFlowCompletionFailed",
+                            ["error_code"] = result.Error.Code ?? "unknown"
+                        });
+                }
+
+                return EventHookResult.Ok(new Dictionary<string, string>
+                {
+                    ["hook_executed"] = "true",
+                    ["sub_instance_id"] = eventData.SubInstanceId.ToString(),
+                    ["parent_instance_id"] = eventData.InstanceId.ToString()
+                });
             }
-
-            return EventHookResult.Ok(new Dictionary<string, string>
+            catch (Exception ex)
             {
-                ["hook_executed"] = "true",
-                ["sub_instance_id"] = eventData.SubInstanceId.ToString(),
-                ["parent_instance_id"] = eventData.InstanceId.ToString()
-            });
-        }
-        catch (Exception ex)
-        {
-            logger.SubFlowCompletionFailed(ex, eventData.SubInstanceId, eventData.InstanceId);
+                logger.SubFlowCompletionFailed(ex, eventData.SubInstanceId, eventData.InstanceId);
 
-            return EventHookResult.Fail(ex, new Dictionary<string, string>
-            {
-                ["hook_error"] = "SubFlowCompletionHookFailed"
-            });
+                return EventHookResult.Fail(ex, new Dictionary<string, string>
+                {
+                    ["hook_error"] = "SubFlowCompletionHookFailed"
+                });
+            }
         }
     }
 

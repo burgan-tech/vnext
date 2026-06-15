@@ -28,7 +28,7 @@ public sealed class WorkflowExecutionContext
     public string? WorkflowVersion { get; set; }
     
     /// <summary>Gets or sets the transition key to execute.</summary>
-    [Enrich(Name = "vnext.flow.transition")]
+    [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;
     
     /// <summary>Gets or sets the trigger type for this execution.</summary>
@@ -36,6 +36,9 @@ public sealed class WorkflowExecutionContext
     
     /// <summary>Gets or sets the execution mode (sync/async).</summary>
     public ExecMode Mode { get; set; } = ExecMode.Sync;
+
+    /// <summary>Gets or sets the original caller's execution mode intent. Used for subflow propagation; defaults to Mode.</summary>
+    public ExecMode CallerMode { get; set; } = ExecMode.Sync;
     
     /// <summary> Get or sets the execution actor (default: User) </summary>
     public ExecutionActor Actor { get; set; } = ExecutionActor.User;
@@ -100,4 +103,5 @@ public sealed class TransitionDataInfo
     public string? Key { get; set; }
     public JsonElement? Attributes  { get; set; }
     public string[]? Tags { get; set; }
+    public string? Stage { get; set; }
 }

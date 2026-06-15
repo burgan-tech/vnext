@@ -62,4 +62,45 @@ public static class TaskExecutionActivityHelper
 
         return activity;
     }
+
+    /// <summary>
+    /// Sets span Status=Error and records standard error tags (error.type, error.code).
+    /// Call only on the final failure outcome — not on intermediate retry attempts.
+    /// </summary>
+    public static void SetError(Activity? activity, string? errorMessage, string? errorType = null, int? statusCode = null)
+    {
+        if (activity is null) return;
+        activity.SetStatus(ActivityStatusCode.Error, errorMessage);
+        if (!string.IsNullOrEmpty(errorType))
+            activity.SetTag("error.type", errorType);
+        if (statusCode.HasValue)
+            activity.SetTag("error.code", statusCode.Value.ToString());
+    }
+
+    /// <summary>
+    /// Adds a <c>task.failed</c> ActivityEvent with error details.
+    /// Use on every failure attempt (including retried ones) so the timeline shows each failure.
+    /// </summary>
+    public static void AddFailedEvent(Activity? activity, string? errorMessage, string? errorType = null, int? statusCode = null)
+    {
+        if (activity is null) return;
+        var tags = new ActivityTagsCollection { { "error.message", errorMessage ?? string.Empty } };
+        if (!string.IsNullOrEmpty(errorType)) tags.Add("error.type", errorType);
+        if (statusCode.HasValue) tags.Add("error.code", statusCode.Value.ToString());
+        activity.AddEvent(new ActivityEvent("task.failed", tags: tags));
+    }
+
+    /// <summary>
+    /// Adds a <c>task.retry</c> ActivityEvent so each retry attempt is visible in the trace timeline.
+    /// </summary>
+    public static void AddRetryEvent(Activity? activity, int attempt, int maxRetries, string? errorMessage, TimeSpan delay)
+    {
+        activity?.AddEvent(new ActivityEvent("task.retry", tags: new ActivityTagsCollection
+        {
+            { "retry.attempt", attempt },
+            { "retry.max", maxRetries },
+            { "retry.delay_ms", (long)delay.TotalMilliseconds },
+            { "error.message", errorMessage }
+        }));
+    }
 }

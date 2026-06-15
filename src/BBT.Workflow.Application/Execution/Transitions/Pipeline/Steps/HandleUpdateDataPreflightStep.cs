@@ -160,6 +160,11 @@ public sealed class HandleUpdateDataPreflightStep(
         {
             context.Instance.AddTags(context.Tags);
         }
+
+        if (!string.IsNullOrWhiteSpace(context.Stage))
+        {
+            context.Instance.SetStage(context.Stage);
+        }
     }
 
     /// <summary>

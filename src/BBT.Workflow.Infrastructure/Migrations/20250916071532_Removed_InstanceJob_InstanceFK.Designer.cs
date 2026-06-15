@@ -33,7 +33,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ConcurrencyStamp")
                         .IsConcurrencyToken()
@@ -43,7 +43,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnName("ConcurrencyStamp");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp without time zone")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("CreatedAt");
 
                     b.Property<string>("CurrentState")
@@ -66,7 +66,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("jsonb");
 
                     b.Property<DateTime?>("ModifiedAt")
-                        .HasColumnType("timestamp without time zone")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("ModifiedAt");
 
                     b.Property<string>("Status")
@@ -92,10 +92,10 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("interval");
 
                     b.Property<DateTime?>("FinishedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime>("StartedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -118,7 +118,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("IsCompleted")
                         .HasColumnType("boolean");
@@ -173,7 +173,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("character varying(26)");
 
                     b.Property<DateTime>("EnteredAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("InstanceId")
                         .HasColumnType("uuid");
@@ -200,7 +200,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp without time zone")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("CreatedAt");
 
                     b.Property<string>("Domain")
@@ -235,7 +235,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("character varying(125)");
 
                     b.Property<DateTime?>("ModifiedAt")
-                        .HasColumnType("timestamp without time zone")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("ModifiedAt");
 
                     b.HasKey("Id");
@@ -258,10 +258,10 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("FinishedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime>("StartedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
@@ -292,7 +292,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("interval");
 
                     b.Property<DateTime?>("FinishedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("FromState")
                         .IsRequired()
@@ -303,7 +303,7 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("StartedAt")
-                        .HasColumnType("timestamp without time zone");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ToState")
                         .HasMaxLength(100)

@@ -6,64 +6,44 @@ using BBT.Workflow.Orchestration.Services;
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Service collection extensions specific to Orchestration API.
-/// Composes modular extensions for the full-stack Orchestration host.
+/// Service collection extensions specific to Orchestration API
 /// </summary>
 public static class OrchestrationApiServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds all services required by the Orchestration API host.
+    /// Adds Orchestration API specific services
     /// </summary>
-    /// <param name="services">The service collection.</param>
-    /// <returns>The service collection for chaining.</returns>
+    /// <param name="services">The service collection</param>
+    /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddOrchestrationApiModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
-
-        // Core domain/application/infrastructure modules
-        services
-            .AddDomainModule()
-            .AddApplicationModule()
-            .AddInfrastructureModule(configuration)
-            .AddInfrastructureRuntimeServices()
-            .AddResultResilience(configuration);
-
-        // ASP.NET Core, serialization, controllers
-        services
-            .AddWorkflowAspNetCore(configuration)
-            .AddWorkflowMapper();
-
-        // Dapr, event bus, domain events, event hooks
-        services
-            .AddWorkflowDapr()
-            .AddWorkflowEventBus(configuration)
-            .AddWorkflowDomainEvents()
-            .AddWorkflowEventHooks();
-
-        // Database, caching, locking
-        services
-            .AddWorkflowDbContext(configuration)
-            .AddWorkflowDistributedCache(configuration)
-            .AddWorkflowDistributedLock(configuration)
-            .AddRedis();
-
-        // Background jobs, telemetry, exception handling
-        services
-            .AddWorkflowBackgroundJobs()
-            .AddWorkflowTelemetry(configuration)
-            .AddWorkflowExceptionHandling();
-
-        // Runtime middleware, headers, health checks
-        services
-            .AddWorkflowRuntimeMiddleware()
-            .AddWorkflowHeaderService()
-            .AddAppHealthChecks();
-
-        // Orchestration-specific
+        
         services
             .AddFunctionHandlers()
-            .AddOrchestrationHostedServices();
-
+            .AddDomainModule()
+            .AddApplicationModule()
+            .AddInfrastructureModule(configuration) // Infrastructure manages its own dependencies including URL templates
+            .AddAspNetCoreModules(configuration)
+            .AddResultResilience(configuration)
+            .AddDaprClients()
+            .AddEventBus(configuration)
+            .AddWorkflowEventHooks()
+            .AddDomainEventsInfrastructure()
+            .AddInfrastructureRuntimeServices()
+            .AddDbContext(configuration)
+            .AppMapper()
+            .AddTelemetry(configuration)
+            .AddDistributedCache(configuration) // Can be called before or after InfrastructureModule
+            .AddDistributedLock(configuration)
+            .AddTransitionLockScope()
+            .AddBackgroundJob()
+            .AddRedis()
+            .AddExceptionHandling()
+            .AddRuntimeMiddleware()
+            .AddHeaderService()
+            .AddHostedServices()
+            .AddAppHealthChecks();
         return services;
     }
 
@@ -78,16 +58,19 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, AuthorizationMatrixFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, HierarchyFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
+
+        services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();
+        services.AddScoped<IDomainFunctionHandler, DefaultDomainFunctionHandler>();
+        services.AddScoped<IDomainFunctionHandlerFactory, DomainFunctionHandlerFactory>();
         return services;
     }
 
-    private static IServiceCollection AddOrchestrationHostedServices(this IServiceCollection services)
+    private static IServiceCollection AddHostedServices(this IServiceCollection services)
     {
-#if DEBUG
+        // Add any Orchestration-specific hosted services
+        #if DEBUG
         services.AddHostedService<MultiSchemaMigrationHostedService>();
-#endif
-        services.AddHostedService<CacheCleanupHostedService>();
-        services.AddHostedService<CacheInitializationHostedService>();
+        #endif
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
         return services;
     }

@@ -23,6 +23,11 @@ public sealed class GetInstanceStateOutput
     public string State { get; set; } = string.Empty;
 
     /// <summary>
+    /// Current state's type in camelCase.
+    /// </summary>
+    public string StateType { get; set; } = string.Empty;
+
+    /// <summary>
     /// Instance status
     /// </summary>
     public InstanceStatus? Status { get; set; }

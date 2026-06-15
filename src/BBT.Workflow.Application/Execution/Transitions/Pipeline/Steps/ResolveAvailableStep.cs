@@ -10,14 +10,15 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 
 /// <summary>
 /// Pipeline step that resolves the Available (Active) status at the end of transition processing.
-/// Sets instance to Active when all conditions are met:
+/// Defers the actual status update to PipelineDirectives.ResolvedStatus so that the status
+/// is only applied after all post-commit jobs complete (in TransitionPipeline).
+/// Conditions for deferring Active status:
 /// - Auto transition chain is not continuing (NextTransition is null)
 /// - Not a terminal state (SubFlow entry point for parent)
 /// - Target state is not a Finish state
 /// - Target state has only manual/event transitions or no transitions
 /// </summary>
 public sealed class ResolveAvailableStep(
-    IInstanceRepository instanceRepository,
     ILogger<ResolveAvailableStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -37,15 +38,13 @@ public sealed class ResolveAvailableStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Set instance to Active and persist
-        return await Result.Ok(context)
-            .Tap(ctx => ctx.Instance.Active())
-            .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
-            .Tap(ctx => logger.LogDebug(
-                "Instance {InstanceId} set to Available after transition to state {TargetState}",
-                ctx.InstanceId,
-                ctx.Target?.Key ?? "unknown"))
-            .Map(_ => StepOutcome.Continue());
+        // Defer status update to after post-commit jobs complete
+        context.Directives.SetResolvedStatus(InstanceStatus.Active);
+        logger.LogDebug(
+            "Instance {InstanceId} deferred Available status after transition to state {TargetState}",
+            context.InstanceId,
+            context.Target?.Key ?? "unknown");
+        return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 
     /// <summary>
@@ -72,21 +71,19 @@ public sealed class ResolveAvailableStep(
             return false;
         }
 
-        // Terminal state reached (SubFlow entry point). When target is a SubFlow state, set Active
-        // so the parent is Available until the subflow actually starts (e.g. after resume and chained transition).
+        // Terminal state reached — stay Busy regardless of state type.
+        // When the target is a SubFlow entry, HandleSubFlowStep has already added the correlation
+        // and set the instance to Busy. Setting Active here would create a window where the parent
+        // appears Active while the SubFlow is still initialising, causing long-polling clients to
+        // receive a premature A status before the SubFlow is ready for interaction.
+        // The state function delegates to the active SubFlow's own status, so the parent's Busy
+        // is the correct signal while any SubFlow is running.
         if (context.Directives.TerminalReached)
         {
-            if (context.Target?.StateType == StateType.SubFlow)
-            {
-                logger.LogDebug(
-                    "Instance {InstanceId} reached terminal SubFlow state {TargetState}, setting Available",
-                    context.InstanceId,
-                    context.Target.Key);
-                return true;
-            }
             logger.LogDebug(
-                "Instance {InstanceId} reached terminal state (non-SubFlow), staying Busy",
-                context.InstanceId);
+                "Instance {InstanceId} reached terminal state {TargetState}, staying Busy",
+                context.InstanceId,
+                context.Target?.Key ?? "unknown");
             return false;
         }
 
@@ -117,12 +114,12 @@ public sealed class ResolveAvailableStep(
             return false;
         }
 
-        // Target state has automatic or scheduled transitions - stay Busy
+        // Target state has automatic transitions - stay Busy
         // (This should already be caught by NextTransition check, but defensive)
         if (!context.Target.HasOnlyManualOrEventTransitions)
         {
             logger.LogDebug(
-                "Instance {InstanceId} target state {TargetState} has auto/scheduled transitions, staying Busy",
+                "Instance {InstanceId} target state {TargetState} has auto transitions, staying Busy",
                 context.InstanceId,
                 context.Target.Key);
             return false;

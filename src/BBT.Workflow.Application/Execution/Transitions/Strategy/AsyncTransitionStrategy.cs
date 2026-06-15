@@ -1,32 +1,68 @@
 using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Dapr.Jobs.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
 /// <summary>
 /// Asynchronous transition execution strategy.
 /// Executes transitions as background jobs for better scalability and fault tolerance.
+/// Acquires a distributed lock before processing to prevent concurrent enqueuing for
+/// the same instance. Reserved transitions (cancel, exit, updateData, timeout, subflow
+/// resume, shared) lock on their own type-scoped key independent of the base instance
+/// lock — so they are accepted and enqueued even while the main flow is Busy, mirroring
+/// the sync <see cref="Pipeline.TransitionPipeline"/>. Under the lock, checks if an active
+/// job already exists and returns 409 if so. Sets the instance to Busy before enqueueing so callers immediately see
+/// the correct in-progress status. The UoW boundary in TransitionRunner guarantees
+/// atomicity: if the Dapr enqueue fails the UoW rolls back and the instance stays Active.
 /// </summary>
 public sealed class AsyncTransitionStrategy(
     IBackgroundJobService backgroundJobService,
     ITransitionContextFactory ctxFactory,
     IInstanceJobRepository jobRepository,
+    IInstanceRepository instanceRepository,
+    IDistributedLockService distributedLockService,
+    IReservedTransitionResolver reservedTransitionResolver,
+    ITransitionValidationService validationService,
+    IUnitOfWorkManager uowManager,
+    IInstanceCommandGateway instanceCommandGateway,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
+    /// <summary>
+    /// Lock lease duration in seconds — covers the check + enqueue + UoW commit cycle.
+    /// </summary>
+    private const int DefaultLockLeaseSeconds = 30;
+
     public ExecMode Mode => ExecMode.Async;
+
     /// <inheritdoc />
     /// <summary>
     /// Executes transition asynchronously by enqueuing a background job.
-    /// Railway chain: Create Context → Enqueue Job → Return Context
+    /// Railway chain: Create Context → Validate (schema + policy) → Set Busy → Enqueue Job → Return Context
     /// </summary>
+    /// <remarks>
+    /// Validation must run BEFORE lock acquisition and job enqueue so that callers
+    /// receive 400 Bad Request for invalid payloads instead of accepting the request,
+    /// flipping the instance to Busy, and discovering the schema violation later in
+    /// the background job (which would leave the instance in a Faulted state).
+    /// This also guarantees correct behavior when callers bypass the AppService
+    /// pre-validation guard and invoke the workflow execution service directly.
+    /// </remarks>
     [Trace]
     public Task<Result<TransitionExecutionContext>> ExecuteAsync(
         WorkflowExecutionContext context,
@@ -34,12 +70,30 @@ public sealed class AsyncTransitionStrategy(
     {
         var activity = Activity.Current;
         return ctxFactory.CreateAsync(context, cancellationToken)
+            .BindAsync(ctx => ValidateAsync(ctx, cancellationToken))
             .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, activity, cancellationToken));
     }
 
     /// <summary>
-    /// Enqueues the job and returns the original context on success.
-    /// Uses Match for idiomatic Result handling with logging side effects.
+    /// Validates the transition context (schema + state-machine policy) before
+    /// any side effects (Busy flip, lock acquisition, job enqueue).
+    /// Mirrors the guard in <c>TransitionPipeline.RunAsync</c> for the sync path.
+    /// </summary>
+    private async Task<Result<TransitionExecutionContext>> ValidateAsync(
+        TransitionExecutionContext ctx,
+        CancellationToken cancellationToken)
+    {
+        var validationResult = await validationService.ValidateAsync(ctx, cancellationToken);
+        return validationResult.IsSuccess
+            ? Result<TransitionExecutionContext>.Ok(ctx)
+            : Result<TransitionExecutionContext>.Fail(validationResult.Error);
+    }
+
+    /// <summary>
+    /// Acquires a distributed lock on the instance before processing.
+    /// Under the lock: checks for an existing active job (409 if found), then
+    /// sets the instance to Busy and enqueues the background job.
+    /// If the lock cannot be acquired, returns 409 — mirrors sync pipeline behavior.
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> EnqueueJobAndReturnContextAsync(
         TransitionExecutionContext ctx,
@@ -49,21 +103,97 @@ public sealed class AsyncTransitionStrategy(
     {
         var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
         EnrichTelemetry(activity, ctx, jobName);
-        var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
 
-        return enqueueResult.Match(
-            onSuccess: _ =>
+        Result<TransitionExecutionContext> lockScopeResult =
+            Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
+
+        // Reserved transitions (cancel, exit, updateData, timeout, subflow resume, shared)
+        // lock on their own type-scoped key — independent of the base instance lock — so the
+        // request is accepted and enqueued even while the main flow holds the instance lock.
+        // Mirrors TransitionPipeline.RunAsync; execution safety is enforced when the job runs
+        // through the sync pipeline.
+        var lockKey = reservedTransitionResolver.IsReserved(ctx)
+            ? reservedTransitionResolver.GetOwnLockKey(ctx)
+            : ctx.LockKey;
+
+        var lockAcquired = await distributedLockService.ExecuteWithLockAsync(
+            lockKey,
+            async () =>
             {
-                LogEnqueueSuccess(context, jobName);
-                SetActivityStatus(activity, enqueueResult);
-                return Result<TransitionExecutionContext>.Ok(ctx);
+                if (await jobRepository.AnyActiveByJobNameAsync(ctx.InstanceId, jobName, cancellationToken))
+                {
+                    logger.TransitionJobAlreadyQueued(jobName, ctx.InstanceId, ctx.TransitionKey);
+                    lockScopeResult = Result<TransitionExecutionContext>.Fail(
+                        WorkflowErrors.TransitionJobAlreadyActive(ctx.InstanceId, ctx.TransitionKey));
+                    return;
+                }
+
+                await SetInstanceBusyAsync(ctx, cancellationToken);
+
+                var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
+                lockScopeResult = enqueueResult.Match(
+                    onSuccess: _ =>
+                    {
+                        LogEnqueueSuccess(context, jobName);
+                        return Result<TransitionExecutionContext>.Ok(ctx);
+                    },
+                    onFailure: error =>
+                    {
+                        LogEnqueueFailure(context);
+                        return Result<TransitionExecutionContext>.Fail(error);
+                    });
             },
-            onFailure: error =>
-            {
-                LogEnqueueFailure(context);
-                SetActivityStatus(activity, enqueueResult);
-                return Result<TransitionExecutionContext>.Fail(error);
-            });
+            DefaultLockLeaseSeconds,
+            cancellationToken);
+
+        if (!lockAcquired)
+        {
+            logger.InstanceLockFailed(ctx.InstanceId.ToString());
+            return Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
+        }
+
+        SetActivityStatus(activity, lockScopeResult);
+        return lockScopeResult;
+    }
+
+    /// <summary>
+    /// Marks the instance as Busy and persists it within the ambient UoW.
+    /// Skips self-marking silently when the instance is already Busy (chained auto transitions),
+    /// already Completed, or being resumed from a SubFlow. SubFlow busy propagation runs regardless.
+    /// </summary>
+    private async Task SetInstanceBusyAsync(
+        TransitionExecutionContext ctx,
+        CancellationToken cancellationToken)
+    {
+        if (!ctx.Instance.IsBusy && !ctx.Instance.IsCompleted && !ctx.Directives.IsSubFlowResume)
+        {
+            await using var innerUow = await uowManager.BeginAsync(
+                new UnitOfWorkOptions
+                {
+                    Scope = UnitOfWorkScopeOption.RequiresNew
+                }, cancellationToken);
+
+            ctx.Instance.Busy();
+            await instanceRepository.UpdateAsync(ctx.Instance, false, cancellationToken);
+            await innerUow.CommitAsync(cancellationToken);
+            logger.InstanceSetBusyForAsyncTransition(ctx.InstanceId, ctx.TransitionKey);
+        }
+
+        var subflow = ctx.Instance.Subflow;
+        if (subflow is null)
+            return;
+
+        var markBusyResult = await instanceCommandGateway.MarkBusyAsync(new MarkBusyInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            InstanceId = subflow.SubFlowInstanceId,
+            Version = subflow.SubFlowVersion
+        }, cancellationToken);
+
+        if (!markBusyResult.IsSuccess)
+            logger.SubFlowBusyPropagationFailedForAsyncTransition(ctx.InstanceId, subflow.SubFlowInstanceId,
+                markBusyResult.Error.Message);
     }
 
     /// <summary>
@@ -100,6 +230,11 @@ public sealed class AsyncTransitionStrategy(
         Dictionary<string, object> metadata,
         CancellationToken cancellationToken)
     {
+        var fp = executionOptions.Value.FailurePolicy;
+        var failurePolicy = JobScheduleFailurePolicy.Constant(
+            TimeSpan.FromSeconds(fp.IntervalSeconds),
+            (uint)fp.MaxRetries);
+
         return ResultExtensions.TryAsync(
             async ct => await backgroundJobService.EnqueueAsync(
                 TransitionJobHandler.HandlerName,
@@ -107,6 +242,7 @@ public sealed class AsyncTransitionStrategy(
                 jobPayload,
                 schedule,
                 metadata,
+                failurePolicy,
                 ct),
             cancellationToken,
             ex => Error.Dependency(
@@ -161,11 +297,13 @@ public sealed class AsyncTransitionStrategy(
             Headers = context.Headers,
             RouteValues = context.RouteValues,
             ExecutionActor = context.Actor,
+            CallerSync = false,
             TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString
+            TraceState = activity?.TraceStateString,
+            Stage = context.Data?.Stage
         };
 
-        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow).ExpressionValue;
+        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow.AddMilliseconds(5)).ExpressionValue;
 
         var metadata = new Dictionary<string, object>
         {
@@ -190,7 +328,7 @@ public sealed class AsyncTransitionStrategy(
     {
         logger.TransitionEnqueued(context.TransitionKey, context.InstanceId, jobName);
     }
-    
+
     /// <summary>
     /// Enriches the activity with telemetry tags and baggage for distributed tracing correlation.
     /// Includes job name for async job correlation.
@@ -218,7 +356,7 @@ public sealed class AsyncTransitionStrategy(
         activity.SetBaggage(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
         activity.SetBaggage(TelemetryConstants.TagNames.JobName, jobName);
     }
-    
+
     /// <summary>
     /// Sets activity status based on result.
     /// </summary>
@@ -235,7 +373,7 @@ public sealed class AsyncTransitionStrategy(
             SetActivityError(activity, result.Error);
         }
     }
-    
+
     /// <summary>
     /// Sets activity error status with error details.
     /// </summary>
@@ -246,7 +384,7 @@ public sealed class AsyncTransitionStrategy(
         activity.SetStatus(ActivityStatusCode.Error, error.Message);
         activity.AddTag("error.code", error.Code);
     }
-    
+
     /// <summary>
     /// Logs failed job enqueue.
     /// </summary>

@@ -147,7 +147,18 @@ Content-Type: application/json
   "version": "{{version}}"
 }
 
-### Package Publish - With domain replacement
+### Package Publish - With domain replacement (replaceDomain: true required)
+POST {{baseUrl}}/api/package/publish
+Content-Type: application/json
+
+{
+  "packageName": "@my-org/my-workflow-package",
+  "version": "{{version}}",
+  "appDomain": "my-custom-domain",
+  "replaceDomain": true
+}
+
+### Package Publish - appDomain provided but replaceDomain omitted (no replacement)
 POST {{baseUrl}}/api/package/publish
 Content-Type: application/json
 
@@ -196,7 +207,8 @@ Content-Type: application/json
   "version": "{{version}}",
   "npmRegistry": "{{npmRegistry}}",
   "npmToken": "your-npm-token-here",
-  "appDomain": "production"
+  "appDomain": "production",
+  "replaceDomain": true
 }
 
 ### Package Publish - Error: Missing packageName
@@ -207,7 +219,7 @@ Content-Type: application/json
   "version": "{{version}}"
 }
 
-### Package Publish - TFS Artifacts authentication
+### Package Publish - TFS Artifacts authentication with domain replacement
 POST {{baseUrl}}/api/package/publish
 Content-Type: application/json
 
@@ -218,7 +230,8 @@ Content-Type: application/json
   "npmUsername": "{{tfsUsername}}",
   "npmPassword": "{{tfsPassword}}",
   "npmEmail": "{{tfsEmail}}",
-  "appDomain": "my-domain"
+  "appDomain": "my-domain",
+  "replaceDomain": true
 }
 
 ### Package Publish - TFS Artifacts (without domain replacement)
@@ -277,8 +290,10 @@ Origin: http://localhost:3001
 # 2. Standard Package (Any npm package)
 #    POST /api/package/publish
 #    - packageName: REQUIRED
-#    - appDomain: OPTIONAL
-#    - Domain replacement: Only if appDomain provided
+#    - replaceDomain: OPTIONAL (boolean, default false)
+#    - appDomain: OPTIONAL (required when replaceDomain:true)
+#    - Domain replacement: Only if replaceDomain:true AND appDomain provided
+#    - Components/references with crossDomain:true are exempt from replacement
 #    - Ordering: Standard (no special ordering)
 #
 # 3. Health Check

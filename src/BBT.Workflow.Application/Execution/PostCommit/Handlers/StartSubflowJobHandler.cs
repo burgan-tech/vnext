@@ -67,10 +67,17 @@ public sealed class StartSubflowJobHandler(
                 context.Transition!,
                 correlation,
                 scriptContext,
+                context.CallerMode,
                 cancellationToken);
 
             if (startResult.IsSuccess)
             {
+                if (scriptContext.Mutations.HasChanges)
+                {
+                    scriptContext.Mutations.ApplyTo(instance);
+                    await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+                }
+
                 logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
             }
 

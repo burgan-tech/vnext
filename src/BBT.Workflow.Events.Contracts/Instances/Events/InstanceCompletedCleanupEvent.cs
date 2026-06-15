@@ -34,6 +34,11 @@ public class InstanceCompletedCleanupEvent : IDistributedEvent
     public required string Flow { get; init; }
     
     /// <summary>
+    /// The workflow version of the completed instance
+    /// </summary>
+    public required string Version { get; init; }
+    
+    /// <summary>
     /// When the instance was completed
     /// </summary>
     public required DateTime CompletedAt { get; init; }

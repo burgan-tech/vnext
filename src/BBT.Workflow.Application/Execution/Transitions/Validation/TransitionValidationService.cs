@@ -58,8 +58,22 @@ public class TransitionValidationService(
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);
 
-        return schemaValidator.Validate(schemaResult.Value!.Schema, context.DataElement);
+        return schemaValidator.Validate(
+            schemaResult.Value!.Schema,
+            context.DataElement,
+            CreateSchemaValidationOptions(context.Headers));
     }
+
+    private static SchemaValidationOptions CreateSchemaValidationOptions(IReadOnlyDictionary<string, string?>? headers)
+    {
+        return new SchemaValidationOptions(
+            Culture: ResolveCulture(headers),
+            IncludeVocabularyDetails: true,
+            CustomValidationEnabled: true);
+    }
+
+    private static string ResolveCulture(IReadOnlyDictionary<string, string?>? headers)
+        => LanguageResolver.ResolveCulture(headers);
 
     /// <inheritdoc />
     /// <summary>

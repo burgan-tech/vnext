@@ -25,7 +25,10 @@ public sealed class SubflowForwardingService(
     {
         var scopeData = new Dictionary<string, object>
         {
-            [TelemetryConstants.TagNames.InstanceId] = instanceId
+            [TelemetryConstants.TagNames.Domain] = input.Domain,
+            [TelemetryConstants.TagNames.Flow] = input.Workflow,
+            [TelemetryConstants.TagNames.InstanceId] = instanceId,
+            [TelemetryConstants.TagNames.TransitionKey] = transitionKey
         };
         if (parentInstanceId.HasValue)
             scopeData[TelemetryConstants.TagNames.ParentInstanceId] = parentInstanceId.Value;

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Aether.Aspects;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
@@ -36,6 +37,9 @@ public sealed class TransitionExecutionContext
     
     /// <summary>Gets or sets instance tags (Optional).</summary>
     public string[]? Tags { get; set; }
+
+    /// <summary>Gets or sets the instance stage label (Optional, max 120 chars).</summary>
+    public string? Stage { get; set; }
 
     /// <summary>Gets the trigger type that initiated this transition.</summary>
     public TriggerType Trigger { get; init; }
@@ -82,6 +86,12 @@ public sealed class TransitionExecutionContext
     public object? Data { get; set; }
 
     // Execution flags
+    /// <summary>Gets the execution mode (sync/async/resume) from the original request.</summary>
+    public ExecMode Mode { get; init; } = ExecMode.Sync;
+
+    /// <summary>Gets the original caller's execution mode intent (sync/async). Used by post-commit handlers for subflow mode propagation.</summary>
+    public ExecMode CallerMode { get; init; } = ExecMode.Sync;
+
     /// <summary>Gets or sets whether to skip immediate execution (for scheduled transitions).</summary>
     public bool SkipImmediateExecution { get; set; }
 
@@ -90,6 +100,11 @@ public sealed class TransitionExecutionContext
 
     /// <summary>Gets whether this transition was requested by an error boundary (e.g. Rollback/Notify). When true, state policy checks are bypassed so the transition can run from any state.</summary>
     public bool IsErrorBoundaryTransition { get; init; }
+
+    /// <summary>
+    /// Gets or sets the active pipeline execution profile for this transition (assigned by <c>TransitionPipeline</c> before executing steps).
+    /// </summary>
+    public PipelineExecutionProfile? Profile { get; set; }
 
     // Telemetry & Headers & Temporary storage
     /// <summary>Gets the distributed tracing trace identifier.</summary>
@@ -149,6 +164,41 @@ public sealed class TransitionExecutionContext
     }
 
     /// <summary>
+    /// Re-bases the cached <see cref="ScriptContext"/>'s instance snapshot onto the current
+    /// (live) <see cref="Instance"/>. Call this after a state change so that subsequent steps
+    /// reusing the cached ScriptContext (e.g. OnEntry tasks and state-level error boundary
+    /// resolution) observe the new <c>CurrentState</c> rather than the snapshot frozen before
+    /// the change. No-op when no ScriptContext has been built yet, so the lazy-build behavior
+    /// of <see cref="GetOrBuildScriptContextAsync"/> is preserved.
+    /// </summary>
+    public void RefreshScriptContextInstance()
+    {
+        if (Instance is null)
+            return;
+
+        if (Cache.TryGetValue("ScriptContext", out var cached) && cached is ScriptContext scriptContext)
+            scriptContext.RefreshInstance(Instance);
+    }
+
+    /// <summary>
+    /// Extracts pending distributed events from the Instance aggregate and defers them
+    /// in <see cref="Directives"/> for explicit publishing after UoW commit.
+    /// Clears the aggregate's event list so they won't be dispatched automatically via IDomainEventSink/SaveChanges.
+    /// </summary>
+    public void ExtractAndDeferInstanceEvents()
+    {
+        if (Instance == null)
+            return;
+
+        var domainEvents = Instance.GetDomainEvents();
+        if (domainEvents.Count == 0)
+            return;
+
+        Directives.DeferEvents(domainEvents);
+        Instance.ClearDomainEvents();
+    }
+
+    /// <summary>
     /// Applies changes made within the provided <see cref="ScriptContext"/> back to the live transition context.
     /// </summary>
     /// <param name="scriptContext">The script context containing potential instance updates.</param>
@@ -183,6 +233,11 @@ public sealed class TransitionExecutionContext
         if (applied)
         {
             Data = Instance.Data;
+        }
+
+        if (scriptContext.Mutations.HasChanges)
+        {
+            scriptContext.Mutations.ApplyTo(Instance);
         }
     }
 }

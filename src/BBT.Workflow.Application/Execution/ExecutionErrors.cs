@@ -96,6 +96,58 @@ public static class ExecutionErrors
 
     #endregion
 
+    #region Resource Lock Errors
+
+    /// <summary>
+    /// Creates an error when a resource lock cannot be acquired because it is held by another instance.
+    /// </summary>
+    /// <param name="resourceKey">The lock key that caused the conflict.</param>
+    public static Error ResourceLockConflict(string resourceKey)
+        => Error.Conflict(
+            WorkflowErrorCodes.ResourceLockConflict,
+            $"Resource lock conflict for key '{resourceKey}'. The resource is already locked by another instance.",
+            target: resourceKey);
+
+    /// <summary>
+    /// Creates an error when the keyExpression script returns a null or empty lock key.
+    /// </summary>
+    /// <param name="transitionKey">The transition whose keyExpression produced an empty key.</param>
+    public static Error ResourceLockKeyEmpty(string transitionKey)
+        => Error.Validation(
+            WorkflowErrorCodes.ResourceLockKeyEmpty,
+            $"resourceLock.keyExpression for transition '{transitionKey}' returned a null or empty key.");
+
+    /// <summary>
+    /// Creates an error when keyExpression compilation or execution fails.
+    /// </summary>
+    /// <param name="transitionKey">The transition whose keyExpression failed.</param>
+    /// <param name="errorMessage">Details from the underlying exception.</param>
+    public static Error ResourceLockKeyResolutionFailed(string transitionKey, string errorMessage)
+        => Error.Failure(
+            WorkflowErrorCodes.ResourceLockKeyResolutionFailed,
+            $"Failed to resolve resource lock key for transition '{transitionKey}': {errorMessage}");
+
+    /// <summary>
+    /// Creates an error when an unknown resource lock action is encountered.
+    /// </summary>
+    /// <param name="action">The unrecognized action value.</param>
+    public static Error ResourceLockInvalidAction(string action)
+        => Error.Validation(
+            WorkflowErrorCodes.ResourceLockInvalidAction,
+            $"Unknown resource lock action: {action}");
+
+    /// <summary>
+    /// Creates an error when a resource lock release fails because the lock is not held by this owner.
+    /// </summary>
+    /// <param name="resourceKey">The lock key that could not be released.</param>
+    public static Error ResourceLockReleaseFailed(string resourceKey)
+        => Error.Failure(
+            WorkflowErrorCodes.ResourceLockReleaseFailed,
+            $"Failed to release resource lock for key '{resourceKey}'. Lock not held by this owner.",
+            detail: resourceKey);
+
+    #endregion
+
     #region Task / Pipeline Errors
 
     /// <summary>

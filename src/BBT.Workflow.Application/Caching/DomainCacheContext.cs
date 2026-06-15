@@ -4,7 +4,11 @@ using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Caching;
 
-public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
+/// <summary>
+/// Provides typed cache sets for each workflow component type.
+/// All operations delegate directly to Redis via <see cref="CacheSet{T}"/>.
+/// </summary>
+public class DomainCacheContext : IDomainCacheContext, IDisposable
 {
     public ICacheSet<Definitions.Workflow> Workflows { get; }
     public ICacheSet<WorkflowTask> Tasks { get; }
@@ -52,16 +56,6 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
             distributedCache,
             extensionBackend,
             loggerFactory.CreateLogger<CacheSet<Extension>>());
-
-        CacheSets =
-        [
-            Workflows,
-            Tasks,
-            Schemas,
-            Functions,
-            Views,
-            Extensions
-        ];
     }
 
     public ICacheSet<T> Set<T>() where T : class, IDomainEntity, IReferenceSetter
@@ -76,66 +70,13 @@ public class DomainCacheContext : CacheContext, IDomainCacheContext, IDisposable
         throw new NotSupportedException($"Type {typeof(T).Name} is not supported in DomainCacheContext.");
     }
 
-    public new Task InitializeAsync(Dictionary<Type, object> initialData, CancellationToken cancellationToken = default)
-        => base.InitializeAsync(initialData, cancellationToken);
-
-    public async Task InitializeWithDistributedCacheAsync(Dictionary<Type, object> initialData, CancellationToken cancellationToken = default)
-    {
-        foreach (var cacheSet in CacheSets)
-        {
-            var cacheSetType = cacheSet.GetType().GetGenericArguments()[0];
-
-            if (initialData.TryGetValue(cacheSetType, out var data))
-            {
-                await cacheSet.LoadAllWithDistributedCacheAsync(data, cancellationToken);
-            }
-        }
-    }
-
-    public async Task MergeAsync(Dictionary<Type, object> deltaData, CancellationToken cancellationToken = default)
-    {
-        foreach (var cacheSet in CacheSets)
-        {
-            var cacheSetType = cacheSet.GetType().GetGenericArguments()[0];
-
-            if (deltaData.TryGetValue(cacheSetType, out var data))
-            {
-                await cacheSet.MergeAllAsync(data, cancellationToken);
-            }
-        }
-    }
-
-    public int CleanupAll(
-        TimeSpan? ttl = null,
-        int? maxItemsPerSet = null,
-        CancellationToken cancellationToken = default)
-    {
-        var total = 0;
-
-        foreach (var cacheSet in CacheSets)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (cacheSet is ICacheSet<Definitions.Workflow> wf && cacheSet.EntityType == typeof(Definitions.Workflow))
-                total += wf.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<WorkflowTask> wt && cacheSet.EntityType == typeof(WorkflowTask))
-                total += wt.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<SchemaDefinition> sd && cacheSet.EntityType == typeof(SchemaDefinition))
-                total += sd.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<Function> fn && cacheSet.EntityType == typeof(Function))
-                total += fn.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<View> vw && cacheSet.EntityType == typeof(View))
-                total += vw.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-            else if (cacheSet is ICacheSet<Extension> ex && cacheSet.EntityType == typeof(Extension))
-                total += ex.Cleanup(ttl, maxItemsPerSet, cancellationToken);
-        }
-
-        return total;
-    }
-
     public void Dispose()
     {
-        foreach (var cacheSet in CacheSets)
-            cacheSet.Dispose();
+        Workflows.Dispose();
+        Tasks.Dispose();
+        Schemas.Dispose();
+        Functions.Dispose();
+        Views.Dispose();
+        Extensions.Dispose();
     }
 }

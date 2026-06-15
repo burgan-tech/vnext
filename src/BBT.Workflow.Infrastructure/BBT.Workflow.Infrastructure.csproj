@@ -26,4 +26,7 @@
   <ItemGroup>
     <Folder Include="Remote\" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BBT.Workflow.Infrastructure.Tests" />
+  </ItemGroup>
 </Project>

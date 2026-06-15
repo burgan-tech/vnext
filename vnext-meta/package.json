@@ -1,0 +1,26 @@
+{
+  "name": "@burgan-tech/vnext-meta",
+  "version": "0.0.53",
+  "description": "vNext Runtime metadata package — version manifest, feature catalog, deprecation registry, and component metadata for offline consumption by Forge Studio, CLI, and domain packages.",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "version-manifest.json",
+    "features.json",
+    "deprecations.json",
+    "migrations.json",
+    "known-issues.json",
+    "component-registry.json",
+    "performance-profiles.json",
+    "security-policy.json"
+  ],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/burgan-tech/vnext.git",
+    "directory": "vnext-meta"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -55,6 +55,14 @@ public sealed class DaprServiceTask : WorkflowTask
     /// </summary>
     public int TimeoutSeconds { get; private set; } = 30;
 
+    /// <summary>
+    /// HTTP status codes that are treated as successful even when they are error codes (e.g. 403, 404).
+    /// Supports exact codes ("403") and alias patterns ("4xx", "40x", "5xx", "50x").
+    /// When a response status code matches any entry, the task is considered successful
+    /// and the ErrorBoundary is not triggered.
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; private set; }
+
     public void SetAppId(string appId) => AppId = appId;
     public void SetMethodName(string methodName) => MethodName = methodName;
     public void SetQueryString(string? queryString) => QueryString = queryString;
@@ -102,6 +110,8 @@ public sealed class DaprServiceTask : WorkflowTask
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetQueryStringInternal(string? queryString) => QueryString = queryString;
     internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
+    internal void SetAcceptedStatusCodesInternal(IReadOnlyList<string>? codes) => AcceptedStatusCodes = codes;
+
     /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
@@ -133,6 +143,17 @@ public sealed class DaprServiceTask : WorkflowTask
         {
             var headers = headersElement.GetRawText();
             Headers = string.IsNullOrWhiteSpace(headers) ? null : headersElement;
+        }
+
+        if (config.TryGetProperty("acceptedStatusCodes", out var acceptedCodesElement) &&
+            acceptedCodesElement.ValueKind == JsonValueKind.Array)
+        {
+            var codes = acceptedCodesElement.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!)
+                .ToList();
+            AcceptedStatusCodes = codes.Count > 0 ? codes : null;
         }
     }
     
@@ -169,6 +190,7 @@ public sealed class DaprServiceTask : WorkflowTask
         cloned.QueryString = QueryString;
         cloned.TimeoutSeconds = TimeoutSeconds;
         cloned.Headers = Headers;
+        cloned.AcceptedStatusCodes = AcceptedStatusCodes;
         
         return cloned;
     }
@@ -187,6 +209,7 @@ public sealed class DaprServiceTask : WorkflowTask
         SetQueryStringInternal(source.QueryString);
         SetTimeoutSecondsInternal(source.TimeoutSeconds);
         SetHeadersInternal(source.Headers);
+        SetAcceptedStatusCodesInternal(source.AcceptedStatusCodes);
     }
 
     /// <summary>
@@ -202,6 +225,7 @@ public sealed class DaprServiceTask : WorkflowTask
         QueryString = null;
         TimeoutSeconds = 30;
         Headers = null;
+        AcceptedStatusCodes = null;
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using BBT.Workflow.Data;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Schemas;
 using Microsoft.EntityFrameworkCore;
 using Shouldly;
 using Testcontainers.PostgreSql;
@@ -49,7 +50,7 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options;
 
-        return new WorkflowDbContext(options);
+        return new WorkflowDbContext(options, new StaticCurrentSchema("public"));
     }
 
     /// <summary>

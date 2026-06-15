@@ -70,11 +70,30 @@ public sealed class InstanceTransition : Entity<Guid>, ICreationAuditedObject
     /// </summary>
     public JsonData Header { get; private set; }
     
+    /// <summary>
+    /// Updates the transition body with post-processed data (e.g. after mapping script execution).
+    /// </summary>
+    public void SetBody(JsonData body)
+    {
+        Body = body;
+    }
+
     public void Completed(string toState)
     {
         ToState = toState;
         FinishedAt = DateTime.UtcNow;
         Duration = FinishedAt - StartedAt;
+    }
+
+    /// <summary>
+    /// Closes the transition record as failed without a target state.
+    /// Used when the pipeline was aborted (timeout, unhandled fault) before reaching ChangeStateStep.
+    /// </summary>
+    public void Failed()
+    {
+        FinishedAt = DateTime.UtcNow;
+        Duration = FinishedAt - StartedAt;
+        // ToState remains null — signals incomplete/aborted transition
     }
 
     public static InstanceTransition Create(

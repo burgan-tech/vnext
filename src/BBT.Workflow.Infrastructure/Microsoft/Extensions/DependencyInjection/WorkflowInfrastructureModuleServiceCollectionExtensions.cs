@@ -1,5 +1,5 @@
 using BBT.Aether.MultiSchema;
-using BBT.Aether.MultiSchema.EntityFrameworkCore.Interceptors;
+using BBT.Workflow.Caching;
 using BBT.Workflow.Data;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
@@ -79,7 +79,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         }
         
         // DbContext
-        services.AddSingleton<NpgsqlSchemaConnectionInterceptor>();
+        services.AddSingleton<SchemaAwareModelCacheKeyFactory>();
         services.AddScoped<IMultiSchemaMigrator<WorkflowDbContext>, MultiSchemaMigrator<WorkflowDbContext>>();
         
         // Security - Schema Validation
@@ -136,13 +136,9 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();
-        services.ConfigureEmbeddedScripts(opt =>
-        {
-            opt.Add(
-                NotificationScriptProvider.DefaultKey,
-                "BBT.Workflow.Tasks.Scripting.NotificationMapping.csx",
-                typeof(EmbeddedScriptEntry).Assembly);
-        });
+
+        // Notification channel resolver (needed by NotificationTaskExecutor in Application layer)
+        services.AddNotificationChannelResolver();
 
         return services;
     }
@@ -157,6 +153,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     public static IServiceCollection AddWorkflowEventHooks(this IServiceCollection services)
     {
         services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
+        services.AddEventHook<InstanceSubFaultedEvent, InstanceSubFaultedEventHook>();
         services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
         services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
         services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();

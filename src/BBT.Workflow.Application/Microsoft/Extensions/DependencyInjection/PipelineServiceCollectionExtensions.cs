@@ -46,6 +46,9 @@ public static class PipelineServiceCollectionExtensions
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
 
+        services.AddSingleton<IPipelineProfileResolver, PipelineProfileResolver>();
+        services.AddSingleton<IReservedTransitionResolver, ReservedTransitionResolver>();
+
         // State Machine Validation - Specification Pattern
         services.AddScoped<ITransitionSpecification, ResumeModeSpecification>();
         services.AddScoped<ITransitionSpecification, SubFlowBypassSpecification>();
@@ -68,7 +71,9 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, ForwardToActiveSubflowStep>();
         services.AddScoped<ITransitionStep, SetBusyStep>();
         services.AddScoped<ITransitionStep, CreateTransitionRecordStep>();
+        services.AddScoped<ITransitionStep, ResourceLockStep>();
         services.AddScoped<ITransitionStep, RunOnExecuteTasksStep>();
+        services.AddScoped<ITransitionStep, ApplyTimeoutStateStep>();
         services.AddScoped<ITransitionStep, CancelScheduledJobsStep>();
         services.AddScoped<ITransitionStep, RunOnExitTasksStep>();
         services.AddScoped<ITransitionStep, ChangeStateStep>();
@@ -87,7 +92,7 @@ public static class PipelineServiceCollectionExtensions
         // Error Boundary Services (used by TaskCoordinator for task-level error handling)
         services.AddScoped<IErrorNormalizer, ErrorNormalizer>();
         
-        // Post-Commit Execution (jobs run after lock release)
+        // Post-Commit Execution (jobs run inside lock scope)
         services.AddScoped<IPostCommitExecutor, PostCommitExecutor>();
         services.AddScoped<IPostCommitHandler<StartSubflowJob>, StartSubflowJobHandler>();
         services.AddScoped<IPostCommitHandler<ForwardToSubflowJob>, ForwardToSubflowJobHandler>();

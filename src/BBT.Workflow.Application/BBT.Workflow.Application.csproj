@@ -19,4 +19,7 @@
     <ProjectReference Include="..\BBT.Workflow.Execution.Abstractions\BBT.Workflow.Execution.Abstractions.csproj" />
     <PackageReference Include="OpenTelemetry.Api" Version="$(OpenTelemetryPackageVersion)" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BBT.Workflow.Application.Tests" />
+  </ItemGroup>
 </Project>

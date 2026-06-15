@@ -189,10 +189,12 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         var responseData = InvokerHelpers.TryParseJson(content);
         var metadata = CreateMetadata(binding, reasonPhrase: response.ReasonPhrase);
+        var isSuccess = response.IsSuccessStatusCode
+            || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
-        _metrics.RecordTaskExecution(TaskType, response.IsSuccessStatusCode ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
 
-        return response.IsSuccessStatusCode
+        return isSuccess
             ? TaskInvocationResult.Success(
                 data: responseData,
                 body: content,
@@ -330,7 +332,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
 
         if (!binding.ValidateSSL)
         {
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "SSL certificate validation is disabled for {TaskType} task {TaskKey}",
                 TaskType, taskKey);
         }

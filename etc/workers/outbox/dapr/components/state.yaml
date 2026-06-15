@@ -13,4 +13,4 @@ spec:
     - name: actorStateStore
       value: "false"
     - name: keyPrefix
-      value: "vnext-outbox"
+      value: "vnext"

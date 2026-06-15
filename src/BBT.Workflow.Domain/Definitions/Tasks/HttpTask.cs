@@ -49,6 +49,14 @@ public sealed class HttpTask : WorkflowTask
     /// </summary>
     public bool ValidateSSL { get; private set; } = true;
 
+    /// <summary>
+    /// HTTP status codes that are treated as successful even when they are error codes (e.g. 403, 404).
+    /// Supports exact codes ("403") and alias patterns ("4xx", "40x", "5xx", "50x").
+    /// When a response status code matches any entry, the task is considered successful
+    /// and the ErrorBoundary is not triggered.
+    /// </summary>
+    public IReadOnlyList<string>? AcceptedStatusCodes { get; private set; }
+
     public void SetUrl(string url)
     {
         if(string.IsNullOrWhiteSpace(url))
@@ -99,6 +107,7 @@ public sealed class HttpTask : WorkflowTask
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
+    internal void SetAcceptedStatusCodesInternal(IReadOnlyList<string>? codes) => AcceptedStatusCodes = codes;
 
     protected override void Configure(JsonElement config)
     {
@@ -127,6 +136,17 @@ public sealed class HttpTask : WorkflowTask
 
         if (config.TryGetProperty("validateSsl", out var validateSsl))
             ValidateSSL = validateSsl.GetBoolean();
+
+        if (config.TryGetProperty("acceptedStatusCodes", out var acceptedCodesElement) &&
+            acceptedCodesElement.ValueKind == JsonValueKind.Array)
+        {
+            var codes = acceptedCodesElement.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!)
+                .ToList();
+            AcceptedStatusCodes = codes.Count > 0 ? codes : null;
+        }
     }
 
     public static HttpTask Create(
@@ -157,6 +177,7 @@ public sealed class HttpTask : WorkflowTask
         cloned.Body = Body;
         cloned.TimeoutSeconds = TimeoutSeconds;
         cloned.ValidateSSL = ValidateSSL;
+        cloned.AcceptedStatusCodes = AcceptedStatusCodes;
 
         return cloned;
     }
@@ -174,6 +195,7 @@ public sealed class HttpTask : WorkflowTask
         SetBodyInternal(source.Body);
         SetTimeoutSecondsInternal(source.TimeoutSeconds);
         SetValidateSSLInternal(source.ValidateSSL);
+        SetAcceptedStatusCodesInternal(source.AcceptedStatusCodes);
     }
 
     /// <summary>
@@ -188,6 +210,7 @@ public sealed class HttpTask : WorkflowTask
         Body = null;
         TimeoutSeconds = 30;
         ValidateSSL = true;
+        AcceptedStatusCodes = null;
     }
 
     /// <summary>

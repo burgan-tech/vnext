@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
 using BBT.Workflow.Definitions;
 using TaskStatus = BBT.Workflow.Definitions.TaskStatus;
@@ -9,8 +10,9 @@ namespace BBT.Workflow.Instances;
 /// Represents a task execution record within a workflow instance transition.
 /// Tracks both platform/infrastructure status (Status) and business outcome (BusinessStatus).
 /// </summary>
-public sealed class InstanceTask : Entity<Guid>
+public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
 {
+    //TODO: CreateAt Koyulacak
     private InstanceTask()
     {
     }
@@ -23,6 +25,7 @@ public sealed class InstanceTask : Entity<Guid>
         TransitionId = transitionId;
         TaskId = taskId;
         StartedAt = DateTime.UtcNow;
+        CreatedAt = DateTime.UtcNow;
         Status = TaskStatus.Waiting;
         BusinessStatus = BusinessStatus.Unknown;
         Request = new JsonData("");
@@ -81,7 +84,7 @@ public sealed class InstanceTask : Entity<Guid>
     /// Remains empty if the task never reached the invocation step (e.g., infra error before invoke).
     /// </summary>
     public JsonData InvocationResult { get; private set; }
-
+    public DateTime CreatedAt { get; set; }
     /// <summary>
     /// Sets the request payload that was sent to the task.
     /// </summary>

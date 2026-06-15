@@ -1,4 +1,6 @@
+using BBT.Aether.Events;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Instances;
 
 namespace BBT.Workflow.Execution;
 
@@ -20,6 +22,7 @@ public sealed class PipelineDirectives
 {
     private readonly List<IPostCommitJob> _postCommitJobs = new();
     private readonly HashSet<string> _postCommitJobKeys = new(StringComparer.Ordinal);
+    private readonly List<DomainEventEnvelope> _deferredEvents = new();
 
     /// <summary>
     /// Gets the order number from which to resume pipeline execution.
@@ -48,6 +51,11 @@ public sealed class PipelineDirectives
     /// Gets a value indicating whether this execution is resuming from a subflow.
     /// </summary>
     public bool IsSubFlowResume { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this execution is triggered by a workflow timeout.
+    /// </summary>
+    public bool IsTimeoutTransition { get; private set; }
 
     /// <summary>
     /// Gets the error transition key to be triggered by error boundary.
@@ -112,6 +120,11 @@ public sealed class PipelineDirectives
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
 
     /// <summary>
+    /// Marks this execution as a workflow timeout transition.
+    /// </summary>
+    public void MarkAsTimeoutTransition() => IsTimeoutTransition = true;
+
+    /// <summary>
     /// Sets the error transition key to be triggered by error boundary.
     /// The pipeline will trigger this transition after error handling completes.
     /// </summary>
@@ -128,6 +141,33 @@ public sealed class PipelineDirectives
         var key = _errorTransitionKey;
         _errorTransitionKey = null;
         return key;
+    }
+
+    /// <summary>
+    /// Gets the deferred instance status to be applied after all pipeline work
+    /// (including post-commit jobs) completes.
+    /// When set, the actual status update is deferred until the pipeline
+    /// returns control to the caller.
+    /// </summary>
+    public InstanceStatus? ResolvedStatus { get; private set; }
+
+    /// <summary>
+    /// Sets the deferred resolved status.
+    /// The status will be applied after post-commit jobs complete.
+    /// </summary>
+    /// <param name="status">The status to defer.</param>
+    public void SetResolvedStatus(InstanceStatus status) => ResolvedStatus = status;
+
+    /// <summary>
+    /// Consumes and clears the resolved status.
+    /// Called by the pipeline after post-commit jobs complete.
+    /// </summary>
+    /// <returns>The deferred status, or null if none was set.</returns>
+    public InstanceStatus? ConsumeResolvedStatus()
+    {
+        var s = ResolvedStatus;
+        ResolvedStatus = null;
+        return s;
     }
 
     /// <summary>
@@ -158,6 +198,42 @@ public sealed class PipelineDirectives
         var copy = _postCommitJobs.ToArray();
         _postCommitJobs.Clear();
         _postCommitJobKeys.Clear();
+        return copy;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether there are deferred events waiting to be published.
+    /// </summary>
+    public bool HasDeferredEvents => _deferredEvents.Count > 0;
+
+    /// <summary>
+    /// Defers a domain event envelope for explicit publishing after UoW commit.
+    /// Events deferred here are NOT dispatched via the IDomainEventSink/SaveChanges path.
+    /// </summary>
+    /// <param name="envelope">The domain event envelope containing the event and its metadata.</param>
+    public void DeferEvent(DomainEventEnvelope envelope)
+    {
+        _deferredEvents.Add(envelope);
+    }
+
+    /// <summary>
+    /// Defers multiple domain event envelopes for explicit publishing after UoW commit.
+    /// </summary>
+    /// <param name="envelopes">The domain event envelopes to defer.</param>
+    public void DeferEvents(IEnumerable<DomainEventEnvelope> envelopes)
+    {
+        _deferredEvents.AddRange(envelopes);
+    }
+
+    /// <summary>
+    /// Consumes and clears all deferred events.
+    /// Called by TransitionRunner after UoW commit to publish events via IDistributedEventBus.
+    /// </summary>
+    /// <returns>A read-only list of deferred domain event envelopes.</returns>
+    public IReadOnlyList<DomainEventEnvelope> ConsumeDeferredEvents()
+    {
+        var copy = _deferredEvents.ToArray();
+        _deferredEvents.Clear();
         return copy;
     }
 }

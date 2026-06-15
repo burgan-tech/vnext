@@ -15,6 +15,14 @@ public sealed class GroupSummary
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
+    /// One entry per groupBy field path (e.g. attributes.status); values align with SQL GROUP BY columns.
+    /// For multiple groupBy fields, use this map instead of parsing <see cref="Name"/>.
+    /// </summary>
+    [JsonPropertyName("keys")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public Dictionary<string, object?> Keys { get; set; } = new();
+
+    /// <summary>
     /// Count of records in this group
     /// </summary>
     [JsonPropertyName("count")]

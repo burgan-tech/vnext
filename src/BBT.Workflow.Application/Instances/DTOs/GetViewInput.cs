@@ -31,5 +31,14 @@ public sealed class GetViewInput : IHasDomain
     /// Query parameters for rule evaluation
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
-}
 
+    /// <summary>
+    /// Caller role for wizard view transition filtering.
+    /// </summary>
+    public string? Role { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility.
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; set; }
+}

@@ -38,6 +38,13 @@ public sealed class ViewComponentValidator : IComponentValidator
                 result.AddError("View display is required.", $"{nameof(View)}.{nameof(View.Display)}");
             }
 
+            if (!string.IsNullOrEmpty(view.Renderer) && view.Type != ViewType.Json)
+            {
+                result.AddError(
+                    "Renderer can only be set when view type is Json.",
+                    $"{nameof(View)}.{nameof(View.Renderer)}");
+            }
+
             return result;
         }
         catch (JsonException ex)

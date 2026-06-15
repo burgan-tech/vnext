@@ -28,7 +28,8 @@ public sealed class StateFunctionHandler(
             Extensions = request.Parameters.Extensions,
             Headers = request.Headers,
             QueryParams = request.QueryParameters,
-            Role = request.CurrentUser.Roles?.FirstOrDefault()
+            Role = request.CurrentUser.Roles?.FirstOrDefault(),
+            Roles = request.CurrentUser.Roles
         };
 
         var result = await queryAppService.GetInstanceStateAsync(input, cancellationToken);

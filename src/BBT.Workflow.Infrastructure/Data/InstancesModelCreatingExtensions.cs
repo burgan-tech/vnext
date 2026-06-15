@@ -1,8 +1,10 @@
+using System.Text.Json;
 using BBT.Aether.Domain.EntityFrameworkCore.Modeling;
 using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace BBT.Workflow.Data;
 
@@ -12,6 +14,8 @@ public static class InstancesModelCreatingExtensions
         this ModelBuilder builder, string? schema = null)
     {
         /* Configure all entities here. */
+
+        builder.Ignore<InstanceIncident>();
 
         builder.Entity<Instance>(b =>
         {
@@ -37,6 +41,12 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.CurrentState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
+            b.Property(p => p.CurrentStateType)
+                .HasConversion<int?>();
+
+            b.Property(p => p.CurrentStateSubType)
+                .HasConversion<int?>();
+
             b.Property(p => p.EffectiveState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
@@ -44,10 +54,29 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(p => p.EffectiveState)
                 .HasDatabaseName("IX_Instances_EffectiveState");
 
+            b.Property(p => p.Stage)
+                .HasMaxLength(InstanceConstants.MaxStageLength);
+
             b.Property(p => p.Status)
                 .IsRequired()
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
+
+            b.Property(p => p.Incidents)
+                .HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
+                    v => JsonSerializer.Deserialize<IReadOnlyCollection<InstanceIncident>>(v, JsonSerializerOptions.Default)
+                         ?? Array.Empty<InstanceIncident>())
+                .Metadata.SetValueComparer(new ValueComparer<IReadOnlyCollection<InstanceIncident>>(
+                    (c1, c2) => JsonSerializer.Serialize(c1, JsonSerializerOptions.Default) ==
+                                JsonSerializer.Serialize(c2, JsonSerializerOptions.Default),
+                    c => c == null ? 0 : JsonSerializer.Serialize(c, JsonSerializerOptions.Default).GetHashCode(),
+                    c => JsonSerializer.Deserialize<IReadOnlyCollection<InstanceIncident>>(
+                        JsonSerializer.Serialize(c, JsonSerializerOptions.Default),
+                        JsonSerializerOptions.Default)!));
+
+            b.Ignore(p => p.HasActiveIncident);
 
             b.HasMany(m => m.DataList)
                 .WithOne()
@@ -66,6 +95,49 @@ public static class InstancesModelCreatingExtensions
             b.Metadata
                 .FindNavigation(nameof(Instance.ChildCorrelations))
                 ?.SetPropertyAccessMode(PropertyAccessMode.Field);
+
+            // STORED GENERATED column: COALESCE(ModifiedAt, CreatedAt).
+            // Enables index-friendly incremental scans (GetActiveDataListSinceAsync) and
+            // is paired with IX_Instances_Active_LastTouched_Id below.
+            b.Property<DateTime>("LastTouchedAt")
+                .HasColumnType("timestamp with time zone")
+                .HasComputedColumnSql("COALESCE(\"ModifiedAt\", \"CreatedAt\")", stored: true);
+
+            // Runtime hot-path partial indexes. Runtime DB queries only ever filter by
+            // Status = 'A' (Active); 'B' (Busy) is consumed in-memory and 'F' (Faulted)
+            // retry path performs a PK lookup. Keeping the partial filter narrow lets the
+            // planner pick these indexes for Status == InstanceStatus.Active LINQ queries.
+            b.HasIndex(new[] { "Key" }, "IX_Instances_Active_Key")
+                .HasFilter("\"Status\" = 'A'");
+
+            // Full (non-partial) Key index. FindByIdentifierAsync /
+            // FindByIdentifierAsReadOnlyAsync probe by Key without a Status filter, so the
+            // partial IX_Instances_Active_Key above cannot serve those lookups. This index
+            // covers Key probes across all statuses while the partial index keeps the
+            // active-only fast path compact. The named-overload form is required so EF
+            // Core does not deduplicate the two Key indexes into a single model entry.
+            b.HasIndex(new[] { "Key" }, "IX_Instances_Key");
+
+            b.HasIndex("LastTouchedAt", "Id")
+                .HasFilter("\"Status\" = 'A'")
+                .HasDatabaseName("IX_Instances_Active_LastTouched_Id");
+
+            // Partial covering index for GetHumanTaskInstancesAsync.
+            // Filters: Status IN ('A','B'), EffectiveStateSubType = Human,
+            // ExtraProperties does NOT contain 'parent.id'.
+            // CreatedAt DESC is the leading column to serve ORDER BY without a sort.
+            b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
+                .IsDescending(true)
+                .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')")
+                .IncludeProperties(p => new
+                {
+                    p.Key,
+                    p.Flow,
+                    p.FlowVersion,
+                    p.CurrentState,
+                    p.EffectiveState,
+                    p.Status
+                });
         });
 
         builder.Entity<InstanceCorrelation>(b =>
@@ -97,9 +169,38 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.SubFlowCurrentState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
-            // Create index for performance on blocking SubFlow queries
-            b.HasIndex(p => new { p.ParentInstanceId, p.IsCompleted, p.SubFlowType })
-                .HasDatabaseName("IX_InstancesCorrelations_Performance");
+            // Partial covering index for the runtime hot-path. The WithDetailsAsync
+            // include now filters c => !c.IsCompleted, so this partial set matches the
+            // include precisely and serves it as an index-only scan.
+            // CompletedAt is intentionally omitted from INCLUDE: it is NULL within the
+            // partial set by definition.
+            // Named overload is required so EF Core does not deduplicate two indexes on the
+            // same column (ParentInstanceId) into a single model entry.
+            b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ActiveByParent_Covering")
+                .HasFilter("\"IsCompleted\" = false")
+                .IncludeProperties(p => new
+                {
+                    p.SubFlowType,
+                    p.SubFlowInstanceId,
+                    p.SubFlowDomain,
+                    p.SubFlowName,
+                    p.SubFlowVersion,
+                    p.SubFlowCurrentState,
+                    p.SubFlowStateChangedAt,
+                    p.ParentState
+                });
+
+            // Tiny partial index dedicated to the blocking-subflow predicate evaluated on
+            // every transition (AnyActiveSubFlowByParentAsync / FindActiveSubFlowByParentAsync).
+            b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ActiveBlockingSubFlow")
+                .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
+
+            // SubFlowInstanceId is 1-1 with the started SubFlow instance (subflow start is
+            // unique per parent state). UNIQUE both enforces this invariant and gives the
+            // hot SubFlow-completion lookup (FindBySubInstanceIdAsync) a direct B-tree probe.
+            b.HasIndex(p => p.SubFlowInstanceId)
+                .IsUnique()
+                .HasDatabaseName("UX_InstancesCorrelations_SubFlowInstanceId");
         });
 
         builder.Entity<InstanceData>(b =>
@@ -147,10 +248,23 @@ public static class InstancesModelCreatingExtensions
                 .IsUnique()
                 .HasDatabaseName("UX_InstancesData_Instance_VersionNo");
 
-            // Partial unique index: Only one record per instance can have IsLatest = true
+            // Partial unique index: Only one record per instance can have IsLatest = true.
+            // INCLUDE adds the meta columns the runtime reads alongside the latest snapshot
+            // so most reads can be served as index-only scans. The Data jsonb payload is
+            // intentionally NOT included to keep the index compact; the planner falls back
+            // to a heap fetch only when the JSON body is needed.
             b.HasIndex(p => p.InstanceId)
                 .IsUnique()
                 .HasFilter("\"IsLatest\" = true")
+                .IncludeProperties(p => new
+                {
+                    p.Version,
+                    p.VersionNo,
+                    p.HistorySequence,
+                    p.ETag,
+                    p.DataHash,
+                    p.EnteredAt
+                })
                 .HasDatabaseName("UX_InstancesData_Instance_IsLatest");
         });
 
@@ -195,6 +309,18 @@ public static class InstancesModelCreatingExtensions
                 .WithMany()
                 .HasForeignKey(p => p.InstanceId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Partial index for GetLatestIncompleteAsync (Retry path & in-flight checks).
+            // Most transitions complete quickly, so the IS NULL subset stays small/hot.
+            b.HasIndex(p => new { p.InstanceId, p.StartedAt })
+                .HasFilter("\"FinishedAt\" IS NULL")
+                .HasDatabaseName("IX_InstanceTransitions_Incomplete");
+
+            // Partial index for GetLastCompletedManualTransitionAsync. TriggerType = 0 is
+            // Manual (default value, see TriggerType.Manual mapping above).
+            b.HasIndex(p => new { p.InstanceId, p.FinishedAt })
+                .HasFilter("\"FinishedAt\" IS NOT NULL AND \"TriggerType\" = 0")
+                .HasDatabaseName("IX_InstanceTransitions_CompletedManual");
         });
 
         builder.Entity<InstanceTask>(b =>
@@ -239,6 +365,14 @@ public static class InstancesModelCreatingExtensions
                 .WithMany()
                 .HasForeignKey(p => p.FaultedTaskId)
                 .OnDelete(DeleteBehavior.NoAction);
+
+            // Covering index for the Status-filtered TaskId selection queries
+            // (GetCompletedTaskIdsAsync, GetTaskIdsByStatusAsync, GetSuccessfulTaskIdsAsync).
+            // GetByTransitionIdAsync (no Status filter) can also use this index via the
+            // (TransitionId, ...) leftmost prefix.
+            b.HasIndex(p => new { p.TransitionId, p.Status })
+                .IncludeProperties(p => new { p.TaskId, p.BusinessStatus, p.StartedAt })
+                .HasDatabaseName("IX_InstanceTasks_Transition_Status_Covering");
         });
 
         builder.Entity<InstanceAction>(b =>
@@ -286,6 +420,15 @@ public static class InstancesModelCreatingExtensions
 
             b.HasIndex(i => i.JobId)
                 .IsUnique();
+
+            // Partial composite index for the three hot-path queries that filter by
+            // InstanceId + JobName + IsActive (GetListActiveAsync, MarkAsProcessedAsync,
+            // AnyActiveByJobNameAsync). Active jobs are a small subset per instance, so
+            // the partial filter keeps the index compact while covering all three patterns
+            // via the (InstanceId, JobName) leftmost prefix.
+            b.HasIndex(i => new { i.InstanceId, i.JobName })
+                .HasFilter("\"IsActive\" = true")
+                .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");
         });
     }
 }

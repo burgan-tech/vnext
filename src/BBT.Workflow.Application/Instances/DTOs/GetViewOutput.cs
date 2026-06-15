@@ -29,5 +29,11 @@ public sealed class GetViewOutput
     /// Localization label
     /// </summary>
     public string Label { get; set; }
+
+    /// <summary>
+    /// Identifies which UI SDK / render engine should interpret the view content.
+    /// Only relevant when <see cref="Type"/> is Json. Null when not specified.
+    /// </summary>
+    public string? Renderer { get; set; }
 }
 

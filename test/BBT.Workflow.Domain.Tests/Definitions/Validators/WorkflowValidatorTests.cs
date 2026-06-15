@@ -194,7 +194,424 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region Timeout Mapping Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenTimeoutHasMappingAndStaticTimer()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "timeout": {
+                "key": "$timeout",
+                "target": "timed-out",
+                "versionStrategy": "None",
+                "timer": {"reset": "false", "duration": "PT1H"},
+                "mapping": {"location": "inline", "code": "dHJ1ZQ=="}
+            },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "timed-out",
+                    "stateType": "finish",
+                    "labels": [{"label": "Timed Out", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var timeoutErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("timeout mapping", StringComparison.OrdinalIgnoreCase) ||
+                        e.ErrorMessage!.Contains("static timer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        timeoutErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenTimeoutHasStaticTimerOnly()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "timeout": {
+                "key": "$timeout",
+                "target": "timed-out",
+                "versionStrategy": "None",
+                "timer": {"reset": "false", "duration": "PT30M"}
+            },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "timed-out",
+                    "stateType": "finish",
+                    "labels": [{"label": "Timed Out", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var timeoutErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("timeout", StringComparison.OrdinalIgnoreCase) &&
+                        e.ErrorMessage!.Contains("timer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        timeoutErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenTimeoutHasMappingButNoTimer()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "timeout": {
+                "key": "$timeout",
+                "target": "timed-out",
+                "versionStrategy": "None",
+                "mapping": {"location": "inline", "code": "dHJ1ZQ=="}
+            },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "timed-out",
+                    "stateType": "finish",
+                    "labels": [{"label": "Timed Out", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("static timer configuration is also required as fallback",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    #endregion
+
+    #region SharedTransition AvailableIn Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenSharedTransitionHasNoAvailableIn()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "review",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Review", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "cancelled",
+                    "stateType": "finish",
+                    "labels": [{"label": "Cancelled", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [
+                {
+                    "key": "cancel",
+                    "target": "cancelled",
+                    "triggerType": "manual",
+                    "labels": [{"label": "Cancel", "language": "en"}]
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var availableInErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("availableIn", StringComparison.OrdinalIgnoreCase) ||
+                        e.ErrorMessage!.Contains("AvailableIn", StringComparison.Ordinal))
+            .ToList();
+        availableInErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenSharedTransitionHasValidAvailableIn()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "review",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Review", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "cancelled",
+                    "stateType": "finish",
+                    "labels": [{"label": "Cancelled", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [
+                {
+                    "key": "cancel",
+                    "target": "cancelled",
+                    "triggerType": "manual",
+                    "availableIn": ["initial", "review"],
+                    "labels": [{"label": "Cancel", "language": "en"}]
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        var availableInErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("availableIn", StringComparison.OrdinalIgnoreCase) ||
+                        e.ErrorMessage!.Contains("AvailableIn", StringComparison.Ordinal))
+            .ToList();
+        availableInErrors.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenSharedTransitionAvailableInReferencesInvalidState()
+    {
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "cancelled",
+                    "stateType": "finish",
+                    "labels": [{"label": "Cancelled", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [
+                {
+                    "key": "cancel",
+                    "target": "cancelled",
+                    "triggerType": "manual",
+                    "availableIn": ["non-existent-state"],
+                    "labels": [{"label": "Cancel", "language": "en"}]
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("availableIn", StringComparison.OrdinalIgnoreCase) &&
+            e.ErrorMessage.Contains("non-existent-state", StringComparison.Ordinal));
+    }
+
+    #endregion
+
+    #region State Alias Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenStateAliasIsComplete()
+    {
+        var workflow = BuildWorkflowWithStateAlias("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+                "labels": [ { "label": "Operasyon İncelemesinde", "language": "tr" } ]
+            }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        var aliasErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("Alias", StringComparison.Ordinal))
+            .ToList();
+        aliasErrors.ShouldBeEmpty($"Unexpected alias errors: {string.Join(", ", aliasErrors.Select(e => e.ErrorMessage))}");
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenStateHasNoAlias()
+    {
+        // The default workflow template has no alias arrays — alias is optional.
+        var workflow = CreateWorkflowWithDefaultAutoTransition();
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors
+            .ShouldNotContain(e => e.ErrorMessage!.Contains("Alias", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStateAliasHasNoLabels()
+    {
+        var workflow = BuildWorkflowWithStateAlias("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+                "labels": []
+            }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("at least one label", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Değerlendirme Aşamasında", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStateAliasHasNoRoles()
+    {
+        var workflow = BuildWorkflowWithStateAlias("""
+            {
+                "name": "Değerlendirme Aşamasında",
+                "roles": [],
+                "labels": [ { "label": "Operasyon İncelemesinde", "language": "tr" } ]
+            }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("at least one role", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Değerlendirme Aşamasında", StringComparison.Ordinal));
+    }
+
+    #endregion
+
     #region Helper Methods
+
+    /// <summary>
+    /// Builds an otherwise-valid workflow whose intermediate "pending" state carries the supplied alias entry.
+    /// </summary>
+    private WorkflowDefinition BuildWorkflowWithStateAlias(string aliasEntryJson)
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "go-pending",
+                            "target": "pending",
+                            "triggerType": "manual",
+                            "labels": [{"label": "Go", "language": "en"}]
+                        }
+                    ]
+                },
+                {
+                    "key": "pending",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Pending", "language": "en"}],
+                    "transitions": [],
+                    "alias": [ {{aliasEntryJson}} ]
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """;
+
+        return DeserializeWorkflow(json);
+    }
 
     private WorkflowDefinition CreateWorkflowWithDefaultAutoTransition()
     {

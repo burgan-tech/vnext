@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Text.Json;
 using BBT.Workflow.Security;
 using Shouldly;
 using Xunit;
@@ -137,6 +139,40 @@ public class InputValidatorTests
     {
         InputValidator.EscapePostgresSingleQuotedString("a'b").ShouldBe("a''b");
         InputValidator.EscapePostgresSingleQuotedString("ok").ShouldBe("ok");
+    }
+
+    [Fact]
+    public void ValidateIncludesObject_ValidObject_ShouldPass()
+    {
+        using var doc = JsonDocument.Parse("""{"memberId":"ia002","role":"advisor"}""");
+        Should.NotThrow(() => InputValidator.ValidateIncludesObject(doc.RootElement));
+    }
+
+    [Fact]
+    public void ValidateIncludesObject_ArrayRoot_ShouldThrow()
+    {
+        using var doc = JsonDocument.Parse("""[1,2]""");
+        Should.Throw<ArgumentException>(() => InputValidator.ValidateIncludesObject(doc.RootElement));
+    }
+
+    [Fact]
+    public void ValidateIncludesObject_TooManyTopLevelProperties_ShouldThrow()
+    {
+        var props = Enumerable.Range(1, InputValidator.MaxIncludesPayloadPropertyCount + 1)
+            .Select(i => $"\"k{i}\":1");
+        var json = "{" + string.Join(",", props) + "}";
+        using var doc = JsonDocument.Parse(json);
+        Should.Throw<ArgumentException>(() => InputValidator.ValidateIncludesObject(doc.RootElement));
+    }
+
+    [Fact]
+    public void ValidateIncludesObject_NestingTooDeep_ShouldThrow()
+    {
+        // Exceed MaxIncludesPayloadNestingDepth nested objects
+        var depth = InputValidator.MaxIncludesPayloadNestingDepth + 2;
+        var json = string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + string.Concat(Enumerable.Repeat("}", depth));
+        using var doc = JsonDocument.Parse(json);
+        Should.Throw<ArgumentException>(() => InputValidator.ValidateIncludesObject(doc.RootElement));
     }
 }
 

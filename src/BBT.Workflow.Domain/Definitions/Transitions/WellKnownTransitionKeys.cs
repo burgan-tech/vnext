@@ -23,5 +23,11 @@ public static class WellKnownTransitionKeys
     /// When requested, the system resolves this to the workflow's configured exit transition.
     /// </summary>
     public const string Exit = "exit";
+
+    /// <summary>
+    /// Virtual transition key used when the workflow timeout fires.
+    /// Not a real transition definition — used only to identify the transition record in audit.
+    /// </summary>
+    public const string Timeout = "$timeout";
 }
 

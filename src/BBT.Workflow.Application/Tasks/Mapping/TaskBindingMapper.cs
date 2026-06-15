@@ -40,11 +40,11 @@ public static class TaskBindingMapper
             {
                 // Remote execution tasks
                 HttpTask http => (TaskTypes.Http, MapHttpTask(http)),
+                SoapTask soap => (TaskTypes.Soap, (object)MapSoapTask(soap)),
                 DaprServiceTask daprService => (TaskTypes.DaprService, MapDaprServiceTask(daprService)),
                 DaprBindingTask daprBinding => (TaskTypes.DaprBinding, MapDaprBindingTask(daprBinding)),
                 DaprHttpEndpointTask daprHttpEndpoint => (TaskTypes.DaprHttpEndpoint, MapDaprHttpEndpointTask(daprHttpEndpoint)),
                 DaprPubSubTask daprPubSub => (TaskTypes.DaprPubSub, MapDaprPubSubTask(daprPubSub)),
-                NotificationTask notification => (TaskTypes.Notification, MapNotificationTask(notification)),
                 
                 // Trigger tasks (basic mapping - runtime context handled by invokers)
                 StartTask startTask => (TaskTypes.StartTrigger, (object)MapStartTask(startTask)),
@@ -95,6 +95,7 @@ public static class TaskBindingMapper
         ValidateSSL = task.ValidateSSL,
         Headers = task.Headers?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
     
     /// <summary>
@@ -113,7 +114,8 @@ public static class TaskBindingMapper
         UseDapr = task.UseDapr,
         ValidateSSL = task.ValidateSSL,
         Headers = task.Headers?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds
+        TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
     
     /// <summary>
@@ -133,7 +135,8 @@ public static class TaskBindingMapper
         UseDapr = task.UseDapr,
         ValidateSSL = task.ValidateSSL,
         Headers = task.Headers?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds
+        TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
     
     /// <summary>
@@ -150,7 +153,8 @@ public static class TaskBindingMapper
         ValidateSSL = task.ValidateSSL,
         UseDapr = task.UseDapr,
         Headers = task.Headers?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds
+        TimeoutSeconds = task.TimeoutSeconds,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>
@@ -167,10 +171,26 @@ public static class TaskBindingMapper
         UseDapr = task.UseDapr,
         Headers = task.Headers?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
-        ETag = null
+        ETag = null,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     #endregion
+
+    /// <summary>
+    /// Maps SoapTask to SoapTaskBinding.
+    /// </summary>
+    private static SoapTaskBinding MapSoapTask(SoapTask task) => new()
+    {
+        Url = task.Url,
+        SoapAction = task.SoapAction,
+        SoapVersion = task.SoapVersion,
+        Body = task.Body,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds,
+        ValidateSSL = task.ValidateSSL,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
+    };
 
     /// <summary>
     /// Maps HttpTask to HttpTaskBinding.
@@ -182,7 +202,8 @@ public static class TaskBindingMapper
         Headers = task.Headers?.GetRawText(),
         Body = task.Body?.GetRawText(),
         TimeoutSeconds = task.TimeoutSeconds,
-        ValidateSSL = task.ValidateSSL
+        ValidateSSL = task.ValidateSSL,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>
@@ -196,7 +217,8 @@ public static class TaskBindingMapper
         Method = task.HttpVerb,  // HttpVerb → Method
         QueryString = task.QueryString,
         Headers = task.Headers?.GetRawText(),
-        Body = task.Body?.GetRawText()
+        Body = task.Body?.GetRawText(),
+        AcceptedStatusCodes = task.AcceptedStatusCodes
     };
 
     /// <summary>
@@ -240,17 +262,4 @@ public static class TaskBindingMapper
             : null
     };
 
-    /// <summary>
-    /// Maps NotificationTask to NotificationBinding.
-    /// Body is serialized from the task's Body property (set by mapping).
-    /// </summary>
-    private static NotificationBinding MapNotificationTask(NotificationTask task) => new()
-    {
-        Body = task.Body != null ? JsonSerializer.Serialize(task.Body) : null,
-        Subject = task.Subject,
-        To = task.To,
-        Metadata = task.Metadata?.ValueKind == JsonValueKind.Object
-            ? task.Metadata.Value.Deserialize<Dictionary<string, string>>()
-            : null
-    };
 }
