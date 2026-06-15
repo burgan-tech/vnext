@@ -333,7 +333,7 @@ function processComponentFile(jsonData, vnextConfig, shouldReplaceDomain, target
             log.detail(`Skipping domain replacement (crossDomain component)`);
         } else {
             log.detail(`Replacing domain → ${targetDomain}`);
-            processed = replaceDomainInJson(processed, targetDomain);
+            processed = replaceDomainInJson(processed, targetDomain, vnextConfig.domain);
         }
     }
     
@@ -543,16 +543,23 @@ async function downloadPackage(packageName, version, registry, authOptions = {})
  * Cross-domain exclusion: if an object has `crossDomain: true`, its `domain`
  * field is preserved as-is (intentionally targets another domain).
  *
+ * Subprocess references (the `process` block of a SubProcess task) are treated
+ * conditionally: their `domain` is rewritten only when it equals the package's
+ * own (source) domain. A `process.domain` pointing at a different domain is a
+ * genuine cross-domain call and is left untouched. See replaceProcessDomainInJson.
+ *
  * @param {Object} obj - Object to process
  * @param {string} targetDomain - Target domain to replace with
+ * @param {string} sourceDomain - Package's own domain; a `process.domain` is rewritten
+ *                                only when it equals this value
  */
-function replaceDomainInJson(obj, targetDomain) {
+function replaceDomainInJson(obj, targetDomain, sourceDomain) {
     if (typeof obj !== 'object' || obj === null) {
         return obj;
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => replaceDomainInJson(item, targetDomain));
+        return obj.map(item => replaceDomainInJson(item, targetDomain, sourceDomain));
     }
 
     // Create a copy of the object
@@ -563,12 +570,59 @@ function replaceDomainInJson(obj, targetDomain) {
         result.domain = targetDomain;
     }
 
-    // Recursively process all properties to find nested domain fields
-    // BUT skip "config" and "process" keys - they should always remain unchanged
+    // Recursively process all properties to find nested domain fields.
+    // "config" is always skipped. The "process" subtree is rewritten conditionally:
+    // only domains equal to the source domain are replaced (cross-domain refs kept).
     for (const [key, value] of Object.entries(result)) {
-        if (key !== 'domain' && key !== 'config' && key !== "process") {
-            result[key] = replaceDomainInJson(value, targetDomain);
+        if (key === 'domain' || key === 'config') {
+            continue;
         }
+        if (key === 'process') {
+            result[key] = replaceProcessDomainInJson(value, targetDomain, sourceDomain);
+        } else {
+            result[key] = replaceDomainInJson(value, targetDomain, sourceDomain);
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Replace domain fields inside a subprocess `process` subtree.
+ *
+ * Unlike replaceDomainInJson, replacement here is conditional: a `domain` is rewritten
+ * to the target domain only when it equals the source domain (the package's own domain).
+ * A `domain` pointing at a different domain is a genuine cross-domain reference and is
+ * preserved as-is. The `crossDomain: true` exemption and `config` skip are both honored.
+ *
+ * The conditional rule applies to the whole subtree, so any nested `domain` inside
+ * `process` follows the same same-domain-only replacement.
+ *
+ * @param {Object} obj - Object to process (a `process` block or any of its descendants)
+ * @param {string} targetDomain - Target domain to replace with
+ * @param {string} sourceDomain - Source domain; only domains equal to this are replaced
+ */
+function replaceProcessDomainInJson(obj, targetDomain, sourceDomain) {
+    if (typeof obj !== 'object' || obj === null) {
+        return obj;
+    }
+
+    if (Array.isArray(obj)) {
+        return obj.map(item => replaceProcessDomainInJson(item, targetDomain, sourceDomain));
+    }
+
+    const result = { ...obj };
+
+    // Replace domain only when it matches the source domain and is not cross-domain
+    if (typeof result.domain === 'string' && result.crossDomain !== true && result.domain === sourceDomain) {
+        result.domain = targetDomain;
+    }
+
+    for (const [key, value] of Object.entries(result)) {
+        if (key === 'domain' || key === 'config') {
+            continue;
+        }
+        result[key] = replaceProcessDomainInJson(value, targetDomain, sourceDomain);
     }
 
     return result;
@@ -1507,4 +1561,4 @@ if (require.main === module) {
     startServer();
 }
 
-module.exports = { startServer, processPackage, downloadPackage, runAutomaticInit };
+module.exports = { startServer, processPackage, downloadPackage, runAutomaticInit, replaceDomainInJson, replaceProcessDomainInJson };
