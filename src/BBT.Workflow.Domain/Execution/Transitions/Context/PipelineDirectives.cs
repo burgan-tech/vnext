@@ -171,6 +171,34 @@ public sealed class PipelineDirectives
     }
 
     /// <summary>
+    /// Gets a value indicating whether the auto-chain ownership token should be released
+    /// after all pipeline work completes, while the instance stays Busy.
+    /// Set when the pipeline comes to rest in a Busy-subtype state with no in-flight chain
+    /// (no next transition, not terminal): the chain is finished, so the durable
+    /// <see cref="Instances.Instance.ChainToken"/> must be cleared so that legitimate foreign
+    /// transitions (e.g. a child sub-process signalling its initiator) are not rejected by the
+    /// chain-token gate, and the ChainReaper does not treat the resting instance as stuck.
+    /// </summary>
+    public bool EndChainRequested { get; private set; }
+
+    /// <summary>
+    /// Requests the auto-chain ownership token to be released at rest (instance stays Busy).
+    /// </summary>
+    public void RequestEndChain() => EndChainRequested = true;
+
+    /// <summary>
+    /// Consumes and clears the end-chain request.
+    /// Called by the pipeline after post-commit jobs complete.
+    /// </summary>
+    /// <returns><c>true</c> if a chain-ownership release was requested; otherwise <c>false</c>.</returns>
+    public bool ConsumeEndChain()
+    {
+        var v = EndChainRequested;
+        EndChainRequested = false;
+        return v;
+    }
+
+    /// <summary>
     /// Enqueues a post-commit job to be executed after the distributed lock is released.
     /// Post-commit jobs are used for side effects like remote calls that shouldn't block the lock.
     /// For idempotent jobs, duplicate enqueueing within the same transition is prevented.
