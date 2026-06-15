@@ -13,7 +13,6 @@ namespace BBT.Workflow.Monitor.Jobs;
 public sealed class MonitorJobQueryService(
     IServiceProvider serviceProvider,
     IInstanceJobRepository jobRepository,
-    IDomainCacheContext domainCacheContext,
     IServiceScopeFactory serviceScopeFactory)
     : ApplicationService(serviceProvider), IMonitorJobQueryService
 {
@@ -66,16 +65,8 @@ public sealed class MonitorJobQueryService(
 
     private async Task<IReadOnlyList<string>> GetWorkflowKeysForDomainAsync(string domain, CancellationToken ct)
     {
-        var snapResult = await domainCacheContext.Workflows.GetAllByDomainAsync(domain, ct);
-        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
-        {
-            return snapResult.Value
-                .Where(w => !string.IsNullOrWhiteSpace(w.Key))
-                .Select(w => w.Key!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
+        // ICacheSet exposes only per-key lookups (no domain-wide enumeration), so workflow keys
+        // for the domain are sourced from the runtime backend (DB) in an isolated scope.
         await using var scope = serviceScopeFactory.CreateAsyncScope();
         var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
         var fromDb = (await runtimeService.GetAsync<BBT.Workflow.Definitions.Workflow>(ct)).ToList();

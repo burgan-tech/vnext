@@ -1,8 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
-using BBT.Aether.AspNetCore.Pagination;
 using BBT.Aether.AspNetCore.Results;
+using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Monitor.Instances;
 using BBT.Workflow.Monitor.Instances.DTOs;
@@ -71,12 +71,7 @@ public sealed class MonitorInstanceController(
             response.Items.Count == pageSize
         );
 
-        var hateoasResult = linkGenerator.CreateHateoasResult(
-            tempList,
-            (IReadOnlyList<MonitorInstanceResponse>)tempList.Items,
-            route
-        );
-        response.Links = hateoasResult.Links;
+        response.Links = linkGenerator.Relative().GenerateLinks(tempList, route);
 
         return result.ToActionResult(HttpContext);
     }

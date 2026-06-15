@@ -14,15 +14,15 @@ namespace BBT.Workflow.Monitor.Components;
 
 /// <summary>
 /// Read-only query service for workflow component definitions.
-/// Resolution follows the vNext caching strategy: in-memory snapshot (<see cref="IDomainCacheContext"/>),
-/// distributed + backend hydration via <see cref="IComponentCacheStore"/> / <see cref="IRuntimeService"/>.
+/// Single-key resolution uses distributed cache with backend hydration via <see cref="IComponentCacheStore"/>;
+/// domain-wide list/stat queries load from the runtime backend (<see cref="IRuntimeService"/>) since the
+/// distributed cache exposes only per-key lookups, then warm the cache for subsequent reads.
 /// Full-list DB loads are performed in an isolated DI scope (same pattern as <see cref="RuntimeCacheInitializer"/> and RuntimeCacheBackend).
 /// so the request-scoped <see cref="ICurrentSchema"/> cannot leak the wrong PostgreSQL schema into definition queries.
 /// </summary>
 public sealed class MonitorComponentQueryService(
     IServiceProvider serviceProvider,
     IComponentCacheStore componentCacheStore,
-    IDomainCacheContext domainCacheContext,
     IServiceScopeFactory serviceScopeFactory,
     IRuntimeInfoProvider runtimeInfoProvider)
     : ApplicationService(serviceProvider), IMonitorComponentQueryService
@@ -67,42 +67,36 @@ public sealed class MonitorComponentQueryService(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetFlowAsync(d, k, v, ct),
-                ct => domainCacheContext.Workflows.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             MonitorComponentTypes.Tasks => await ResolveAsync<WorkflowTask>(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetTaskAsync(d, k, v, ct),
-                ct => domainCacheContext.Tasks.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             MonitorComponentTypes.Schemas => await ResolveAsync<SchemaDefinition>(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetSchemaAsync(d, k, v, ct),
-                ct => domainCacheContext.Schemas.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             MonitorComponentTypes.Extensions => await ResolveAsync<Extension>(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetExtensionAsync(d, k, v, ct),
-                ct => domainCacheContext.Extensions.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             MonitorComponentTypes.Functions => await ResolveAsync<Function>(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetFunctionAsync(d, k, v, ct),
-                ct => domainCacheContext.Functions.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             MonitorComponentTypes.Views => await ResolveAsync<View>(
                 input,
                 canonicalType,
                 (d, k, v, ct) => componentCacheStore.GetViewAsync(d, k, v, ct),
-                ct => domainCacheContext.Views.GetAllByDomainAsync(input.Domain, ct),
                 cancellationToken),
 
             _ => Result<MonitorComponentResponse>.Fail(
@@ -138,7 +132,6 @@ public sealed class MonitorComponentQueryService(
         MonitorGetComponentsInput input,
         string canonicalComponentType,
         Func<string, string, string?, CancellationToken, Task<Result<T>>> getByKey,
-        Func<CancellationToken, Task<Result<List<T>>>> getSnapshotAllByDomain,
         CancellationToken cancellationToken)
         where T : class, IDomainEntity, IReferenceSetter
     {
@@ -155,51 +148,29 @@ public sealed class MonitorComponentQueryService(
             });
         }
 
-        return await GetFullListWithSnapshotThenBackendAsync<T>(
+        return await GetFullListFromRuntimeAsync<T>(
             canonicalComponentType,
             input.Domain,
-            getSnapshotAllByDomain,
             cancellationToken);
     }
 
-    private async Task<Result<MonitorComponentResponse>> GetFullListWithSnapshotThenBackendAsync<T>(
+    private async Task<Result<MonitorComponentResponse>> GetFullListFromRuntimeAsync<T>(
         string componentType,
         string domain,
-        Func<CancellationToken, Task<Result<List<T>>>> getSnapshotAllByDomain,
         CancellationToken cancellationToken)
         where T : class, IDomainEntity, IReferenceSetter
     {
-        // Snapshot may be partially warm (individual key lookups populate it one-by-one),
-        // so it cannot be used as a reliable source for list queries. Always load from DB
-        // for list queries to guarantee completeness, then warm the cache.
+        // The distributed cache exposes only per-key lookups (ICacheSet has no domain-wide
+        // enumeration), so list queries always load from the runtime backend (DB) to guarantee
+        // completeness, then warm the cache for subsequent single-key reads.
         var loadResult = await LoadLatestPerKeyFromRuntimeAndWarmCacheAsync<T>(domain, cancellationToken);
-        if (loadResult.IsSuccess && loadResult.Value is { Count: > 0 })
-        {
-            return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
-            {
-                ComponentType = componentType,
-                Items = loadResult.Value!.Select(Serialize).ToList()
-            });
-        }
-
-        // DB returned nothing — try snapshot as last resort (may have stale but better than empty)
-        var snapResult = await getSnapshotAllByDomain(cancellationToken);
-        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
-        {
-            return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
-            {
-                ComponentType = componentType,
-                Items = snapResult.Value!.Select(Serialize).ToList()
-            });
-        }
-
         if (!loadResult.IsSuccess)
             return Result<MonitorComponentResponse>.Fail(loadResult.Error);
 
         return Result<MonitorComponentResponse>.Ok(new MonitorComponentResponse
         {
             ComponentType = componentType,
-            Items = []
+            Items = loadResult.Value!.Select(Serialize).ToList()
         });
     }
 
@@ -243,22 +214,22 @@ public sealed class MonitorComponentQueryService(
         MonitorGetComponentStatsInput input,
         CancellationToken cancellationToken = default)
     {
-        var flows      = await CountTypeAsync<Definitions.Workflow>(input.Domain, ct => domainCacheContext.Workflows.GetAllByDomainAsync(input.Domain, ct),   cancellationToken);
+        var flows      = await CountTypeAsync<Definitions.Workflow>(input.Domain, cancellationToken);
         if (!flows.IsSuccess)      return Result<MonitorComponentStatsResponse>.Fail(flows.Error);
 
-        var tasks      = await CountTypeAsync<WorkflowTask>(input.Domain,          ct => domainCacheContext.Tasks.GetAllByDomainAsync(input.Domain, ct),      cancellationToken);
+        var tasks      = await CountTypeAsync<WorkflowTask>(input.Domain,          cancellationToken);
         if (!tasks.IsSuccess)      return Result<MonitorComponentStatsResponse>.Fail(tasks.Error);
 
-        var schemas    = await CountTypeAsync<SchemaDefinition>(input.Domain,      ct => domainCacheContext.Schemas.GetAllByDomainAsync(input.Domain, ct),    cancellationToken);
+        var schemas    = await CountTypeAsync<SchemaDefinition>(input.Domain,      cancellationToken);
         if (!schemas.IsSuccess)    return Result<MonitorComponentStatsResponse>.Fail(schemas.Error);
 
-        var views      = await CountTypeAsync<View>(input.Domain,                  ct => domainCacheContext.Views.GetAllByDomainAsync(input.Domain, ct),      cancellationToken);
+        var views      = await CountTypeAsync<View>(input.Domain,                  cancellationToken);
         if (!views.IsSuccess)      return Result<MonitorComponentStatsResponse>.Fail(views.Error);
 
-        var functions  = await CountTypeAsync<Function>(input.Domain,              ct => domainCacheContext.Functions.GetAllByDomainAsync(input.Domain, ct),  cancellationToken);
+        var functions  = await CountTypeAsync<Function>(input.Domain,              cancellationToken);
         if (!functions.IsSuccess)  return Result<MonitorComponentStatsResponse>.Fail(functions.Error);
 
-        var extensions = await CountTypeAsync<Extension>(input.Domain,             ct => domainCacheContext.Extensions.GetAllByDomainAsync(input.Domain, ct), cancellationToken);
+        var extensions = await CountTypeAsync<Extension>(input.Domain,             cancellationToken);
         if (!extensions.IsSuccess) return Result<MonitorComponentStatsResponse>.Fail(extensions.Error);
 
         return Result<MonitorComponentStatsResponse>.Ok(new MonitorComponentStatsResponse
@@ -274,14 +245,9 @@ public sealed class MonitorComponentQueryService(
 
     private async Task<Result<int>> CountTypeAsync<T>(
         string domain,
-        Func<CancellationToken, Task<Result<List<T>>>> getSnapshotAllByDomain,
         CancellationToken cancellationToken)
         where T : class, IDomainEntity, IReferenceSetter
     {
-        var snapResult = await getSnapshotAllByDomain(cancellationToken);
-        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
-            return Result<int>.Ok(snapResult.Value.Count);
-
         var loadResult = await LoadLatestPerKeyFromRuntimeAndWarmCacheAsync<T>(domain, cancellationToken);
         if (!loadResult.IsSuccess)
             return Result<int>.Fail(loadResult.Error);

@@ -18,7 +18,6 @@ public sealed class MonitorStatsService(
     IInstanceTaskRepository taskRepository,
     IInstanceTransitionRepository transitionRepository,
     IComponentCacheStore componentCacheStore,
-    IDomainCacheContext domainCacheContext,
     IServiceScopeFactory serviceScopeFactory)
     : ApplicationService(serviceProvider), IMonitorStatsService
 {
@@ -224,16 +223,8 @@ public sealed class MonitorStatsService(
     private async Task<IReadOnlyList<string>> GetWorkflowKeysForDomainAsync(
         string domain, CancellationToken ct)
     {
-        var snapResult = await domainCacheContext.Workflows.GetAllByDomainAsync(domain, ct);
-        if (snapResult.IsSuccess && snapResult.Value is { Count: > 0 })
-        {
-            return snapResult.Value
-                .Where(w => !string.IsNullOrWhiteSpace(w.Key))
-                .Select(w => w.Key!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
+        // ICacheSet exposes only per-key lookups (no domain-wide enumeration), so workflow keys
+        // for the domain are sourced from the runtime backend (DB) in an isolated scope.
         await using var scope = serviceScopeFactory.CreateAsyncScope();
         var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
         var fromDb = (await runtimeService.GetAsync<Definitions.Workflow>(ct)).ToList();
