@@ -1,0 +1,19 @@
+# Build artifacts (never needed in image build context; avoids stale outputs)
+**/bin/
+**/obj/
+**/out/
+
+# VCS / CI / IDE
+.git/
+.github/
+.vs/
+.vscode/
+.idea/
+**/*.user
+
+# Docs & local-only files (image builds don't need these)
+**/*.md
+**/.DS_Store
+
+# Local docker compose / runtime data
+etc/docker/**/data/
