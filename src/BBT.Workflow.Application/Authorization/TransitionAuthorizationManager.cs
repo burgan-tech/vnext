@@ -8,7 +8,8 @@ namespace BBT.Workflow.Authorization;
 
 /// <summary>
 /// Evaluates transition-level role grants (static + predefined + dynamic context references).
-/// DENY always wins; if no DENY match, any ALLOW match yields allowed.
+/// DENY always wins. If at least one ALLOW grant exists, the set is an allowlist (default deny unless an ALLOW matches).
+/// A grant set with no ALLOW grant is a blacklist (default allow unless a matching DENY applies).
 /// <para>
 /// Predefined actor roles ($InstanceStarter, $PreviousUser) are matched against <c>ICurrentUser.ActorUserName</c>.
 /// Predefined behalf-of roles ($InstanceBehalfOfStarter, $PreviousBehalfOfUser) are matched against <c>ICurrentUser.UserName</c>.
@@ -167,6 +168,8 @@ public sealed class TransitionAuthorizationManager(
 
     /// <summary>
     /// Evaluates role grants with resolution of predefined instance roles and dynamic context references.
+    /// DENY always wins; if at least one ALLOW grant exists, an ALLOW match is required; otherwise (deny-only set)
+    /// the caller is allowed unless explicitly denied.
     /// When role is null, only predefined/dynamic role grants are evaluated; regular role grants yield no match.
     /// </summary>
     private async Task<bool> EvaluateRolesWithPredefinedAsync(
@@ -219,6 +222,10 @@ public sealed class TransitionAuthorizationManager(
             return false;
 
         if (roleGrants.Any(g => g.IsAllow && IsMatch(g)))
+            return true;
+
+        // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
+        if (!roleGrants.Any(g => g.IsAllow))
             return true;
 
         return false;
@@ -414,11 +421,21 @@ public sealed class TransitionAuthorizationManager(
     }
 
     /// <summary>
-    /// Evaluates role against role grants (static only). DENY always wins; else any ALLOW match → true.
+    /// Evaluates role against role grants (static only). DENY always wins.
+    /// If at least one ALLOW grant exists, the set is an allowlist (default deny unless an ALLOW matches).
+    /// A grant set with no ALLOW grant is a blacklist (default allow unless a matching DENY applies),
+    /// controlled by <paramref name="defaultAllowWhenNoAllowGrant"/>.
     /// When role is null, no regular role grants match; only the grant count check applies (empty grants → allow).
     /// Used by transition/function authorization and by schema field-level visibility.
     /// </summary>
-    public static bool EvaluateRolesStatic(string? role, IReadOnlyCollection<RoleGrant> roleGrants)
+    /// <param name="role">The caller role to evaluate, or null.</param>
+    /// <param name="roleGrants">The grant set to evaluate against.</param>
+    /// <param name="defaultAllowWhenNoAllowGrant">
+    /// When true (default), a grant set with no ALLOW grant allows callers that are not explicitly denied.
+    /// Set to false to force strict allowlist semantics (used when the blacklist decision is made over a wider grant set).
+    /// </param>
+    public static bool EvaluateRolesStatic(string? role, IReadOnlyCollection<RoleGrant> roleGrants,
+        bool defaultAllowWhenNoAllowGrant = true)
     {
         if (roleGrants.Count == 0)
             return true; // No roles defined → allow
@@ -433,6 +450,9 @@ public sealed class TransitionAuthorizationManager(
             if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsAllow)
                 return true;
         }
+        // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
+        if (defaultAllowWhenNoAllowGrant && !roleGrants.Any(g => g.IsAllow))
+            return true;
         return false;
     }
 
@@ -440,7 +460,8 @@ public sealed class TransitionAuthorizationManager(
     public async Task<bool> IsPredefinedRoleMatchAsync(
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance instance,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool defaultAllowWhenNoAllowGrant = true)
     {
         var predefinedGrants = roleGrants;
 
@@ -499,7 +520,10 @@ public sealed class TransitionAuthorizationManager(
                                       && string.Equals(actorUserName, previousUserCreatedBy, StringComparison.Ordinal)))
             return true;
 
-        
+        // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
+        if (defaultAllowWhenNoAllowGrant && !predefinedGrants.Any(g => g.IsAllow))
+            return true;
+
         return false;
     }
 }

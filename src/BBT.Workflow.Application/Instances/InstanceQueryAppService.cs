@@ -1794,12 +1794,16 @@ public sealed class InstanceQueryAppService(
                     break;
                 }
 
+                // Blacklist decision is made over the WHOLE grant list, not the split subsets:
+                // when no ALLOW grant exists anywhere, both subsets evaluate as deny-only blacklists.
+                var applyBlacklistFallback = !transitionRoles.Any(g => g.IsAllow);
+
                 var staticMatch = !hasStaticRoles;
                 if (hasStaticRoles)
                 {
                     foreach (var role in userRoles)
                     {
-                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles))
+                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles, applyBlacklistFallback))
                         {
                             staticMatch = true;
                             break;
@@ -1811,7 +1815,7 @@ public sealed class InstanceQueryAppService(
                 if (hasPredefinedRoles)
                 {
                     predefinedMatch = await transitionAuthorizationManager.IsPredefinedRoleMatchAsync(
-                        predefinedRoles, instance, cancellationToken);
+                        predefinedRoles, instance, cancellationToken, applyBlacklistFallback);
                 }
 
                 if (staticMatch && predefinedMatch)
