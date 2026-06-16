@@ -28,9 +28,9 @@ public static class McpServerSetup
     /// </summary>
     public static IServiceCollection AddOrchestrationClient(this IServiceCollection services, McpOptions options)
     {
-        // Per-domain client authorization is enforced in OrchestrationHttpClient via this service.
+        // Client authorization is enforced in OrchestrationHttpClient via this service.
         services.AddHttpContextAccessor();
-        services.AddScoped<IDomainAuthorizer, DomainAuthorizer>();
+        services.AddScoped<IClientAuthorizer, ClientAuthorizer>();
 
         var userAgent = $"vnext-mcp/{ServerVersion}";
         services.AddHttpClient<IOrchestrationClient, OrchestrationHttpClient>(client =>

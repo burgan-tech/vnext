@@ -11,21 +11,19 @@ namespace BBT.Workflow.Mcp.Clients;
 public interface IOrchestrationClient
 {
     /// <summary>
-    /// Issues a GET to a relative API path with optional query parameters. <paramref name="domain"/>
-    /// drives per-call authorization (pass <c>null</c> for non-domain-scoped calls).
+    /// Issues a GET to a relative API path with optional query parameters. Client authorization is
+    /// enforced inside the implementation before the call is made.
     /// </summary>
     Task<JsonNode?> GetAsync(
-        string? domain,
         string relativePath,
         IReadOnlyDictionary<string, string?>? query = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Issues a request with a JSON body (used by mutating tools). <paramref name="domain"/> drives
-    /// per-call authorization (pass <c>null</c> for non-domain-scoped calls).
+    /// Issues a request with a JSON body (used by mutating tools). Client authorization is enforced
+    /// inside the implementation before the call is made.
     /// </summary>
     Task<JsonNode?> SendAsync(
-        string? domain,
         HttpMethod method,
         string relativePath,
         JsonNode? body = null,

@@ -16,6 +16,7 @@ if (transport == "http")
         .AddVNextTools(options);
 
     var app = builder.Build();
+    WarnIfNoDomain(app.Services, options);
     app.MapMcp();
     await app.RunAsync();
 }
@@ -35,10 +36,24 @@ else
         .WithStdioServerTransport()
         .AddVNextTools(options);
 
-    await builder.Build().RunAsync();
+    var host = builder.Build();
+    WarnIfNoDomain(host.Services, options);
+    await host.RunAsync();
 }
 
 return;
+
+static void WarnIfNoDomain(IServiceProvider services, McpOptions options)
+{
+    if (!string.IsNullOrWhiteSpace(options.Domain))
+        return;
+
+    services.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("BBT.Workflow.Mcp")
+        .LogWarning(
+            "Mcp:Domain is not configured. Component/runtime tools will return a configuration error until " +
+            "you set the domain this MCP instance serves (e.g. Mcp__Domain=<domain>).");
+}
 
 static string ResolveTransport(string[] args)
 {

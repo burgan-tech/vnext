@@ -10,32 +10,30 @@ namespace BBT.Workflow.Mcp.Clients;
 /// <see cref="IOrchestrationClient"/> implementation over a typed <see cref="HttpClient"/>.
 /// The base address and outbound headers are configured at registration time (see
 /// <c>McpServerSetup</c>). API version segment <c>api/v1.0</c> is prepended to caller-supplied
-/// relative paths. Per-call <b>domain authorization</b> runs here via <see cref="IDomainAuthorizer"/>
-/// — the single chokepoint every domain-scoped tool flows through.
+/// relative paths. <b>Client authorization</b> runs here via <see cref="IClientAuthorizer"/> — the
+/// single chokepoint every Orchestration-bound tool flows through.
 /// </summary>
-public sealed class OrchestrationHttpClient(HttpClient httpClient, IDomainAuthorizer authorizer) : IOrchestrationClient
+public sealed class OrchestrationHttpClient(HttpClient httpClient, IClientAuthorizer authorizer) : IOrchestrationClient
 {
     private const string ApiPrefix = "api/v1.0/";
 
     /// <inheritdoc />
     public Task<JsonNode?> GetAsync(
-        string? domain,
         string relativePath,
         IReadOnlyDictionary<string, string?>? query = null,
         CancellationToken cancellationToken = default) =>
-        SendAsync(domain, HttpMethod.Get, relativePath, body: null, query, cancellationToken);
+        SendAsync(HttpMethod.Get, relativePath, body: null, query, cancellationToken);
 
     /// <inheritdoc />
     public async Task<JsonNode?> SendAsync(
-        string? domain,
         HttpMethod method,
         string relativePath,
         JsonNode? body = null,
         IReadOnlyDictionary<string, string?>? query = null,
         CancellationToken cancellationToken = default)
     {
-        // Authorize the inbound client for this domain before touching Orchestration.
-        var authError = authorizer.CheckDomain(domain);
+        // Authorize the inbound client before touching Orchestration.
+        var authError = authorizer.Check();
         if (authError is not null)
             return authError;
 

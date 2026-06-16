@@ -15,6 +15,13 @@ public sealed class McpOptions
     public string OrchestrationBaseUrl { get; set; } = "http://localhost:4201";
 
     /// <summary>
+    /// The single vNext domain this MCP instance serves. Each instance is single-domain (like
+    /// <see cref="OrchestrationBaseUrl"/>), so the domain is configured here rather than passed on every
+    /// tool call. Required for component/runtime tools; when unset they return a clear configuration error.
+    /// </summary>
+    public string? Domain { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, mutating tools (start_instance, run_transition, …) are registered.
     /// Default <c>false</c> to prevent accidental writes from CI/agents.
     /// </summary>
@@ -27,18 +34,12 @@ public sealed class McpOptions
     public bool AllowCodeRead { get; set; } = true;
 
     /// <summary>
-    /// Per-domain fixed API keys used to authorize inbound MCP clients (domain → key). A client may
-    /// only use tools for a domain when it presents that domain's key. <b>Empty ⇒ authorization is
-    /// disabled</b> (open) — convenient for local development.
+    /// The fixed API key that inbound MCP clients must present (as <c>Authorization: Bearer &lt;key&gt;</c>)
+    /// on the <b>HTTP</b> transport. Each MCP instance is single-domain, so a single key suffices.
+    /// <b>Empty/null ⇒ authorization is disabled</b> (open) — convenient for local development. The
+    /// stdio transport is not gated (the process is launched by the trusted local user).
     /// </summary>
-    public Dictionary<string, string> DomainApiKeys { get; set; } = new();
-
-    /// <summary>
-    /// The API key presented by the client under the <b>stdio</b> transport, where there is no inbound
-    /// HTTP request to carry an <c>Authorization</c> header. Ignored on the HTTP transport (the
-    /// <c>Authorization: Bearer</c> header is used there instead).
-    /// </summary>
-    public string? ClientApiKey { get; set; }
+    public string? ApiKey { get; set; }
 
     /// <summary>
     /// The npm package holding the offline <c>vnext-meta</c> JSON files. Loaded once at startup

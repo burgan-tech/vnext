@@ -22,7 +22,10 @@ Two packagings from one codebase:
 
 ```bash
 dotnet tool install -g BBT.Workflow.Mcp
-claude mcp add vnext-runtime --env Mcp__OrchestrationBaseUrl=http://localhost:4201 -- vnext-mcp
+claude mcp add vnext-runtime \
+  --env Mcp__OrchestrationBaseUrl=http://localhost:4201 \
+  --env Mcp__Domain=<your-domain> \
+  -- vnext-mcp
 ```
 
 **B. Docker image (Streamable HTTP, hosted/CI)** — `ghcr.io/burgan-tech/vnext/mcp-server`:
@@ -30,6 +33,7 @@ claude mcp add vnext-runtime --env Mcp__OrchestrationBaseUrl=http://localhost:42
 ```bash
 docker run --rm -p 5000:5000 \
   -e Mcp__OrchestrationBaseUrl=http://host.docker.internal:4201 \
+  -e Mcp__Domain=<your-domain> \
   ghcr.io/burgan-tech/vnext/mcp-server:<tag>
 ```
 
@@ -41,25 +45,25 @@ terminated upstream (ingress). Deploy via the `vnext-helm-charts` repo (`image.r
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `OrchestrationBaseUrl` | `http://localhost:4201` | Orchestration API base URL |
+| `OrchestrationBaseUrl` | `http://localhost:4201` | Orchestration API base URL (domain-specific) |
+| `Domain` | `null` | The single vNext domain this instance serves. **Required** for component/runtime tools |
 | `AllowMutations` | `false` | Register mutating tools (start/transition/retry/publish/invalidate) |
 | `AllowCodeRead` | `true` | Register `get_mapping_code` (returns executable `.csx`) |
-| `DomainApiKeys` | `{}` (empty) | Per-domain client keys (`domain` → key). **Empty ⇒ auth disabled** (local dev) |
-| `ClientApiKey` | `null` | Presented key under **stdio** (no HTTP header available) |
+| `ApiKey` | `null` | Fixed client key (HTTP `Authorization: Bearer`). **Empty ⇒ auth disabled** (local dev) |
 | `MetaPackageName` | `@burgan-tech/vnext-meta` | npm package holding the `vnext-meta` JSON |
 | `MetaPackageVersion` | `0.0.61` | **Pinned** meta version (never `latest`); bump to upgrade |
 
 ### Client authorization
 
-The MCP server is the auth boundary — each domain has a fixed key configured in `Mcp:DomainApiKeys`
-(`{ "my-domain": "<secret>" }`). A client may only use tools for a domain when it presents that domain's
-key; otherwise the tool returns `401` (wrong/missing key) or `403` (domain not configured). When
-`DomainApiKeys` is empty, authorization is **disabled** (handy for local dev).
+Each MCP instance is **single-domain** — `Mcp:OrchestrationBaseUrl` points at one domain's runtime, so a
+single fixed key (`Mcp:ApiKey`) gates the instance. (To serve another domain, run another instance with
+its own config.) When `ApiKey` is empty, authorization is **disabled** (handy for local dev).
 
-- **HTTP transport:** client sends `Authorization: Bearer <key>` (see `claude mcp add --header` below).
-- **stdio transport:** the key comes from `Mcp__ClientApiKey` (no HTTP request to carry a header).
+- **HTTP transport:** the client sends `Authorization: Bearer <key>`; a missing/wrong key returns `401`
+  (see `claude mcp add --header` below).
+- **stdio transport:** not gated — the process is launched by the trusted local user, so `ApiKey` only
+  takes effect over HTTP.
 
-`tools/list`, MetaTools, and non-domain calls (e.g. `get_runtime_config`) are not domain-gated.
 Outbound calls to Orchestration carry `User-Agent: vnext-mcp/<version>` (provenance) and **no** API key —
 the runtime has no inbound auth of its own; authorization lives entirely at the MCP server.
 
@@ -82,48 +86,60 @@ still starts (live tools work) and a background task retries the meta load.
 > Documentation discovery is intentionally **not** in this server — use the **Context7 MCP** server
 > (`burgan-tech/vnext-runtime` / `vnext-docs`), which already indexes the public docs with semantic search.
 
-Every tool takes `domain` as a parameter; one server instance serves all domains.
+Tools do **not** take a `domain` argument — each instance is single-domain and reads `Mcp:Domain` from
+config (component/runtime tools return a clear error if it is unset). To serve another domain, run another
+instance with its own `Mcp:Domain` + `Mcp:OrchestrationBaseUrl`.
 
 ## Register with Claude Code (stdio)
 
 ```bash
 claude mcp add vnext-runtime \
   --env Mcp__OrchestrationBaseUrl=http://localhost:4201 \
-  --env Mcp__MetaPackageVersion=0.0.61 \
+  --env Mcp__Domain=<your-domain> \
   -- dotnet run --project tools/BBT.Workflow.Mcp.Server
 ```
 
 Or, after `dotnet tool install -g BBT.Workflow.Mcp`:
 
 ```bash
-claude mcp add vnext-runtime --env Mcp__OrchestrationBaseUrl=http://localhost:4201 -- vnext-mcp
+claude mcp add vnext-runtime \
+  --env Mcp__OrchestrationBaseUrl=http://localhost:4201 \
+  --env Mcp__Domain=<your-domain> \
+  -- vnext-mcp
 ```
+
+stdio is not auth-gated (the local user launched the process), so `Mcp__ApiKey` is not needed here.
 
 ## Register with Claude Code (Streamable HTTP)
 
 The HTTP transport exposes the MCP endpoint at the **root path** (`/`, via `MapMcp`), so the URL is
 just the server's base address — no `/mcp` suffix.
 
-1. Start the server in HTTP mode (Docker per [Install B](#install), or locally):
+1. Start the server in HTTP mode (Docker per [Install B](#install), or locally). `Mcp__Domain` is
+   required; set `Mcp__ApiKey` to require clients to authenticate:
 
    ```bash
    ASPNETCORE_URLS=http://localhost:5000 \
+   Mcp__OrchestrationBaseUrl=http://localhost:4201 \
+   Mcp__Domain=<your-domain> \
+   Mcp__ApiKey=<secret> \
      dotnet run --project tools/BBT.Workflow.Mcp.Server -- --transport http
    ```
 
    The port comes from `ASPNETCORE_URLS` (or `--urls`); there is no separate `--port` flag.
 
-2. Register the remote server with Claude Code:
-
-   ```bash
-   claude mcp add --transport http vnext-runtime http://localhost:5000/
-   ```
-
-   Behind an authenticating ingress, pass a header (and use `--scope user` to share across projects):
+2. Register the remote server with Claude Code. When the server has `Mcp:ApiKey` set, the client must
+   present it as a Bearer token (use `--scope user` to share across projects):
 
    ```bash
    claude mcp add --transport http --scope user vnext-runtime https://vnext-mcp.example.com/ \
-     --header "Authorization: Bearer <token>"
+     --header "Authorization: Bearer <Mcp:ApiKey value>"
+   ```
+
+   If the server has no `Mcp:ApiKey` (local dev), the header is optional:
+
+   ```bash
+   claude mcp add --transport http vnext-runtime http://localhost:5000/
    ```
 
 Alternatively, commit a project-scoped `.mcp.json` for the team:
