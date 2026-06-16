@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.BackgroundJobs.Options;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Instances;
