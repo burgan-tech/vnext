@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Dynamic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Security;
 using System.Threading.Tasks;
 using System.Xml;
 using Microsoft.Extensions.Configuration;
@@ -604,6 +605,15 @@ public abstract class ScriptBase
     /// <param name="xmlDoc">The document to serialize</param>
     /// <returns>XML string, or <c>null</c> if <paramref name="xmlDoc"/> is null</returns>
     protected static string? XmlToString(XmlDocument? xmlDoc) => xmlDoc?.OuterXml;
+
+    /// <summary>
+    /// Escapes XML-special characters (<c>&lt; &gt; &amp; " '</c>) in a value so it can be safely
+    /// embedded as text inside an XML/SOAP envelope. Pure string transform — no I/O or parsing.
+    /// Returns <c>null</c> for a null input.
+    /// </summary>
+    /// <param name="value">Raw value to escape (e.g. user-supplied input bound into a SOAP body).</param>
+    /// <returns>The XML-escaped string, or <c>null</c> if <paramref name="value"/> is null.</returns>
+    protected static string? EscapeXml(string? value) => value is null ? null : SecurityElement.Escape(value);
 
     #endregion
 

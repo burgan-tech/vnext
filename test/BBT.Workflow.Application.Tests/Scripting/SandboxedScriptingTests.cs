@@ -165,6 +165,59 @@ public class SandboxedScriptingTests
         instance.Calc().ShouldBe(5);
     }
 
+    private static MetadataReference SoapTaskRef =>
+        MetadataReference.CreateFromFile(typeof(BBT.Workflow.Definitions.SoapTask).Assembly.Location);
+
+    private static MetadataReference XmlImplRef =>
+        MetadataReference.CreateFromFile(typeof(System.Xml.XmlDocument).Assembly.Location);
+
+    /// <summary>Resolves a platform facade assembly by simple name from the trusted-platform-assembly set.</summary>
+    private static MetadataReference ResolveFacade(string simpleName)
+    {
+        var tpa = (System.AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty)
+            .Split(System.IO.Path.PathSeparator, System.StringSplitOptions.RemoveEmptyEntries);
+        var path = System.Array.Find(tpa, p =>
+            string.Equals(System.IO.Path.GetFileNameWithoutExtension(p), simpleName, System.StringComparison.OrdinalIgnoreCase));
+        path.ShouldNotBeNull($"Facade '{simpleName}' must be present in the TPA set on this runtime.");
+        return MetadataReference.CreateFromFile(path);
+    }
+
+    private const string SoapTouchingCode =
+        "public class C : ISandboxTestCalc { public int Calc() { " +
+        "var t = BBT.Workflow.Definitions.SoapTask.CreateEmpty(); t.SetBody(\"<a/>\"); return t.Body!.Length; } }";
+
+    [Fact]
+    public async Task Sandbox_Compiles_SoapTask_Mapping_With_Xml_Facade()
+    {
+        // Mirror the engine's reference contract under the sandbox: the System.Xml.ReaderWriter facade
+        // (XmlDocument's metadata identity) plus the System.Private.Xml implementation. With both,
+        // a mapping touching SoapTask compiles even when the sandbox is enabled.
+        var evaluator = new CSharpEvaluator(EnabledSandbox());
+
+        var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
+            SoapTouchingCode,
+            extraReferences: [ContractRef, SoapTaskRef, XmlImplRef, ResolveFacade("System.Xml.ReaderWriter")],
+            usingDirectives: ["BBT.Workflow.Scripting"]);
+
+        instance.Calc().ShouldBe(4);
+    }
+
+    [Fact]
+    public async Task Sandbox_Disabled_Compiles_SoapTask_Mapping_With_Xml_Facade()
+    {
+        // The reported failure (CS0012 / System.Xml.ReaderWriter) is on the Execution host where the
+        // sandbox is disabled. Supplying the facade + implementation references compiles a SoapTask
+        // mapping on that path too.
+        var evaluator = new CSharpEvaluator(new ScriptSandboxOptions { Enabled = false });
+
+        var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
+            SoapTouchingCode,
+            extraReferences: [ContractRef, SoapTaskRef, XmlImplRef, ResolveFacade("System.Xml.ReaderWriter")],
+            usingDirectives: ["BBT.Workflow.Scripting"]);
+
+        instance.Calc().ShouldBe(4);
+    }
+
     [Fact]
     public void HelperRegistry_Compiles_Set_And_Exposes_Namespaces()
     {
