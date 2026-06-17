@@ -49,6 +49,14 @@ public sealed class ScriptResponse
     public dynamic? Headers { get; set; }
 
     /// <summary>
+    /// Optional HTTP status code to apply to the function response.
+    /// Allows multi-task output handlers to override the default 200 status (e.g. 400/404/410).
+    /// When null, the engine falls back to single-task metadata or the default status code.
+    /// </summary>
+    /// <value>An HTTP status code, or null to use the default behavior.</value>
+    public int? StatusCode { get; set; }
+
+    /// <summary>
     /// Route values or routing parameters associated with the response.
     /// Can be used for workflow routing decisions, URL generation, or parameter passing between workflow components.
     /// </summary>
