@@ -116,6 +116,21 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when the direct Dapr enqueue of a chained continuation fails and the strategy
+    /// falls back to publishing the continuation through the transactional outbox.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10127,
+        Level = LogLevel.Warning,
+        Message = "Direct Dapr enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}); falling back to outbox: {Reason}")]
+    public static partial void TransitionContinuationFellBackToOutbox(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName,
+        string reason);
+
+    /// <summary>
     /// Logs when a foreign transition is rejected by the chain-token gate because the instance
     /// is Busy with an active auto-chain owned by a different token.
     /// </summary>
