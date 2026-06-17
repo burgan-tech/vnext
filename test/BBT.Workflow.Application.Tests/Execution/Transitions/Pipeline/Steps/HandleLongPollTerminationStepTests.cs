@@ -4,6 +4,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Guids;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -31,6 +33,8 @@ public class HandleLongPollTerminationStepTests
     private readonly IInstanceJobRepository _jobRepository = Substitute.For<IInstanceJobRepository>();
     private readonly IBackgroundJobService _jobService = Substitute.For<IBackgroundJobService>();
     private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
+    private readonly ITransitionAuthorizationManager _authManager = Substitute.For<ITransitionAuthorizationManager>();
+    private readonly ICurrentUser _currentUser = Substitute.For<ICurrentUser>();
     private readonly HandleLongPollTerminationStep _step;
 
     public HandleLongPollTerminationStepTests()
@@ -43,6 +47,7 @@ public class HandleLongPollTerminationStepTests
         _guidGenerator.Create().Returns(Guid.NewGuid());
         _step = new HandleLongPollTerminationStep(
             _instanceRepository, _jobRepository, _jobService, _guidGenerator,
+            _authManager, _currentUser,
             Substitute.For<ILogger<HandleLongPollTerminationStep>>());
     }
 
@@ -104,6 +109,43 @@ public class HandleLongPollTerminationStepTests
             default!, default!, default!, default!, default!, default);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenRolesConfiguredAndCallerOwns_ShouldArmAndPause()
+    {
+        var workflow = CreateWorkflow(terminate: true, withRoles: true);
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        _authManager.IsAnyRoleAllowedForGrantsAsync(
+                Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.SkipToOrder.ShouldBe(LifecycleOrder.Finalize);
+        context.Instance.IsAwaitingLongPollAck.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRolesConfiguredAndCallerDoesNotOwn_ShouldNotArm()
+    {
+        var workflow = CreateWorkflow(terminate: true, withRoles: true);
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        _authManager.IsAnyRoleAllowedForGrantsAsync(
+                Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        // Not an owning role → no pause, no arm, pipeline continues.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.SkipToOrder.ShouldBeNull();
+        context.Instance.IsAwaitingLongPollAck.ShouldBeFalse();
+        await _jobService.DidNotReceiveWithAnyArgs().EnqueueAsync<LongPollAckTimeoutPayload>(
+            default!, default!, default!, default!, default!, default);
+    }
+
     private TransitionExecutionContext CreateContext(Definitions.Workflow workflow, State target)
     {
         var instance = Instance.Create(Guid.NewGuid(), WorkflowKey, "1.0.0");
@@ -128,10 +170,13 @@ public class HandleLongPollTerminationStepTests
         };
     }
 
-    private static Definitions.Workflow CreateWorkflow(bool terminate)
+    private static Definitions.Workflow CreateWorkflow(bool terminate, bool withRoles = false)
     {
+        var roles = withRoles
+            ? """, "roles": [ { "role": "morph-idm.core", "grant": "allow" } ]"""
+            : "";
         var interaction = terminate
-            ? """, "interaction": { "longPoll": { "terminate": true, "fallbackTimeoutSeconds": 30 } }"""
+            ? $$""", "interaction": { "longPoll": { "terminate": true, "fallbackTimeoutSeconds": 30{{roles}} } }"""
             : "";
         var json = $$"""
                    {

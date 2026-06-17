@@ -3,6 +3,9 @@ using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.LongPoll;
@@ -26,6 +29,8 @@ public sealed class HandleLongPollTerminationStep(
     IInstanceJobRepository jobRepository,
     IBackgroundJobService backgroundJobService,
     IGuidGenerator guidGenerator,
+    ITransitionAuthorizationManager transitionAuthorizationManager,
+    ICurrentUser currentUser,
     ILogger<HandleLongPollTerminationStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -39,6 +44,16 @@ public sealed class HandleLongPollTerminationStep(
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(HandleLongPollTerminationStep)}");
 
         if (!IsApplicable(context))
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
+        // Role gate: the long-poll stop belongs to the role that drove the transition into this state.
+        // When the entered state scopes the stop to specific roles (interaction.longPoll.roles) and the
+        // triggering caller is not one of them, do NOT pause — that role is not an owner of the stop, so
+        // the pipeline proceeds normally (epilogue runs). The same grant is used by the State function
+        // signal and the acknowledge check, so arm → signal → ack all agree on the owning role.
+        if (!await OwnsLongPollAsync(context, cancellationToken))
         {
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
@@ -75,6 +90,26 @@ public sealed class HandleLongPollTerminationStep(
         => context.Target?.TerminatesLongPollOnEntry == true
            && !context.Directives.IsLongPollAckResume
            && !context.Instance.IsAwaitingLongPollAck;
+
+    /// <summary>
+    /// Returns true when the triggering caller owns the long-poll stop for the entered state.
+    /// No roles configured → applies to all (every caller owns it). Otherwise the caller's role(s)
+    /// must satisfy <c>interaction.longPoll.roles</c> (same grant used by the State function signal
+    /// and the acknowledge check; DENY-wins / allowlist semantics, predefined + dynamic roles honored).
+    /// </summary>
+    private async Task<bool> OwnsLongPollAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var roles = context.Target!.LongPollAckRoles;
+        if (roles is not { Count: > 0 })
+            return true;
+
+        var callerRoles = currentUser.ResolveCallerRoles(context.Headers);
+        var requestContext = new AuthorizationRequestContext(context.Headers, null, context.RouteValues);
+        return await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
+            callerRoles, roles, context.Instance, requestContext, cancellationToken);
+    }
 
     /// <summary>
     /// Schedules the one-shot fallback resume job and tracks it so acknowledge can cancel it.
