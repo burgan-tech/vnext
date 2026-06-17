@@ -14,6 +14,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Scripting;
 using Dapr.Jobs.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -51,6 +52,7 @@ public sealed class AsyncTransitionStrategy(
     IInstanceCommandGateway instanceCommandGateway,
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
+    IRequestRawBodyProvider rawBodyProvider,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     /// <summary>
@@ -175,7 +177,7 @@ public sealed class AsyncTransitionStrategy(
         TransitionExecutionContext ctx,
         CancellationToken cancellationToken)
     {
-        if (!ctx.Instance.IsBusy && !ctx.Instance.IsCompleted && !ctx.Directives.IsSubFlowResume)
+        if (!ctx.Instance.IsBusy && !ctx.Instance.IsCompleted && !ctx.Directives.IsInternalResume)
         {
             await using var innerUow = await uowManager.BeginAsync(
                 new UnitOfWorkOptions
@@ -232,7 +234,8 @@ public sealed class AsyncTransitionStrategy(
         // enqueue, the ChainReaper backstop recovers the pending intent. The job is keyed by
         // JobName (not the Dapr-returned id), so a generated id for the intent is sufficient —
         // mirroring the outbox path.
-        var (jobName, jobPayload, schedule, metadata) = BuildJobPayload(context, transContext, activity);
+        var (jobName, jobPayload, schedule, metadata) =
+            BuildJobPayload(context, transContext, activity, rawBodyProvider.GetRawBody());
         var jobId = Guid.NewGuid();
 
         await using (var jobUow = await uowManager.BeginAsync(
@@ -360,7 +363,8 @@ public sealed class AsyncTransitionStrategy(
     /// Pure function - no side effects.
     /// </summary>
     private static (string JobName, TransitionJobPayload Payload, string Schedule, Dictionary<string, object> Metadata)
-        BuildJobPayload(WorkflowExecutionContext context, TransitionExecutionContext transContext, Activity? activity)
+        BuildJobPayload(WorkflowExecutionContext context, TransitionExecutionContext transContext, Activity? activity,
+            string? rawBody)
     {
         var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
 
@@ -373,6 +377,7 @@ public sealed class AsyncTransitionStrategy(
             Workflow = transContext.WorkflowKey,
             Version = transContext.Workflow.Version,
             Data = context.Data?.Attributes,
+            RawBody = rawBody,
             InstanceKey = context.Data?.Key,
             Tags = context.Data?.Tags,
             Headers = context.Headers,

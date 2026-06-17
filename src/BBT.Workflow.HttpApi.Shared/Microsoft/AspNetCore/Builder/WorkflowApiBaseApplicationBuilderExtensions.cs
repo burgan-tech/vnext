@@ -52,6 +52,15 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     {
         return app.UseMiddleware<HttpMetricsMiddleware>();
     }
+
+    /// <summary>
+    /// Buffers the raw request body so the original payload can be exposed to mappings for signature
+    /// verification (JWS/mTLS) via <c>ScriptContext.RawBody</c>. Register before controllers/model binding.
+    /// </summary>
+    public static IApplicationBuilder UseRawRequestBodyBuffering(this IApplicationBuilder app)
+    {
+        return app.UseMiddleware<RawRequestBodyBufferingMiddleware>();
+    }
     
     public static void MigrateMessagingDbContext(this IServiceProvider services)
     {

@@ -63,29 +63,65 @@ public sealed class ScriptEngine(
     /// Includes core .NET types, collections, and workflow-specific assemblies.
     /// </summary>
     private static readonly Lazy<MetadataReference[]> DefaultReferences = new(() =>
-    [
-        MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(TimerSchedule).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(Task).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(Dictionary<,>).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(Microsoft.CSharp.RuntimeBinder.CSharpArgumentInfo).Assembly.Location),
-        // System.Linq.Expressions: provides DynamicAttribute and System.Dynamic.ExpandoObject, both
-        // required for the `dynamic` keyword that mappings rely on (e.g. Handler returns dynamic,
-        // ScriptContext.Body is dynamic). Runtime-owned so it is always referenced even under the
-        // sandbox, where the curated assembly allow-list would otherwise omit it.
-        MetadataReference.CreateFromFile(typeof(System.Dynamic.ExpandoObject).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location),
-        // BBT.Aether.Domain: aggregate base types (AggregateRoot<>, Entity<>, audit interfaces).
-        // Domain entities exposed to mappings — e.g. ScriptContext.Instance — inherit members such as
-        // Id/CreationTime from here, so the assembly must be referenced for those inherited members to
-        // resolve. Like the others, its simple name flows into the sandbox grant automatically.
-        MetadataReference.CreateFromFile(typeof(BBT.Aether.Domain.Entities.AggregateRoot<>).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(JsonSerializableAttribute).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(System.Text.Encodings.Web.JavaScriptEncoder).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(System.Xml.XmlDocument).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(System.Xml.Linq.XDocument).Assembly.Location),
-    ]);
+    {
+        var references = new List<MetadataReference?>
+        {
+            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(TimerSchedule).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(Task).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(Dictionary<,>).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(Microsoft.CSharp.RuntimeBinder.CSharpArgumentInfo).Assembly.Location),
+            // System.Linq.Expressions: provides DynamicAttribute and System.Dynamic.ExpandoObject, both
+            // required for the `dynamic` keyword that mappings rely on (e.g. Handler returns dynamic,
+            // ScriptContext.Body is dynamic). Runtime-owned so it is always referenced even under the
+            // sandbox, where the curated assembly allow-list would otherwise omit it.
+            MetadataReference.CreateFromFile(typeof(System.Dynamic.ExpandoObject).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location),
+            // BBT.Aether.Domain: aggregate base types (AggregateRoot<>, Entity<>, audit interfaces).
+            // Domain entities exposed to mappings — e.g. ScriptContext.Instance — inherit members such as
+            // Id/CreationTime from here, so the assembly must be referenced for those inherited members to
+            // resolve. Like the others, its simple name flows into the sandbox grant automatically.
+            MetadataReference.CreateFromFile(typeof(BBT.Aether.Domain.Entities.AggregateRoot<>).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(JsonSerializableAttribute).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(System.Text.Encodings.Web.JavaScriptEncoder).Assembly.Location),
+            // System.Private.Xml / System.Private.Xml.Linq: the runtime *implementations* of XmlDocument
+            // and XDocument. Necessary but NOT sufficient — see the facade references below.
+            MetadataReference.CreateFromFile(typeof(System.Xml.XmlDocument).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(System.Xml.Linq.XDocument).Assembly.Location),
+            // XML facade/contract assemblies. Task definitions compiled against the .NET ref pack bind
+            // XmlDocument/XDocument to the facade identities (System.Xml.ReaderWriter / System.Xml.XDocument),
+            // not the System.Private.Xml* implementations above. Roslyn resolves type references by
+            // assembly identity, so any script that merely *touches* such a type — e.g. SoapTask, whose
+            // SetBody(XmlDocument) overload forces resolution of every member signature — fails with
+            // CS0012 unless the facade itself is referenced. The facade has no managed type of its own
+            // (it only forwards to System.Private.Xml), so it cannot be reached via typeof(...).Assembly
+            // and must be resolved by name from the trusted-platform-assembly set. Their simple names
+            // flow into the sandbox grant automatically via DefaultReferenceAssemblyNames.
+            ResolvePlatformFacade("System.Xml.ReaderWriter"),
+            ResolvePlatformFacade("System.Xml.XDocument"),
+        };
+
+        return references.Where(r => r is not null).Cast<MetadataReference>().ToArray();
+    });
+
+    /// <summary>
+    /// Resolves a platform facade/contract assembly (one that carries only <c>TypeForwardedTo</c>
+    /// entries and no managed types, so it cannot be reached through <c>typeof(...).Assembly</c>) by
+    /// its simple name from the runtime's trusted-platform-assembly list. Returns <c>null</c> when the
+    /// facade is absent on the host runtime, letting the caller degrade gracefully instead of failing
+    /// engine startup.
+    /// </summary>
+    private static MetadataReference? ResolvePlatformFacade(string simpleName)
+    {
+        var tpa = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty)
+            .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+
+        var path = Array.Find(tpa, p =>
+            string.Equals(System.IO.Path.GetFileNameWithoutExtension(p), simpleName, StringComparison.OrdinalIgnoreCase));
+
+        return path is null ? null : MetadataReference.CreateFromFile(path);
+    }
 
     /// <summary>
     /// Simple assembly names backing <see cref="DefaultReferences"/>. These are merged into the sandbox
@@ -124,7 +160,12 @@ public sealed class ScriptEngine(
         "BBT.Workflow.Scripting.Functions",
         "BBT.Workflow.Definitions.Timer",
         "System.Xml",
-        "System.Xml.Linq"
+        "System.Xml.Linq",
+        // System.Security: brings SecurityElement.Escape into scope for XML/SOAP-safe escaping of
+        // user input. The root namespace is benign (SecurityElement/SecureString/legacy CAS no-ops);
+        // a using grants no new capability — the sandbox boundary stays the reference allow-list +
+        // BannedApiAnalyzer, and dangerous sub-namespaces (Cryptography/Principal) are NOT imported.
+        "System.Security"
     };
     
     /// <summary>

@@ -149,6 +149,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public int? ResumePointStepOrder { get; private set; }
 
     /// <summary>
+    /// Long-poll acknowledge token. Set when the pipeline pauses on entering a state whose
+    /// <c>interaction.longPoll.terminate</c> is true; the State (long-poll) function surfaces the
+    /// termination signal while this is non-null, and the pipeline resumes when the client
+    /// acknowledges (or the fallback schedule fires). The token guards against double-resume:
+    /// acknowledge and fallback compare-and-clear it so only one wins. Null when no long-poll
+    /// acknowledge is pending.
+    /// </summary>
+    public Guid? LongPollAckToken { get; private set; }
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -574,6 +584,21 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Clears the durable resume point (called at transition finalize so it never leaks into the next transition).
     /// </summary>
     public void ClearResumePoint() => ResumePointStepOrder = null;
+
+    /// <summary>
+    /// Arms the long-poll acknowledge marker with the supplied token (pipeline paused on state entry).
+    /// </summary>
+    public void ArmLongPollAck(Guid token) => LongPollAckToken = token;
+
+    /// <summary>
+    /// Clears the long-poll acknowledge marker (acknowledge received or fallback resumed).
+    /// </summary>
+    public void ClearLongPollAck() => LongPollAckToken = null;
+
+    /// <summary>
+    /// True while a long-poll acknowledge is pending (the pipeline is paused on state entry).
+    /// </summary>
+    public bool IsAwaitingLongPollAck => LongPollAckToken.HasValue;
 
     /// <summary>
     /// Returns whether the supplied token matches the instance's current chain ownership token.

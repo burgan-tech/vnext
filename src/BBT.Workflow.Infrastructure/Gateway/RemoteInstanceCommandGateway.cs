@@ -80,5 +80,13 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     {
         return _remoteService.MarkBusyAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.AcknowledgeLongPollAsync(input, cancellationToken);
+    }
 }
 

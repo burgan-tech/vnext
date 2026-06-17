@@ -26,10 +26,24 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(ClearBusyOnResumeStep)}");
 
-        // Only process this step if resuming from SubFlow completion
-        if (!context.Directives.IsSubFlowResume)
+        // Only process this step on an internal resume (SubFlow completion or long-poll acknowledge)
+        if (!context.Directives.IsInternalResume)
         {
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+        }
+
+        // Long-poll acknowledge resume: compare-and-clear the durable ack marker. Acknowledge and
+        // the fallback timeout can both request a resume; the reserved ":lpack" lock serializes
+        // them, and this guard makes the second one a no-op — if the marker is already cleared the
+        // pipeline has already advanced, so stop without re-running the epilogue.
+        if (context.Directives.IsLongPollAckResume)
+        {
+            if (!context.Instance.IsAwaitingLongPollAck)
+            {
+                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Stop()));
+            }
+
+            context.Instance.ClearLongPollAck();
         }
 
         // Resolve target state first, then conditionally defer status
@@ -64,9 +78,15 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
     /// </summary>
     private static void ClearBusyIfNeeded(TransitionExecutionContext context)
     {
-        // If target state is Busy subtype, ChangeState will handle status
+        // If target state is Busy subtype, ChangeState will handle status. The chain has come
+        // to rest in a Busy-subtype state, so release the durable chain-ownership token (the
+        // instance stays Busy) — otherwise the chain-token gate would reject legitimate foreign
+        // transitions and the ChainReaper would treat the resting instance as stuck.
         if (context.Target?.SubType == StateSubType.Busy)
+        {
+            context.Directives.RequestEndChain();
             return;
+        }
 
         // Defer status update to after post-commit jobs complete
         if (context.Instance is { IsActive: false, IsCompleted: false })

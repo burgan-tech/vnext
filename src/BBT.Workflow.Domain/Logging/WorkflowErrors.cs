@@ -465,6 +465,14 @@ public static class WorkflowErrors
             $"Access to state '{stateKey}' is not permitted for the current roles.");
 
     /// <summary>
+    /// The current roles are not permitted to acknowledge long-poll termination for the instance. Maps to HTTP 403.
+    /// </summary>
+    public static Error LongPollAckAccessDenied(Guid instanceId)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Long-poll acknowledge for instance '{instanceId}' is not permitted for the current roles.");
+
+    /// <summary>
     /// The current roles are not permitted to invoke the custom function (function-level roles). Maps to HTTP 403.
     /// </summary>
     public static Error FunctionAccessDenied(string functionKey)

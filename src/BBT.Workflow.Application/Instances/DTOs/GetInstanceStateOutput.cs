@@ -43,6 +43,13 @@ public sealed class GetInstanceStateOutput
     public List<TransitionItem> Transitions { get; set; } = [];
 
     /// <summary>
+    /// Client-workflow-manager interaction directives for the current state. Present only when the
+    /// state declares an applicable directive for the caller (today: long-poll termination). A generic
+    /// container so future interaction directives are grouped under the same key.
+    /// </summary>
+    public InstanceInteractionOutput? Interaction { get; set; }
+
+    /// <summary>
     /// Representation ETag (RFC 7232 quoted) for cache validation.
     /// </summary>
     public string? ETag

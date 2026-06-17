@@ -16,13 +16,15 @@ namespace BBT.Workflow.Scripting;
 internal sealed class ScriptContextBuilder(
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
-    ILogger<ScriptContext> logger) : IScriptContextBuilder
+    ILogger<ScriptContext> logger,
+    IRequestRawBodyProvider? rawBodyProvider = null) : IScriptContextBuilder
 {
     private IRuntimeInfoProvider? _runtimeInfoProvider;
     private Definitions.Workflow? _workflow;
     private Instance? _instance;
     private Transition? _transition;
     private object? _body;
+    private string? _explicitRawBody;
     private Dictionary<string, string?>? _headers;
     private Dictionary<string, object?>? _routeValues;
     private Dictionary<string, object?>? _queryParameters;
@@ -120,6 +122,12 @@ internal sealed class ScriptContextBuilder(
         return this;
     }
 
+    public IScriptContextBuilder WithRawBody(string? rawBody)
+    {
+        _explicitRawBody = rawBody;
+        return this;
+    }
+
     public IScriptContextBuilder WithHeaders(Dictionary<string, string?>? headers)
     {
         _headers = headers;
@@ -212,6 +220,7 @@ internal sealed class ScriptContextBuilder(
         return builder
             .SetRuntime(_runtimeInfoProvider!)
             .SetBody(_body)
+            .SetRawBody(_explicitRawBody ?? rawBodyProvider?.GetRawBody())
             .SetHeaders(_headers)
             .SetRouteValues(_routeValues)
             .SetQueryParameters(_queryParameters)

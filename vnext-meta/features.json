@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.58",
+  "runtimeVersion": "0.0.61",
   "engine": {
     "customScriptHelpers": {
       "since": "0.0.58",
@@ -13,6 +13,15 @@
         "Scripting:Sandbox:BannedNamespaces",
         "Scripting:Sandbox:PluginDirectory",
         "Scripting:Sandbox:AllowUnsafe"
+      ]
+    },
+    "longPollTermination": {
+      "since": "0.0.62",
+      "status": "stable",
+      "description": "Declarative long-poll termination on state entry. A state may declare interaction.longPoll.terminate=true (with optional interaction.longPoll.roles[] role grants and interaction.longPoll.fallbackTimeoutSeconds, default 60). When the pipeline enters such a state it runs ChangeState + OnEntry, then pauses before the epilogue (Schedule/Auto/Finish); the instance stays Busy. The State (long-poll) function returns HTTP 200 with an interaction object { terminateLongPoll: true, ack: { href } } for callers whose role is granted, telling the client to stop polling and render the entered-state screen. The client then POSTs to the acknowledge endpoint (instances/{instance}/longpoll/ack), which resumes the pipeline from where it paused; a fallback schedule auto-resumes if the client never acknowledges. The 'interaction' object is a generic, extensible container for client-workflow-manager directives.",
+      "schemaPath": "state.interaction.longPoll",
+      "apiEndpoints": [
+        "POST {domain}/workflows/{workflow}/instances/{instance}/longpoll/ack"
       ]
     }
   }

@@ -203,6 +203,9 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasComputedColumnSql("COALESCE(\"ModifiedAt\", \"CreatedAt\")", true);
 
+                    b.Property<Guid?>("LongPollAckToken")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("ModifiedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ModifiedAt");
@@ -245,6 +248,10 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("EffectiveState")
                         .HasDatabaseName("IX_Instances_EffectiveState");
+
+                    b.HasIndex("LongPollAckToken")
+                        .HasDatabaseName("IX_Instances_LongPollAckToken")
+                        .HasFilter("\"LongPollAckToken\" IS NOT NULL");
 
                     b.HasIndex("LastTouchedAt", "Id")
                         .HasDatabaseName("IX_Instances_Active_LastTouched_Id")

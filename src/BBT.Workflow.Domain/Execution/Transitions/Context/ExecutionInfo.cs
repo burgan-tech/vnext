@@ -17,6 +17,10 @@ public sealed class ExecutionInfo
     /// <summary>Gets or sets whether this execution is resuming from a SubFlow completion.</summary>
     public bool IsSubFlowResume { get; set; }
 
+    /// <summary>Gets or sets whether this execution is resuming from a long-poll acknowledge
+    /// (client acknowledged the termination signal, or the fallback timeout fired).</summary>
+    public bool IsLongPollAckResume { get; set; }
+
     /// <summary>Gets or sets whether this execution is triggered by a workflow timeout.</summary>
     public bool IsTimeoutTransition { get; set; }
 }

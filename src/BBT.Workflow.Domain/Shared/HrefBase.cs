@@ -65,6 +65,13 @@ public sealed class SchemaHref : HrefBase
 }
 
 /// <summary>
+/// Acknowledge href link (e.g. the long-poll termination acknowledge endpoint).
+/// </summary>
+public sealed class AckHref : HrefBase
+{
+}
+
+/// <summary>
 /// View href link with load data flag
 /// </summary>
 public sealed class ViewHref : HrefBase

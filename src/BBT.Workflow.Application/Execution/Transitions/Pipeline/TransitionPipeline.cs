@@ -102,6 +102,9 @@ public class TransitionPipeline
             }
 
             // SubFlow Resume resumes an already-Busy instance; confirm the busy mark.
+            // (Long-poll acknowledge resume is intentionally NOT re-marked here: the paused
+            // instance is already Busy, and a redundant resume that no-ops must not strand an
+            // already-advanced instance in Busy.)
             if (context.Directives.IsSubFlowResume)
                 await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
@@ -190,8 +193,10 @@ public class TransitionPipeline
             if (continuationResult.Value is null)
             {
                 // No further in-process work (chain complete or continuation enqueued) —
-                // apply deferred status (inside lock, no re-acquire needed).
+                // apply deferred status and release chain ownership if requested
+                // (inside lock, no re-acquire needed).
                 await ApplyResolvedStatusAsync(context, cancellationToken);
+                await ApplyChainOwnershipAsync(context, cancellationToken);
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
@@ -320,6 +325,31 @@ public class TransitionPipeline
 
         _logger.LogDebug(
             "Instance {InstanceId} resolved to Active after chain completion",
+            context.InstanceId);
+    }
+
+    /// <summary>
+    /// Releases the durable chain-ownership token when the pipeline has come to rest while the
+    /// instance stays Busy (e.g. a Busy-subtype state). The auto-chain has finished, so the token
+    /// must be cleared — otherwise the chain-token gate would reject legitimate foreign transitions
+    /// and the ChainReaper would treat the resting instance as stuck. The instance status is left
+    /// unchanged (still Busy). Already within lock scope — no re-acquisition needed.
+    /// </summary>
+    private async Task ApplyChainOwnershipAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (!context.Directives.ConsumeEndChain())
+            return;
+
+        if (context.Instance.IsCompleted || !context.Instance.ChainToken.HasValue)
+            return;
+
+        context.Instance.EndChain();
+        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+
+        _logger.LogDebug(
+            "Instance {InstanceId} released chain ownership at rest (stays Busy)",
             context.InstanceId);
     }
 }

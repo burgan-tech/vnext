@@ -89,6 +89,7 @@ public class AsyncTransitionStrategyTests
             _mockInstanceCommandGateway.Object,
             _mockEventBus.Object,
             executionOptions,
+            new BBT.Workflow.Scripting.AmbientRequestRawBodyProvider(),
             _mockLogger.Object);
     }
 

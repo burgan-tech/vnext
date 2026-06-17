@@ -125,6 +125,12 @@ public static class InstanceUrlTemplates
     public const string MarkBusyTemplate = "/{0}/workflows/{1}/instances/{2}/busy";
 
     /// <summary>
+    /// URL template for the long-poll acknowledge endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/longpoll/ack
+    /// </summary>
+    public const string LongPollAckTemplate = "/{0}/workflows/{1}/instances/{2}/longpoll/ack";
+
+    /// <summary>
     /// URL template for retry instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/retry
     /// </summary>
@@ -353,6 +359,9 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string MarkBusy(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(MarkBusyTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    public static string LongPollAck(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(LongPollAckTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for retry instance endpoint.

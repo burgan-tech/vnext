@@ -53,6 +53,19 @@ public sealed class PipelineDirectives
     public bool IsSubFlowResume { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this execution is resuming from a long-poll acknowledge
+    /// (declarative long-poll termination on state entry — client acknowledged or fallback fired).
+    /// </summary>
+    public bool IsLongPollAckResume { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this is an internal, system-triggered pipeline resume of an
+    /// already-Busy instance (subflow completion or long-poll acknowledge). These share lock-key,
+    /// validation-bypass and busy-confirmation behavior.
+    /// </summary>
+    public bool IsInternalResume => IsSubFlowResume || IsLongPollAckResume;
+
+    /// <summary>
     /// Gets a value indicating whether this execution is triggered by a workflow timeout.
     /// </summary>
     public bool IsTimeoutTransition { get; private set; }
@@ -120,6 +133,11 @@ public sealed class PipelineDirectives
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
 
     /// <summary>
+    /// Marks this execution as a long-poll acknowledge resume scenario.
+    /// </summary>
+    public void MarkAsLongPollAckResume() => IsLongPollAckResume = true;
+
+    /// <summary>
     /// Marks this execution as a workflow timeout transition.
     /// </summary>
     public void MarkAsTimeoutTransition() => IsTimeoutTransition = true;
@@ -168,6 +186,34 @@ public sealed class PipelineDirectives
         var s = ResolvedStatus;
         ResolvedStatus = null;
         return s;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the auto-chain ownership token should be released
+    /// after all pipeline work completes, while the instance stays Busy.
+    /// Set when the pipeline comes to rest in a Busy-subtype state with no in-flight chain
+    /// (no next transition, not terminal): the chain is finished, so the durable
+    /// <see cref="Instances.Instance.ChainToken"/> must be cleared so that legitimate foreign
+    /// transitions (e.g. a child sub-process signalling its initiator) are not rejected by the
+    /// chain-token gate, and the ChainReaper does not treat the resting instance as stuck.
+    /// </summary>
+    public bool EndChainRequested { get; private set; }
+
+    /// <summary>
+    /// Requests the auto-chain ownership token to be released at rest (instance stays Busy).
+    /// </summary>
+    public void RequestEndChain() => EndChainRequested = true;
+
+    /// <summary>
+    /// Consumes and clears the end-chain request.
+    /// Called by the pipeline after post-commit jobs complete.
+    /// </summary>
+    /// <returns><c>true</c> if a chain-ownership release was requested; otherwise <c>false</c>.</returns>
+    public bool ConsumeEndChain()
+    {
+        var v = EndChainRequested;
+        EndChainRequested = false;
+        return v;
     }
 
     /// <summary>

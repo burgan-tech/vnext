@@ -40,6 +40,21 @@ public sealed class HttpTask : WorkflowTask
     public JsonElement? Body { get; private set; }
 
     /// <summary>
+    /// Explicit media type applied to the request body (e.g. "application/x-www-form-urlencoded", "text/plain").
+    /// When set, it overrides any "Content-Type" entry in <see cref="Headers"/>.
+    /// When null, the "Content-Type" header is used, falling back to "application/json".
+    /// </summary>
+    public string? ContentType { get; private set; }
+
+    /// <summary>
+    /// Verbatim request body. When set, it is transmitted byte-for-byte without any JSON re-serialization
+    /// (bypasses <see cref="Body"/> serialization and content-type unwrapping). Use this for signing
+    /// scenarios (JWS/mTLS) where the wire body must exactly match the bytes that were signed.
+    /// Takes precedence over <see cref="Body"/>.
+    /// </summary>
+    public string? RawBody { get; private set; }
+
+    /// <summary>
     /// Timeout seconds
     /// </summary>
     public int TimeoutSeconds { get; private set; } = 30;
@@ -68,6 +83,25 @@ public sealed class HttpTask : WorkflowTask
     public void SetBody(dynamic body)
     {
         Body = JsonSerializer.SerializeToElement(body);
+    }
+
+    /// <summary>
+    /// Sets the explicit content type applied to the request body. Pass null to fall back to header/default resolution.
+    /// </summary>
+    /// <param name="contentType">The media type, e.g. "application/x-www-form-urlencoded"; or null.</param>
+    public void SetContentType(string? contentType)
+    {
+        ContentType = string.IsNullOrWhiteSpace(contentType) ? null : contentType;
+    }
+
+    /// <summary>
+    /// Sets the verbatim request body that will be transmitted byte-for-byte (no JSON re-serialization).
+    /// Use for signed payloads. Pass null to clear and fall back to <see cref="Body"/>.
+    /// </summary>
+    /// <param name="raw">The exact body string to send; or null.</param>
+    public void SetRawBody(string? raw)
+    {
+        RawBody = raw;
     }
     
     public void SetHeaders(Dictionary<string, string?> headers)
@@ -105,6 +139,8 @@ public sealed class HttpTask : WorkflowTask
     /// </summary>
     internal void SetHeadersInternal(JsonElement? headers) => Headers = headers;
     internal void SetBodyInternal(JsonElement? body) => Body = body;
+    internal void SetContentTypeInternal(string? contentType) => ContentType = contentType;
+    internal void SetRawBodyInternal(string? raw) => RawBody = raw;
     internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
     internal void SetAcceptedStatusCodesInternal(IReadOnlyList<string>? codes) => AcceptedStatusCodes = codes;
@@ -129,6 +165,19 @@ public sealed class HttpTask : WorkflowTask
         {
             var body = bodyElement.GetRawText();
             Body = string.IsNullOrWhiteSpace(body) ? null : bodyElement;
+        }
+
+        if (config.TryGetProperty("contentType", out var contentTypeElement))
+        {
+            var contentType = contentTypeElement.GetString();
+            ContentType = string.IsNullOrWhiteSpace(contentType) ? null : contentType;
+        }
+
+        if (config.TryGetProperty("rawBody", out var rawBodyElement) &&
+            rawBodyElement.ValueKind == JsonValueKind.String)
+        {
+            var raw = rawBodyElement.GetString();
+            RawBody = string.IsNullOrEmpty(raw) ? null : raw;
         }
 
         if (config.TryGetProperty("timeoutSeconds", out var timeoutSeconds))
@@ -175,6 +224,8 @@ public sealed class HttpTask : WorkflowTask
         cloned.Method = Method;
         cloned.Headers = Headers;
         cloned.Body = Body;
+        cloned.ContentType = ContentType;
+        cloned.RawBody = RawBody;
         cloned.TimeoutSeconds = TimeoutSeconds;
         cloned.ValidateSSL = ValidateSSL;
         cloned.AcceptedStatusCodes = AcceptedStatusCodes;
@@ -193,6 +244,8 @@ public sealed class HttpTask : WorkflowTask
         Method = source.Method;
         SetHeadersInternal(source.Headers);
         SetBodyInternal(source.Body);
+        SetContentTypeInternal(source.ContentType);
+        SetRawBodyInternal(source.RawBody);
         SetTimeoutSecondsInternal(source.TimeoutSeconds);
         SetValidateSSLInternal(source.ValidateSSL);
         SetAcceptedStatusCodesInternal(source.AcceptedStatusCodes);
@@ -208,6 +261,8 @@ public sealed class HttpTask : WorkflowTask
         Method = "GET";
         Headers = null;
         Body = null;
+        ContentType = null;
+        RawBody = null;
         TimeoutSeconds = 30;
         ValidateSSL = true;
         AcceptedStatusCodes = null;

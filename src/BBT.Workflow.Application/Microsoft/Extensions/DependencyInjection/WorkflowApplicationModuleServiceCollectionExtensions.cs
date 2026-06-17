@@ -1,5 +1,6 @@
 using BBT.Workflow.Application.Resilience;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Components;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
@@ -59,6 +60,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();

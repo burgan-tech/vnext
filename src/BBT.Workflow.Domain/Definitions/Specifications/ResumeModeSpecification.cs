@@ -22,7 +22,7 @@ public sealed class ResumeModeSpecification : ITransitionSpecification
     /// Applicable when execution is resuming from SubFlow completion or triggered by workflow timeout.
     /// </summary>
     public bool IsApplicable(TransitionExecutionContext context)
-        => context.Directives.IsSubFlowResume || context.Directives.IsTimeoutTransition;
+        => context.Directives.IsInternalResume || context.Directives.IsTimeoutTransition;
 
     /// <inheritdoc />
     /// <summary>
