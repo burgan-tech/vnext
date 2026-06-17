@@ -38,16 +38,27 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
     /// <summary>
     /// Returns status-based instance counters aggregated across all workflows in the domain.
     /// Workflow list is resolved from cache (snapshot) then falls back to the runtime backend.
-    /// Each workflow schema is scanned in parallel and the counts are summed.
+    /// Each workflow schema is scanned in parallel (one grouped query per schema) and the counts are summed.
+    /// Accepts an optional GraphQL <paramref name="filter"/>; when it does not constrain <c>createdAt</c>,
+    /// a default "last 7 days" window is applied so very large tables are never scanned unbounded by default.
     /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="filter">Optional GraphQL filter (e.g. a <c>createdAt</c> date-range). Omitted = last 7 days.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">Counters returned successfully</response>
     [HttpGet("{domain}/stats/instances")]
     [ProducesResponseType(typeof(MonitorInstanceCountersResponse), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetDomainInstanceCountersAsync(
         [FromRoute] string domain,
+        [FromQuery] string? filter = null,
         CancellationToken cancellationToken = default)
     {
-        var input = new MonitorGetInstanceCountersInput { Domain = domain, Workflow = null };
+        var input = new MonitorGetInstanceCountersInput
+        {
+            Domain   = domain,
+            Workflow = null,
+            Filter   = string.IsNullOrWhiteSpace(filter) ? null : filter.Trim()
+        };
         var result = await statsService.GetInstanceCountersAsync(input, cancellationToken);
         return FromResult(result);
     }

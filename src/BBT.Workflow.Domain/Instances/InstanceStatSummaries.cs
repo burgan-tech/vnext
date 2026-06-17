@@ -11,6 +11,16 @@ public sealed record TransitionExecutionStat(string TransitionKey, string? FromS
 /// <summary>Instance count for a specific state key.</summary>
 public sealed record StateCountStat(string StateKey, int Count);
 
+/// <summary>
+/// Per-status instance counts produced by a single grouped aggregation query (one SQL round-trip
+/// using conditional counts), honouring an optional filter. Additive — monitor-only.
+/// </summary>
+public sealed record InstanceStatusCounts(long Active, long Busy, long Completed, long Faulted, long Passive)
+{
+    /// <summary>Sum of all status counts.</summary>
+    public long Total => Active + Busy + Completed + Faulted + Passive;
+}
+
 /// <summary>Aggregate duration statistics over completed instances in a schema.</summary>
 public sealed record InstanceDurationStat(double AvgMs, double MinMs, double MaxMs, long CompletedCount);
 

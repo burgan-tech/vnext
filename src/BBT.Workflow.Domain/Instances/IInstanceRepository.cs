@@ -158,6 +158,18 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <summary>Read-only: avg/min/max completion duration over completed instances (additive, monitor-only).</summary>
     Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Read-only: returns per-status instance counts (Active/Busy/Completed/Faulted/Passive) in a single
+    /// aggregation query, honouring the optional GraphQL/legacy <paramref name="filter"/> (e.g. a
+    /// <c>createdAt</c> date-range). Replaces N separate per-status COUNT round-trips for dashboard
+    /// counters. Reuses the same filter-application path as <see cref="CountAsync"/> (additive, monitor-only).
+    /// </summary>
+    /// <param name="filter">Optional GraphQL/legacy filter JSON. Null counts all instances in the schema.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<InstanceStatusCounts> GetStatusCountsAsync(
+        string? filter,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Read-only: per-current-state count of faulted instances in the current schema (additive, monitor-only).</summary>
     Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default);
 

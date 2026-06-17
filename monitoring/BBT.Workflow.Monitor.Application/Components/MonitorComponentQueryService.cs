@@ -6,6 +6,7 @@ using BBT.Aether.Results;
 using BBT.Workflow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using Mapping = BBT.Workflow.Definitions.Mapping;
 using BBT.Workflow.Monitor.Components.DTOs;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,7 +59,7 @@ public sealed class MonitorComponentQueryService(
             return Result<MonitorComponentResponse>.Fail(
                 Error.Validation("component.unknownType",
                     $"Unknown component type '{input.ComponentType}'. " +
-                    $"Supported: {string.Join(", ", MonitorComponentTypes.Flows, MonitorComponentTypes.Tasks, MonitorComponentTypes.Schemas, MonitorComponentTypes.Extensions, MonitorComponentTypes.Functions, MonitorComponentTypes.Views)}."));
+                    $"Supported: {string.Join(", ", MonitorComponentTypes.Flows, MonitorComponentTypes.Tasks, MonitorComponentTypes.Schemas, MonitorComponentTypes.Extensions, MonitorComponentTypes.Functions, MonitorComponentTypes.Views, MonitorComponentTypes.Mappings)}."));
         }
 
         return canonicalType switch
@@ -99,6 +100,12 @@ public sealed class MonitorComponentQueryService(
                 (d, k, v, ct) => componentCacheStore.GetViewAsync(d, k, v, ct),
                 cancellationToken),
 
+            MonitorComponentTypes.Mappings => await ResolveAsync<Mapping>(
+                input,
+                canonicalType,
+                (d, k, v, ct) => componentCacheStore.GetMappingAsync(d, k, v, ct),
+                cancellationToken),
+
             _ => Result<MonitorComponentResponse>.Fail(
                 Error.Validation("component.unknownType",
                     $"Unknown component type '{input.ComponentType}'. " +
@@ -124,6 +131,8 @@ public sealed class MonitorComponentQueryService(
             return MonitorComponentTypes.Functions;
         if (t.Equals(MonitorComponentTypes.Views, StringComparison.OrdinalIgnoreCase))
             return MonitorComponentTypes.Views;
+        if (t.Equals(MonitorComponentTypes.Mappings, StringComparison.OrdinalIgnoreCase))
+            return MonitorComponentTypes.Mappings;
 
         return null;
     }
@@ -232,6 +241,9 @@ public sealed class MonitorComponentQueryService(
         var extensions = await CountTypeAsync<Extension>(input.Domain,             cancellationToken);
         if (!extensions.IsSuccess) return Result<MonitorComponentStatsResponse>.Fail(extensions.Error);
 
+        var mappings   = await CountTypeAsync<Mapping>(input.Domain,               cancellationToken);
+        if (!mappings.IsSuccess)   return Result<MonitorComponentStatsResponse>.Fail(mappings.Error);
+
         return Result<MonitorComponentStatsResponse>.Ok(new MonitorComponentStatsResponse
         {
             Flows      = flows.Value,
@@ -240,6 +252,7 @@ public sealed class MonitorComponentQueryService(
             Views      = views.Value,
             Functions  = functions.Value,
             Extensions = extensions.Value,
+            Mappings   = mappings.Value,
         });
     }
 
@@ -320,6 +333,7 @@ public sealed class MonitorComponentQueryService(
             MonitorComponentTypes.Extensions  => await runtimeService.GetAsync<Extension>(cancellationToken),
             MonitorComponentTypes.Functions   => await runtimeService.GetAsync<Function>(cancellationToken),
             MonitorComponentTypes.Views       => await runtimeService.GetAsync<View>(cancellationToken),
+            MonitorComponentTypes.Mappings    => await runtimeService.GetAsync<Mapping>(cancellationToken),
             _ => []
         };
 

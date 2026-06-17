@@ -72,6 +72,9 @@ public static class MonitorComponentTypes
 
     /// <summary>View definitions.</summary>
     public const string Views = "sys-views";
+
+    /// <summary>Mapping (script-library) definitions.</summary>
+    public const string Mappings = "sys-mappings";
 }
 
 /// <summary>Input for querying component type counts for a domain.</summary>
@@ -103,8 +106,11 @@ public sealed class MonitorComponentStatsResponse
     /// <summary>Number of published extension definitions.</summary>
     public int Extensions { get; set; }
 
+    /// <summary>Number of published mapping (script-library) definitions.</summary>
+    public int Mappings { get; set; }
+
     /// <summary>Sum of all component counts across all types.</summary>
-    public int Total => Flows + Tasks + Schemas + Views + Functions + Extensions;
+    public int Total => Flows + Tasks + Schemas + Views + Functions + Extensions + Mappings;
 }
 
 /// <summary>Summary list response for a single component type — lightweight alternative to /definition.</summary>

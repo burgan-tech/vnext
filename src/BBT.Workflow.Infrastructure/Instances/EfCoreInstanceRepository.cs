@@ -1224,6 +1224,29 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<InstanceStatusCounts> GetStatusCountsAsync(
+        string? filter,
+        CancellationToken cancellationToken = default)
+    {
+        // Single round-trip: COUNT(*) FILTER (WHERE "Status" = …) per status, over the filtered set.
+        // Reuses GetFilteredQueryAsync so the optional GraphQL/legacy filter (e.g. createdAt range)
+        // is applied identically to CountAsync. GroupBy(_ => 1) collapses to a whole-set aggregate;
+        // the i.Status == InstanceStatus.X comparison is the same value-converted predicate CountByStatusAsync uses.
+        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        var counts = await query
+            .GroupBy(_ => 1)
+            .Select(g => new InstanceStatusCounts(
+                g.LongCount(i => i.Status == InstanceStatus.Active),
+                g.LongCount(i => i.Status == InstanceStatus.Busy),
+                g.LongCount(i => i.Status == InstanceStatus.Completed),
+                g.LongCount(i => i.Status == InstanceStatus.Faulted),
+                g.LongCount(i => i.Status == InstanceStatus.Passive)))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return counts ?? new InstanceStatusCounts(0, 0, 0, 0, 0);
+    }
+
+    /// <inheritdoc />
     public async Task<long> CountByStatusAsync(
         InstanceStatus? status,
         string? flowVersion,
