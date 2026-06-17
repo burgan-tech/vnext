@@ -57,6 +57,27 @@ State-function code.
    (79) compare-and-clears the token, clears Busy, and the epilogue runs (Schedule → Auto → Finish →
    Finalize → ResolveAvailable) — the pipeline continues exactly where it paused.
 
+## SubFlow chain (nested / cross-domain)
+
+When the entered terminate state belongs to a **subflow**, the instance that pauses and arms
+`LongPollAckToken` is the deepest active subflow child — not the top instance the client polls. Both
+sides follow the chain:
+
+- **Read (State function).** `GetSubFlowTransitionsAsync` already recurses down via
+  `instanceQueryGateway.GetFunctionWithStateAsync` (routed local/remote). The child's `interaction`
+  block is bubbled up through `SubFlowStateInfo`, and each level **rewrites the ack href** to its own
+  acknowledge endpoint — so the top response always carries the top's `ack.href`. Role filtering
+  stays at the child (caller role forwarded via headers).
+- **Command (acknowledge).** `AcknowledgeLongPollAsync` descends like `MarkBusyAsync`: at each level,
+  if the instance is awaiting → resume here (leaf); else if it has an active SubFlow correlation →
+  forward via `IInstanceCommandGateway.AcknowledgeLongPollAsync` to the child (Routed → Local /
+  Remote on `IsDomainMatch`), one hop per level. The client always POSTs the top's `longpoll/ack`;
+  the chain walk reaches the paused (possibly cross-domain) instance and resumes it.
+
+Only `SubFlowType.SubFlow` correlations are followed (the same set the State function follows);
+SubProcess (fire-and-forget) is out of scope. Each level armed its own fallback job, so a failed
+descent hop is still covered by the deepest child's fallback.
+
 ## Idempotency
 
 Acknowledge and the fallback timeout can both request a resume. The reserved `:lpack` lock

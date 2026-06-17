@@ -202,6 +202,60 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.State.ShouldBe("sub-review");
     }
 
+    /// <summary>
+    /// When the active subflow signals long-poll termination, the parent bubbles the interaction up
+    /// and rewrites the ack href to the parent's own acknowledge endpoint (the instance the client polls).
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenSubFlowAwaitingLongPollAck_BubblesInteractionWithParentAckHref()
+    {
+        // Arrange — subflow is Active and signals termination with its OWN (child) ack href
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        SetupSubFlowGateway(InstanceStatus.Active, "sub-review", new InstanceInteractionOutput
+        {
+            TerminateLongPoll = true,
+            Ack = new BBT.Workflow.Shared.AckHref { Href = "/child/longpoll/ack" }
+        });
+        _urlTemplateBuilder
+            .BuildLongPollAckUrl(TestDomain, TestWorkflow, instance.Id.ToString(), Arg.Any<string?>())
+            .Returns("/parent/longpoll/ack");
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — bubbled up, ack href rewritten to the parent's endpoint
+        result.Result.IsSuccess.ShouldBeTrue();
+        var output = result.Result.Value!;
+        output.Interaction.ShouldNotBeNull();
+        output.Interaction!.TerminateLongPoll.ShouldBeTrue();
+        output.Interaction.Ack.ShouldNotBeNull();
+        output.Interaction.Ack!.Href.ShouldBe("/parent/longpoll/ack");
+    }
+
+    /// <summary>
+    /// When the active subflow does not signal termination, the parent emits no interaction.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenSubFlowNotAwaiting_NoInteraction()
+    {
+        // Arrange
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        SetupSubFlowGateway(InstanceStatus.Active, "sub-review");
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
     [Fact]
     public async Task GetInstanceStateAsync_WhenCurrentStateIsWizard_ReturnsStateTypeAsCamelCase()
     {
@@ -826,14 +880,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(true);
     }
 
-    private void SetupSubFlowGateway(InstanceStatus subFlowStatus, string subFlowState)
+    private void SetupSubFlowGateway(InstanceStatus subFlowStatus, string subFlowState,
+        InstanceInteractionOutput? interaction = null)
     {
         var subFlowOutput = new GetInstanceStateOutput
         {
             Status = subFlowStatus,
             State = subFlowState,
             Transitions = [],
-            ActiveCorrelations = []
+            ActiveCorrelations = [],
+            Interaction = interaction
         };
 
         _instanceQueryGateway

@@ -4,6 +4,7 @@ using BBT.Aether;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Execution.LongPoll;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Aether.Application.Services;
 using BBT.Aether.BackgroundJob;
@@ -58,6 +59,7 @@ public sealed class InstanceCommandAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
+    IInstanceCommandGateway instanceCommandGateway,
     ICurrentUser currentUser,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
@@ -168,9 +170,28 @@ public sealed class InstanceCommandAppService(
 
         var instance = instanceResult.Value!;
 
-        // Idempotent: nothing to acknowledge (already resumed by an earlier ack or the fallback).
+        // Not the awaiting instance — descend the active SubFlow chain (local or cross-domain via the
+        // gateway) to the instance that actually paused. The State function follows the same SubFlow
+        // chain downward, so the awaiting instance is the deepest active subflow child.
         if (!instance.IsAwaitingLongPollAck)
+        {
+            var sub = instance.Subflow;
+            if (sub is not null)
+            {
+                return await instanceCommandGateway.AcknowledgeLongPollAsync(new AcknowledgeLongPollInput
+                {
+                    Domain = sub.SubFlowDomain,
+                    Workflow = sub.SubFlowName,
+                    Instance = sub.SubFlowInstanceId.ToString(),
+                    Version = sub.SubFlowVersion,
+                    Role = input.Role,
+                    Headers = input.Headers
+                }, cancellationToken);
+            }
+
+            // Idempotent: nothing awaiting anywhere in the chain (already resumed or fallback fired).
             return Result.Ok();
+        }
 
         var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
         if (!workflowResult.IsSuccess)

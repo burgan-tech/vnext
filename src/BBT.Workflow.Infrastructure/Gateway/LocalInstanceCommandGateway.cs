@@ -162,4 +162,17 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
                 return Result.Ok();
             }, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version ?? string.Empty,
+            async (sp, ct) =>
+            {
+                var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
+                return await commandService.AcknowledgeLongPollAsync(input, ct);
+            }, cancellationToken);
+    }
 }

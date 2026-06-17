@@ -376,7 +376,9 @@ public sealed class InstanceQueryAppService(
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
                     SubFlowActiveCorrelations: subFlowValue.ActiveCorrelations,
-                    SubFlowTransitionItems: subFlowValue.Transitions);
+                    SubFlowTransitionItems: subFlowValue.Transitions,
+                    // Bubble the (possibly deeper) subflow's long-poll termination signal up the chain.
+                    Interaction: subFlowValue.Interaction);
             }
         }
         catch (Exception ex)
@@ -1049,9 +1051,24 @@ public sealed class InstanceQueryAppService(
         // Declarative long-poll termination: when the instance is paused on a state that terminates
         // long polling and the caller's role is granted the signal, tell the client to stop polling,
         // render the entered-state screen, and acknowledge via the ack href. Role-filtered so only the
-        // intended roles are told to stop. Gated on the main-flow current state (not a subflow view).
-        var interaction = await ResolveInteractionAsync(
-            input, instance, currentStateValue, displayedState, cancellationToken);
+        // intended roles are told to stop. The awaiting instance may be THIS instance (leaf) or a
+        // nested subflow whose signal bubbled up via SubFlowStateInfo — in the subflow case the ack
+        // href is rewritten to THIS level so the client always acknowledges the instance it polls; the
+        // acknowledge endpoint then descends the chain. The two are mutually exclusive (a parent in a
+        // SubFlow state is not itself in a terminate state). Role filtering for the bubbled case was
+        // already applied at the child level (caller role forwarded via headers).
+        var interaction = subFlowStateInfo.Interaction?.TerminateLongPoll == true
+            ? new InstanceInteractionOutput
+            {
+                TerminateLongPoll = true,
+                Ack = new AckHref
+                {
+                    Href = urlTemplateBuilder.BuildLongPollAckUrl(
+                        input.Domain, input.Workflow, instance.Id.ToString())
+                }
+            }
+            : await ResolveInteractionAsync(
+                input, instance, currentStateValue, displayedState, cancellationToken);
 
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
@@ -1982,7 +1999,8 @@ public sealed class InstanceQueryAppService(
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
-        List<TransitionItem>? SubFlowTransitionItems = null);
+        List<TransitionItem>? SubFlowTransitionItems = null,
+        InstanceInteractionOutput? Interaction = null);
 
     private sealed record WizardViewSelection(
         ViewDefinition? ViewDefinition,

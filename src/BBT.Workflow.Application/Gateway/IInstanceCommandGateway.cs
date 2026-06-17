@@ -94,5 +94,18 @@ public interface IInstanceCommandGateway
     Task<Result> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Acknowledges a long-poll termination signal and resumes the paused pipeline, descending the
+    /// active SubFlow chain (local or cross-domain) to the instance that is actually awaiting.
+    /// Routes to local or remote execution based on target domain. Each level either resumes (if it is
+    /// the awaiting instance) or forwards to its active SubFlow child via this same method.
+    /// </summary>
+    /// <param name="input">Target domain, workflow, instance and caller context.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result indicating success or failure of the resume along the chain.</returns>
+    Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default);
 }
 
