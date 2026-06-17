@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
@@ -59,7 +60,9 @@ public sealed class HttpTaskInvoker(
                 new HttpMethod(binding.Method),
                 binding.Url);
 
-            // Add headers
+            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
+            // captured here and applied to request.Content below instead of request.Headers.
+            string? headerContentType = null;
             if (!string.IsNullOrEmpty(binding.Headers))
             {
                 var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
@@ -67,18 +70,23 @@ public sealed class HttpTaskInvoker(
                 {
                     foreach (var header in headers)
                     {
+                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                        {
+                            headerContentType = header.Value;
+                            continue;
+                        }
+
                         request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }
                 }
             }
 
-            // Add body for non-GET requests
+            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
             if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
             {
-                request.Content = new StringContent(
-                    binding.Body,
-                    Encoding.UTF8,
-                    "application/json");
+                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
+                request.Content = new StringContent(binding.Body, Encoding.UTF8);
+                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
             }
 
             var response = await httpClient.SendAsync(request, cancellationToken);

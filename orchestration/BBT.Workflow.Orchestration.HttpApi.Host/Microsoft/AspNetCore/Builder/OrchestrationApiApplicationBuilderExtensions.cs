@@ -34,6 +34,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
         app.UseParentInstanceIdEnrichment();
         app.UseSecurityHeaders();
         app.UseCurrentUser();
+        app.UseRawRequestBodyBuffering();
         app.UseStaticFiles();
         app.UseAetherApiVersioning(
             useSwagger: !app.Environment.IsProduction(),

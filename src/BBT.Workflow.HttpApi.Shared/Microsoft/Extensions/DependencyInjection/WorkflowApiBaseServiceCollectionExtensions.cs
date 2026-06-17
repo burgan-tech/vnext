@@ -18,6 +18,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -64,6 +65,12 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         services.AddEndpointsApiExplorer();
         services.AddAetherApiVersioning(apiTitle: "vNext API");
         services.AddScoped<IWorkflowContext, WorkflowContext>();
+
+        // Raw request body capture for signature verification (JWS/mTLS): expose the original payload to
+        // mappings via ScriptContext.RawBody. Replaces the ambient-only default registered in the Application layer.
+        services.AddHttpContextAccessor();
+        services.Replace(ServiceDescriptor.Singleton<BBT.Workflow.Scripting.IRequestRawBodyProvider,
+            BBT.Workflow.Middlewares.HttpContextRawBodyProvider>());
 
         services.AddControllers()
             .AddJsonOptions(options =>

@@ -223,6 +223,10 @@ public static class TaskServiceCollectionExtensions
     {
         services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
 
+        // Default raw-body provider resolves the original request body from the ambient job scope only.
+        // HTTP hosts replace this (via Replace) with one that also reads the live HTTP request.
+        services.TryAddSingleton<IRequestRawBodyProvider, AmbientRequestRawBodyProvider>();
+
         // Sandbox + custom-script-helpers options, bound defensively from configuration so a missing
         // section simply yields safe defaults (sandbox disabled, helpers disabled). Registered as
         // concrete singletons (not IOptions) so consumers can be constructed without an IConfiguration.

@@ -195,16 +195,58 @@ public static class TaskBindingMapper
     /// <summary>
     /// Maps HttpTask to HttpTaskBinding.
     /// </summary>
-    private static HttpTaskBinding MapHttpTask(HttpTask task) => new()
+    private static HttpTaskBinding MapHttpTask(HttpTask task)
     {
-        Url = task.Url,
-        Method = task.Method,
-        Headers = task.Headers?.GetRawText(),
-        Body = task.Body?.GetRawText(),
-        TimeoutSeconds = task.TimeoutSeconds,
-        ValidateSSL = task.ValidateSSL,
-        AcceptedStatusCodes = task.AcceptedStatusCodes
-    };
+        var contentType = HttpContentType.Resolve(task.ContentType, ReadHeaderContentType(task.Headers));
+
+        return new HttpTaskBinding
+        {
+            Url = task.Url,
+            Method = task.Method,
+            Headers = task.Headers?.GetRawText(),
+            Body = task.RawBody ?? SerializeBody(task.Body, contentType),
+            ContentType = task.ContentType,
+            TimeoutSeconds = task.TimeoutSeconds,
+            ValidateSSL = task.ValidateSSL,
+            AcceptedStatusCodes = task.AcceptedStatusCodes
+        };
+    }
+
+    /// <summary>
+    /// Serializes the task body to its wire representation. JSON content types preserve the raw JSON text;
+    /// for non-JSON content types a JSON-string body is unwrapped to its raw value (e.g. form-urlencoded
+    /// "a=1&amp;b=2") so it is not transmitted with surrounding quotes.
+    /// </summary>
+    private static string? SerializeBody(JsonElement? body, string contentType)
+    {
+        if (body is not { } element)
+            return null;
+
+        if (!HttpContentType.IsJson(contentType) && element.ValueKind == JsonValueKind.String)
+            return element.GetString();
+
+        return element.GetRawText();
+    }
+
+    /// <summary>
+    /// Reads the "Content-Type" entry (case-insensitive) from the task headers JSON, if present.
+    /// </summary>
+    private static string? ReadHeaderContentType(JsonElement? headers)
+    {
+        if (headers is not { ValueKind: JsonValueKind.Object } element)
+            return null;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "Content-Type", System.StringComparison.OrdinalIgnoreCase)
+                && property.Value.ValueKind == JsonValueKind.String)
+            {
+                return property.Value.GetString();
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Maps DaprServiceTask to DaprServiceBinding.

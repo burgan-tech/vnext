@@ -10,7 +10,8 @@ namespace BBT.Workflow.Scripting;
 /// </summary>
 public sealed class ScriptContextFactory(
     IComponentCacheStore componentCacheStore,
-    ILogger<ScriptContext> logger) : IScriptContextFactory
+    ILogger<ScriptContext> logger,
+    IRequestRawBodyProvider? rawBodyProvider = null) : IScriptContextFactory
 {
     /// <summary>
     /// Creates a new fluent builder for constructing ScriptContext instances.
@@ -18,6 +19,6 @@ public sealed class ScriptContextFactory(
     /// <returns>A new ScriptContextBuilder instance for fluent configuration.</returns>
     public IScriptContextBuilder NewBuilder(IInstanceRepository  instanceRepository)
     {
-        return new ScriptContextBuilder(componentCacheStore, instanceRepository, logger);
+        return new ScriptContextBuilder(componentCacheStore, instanceRepository, logger, rawBodyProvider);
     }
 }
