@@ -138,6 +138,9 @@ public sealed class TransitionContextFactory(
         if (input.Execution?.IsSubFlowResume == true)
             executionContext.Directives.MarkAsSubFlowResume();
 
+        if (input.Execution?.IsLongPollAckResume == true)
+            executionContext.Directives.MarkAsLongPollAckResume();
+
         if (input.Execution?.IsTimeoutTransition == true)
             executionContext.Directives.MarkAsTimeoutTransition();
 

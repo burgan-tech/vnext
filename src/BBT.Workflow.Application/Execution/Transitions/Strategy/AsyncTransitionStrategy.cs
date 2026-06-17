@@ -177,7 +177,7 @@ public sealed class AsyncTransitionStrategy(
         TransitionExecutionContext ctx,
         CancellationToken cancellationToken)
     {
-        if (!ctx.Instance.IsBusy && !ctx.Instance.IsCompleted && !ctx.Directives.IsSubFlowResume)
+        if (!ctx.Instance.IsBusy && !ctx.Instance.IsCompleted && !ctx.Directives.IsInternalResume)
         {
             await using var innerUow = await uowManager.BeginAsync(
                 new UnitOfWorkOptions

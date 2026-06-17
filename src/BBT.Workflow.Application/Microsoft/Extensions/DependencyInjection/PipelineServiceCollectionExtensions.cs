@@ -3,6 +3,7 @@ using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Execution.LongPoll;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.PostCommit;
@@ -80,6 +81,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, ChangeStateStep>();
         services.AddScoped<ITransitionStep, RunOnEntryTasksStep>();
         services.AddScoped<ITransitionStep, HandleSubFlowStep>();
+        services.AddScoped<ITransitionStep, HandleLongPollTerminationStep>();
         services.AddScoped<ITransitionStep, ClearBusyOnResumeStep>();
         services.AddScoped<ITransitionStep, ScheduleTransitionsStep>();
         services.AddScoped<ITransitionStep, RunAutomaticTransitionsStep>();
@@ -105,6 +107,9 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<IPostCommitHandler<StartSubflowJob>, StartSubflowJobHandler>();
         services.AddScoped<IPostCommitHandler<ForwardToSubflowJob>, ForwardToSubflowJobHandler>();
         services.AddSingleton<IPostCommitFailurePolicy, DefaultPostCommitFailurePolicy>();
+
+        // Long-poll termination resume (acknowledge endpoint + fallback timeout job)
+        services.AddScoped<ILongPollAckResumeService, LongPollAckResumeService>();
 
         return services;
     }

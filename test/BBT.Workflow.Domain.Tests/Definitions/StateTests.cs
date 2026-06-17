@@ -575,6 +575,88 @@ public class StateTests
         Assert.Empty(state!.Aliases);
     }
 
+    [Fact]
+    public void Deserialize_ShouldPopulateInteractionLongPoll_WithRolesAndTimeout()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "interaction": {
+                "longPoll": {
+                    "terminate": true,
+                    "fallbackTimeoutSeconds": 90,
+                    "roles": [ { "role": "backoffice.operator", "grant": "allow" } ]
+                }
+            }
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.True(state!.TerminatesLongPollOnEntry);
+        Assert.Equal(90, state.LongPollFallbackTimeoutSeconds);
+        Assert.NotNull(state.LongPollAckRoles);
+        Assert.Single(state.LongPollAckRoles!);
+        Assert.Equal("backoffice.operator", state.LongPollAckRoles!.First().Role);
+        Assert.True(state.LongPollAckRoles!.First().IsAllow);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldDefaultLongPoll_WhenTerminateOnlySpecified()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "interaction": { "longPoll": { "terminate": true } }
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.True(state!.TerminatesLongPollOnEntry);
+        Assert.Equal(60, state.LongPollFallbackTimeoutSeconds); // default
+        Assert.NotNull(state.LongPollAckRoles);
+        Assert.Empty(state.LongPollAckRoles!);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldNotTerminateLongPoll_WhenInteractionOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch"
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Null(state!.Interaction);
+        Assert.False(state.TerminatesLongPollOnEntry);
+        Assert.Equal(60, state.LongPollFallbackTimeoutSeconds);
+        Assert.Null(state.LongPollAckRoles);
+    }
+
     private static System.Text.Json.JsonSerializerOptions EnumNamingSerializerOptions => new()
     {
         PropertyNameCaseInsensitive = true,

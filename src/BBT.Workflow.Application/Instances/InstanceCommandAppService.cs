@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
+using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Execution.LongPoll;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Aether.Application.Services;
 using BBT.Aether.BackgroundJob;
@@ -53,6 +55,10 @@ public sealed class InstanceCommandAppService(
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     ITimerEvaluator timerEvaluator,
+    ITransitionAuthorizationManager transitionAuthorizationManager,
+    IInstanceCancellationService cancellationService,
+    ILongPollAckResumeService longPollAckResumeService,
+    ICurrentUser currentUser,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -147,6 +153,60 @@ public sealed class InstanceCommandAppService(
             Key = existingInstance.Key,
             Status = existingInstance.Status
         });
+    }
+
+    /// <inheritdoc />
+    public async Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        var instanceResult = await instanceRepository.GetActiveAsync(input.Instance, cancellationToken);
+        if (!instanceResult.IsSuccess)
+            return Result.Fail(instanceResult.Error);
+
+        var instance = instanceResult.Value!;
+
+        // Idempotent: nothing to acknowledge (already resumed by an earlier ack or the fallback).
+        if (!instance.IsAwaitingLongPollAck)
+            return Result.Ok();
+
+        var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result.Fail(workflowResult.Error);
+
+        var workflow = workflowResult.Value!;
+
+        // Role check against the entered state's interaction.longPoll.roles (default-allow when none).
+        var state = workflow.FindState(instance.GetCurrentState);
+        var ackRoles = state?.LongPollAckRoles;
+        if (ackRoles is { Count: > 0 })
+        {
+            var callerRoles = BuildCallerRoles(input.Role);
+            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
+                callerRoles, ackRoles, instance, cancellationToken: cancellationToken);
+            if (!allowed)
+                return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
+        }
+
+        // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
+        // operation safe even if cancellation is missed.
+        await cancellationService.ProcessStateTransitionsCancellationAsync(
+            instance.Id, [LongPollAckConstants.JobKey], cancellationToken);
+
+        return await longPollAckResumeService.ResumeAsync(
+            workflow.Domain, workflow.Key, workflow.Version, instance.Id, cancellationToken);
+    }
+
+    private IReadOnlyCollection<string> BuildCallerRoles(string? explicitRole)
+    {
+        var roles = new List<string>();
+        if (!string.IsNullOrWhiteSpace(explicitRole))
+            roles.Add(explicitRole.Trim());
+        if (currentUser.Roles is { Length: > 0 })
+            roles.AddRange(currentUser.Roles);
+        return roles;
     }
 
     /// <summary>

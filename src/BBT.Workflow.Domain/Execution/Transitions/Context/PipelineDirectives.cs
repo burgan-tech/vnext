@@ -53,6 +53,19 @@ public sealed class PipelineDirectives
     public bool IsSubFlowResume { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this execution is resuming from a long-poll acknowledge
+    /// (declarative long-poll termination on state entry — client acknowledged or fallback fired).
+    /// </summary>
+    public bool IsLongPollAckResume { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this is an internal, system-triggered pipeline resume of an
+    /// already-Busy instance (subflow completion or long-poll acknowledge). These share lock-key,
+    /// validation-bypass and busy-confirmation behavior.
+    /// </summary>
+    public bool IsInternalResume => IsSubFlowResume || IsLongPollAckResume;
+
+    /// <summary>
     /// Gets a value indicating whether this execution is triggered by a workflow timeout.
     /// </summary>
     public bool IsTimeoutTransition { get; private set; }
@@ -118,6 +131,11 @@ public sealed class PipelineDirectives
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     public void MarkAsSubFlowResume() => IsSubFlowResume = true;
+
+    /// <summary>
+    /// Marks this execution as a long-poll acknowledge resume scenario.
+    /// </summary>
+    public void MarkAsLongPollAckResume() => IsLongPollAckResume = true;
 
     /// <summary>
     /// Marks this execution as a workflow timeout transition.
