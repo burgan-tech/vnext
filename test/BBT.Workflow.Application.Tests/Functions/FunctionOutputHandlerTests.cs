@@ -238,10 +238,116 @@ public class FunctionOutputHandlerTests
         ((Dictionary<string, dynamic?>)response.Data).ShouldContainKey(function.Key.ToVariableName());
     }
 
+    // ─── CreateRawResponse: output headers/status (multi-task) ─────────────────
+
+    [Fact]
+    public void CreateRawResponse_UsesOutputHeadersAndStatus_WhenProvided()
+    {
+        var function = CreateMultiTaskFunction(rawResponse: true);
+        var context = CreateScriptContext();
+        var outputHeaders = new Dictionary<string, string>
+        {
+            ["X-JWS-Signature"] = "eyJ...",
+            ["X-Total-Count"] = "42"
+        };
+
+        var response = FunctionAppService.CreateRawResponse(
+            function, context, data: new { ok = true }, outputHeaders: outputHeaders, outputStatusCode: 400);
+
+        response.StatusCode.ShouldBe(400);
+        response.Headers.ShouldNotBeNull();
+        response.Headers!["X-JWS-Signature"].ShouldBe("eyJ...");
+        response.Headers!["X-Total-Count"].ShouldBe("42");
+    }
+
+    [Fact]
+    public void CreateRawResponse_OutputHeadersOverrideSingleTask()
+    {
+        var function = CreateFunction(rawResponse: true);
+        var context = CreateScriptContext();
+        var taskKey = TaskRef.Key.ToVariableName();
+        context.SetStandardResponse(new StandardTaskResponse
+        {
+            Data = new Dictionary<string, object?> { ["title"] = "from task" },
+            StatusCode = 201,
+            Headers = new Dictionary<string, string> { ["x-source"] = "single-task" }
+        }, taskKey);
+
+        var response = FunctionAppService.CreateRawResponse(
+            function, context, data: new { ok = true },
+            outputHeaders: new Dictionary<string, string> { ["x-source"] = "output" },
+            outputStatusCode: 410);
+
+        response.StatusCode.ShouldBe(410);
+        response.Headers!["x-source"].ShouldBe("output");
+    }
+
+    [Fact]
+    public void CreateRawResponse_FallsBackToSingleTask_WhenOutputHeadersNull()
+    {
+        var function = CreateFunction(rawResponse: true);
+        var context = CreateScriptContext();
+        var taskKey = TaskRef.Key.ToVariableName();
+        context.SetStandardResponse(new StandardTaskResponse
+        {
+            Data = new Dictionary<string, object?> { ["title"] = "from task" },
+            StatusCode = 201,
+            Headers = new Dictionary<string, string> { ["x-source"] = "single-task" }
+        }, taskKey);
+
+        var response = FunctionAppService.CreateRawResponse(
+            function, context, data: new { ok = true });
+
+        response.StatusCode.ShouldBe(201);
+        response.Headers!["x-source"].ShouldBe("single-task");
+    }
+
+    [Fact]
+    public void CreateRawResponse_MultiTaskWithoutOutputHeaders_HasNoHeaders()
+    {
+        var function = CreateMultiTaskFunction(rawResponse: true);
+        var context = CreateScriptContext();
+
+        var response = FunctionAppService.CreateRawResponse(function, context, data: new { ok = true });
+
+        response.StatusCode.ShouldBeNull();
+        response.Headers.ShouldBeNull();
+    }
+
+    [Fact]
+    public void CreateRawResponse_NormalizesObjectValuedOutputHeaders()
+    {
+        var function = CreateMultiTaskFunction(rawResponse: true);
+        var context = CreateScriptContext();
+        var outputHeaders = new Dictionary<string, object?>
+        {
+            ["X-Total-Count"] = 42,
+            ["X-Null"] = null
+        };
+
+        var response = FunctionAppService.CreateRawResponse(
+            function, context, data: new { ok = true }, outputHeaders: outputHeaders);
+
+        response.Headers.ShouldNotBeNull();
+        response.Headers!["X-Total-Count"].ShouldBe("42");
+        response.Headers.ShouldNotContainKey("X-Null");
+    }
+
     private static Function CreateFunction(bool rawResponse)
     {
         var function = new Function(TaskScope.Domain, CreateTask(1, TaskRef), rawResponse: rawResponse);
         function.SetReference(new Reference("send-otp", "test-domain", "sys-functions", "1.0.0"));
+        return function;
+    }
+
+    private static Function CreateMultiTaskFunction(bool rawResponse)
+    {
+        var function = new Function(
+            TaskScope.Domain,
+            CreateTask(1, TaskRef),
+            onExecutionTasks: [CreateTask(1, TaskRef), CreateTask(2, Task2Ref)],
+            rawResponse: rawResponse);
+        function.SetReference(new Reference("get-hesaplar", "test-domain", "sys-functions", "1.0.0"));
         return function;
     }
 
