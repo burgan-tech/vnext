@@ -20,13 +20,15 @@ public sealed class ReservedTransitionResolver : IReservedTransitionResolver
             || context.IsUpdateDataTransition()
             || context.Directives.IsTimeoutTransition
             || context.Directives.IsSubFlowResume
+            || context.Directives.IsLongPollAckResume
             || context.IsSharedTransition();
     }
 
     /// <inheritdoc />
     public string GetOwnLockKey(TransitionExecutionContext context)
     {
-        if (context.Directives.IsSubFlowResume)     return context.LockKey + ":resume";
+        if (context.Directives.IsSubFlowResume)       return context.LockKey + ":resume";
+        if (context.Directives.IsLongPollAckResume)   return context.LockKey + ":lpack";
         if (context.IsCancelTransition())           return context.LockKey + ":cancel";
         if (context.IsExitTransition())             return context.LockKey + ":exit";
         if (context.IsUpdateDataTransition())       return context.LockKey + ":updatedata";

@@ -2110,7 +2110,58 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string errorCode,
         string? boundaryAction);
-  
+
+    #endregion
+
+    #region Long-Poll Termination
+
+    /// <summary>
+    /// Logs when the pipeline pauses on state entry for declarative long-poll termination.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20300,
+        Level = LogLevel.Information,
+        Message = "Long-poll termination armed on instance {InstanceId} at state {State}; fallback in {FallbackSeconds}s")]
+    public static partial void LongPollTerminationArmed(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        int fallbackSeconds);
+
+    /// <summary>
+    /// Logs when a paused pipeline resumes after a long-poll acknowledge (or fallback timeout).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20301,
+        Level = LogLevel.Information,
+        Message = "Long-poll acknowledge resumed pipeline for instance {InstanceId}")]
+    public static partial void LongPollAckResumed(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a long-poll acknowledge resume is skipped because the instance is no longer awaiting acknowledge.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20302,
+        Level = LogLevel.Debug,
+        Message = "Long-poll acknowledge resume skipped (not awaiting) for instance {InstanceId}")]
+    public static partial void LongPollAckResumeSkipped(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a long-poll acknowledge resume fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20303,
+        Level = LogLevel.Error,
+        Message = "Long-poll acknowledge resume failed for instance {InstanceId}: {Reason}")]
+    public static partial void LongPollAckResumeFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string reason);
+
     #endregion
 
     #region Multi-Channel Notification

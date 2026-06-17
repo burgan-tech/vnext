@@ -102,6 +102,9 @@ public class TransitionPipeline
             }
 
             // SubFlow Resume resumes an already-Busy instance; confirm the busy mark.
+            // (Long-poll acknowledge resume is intentionally NOT re-marked here: the paused
+            // instance is already Busy, and a redundant resume that no-ops must not strand an
+            // already-advanced instance in Busy.)
             if (context.Directives.IsSubFlowResume)
                 await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 

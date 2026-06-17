@@ -103,5 +103,15 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
             ? _local.MarkBusyAsync(input, cancellationToken)
             : _remote.MarkBusyAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.AcknowledgeLongPollAsync(input, cancellationToken)
+            : _remote.AcknowledgeLongPollAsync(input, cancellationToken);
+    }
 }
 

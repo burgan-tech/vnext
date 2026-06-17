@@ -376,7 +376,9 @@ public sealed class InstanceQueryAppService(
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
                     SubFlowActiveCorrelations: subFlowValue.ActiveCorrelations,
-                    SubFlowTransitionItems: subFlowValue.Transitions);
+                    SubFlowTransitionItems: subFlowValue.Transitions,
+                    // Bubble the (possibly deeper) subflow's long-poll termination signal up the chain.
+                    Interaction: subFlowValue.Interaction);
             }
         }
         catch (Exception ex)
@@ -1046,6 +1048,28 @@ public sealed class InstanceQueryAppService(
                 displayedState = aliasDisplay;
         }
 
+        // Declarative long-poll termination: when the instance is paused on a state that terminates
+        // long polling and the caller's role is granted the signal, tell the client to stop polling,
+        // render the entered-state screen, and acknowledge via the ack href. Role-filtered so only the
+        // intended roles are told to stop. The awaiting instance may be THIS instance (leaf) or a
+        // nested subflow whose signal bubbled up via SubFlowStateInfo — in the subflow case the ack
+        // href is rewritten to THIS level so the client always acknowledges the instance it polls; the
+        // acknowledge endpoint then descends the chain. The two are mutually exclusive (a parent in a
+        // SubFlow state is not itself in a terminate state). Role filtering for the bubbled case was
+        // already applied at the child level (caller role forwarded via headers).
+        var interaction = subFlowStateInfo.Interaction?.TerminateLongPoll == true
+            ? new InstanceInteractionOutput
+            {
+                TerminateLongPoll = true,
+                Ack = new AckHref
+                {
+                    Href = urlTemplateBuilder.BuildLongPollAckUrl(
+                        input.Domain, input.Workflow, instance.Id.ToString())
+                }
+            }
+            : await ResolveInteractionAsync(
+                input, instance, currentStateValue, displayedState, cancellationToken);
+
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
             Data = dataHref,
@@ -1056,8 +1080,54 @@ public sealed class InstanceQueryAppService(
                 : subFlowStateInfo.StateType!,
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
-            Transitions = transitionItems
+            Transitions = transitionItems,
+            Interaction = interaction
         });
+    }
+
+    /// <summary>
+    /// Resolves the client-workflow-manager interaction directives for the response, or null when none
+    /// apply. Today this is long-poll termination: emitted only on the main-flow current state, when the
+    /// instance is awaiting acknowledge, the state declares <c>interaction.longPoll.terminate</c>, and the
+    /// caller's role is granted by <c>interaction.longPoll.roles</c> (default-allow when no roles configured).
+    /// </summary>
+    private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
+        GetInstanceStateInput input,
+        Instance instance,
+        State currentStateValue,
+        string? displayedState,
+        CancellationToken cancellationToken)
+    {
+        if (!instance.IsAwaitingLongPollAck || !currentStateValue.TerminatesLongPollOnEntry)
+            return null;
+
+        // Only signal on the main-flow current state view, not a subflow terminal view.
+        if (!string.Equals(displayedState, instance.CurrentState, StringComparison.Ordinal)
+            && displayedState is not null)
+        {
+            // displayedState may be a role alias of the current state; still allow when it aliases it.
+            if (currentStateValue.Aliases.Count == 0)
+                return null;
+        }
+
+        var ackRoles = currentStateValue.LongPollAckRoles;
+        if (ackRoles is { Count: > 0 })
+        {
+            var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
+            var callerRoles = input.Roles ?? (string.IsNullOrWhiteSpace(input.Role) ? [] : [input.Role]);
+            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
+                callerRoles, ackRoles, instance, requestContext, cancellationToken);
+            if (!allowed)
+                return null;
+        }
+
+        var ackHref = urlTemplateBuilder.BuildLongPollAckUrl(
+            input.Domain, input.Workflow, instance.Id.ToString());
+        return new InstanceInteractionOutput
+        {
+            TerminateLongPoll = true,
+            Ack = new AckHref { Href = ackHref }
+        };
     }
 
     /// <summary>
@@ -1929,7 +1999,8 @@ public sealed class InstanceQueryAppService(
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
-        List<TransitionItem>? SubFlowTransitionItems = null);
+        List<TransitionItem>? SubFlowTransitionItems = null,
+        InstanceInteractionOutput? Interaction = null);
 
     private sealed record WizardViewSelection(
         ViewDefinition? ViewDefinition,

@@ -343,6 +343,44 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Acknowledges a long-poll termination signal and resumes the paused pipeline.
+    /// The client calls this after it stops long polling and renders the entered-state screen.
+    /// Idempotent: a no-op when the instance is not awaiting acknowledge (already resumed or the
+    /// fallback timeout already fired).
+    /// </summary>
+    /// <response code="200">Acknowledge accepted (pipeline resumed or already resumed)</response>
+    /// <response code="403">Acknowledge not permitted for the current roles</response>
+    /// <response code="404">Instance or workflow not found</response>
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/longpoll/ack")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AcknowledgeLongPollAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] string? version = null,
+        [FromQuery] string? role = null,
+        CancellationToken cancellationToken = default)
+    {
+        var headers = httpContextAccessor.HttpContext?.Request.Headers
+            .ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString()) ?? [];
+
+        var input = new AcknowledgeLongPollInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            Version = version,
+            Role = role,
+            Headers = headers
+        };
+
+        var result = await commandAppService.AcknowledgeLongPollAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Retries a faulted workflow instance by re-executing the incomplete transition.
     /// </summary>
     /// <param name="domain">The domain name.</param>

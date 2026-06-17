@@ -436,6 +436,54 @@ public sealed class RemoteInstanceCommandAppService(
     }
 
     /// <summary>
+    /// Acknowledges a long-poll termination signal on a remote instance by calling the remote API.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/longpoll/ack
+    /// </summary>
+    public async Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            if (!endpointResult.IsSuccess)
+                return Result.Fail(endpointResult.Error);
+
+            var endpoint = endpointResult.Value!;
+
+            var relativePath = InstanceUrlTemplates.LongPollAck(
+                input.Domain,
+                input.Workflow,
+                input.Instance,
+                ApiVersionPrefix);
+
+            var query = new List<string>();
+            if (!string.IsNullOrEmpty(input.Version))
+                query.Add($"version={Uri.EscapeDataString(input.Version)}");
+            if (!string.IsNullOrEmpty(input.Role))
+                query.Add($"role={Uri.EscapeDataString(input.Role)}");
+            if (query.Count > 0)
+                relativePath += "?" + string.Join("&", query);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri);
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Handles HTTP response by mapping status codes to appropriate Result types.
     /// Follows Railway Pattern: Status code → Result.Fail (not exceptions).
     /// </summary>
