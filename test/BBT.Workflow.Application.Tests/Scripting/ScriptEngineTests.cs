@@ -223,6 +223,186 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
         Assert.Equal("Got secret: mock_secret_value", response.Data);
     }
 
+    [Fact]
+    public async Task Compile_SoapTask_Mapping_Should_Resolve_XmlDocument_Facade()
+    {
+        // Regression: a mapping that merely touches SoapTask forces Roslyn to resolve every member
+        // signature, including SetBody(XmlDocument). XmlDocument's metadata identity binds to the
+        // System.Xml.ReaderWriter facade, which is not the System.Private.Xml implementation reachable
+        // via typeof(XmlDocument).Assembly. Without the facade reference this failed with
+        // CS0012 (System.Xml.ReaderWriter not referenced). The engine's default references must cover it
+        // WITHOUT the mapping author supplying any System.Xml reference explicitly.
+        var code = """
+                   using System.Threading.Tasks;
+                   using BBT.Workflow.Scripting;
+                   using BBT.Workflow.Definitions;
+
+                   public class SoapMapping : IMapping
+                   {
+                       public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
+                       {
+                           var soap = (task as SoapTask)!;
+                           soap.SetUrl("https://example.com/soap");
+                           soap.SetBody("<a/>");
+                           return Task.FromResult(new ScriptResponse { Data = soap.Body, Headers = null });
+                       }
+
+                       public Task<ScriptResponse> OutputHandler(ScriptContext context)
+                           => Task.FromResult(new ScriptResponse { Data = "out", Headers = null });
+                   }
+                   """;
+
+        // Only the runtime contract assembly is supplied; the XML references come from the engine defaults.
+        var references = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location)
+        };
+
+        var instance = await _scriptEngine.CompileToInstanceAsync<IMapping>(code, references);
+
+        var soapTask = WorkflowTaskFactory.CreateSoapTask();
+        var response = await instance.InputHandler(
+            task: soapTask,
+            context: new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+                .SetWorkflow(WorkflowFactory.CreateDefault())
+                .SetInstance(InstanceFactory.CreateDefault())
+                .SetTransition(TransitionFactory.CreateDefault())
+                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+                .SetDefinitions(new Dictionary<string, object>())
+                .Build());
+
+        Assert.NotNull(response);
+        Assert.Equal("<a/>", response.Data);
+        Assert.Equal("https://example.com/soap", soapTask.Url);
+        Assert.Equal("<a/>", soapTask.Body);
+    }
+
+    [Fact]
+    public async Task Compile_Mapping_Using_SecurityElement_Escape_Without_Explicit_Using_Should_Work()
+    {
+        // System.Security is a default using, so SecurityElement.Escape resolves with no explicit
+        // using in the mapping. Verifies XML/SOAP-safe escaping of user input is available by default.
+        var code = """
+                   using System.Threading.Tasks;
+                   using BBT.Workflow.Scripting;
+                   using BBT.Workflow.Definitions;
+
+                   public class EscapeMapping : IMapping
+                   {
+                       public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
+                           => Task.FromResult(new ScriptResponse { Data = SecurityElement.Escape("<a>&'\""), Headers = null });
+
+                       public Task<ScriptResponse> OutputHandler(ScriptContext context)
+                           => Task.FromResult(new ScriptResponse { Data = "out", Headers = null });
+                   }
+                   """;
+
+        var references = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location)
+        };
+
+        var instance = await _scriptEngine.CompileToInstanceAsync<IMapping>(code, references);
+
+        var response = await instance.InputHandler(
+            task: WorkflowTaskFactory.CreateHttpTask(),
+            context: new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+                .SetWorkflow(WorkflowFactory.CreateDefault())
+                .SetInstance(InstanceFactory.CreateDefault())
+                .SetTransition(TransitionFactory.CreateDefault())
+                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+                .SetDefinitions(new Dictionary<string, object>())
+                .Build());
+
+        Assert.Equal("&lt;a&gt;&amp;&apos;&quot;", response.Data?.ToString());
+    }
+
+    [Fact]
+    public async Task Compile_Mapping_Using_ScriptBase_EscapeXml_Helper_Should_Work()
+    {
+        // ScriptBase.EscapeXml wraps SecurityElement.Escape as a curated helper.
+        var code = """
+                   using System.Threading.Tasks;
+                   using BBT.Workflow.Scripting;
+                   using BBT.Workflow.Definitions;
+                   using BBT.Workflow.Scripting.Functions;
+
+                   public class EscapeHelperMapping : ScriptBase, IMapping
+                   {
+                       public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
+                           => Task.FromResult(new ScriptResponse { Data = EscapeXml("a & b"), Headers = null });
+
+                       public Task<ScriptResponse> OutputHandler(ScriptContext context)
+                           => Task.FromResult(new ScriptResponse { Data = "out", Headers = null });
+                   }
+                   """;
+
+        var references = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
+        };
+
+        var instance = await _scriptEngine.CompileToInstanceAsync<IMapping>(code, references);
+
+        var response = await instance.InputHandler(
+            task: WorkflowTaskFactory.CreateHttpTask(),
+            context: new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+                .SetWorkflow(WorkflowFactory.CreateDefault())
+                .SetInstance(InstanceFactory.CreateDefault())
+                .SetTransition(TransitionFactory.CreateDefault())
+                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+                .SetDefinitions(new Dictionary<string, object>())
+                .Build());
+
+        Assert.Equal("a &amp; b", response.Data?.ToString());
+    }
+
+    [Fact]
+    public async Task Compile_Mapping_Using_ScriptBase_ParseXml_Should_Work()
+    {
+        // Locks in the general System.Xml path: ScriptBase.ParseXml returns an XmlDocument, so the
+        // facade reference is required even for mappings that never touch SoapTask.
+        var code = """
+                   using System.Threading.Tasks;
+                   using BBT.Workflow.Scripting;
+                   using BBT.Workflow.Definitions;
+                   using BBT.Workflow.Scripting.Functions;
+
+                   public class XmlMapping : ScriptBase, IMapping
+                   {
+                       public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
+                       {
+                           var doc = ParseXml("<root><v>42</v></root>");
+                           return Task.FromResult(new ScriptResponse { Data = XmlToString(doc), Headers = null });
+                       }
+
+                       public Task<ScriptResponse> OutputHandler(ScriptContext context)
+                           => Task.FromResult(new ScriptResponse { Data = "out", Headers = null });
+                   }
+                   """;
+
+        var references = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(ScriptBase).Assembly.Location)
+        };
+
+        var instance = await _scriptEngine.CompileToInstanceAsync<IMapping>(code, references);
+
+        var response = await instance.InputHandler(
+            task: WorkflowTaskFactory.CreateHttpTask(),
+            context: new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+                .SetWorkflow(WorkflowFactory.CreateDefault())
+                .SetInstance(InstanceFactory.CreateDefault())
+                .SetTransition(TransitionFactory.CreateDefault())
+                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+                .SetDefinitions(new Dictionary<string, object>())
+                .Build());
+
+        Assert.NotNull(response);
+        Assert.Contains("<root>", response.Data?.ToString());
+    }
 }
 
 public interface IMyCompiledClass

@@ -24,6 +24,23 @@ public static class WorkflowTaskFactory
         return task;
     }
 
+    public static SoapTask CreateSoapTask(string name = "mock-soap")
+    {
+        var config = """
+                      {
+                        "url": "https://example.com/soap",
+                        "soapAction": "urn:Test",
+                        "soapVersion": "1.1",
+                        "body": "<envelope/>",
+                        "timeoutSeconds": 25
+                      }
+                     """;
+
+        var task = SoapTask.Create(config.ToJsonElement());
+        task.SetReference(new Reference(name, "test", "sys-tasks", "1.0.0"));
+        return task;
+    }
+
     public static GetInstancesTask CreateGetInstancesTask(
         string name = "get-instances",
         string domain = "test-domain",
