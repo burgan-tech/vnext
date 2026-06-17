@@ -129,6 +129,12 @@ namespace BBT.Workflow.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("ChainHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ChainToken")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -211,6 +217,9 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("character varying(36)")
                         .HasColumnName("ModifiedByBehalfOf");
 
+                    b.Property<int?>("ResumePointStepOrder")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Stage")
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
@@ -225,6 +234,14 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("text[]");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ChainHeartbeatAt")
+                        .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
+                        .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
+
+                    b.HasIndex("ChainToken")
+                        .HasDatabaseName("IX_Instances_ChainToken")
+                        .HasFilter("\"ChainToken\" IS NOT NULL");
 
                     b.HasIndex("EffectiveState")
                         .HasDatabaseName("IX_Instances_EffectiveState");

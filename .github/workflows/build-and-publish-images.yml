@@ -45,6 +45,7 @@ env:
   INBOX_IMAGE_NAME: ${{ github.repository }}/inbox
   OUTBOX_IMAGE_NAME: ${{ github.repository }}/outbox
   DBMIGRATOR_IMAGE_NAME: ${{ github.repository }}/db-migrator
+  MCP_SERVER_IMAGE_NAME: ${{ github.repository }}/mcp-server
 
 jobs:
   prepare:
@@ -216,6 +217,11 @@ jobs:
             image: db-migrator
             image_name_env: DBMIGRATOR_IMAGE_NAME
             dockerfile: ./workers/BBT.Workflow.DbMigrator/Dockerfile
+            with_version_arg: false
+          - key: mcp-server
+            image: mcp-server
+            image_name_env: MCP_SERVER_IMAGE_NAME
+            dockerfile: ./tools/BBT.Workflow.Mcp.Server/Dockerfile
             with_version_arg: false
     steps:
       - name: Checkout code
@@ -703,9 +709,15 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
+          # 10.0.x (latest 10.0 SDK) is installed alongside the 10.0.2xx band so
+          # the AspNetCore.App shared framework matching the runner's system
+          # runtime (e.g. 10.0.9) is present. PostSharp rolls its host forward to
+          # that runtime and requires the matching AspNetCore.App or it fails with
+          # "No compatible version of requested runtime framework Microsoft.AspNetCore.App".
           dotnet-version: |
             9.0.x
             10.0.2xx
+            10.0.x
 
       - name: Setup NETStandard.Library.Ref for PostSharp
         run: ./scripts/setup-netstandard-ref.sh
@@ -747,6 +759,15 @@ jobs:
             -p:Version=${{ env.NUGET_VERSION }} \
             --output ./nuget-artifacts
 
+      # dotnet tool: installs as `vnext-mcp` (stdio MCP server for local AI tooling).
+      - name: Pack BBT.Workflow.Mcp (dotnet tool)
+        run: |
+          dotnet pack tools/BBT.Workflow.Mcp.Server/BBT.Workflow.Mcp.Server.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:Version=${{ env.NUGET_VERSION }} \
+            --output ./nuget-artifacts
+
       - name: Push all packages to NuGet.org
         run: |
           dotnet nuget push ./nuget-artifacts/*.nupkg \
@@ -766,6 +787,7 @@ jobs:
           echo "| BBT.Workflow.Modules.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Modules.Scripting) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Domain | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Domain) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Tasks.Abstractions | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Tasks.Abstractions) |" >> $GITHUB_STEP_SUMMARY
+          echo "| BBT.Workflow.Mcp (dotnet tool: \`vnext-mcp\`) | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Mcp) |" >> $GITHUB_STEP_SUMMARY
 
   publish-npm:
     name: Publish npm Package
@@ -787,6 +809,9 @@ jobs:
           node-version: '24'
           always-auth: false
           cache: 'npm'
+          # setup-node runs from the repo root, but the lockfile lives in
+          # vnext-meta, so point caching at it explicitly.
+          cache-dependency-path: vnext-meta/package-lock.json
 
       - name: Set package version
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version

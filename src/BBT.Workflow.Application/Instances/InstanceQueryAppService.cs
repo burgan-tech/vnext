@@ -20,6 +20,7 @@ using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Users;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Schemas;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -343,7 +344,8 @@ public sealed class InstanceQueryAppService(
                 Extensions = extensions,
                 Headers = headers,
                 QueryParams = queryParams,
-                Role = role
+                Role = currentUser.ResolveCallerRole(headers),
+                Roles = currentUser.ResolveCallerRoles(headers)
             };
 
             var subFlowResult = await instanceQueryGateway.GetFunctionWithStateAsync(
@@ -1259,7 +1261,9 @@ public sealed class InstanceQueryAppService(
             Workflow = subflow.SubFlowName,
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
-            Extensions = extensions
+            Extensions = extensions,
+            Role = currentUser.ResolveCallerRole(null),
+            Roles = currentUser.ResolveCallerRoles(null)
         };
 
         return await instanceQueryGateway.GetFunctionWithExtensionsAsync(
@@ -1342,7 +1346,9 @@ public sealed class InstanceQueryAppService(
             Domain = subflow.SubFlowDomain,
             Workflow = subflow.SubFlowName,
             Version = subflow.SubFlowVersion,
-            Instance = subflow.SubFlowInstanceId.ToString()
+            Instance = subflow.SubFlowInstanceId.ToString(),
+            Role = currentUser.ResolveCallerRole(null),
+            Roles = currentUser.ResolveCallerRoles(null)
         };
 
         return await instanceQueryGateway.GetFunctionWithSchemaAsync(
@@ -1514,7 +1520,8 @@ public sealed class InstanceQueryAppService(
                 Version = instance.Subflow!.SubFlowVersion,
                 Headers = headers ?? new Dictionary<string, string?>(),
                 QueryParams = queryParams ?? new Dictionary<string, string?>(),
-                Role = role
+                Role = currentUser.ResolveCallerRole(headers),
+                Roles = currentUser.ResolveCallerRoles(headers)
             },
             transitionKey,
             cancellationToken);
@@ -1787,12 +1794,16 @@ public sealed class InstanceQueryAppService(
                     break;
                 }
 
+                // Blacklist decision is made over the WHOLE grant list, not the split subsets:
+                // when no ALLOW grant exists anywhere, both subsets evaluate as deny-only blacklists.
+                var applyBlacklistFallback = !transitionRoles.Any(g => g.IsAllow);
+
                 var staticMatch = !hasStaticRoles;
                 if (hasStaticRoles)
                 {
                     foreach (var role in userRoles)
                     {
-                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles))
+                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles, applyBlacklistFallback))
                         {
                             staticMatch = true;
                             break;
@@ -1804,7 +1815,7 @@ public sealed class InstanceQueryAppService(
                 if (hasPredefinedRoles)
                 {
                     predefinedMatch = await transitionAuthorizationManager.IsPredefinedRoleMatchAsync(
-                        predefinedRoles, instance, cancellationToken);
+                        predefinedRoles, instance, cancellationToken, applyBlacklistFallback);
                 }
 
                 if (staticMatch && predefinedMatch)

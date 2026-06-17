@@ -117,9 +117,20 @@ public interface ITransitionAuthorizationManager
     /// <summary>
     /// Checks whether the current user matches any predefined role ($InstanceStarter, $PreviousUser)
     /// in the given role grants. Only evaluates predefined roles; static roles are ignored.
+    /// DENY always wins. If at least one ALLOW grant exists, this is an allowlist (default deny).
+    /// A grant set with no ALLOW grant is a blacklist (default allow unless a matching DENY applies),
+    /// controlled by <paramref name="defaultAllowWhenNoAllowGrant"/>.
     /// </summary>
+    /// <param name="roleGrants">The grant set to evaluate (predefined roles only).</param>
+    /// <param name="instance">The instance used to resolve predefined roles.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="defaultAllowWhenNoAllowGrant">
+    /// When true (default), a grant set with no ALLOW grant allows callers that are not explicitly denied.
+    /// Set to false to force strict allowlist semantics (used when the blacklist decision is made over a wider grant set).
+    /// </param>
     Task<bool> IsPredefinedRoleMatchAsync(
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance instance,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool defaultAllowWhenNoAllowGrant = true);
 }

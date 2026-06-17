@@ -1,5 +1,6 @@
 using BBT.Workflow.Application.Resilience;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Components;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
@@ -11,6 +12,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Functions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -70,6 +72,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
@@ -83,7 +86,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();
         services.AddScoped<IInstanceBusyPropagationService, InstanceBusyPropagationService>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
-        
+        services.AddScoped<IChildSubflowFaultService, ChildSubflowFaultService>();
+        services.AddScoped<ITransitionJobEnqueuer, TransitionJobEnqueuer>();
+
         // Instance Services
         services.AddScoped<IInstanceCancellationService, InstanceCancellationService>();
         
@@ -113,6 +118,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<ICacheBackend<Function>, RuntimeCacheBackend<Function>>();
         services.AddSingleton<ICacheBackend<View>, RuntimeCacheBackend<View>>();
         services.AddSingleton<ICacheBackend<Extension>, RuntimeCacheBackend<Extension>>();
+        services.AddSingleton<ICacheBackend<Mapping>, RuntimeCacheBackend<Mapping>>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();
@@ -130,6 +136,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IWorkflowCastHandler, ViewWorkflowCastHandler>();
         services.AddSingleton<IWorkflowCastHandler, SchemaWorkflowCastHandler>();
         services.AddSingleton<IWorkflowCastHandler, ExtensionWorkflowCastHandler>();
+        services.AddSingleton<IWorkflowCastHandler, MappingWorkflowCastHandler>();
         services.AddSingleton<WorkflowCastProcessor>();
     }
 
@@ -144,6 +151,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IComponentValidator, FunctionComponentValidator>();
         services.AddSingleton<IComponentValidator, SchemaComponentValidator>();
         services.AddSingleton<IComponentValidator, ExtensionComponentValidator>();
+        services.AddSingleton<IComponentValidator, MappingComponentValidator>();
         services.AddSingleton<ComponentValidatorProcessor>();
     }
 

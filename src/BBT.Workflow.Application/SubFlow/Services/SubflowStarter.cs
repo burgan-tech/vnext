@@ -50,6 +50,7 @@ public sealed class SubflowStarter(
             {
                 return Result.Fail(mappingResult.Error);
             }
+
             inputMappingResult = mappingResult.Value;
         }
 
@@ -67,7 +68,7 @@ public sealed class SubflowStarter(
             mode,
             cancellationToken);
     }
-    
+
     /// <summary>
     /// Internal method that contains the common logic for starting SubFlow/SubProcess workflows.
     /// </summary>
@@ -86,7 +87,8 @@ public sealed class SubflowStarter(
         ExecMode mode,
         CancellationToken cancellationToken)
     {
-        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
+        using var activity =
+            SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
         SubFlowActivityHelper.EnrichWithStart(
             activity,
             parentInstance.Id,
@@ -98,14 +100,14 @@ public sealed class SubflowStarter(
         activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
 
         using (logger.BeginScope(new Dictionary<string, object>
-        {
-            [TelemetryConstants.TagNames.Domain] = workflow.Domain,
-            [TelemetryConstants.TagNames.Flow] = workflow.Key,
-            [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
-            [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
-            [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
-            [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId
-        }))
+               {
+                   [TelemetryConstants.TagNames.Domain] = workflow.Domain,
+                   [TelemetryConstants.TagNames.Flow] = workflow.Key,
+                   [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
+                   [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
+                   [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
+                   [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId
+               }))
         {
             // Prepare instance creation input
             var createInstanceInput = new CreateInstanceInput
@@ -149,6 +151,7 @@ public sealed class SubflowStarter(
                 createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
                     JsonSerializer.Serialize(overrides.Transitions);
             }
+
             if (overrides?.States is { Count: > 0 })
             {
                 createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
@@ -177,6 +180,7 @@ public sealed class SubflowStarter(
                 foreach (var kv in fromMapping)
                     headers[kv.Key] = kv.Value;
             }
+
             headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
 
             var subFlowStartInput = new StartInstanceInput(
@@ -227,8 +231,6 @@ public sealed class SubflowStarter(
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
-        var mappingCode = subFlowConfig.Mapping.DecodedCode;
-
         // Determine the appropriate mapping interface based on SubFlow type
         var mappingInterfaceType = subFlowConfig.Type.Code == "S"
             ? typeof(ISubFlowMapping)
@@ -238,7 +240,7 @@ public sealed class SubflowStarter(
         {
             // Compile the mapping script to the appropriate interface
             var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-                mappingCode,
+                subFlowConfig.Mapping,
                 cancellationToken: ct);
 
             // Cast to the appropriate mapping interface and execute InputHandler

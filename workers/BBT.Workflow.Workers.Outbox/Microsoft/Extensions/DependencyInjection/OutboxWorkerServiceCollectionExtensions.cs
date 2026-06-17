@@ -52,6 +52,7 @@ public static class OutboxWorkerServiceCollectionExtensions
     private static IServiceCollection AddHostedServices(this IServiceCollection services)
     {
         services.AddHostedService<OutboxProcessorHostedService>();
+        services.AddHostedService<ChainReaperHostedService>();
         return services;
     }
 }

@@ -181,7 +181,7 @@ public class ResourceLockStepTests
             .ReturnsForAnyArgs<Task<dynamic>>(_ => throw new InvalidOperationException("script error"));
 
         _scriptEngine
-            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<string>())
+            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
             .ReturnsForAnyArgs(Task.FromResult(mapping));
 
         SetupScriptContextFactory();
@@ -201,7 +201,7 @@ public class ResourceLockStepTests
             .ReturnsForAnyArgs(Task.FromResult<dynamic>(keyResult));
 
         _scriptEngine
-            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<string>())
+            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
             .ReturnsForAnyArgs(Task.FromResult(mapping));
 
         SetupScriptContextFactory();

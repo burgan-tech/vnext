@@ -55,7 +55,7 @@ public sealed class TransitionDataMapper(
         var result = await ResultExtensions.TryAsync(
             async ct =>
             {
-                var mappingInstance = await CompileMappingScriptAsync(transition, ct);
+                var mappingInstance = await CompileMappingScriptAsync(transition, workflow.Scripts, ct);
                 var scriptContext = await BuildScriptContextAsync(
                     payload, transition, workflow, instance, runtimeInfoProvider, headers, ct);
 
@@ -75,10 +75,12 @@ public sealed class TransitionDataMapper(
     /// </summary>
     private Task<ITransitionMapping> CompileMappingScriptAsync(
         Transition transition,
+        ScriptSettings? flowScripts,
         CancellationToken cancellationToken)
     {
         return scriptEngine.CompileToInstanceAsync<ITransitionMapping>(
-            transition.Mapping!.DecodedCode,
+            transition.Mapping!,
+            flowScripts: flowScripts,
             cancellationToken: cancellationToken);
     }
 

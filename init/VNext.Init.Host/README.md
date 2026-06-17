@@ -9,7 +9,8 @@ Node.js service for downloading npm packages and publishing them to the vnext AP
 - Merges with custom components if available
 - **Automatic version generation** using extended SemVer format
 - **Opt-in domain replacement** via `replaceDomain: true` + `appDomain` (standard publish)
-- **Cross-domain exclusion** — components/references marked `crossDomain: true` are skipped during replacement
+- **Source-domain matched** — only references on the package's own (source) domain are rewritten; references on a different domain are preserved as cross-domain
+- **Cross-domain exclusion** — references marked `crossDomain: true` (and the `config` subtree) are never rewritten
 - Publishes to vnext API endpoint
 - Provides REST API for package management
 - **Two specialized endpoints** for different package types
@@ -177,12 +178,25 @@ This endpoint is for publishing any npm package with optional domain replacement
 | `appDomain` | ✅ **Required** | ⭕ Only with `replaceDomain: true` |
 | `replaceDomain` | N/A (always active) | Set `true` to enable replacement |
 | Domain Replacement | Always (when appDomain provided) | Only if `replaceDomain: true` + `appDomain` |
-| Cross-domain exclusion | ✅ Yes | ✅ Yes |
+| Source-domain matched | ✅ Yes | ✅ Yes |
+| Cross-domain references preserved | ✅ Yes | ✅ Yes |
 | Special Ordering | Yes (Workflows first, sys-flows first) | No |
 
 ---
 
 ## Domain Replacement
+
+### Core Rule — Source-Domain Match
+
+Replacement is driven by **value matching**, not by blanket rewriting:
+
+- **Source domain** = the package's own domain (`vnext.config.json` → `domain`).
+- **Target domain** = the request's `appDomain`.
+
+A `domain` field is rewritten **only when its value equals the source domain**. Any `domain`
+that points at a different domain is a genuine **cross-domain reference** and is left untouched.
+This rule is applied uniformly at every level — root, `attributes`, `data[]`, subprocess
+`process`, and any nested object.
 
 ### Standard Package (`/api/package/publish`)
 
@@ -190,25 +204,34 @@ Domain replacement is **opt-in**. It is enabled only when **both** conditions ar
 - `replaceDomain: true` is set in the request body
 - `appDomain` contains a non-empty target domain
 
-When enabled, **all** domain fields are replaced at every level:
+When enabled, each `domain` is decided by value (source domain = `core` in the table below,
+target = `my-domain`):
 
-| Field | Replaced? |
-|-------|-----------|
-| Root `domain` | ✅ Yes (unless `crossDomain: true` on root) |
-| `attributes.domain` | ✅ Yes (unless enclosing object has `crossDomain: true`) |
-| `data[].domain` | ✅ Yes (unless `crossDomain: true` on the data item) |
-| `data[].attributes.domain` | ✅ Yes (unless enclosing object has `crossDomain: true`) |
-| Any nested `domain` field | ✅ Yes (unless enclosing object has `crossDomain: true`) |
-| Any field inside `config` | ❌ Never (preserved as-is) |
-| Any field inside `process` | ❌ Never (preserved as-is) |
+| Case | Example value | Result |
+|------|---------------|--------|
+| `domain` equals source domain | `"core"` | ✅ Replaced → `"my-domain"` |
+| `domain` is a different domain | `"payments"` | ⛔ Preserved (cross-domain) |
+| `process.domain` equals source domain | `"core"` | ✅ Replaced → `"my-domain"` |
+| `process.domain` is a different domain | `"notification"` | ⛔ Preserved (cross-domain subflow) |
+| Object marked `crossDomain: true` | any value | ⛔ Preserved (explicit opt-out) |
+| Any field inside `config` | any value | ⛔ Never visited (skipped entirely) |
+
+The rule is the same for `attributes.domain`, `data[].domain`, `data[].attributes.domain`, and
+any deeply nested `domain`.
 
 ### Runtime Package (`/api/package/runtime/publish`)
 
-Domain replacement is **always active** when `appDomain` is provided (required). The same cross-domain exclusion rules apply.
+Domain replacement is **always active** when `appDomain` is provided (required). The same
+source-domain-match rules apply.
 
-### Cross-Domain Exclusion
+### Cross-Domain References
 
-Components or references that intentionally target a different domain can opt out of domain replacement by setting `crossDomain: true` on the relevant object.
+There are two ways a `domain` is preserved instead of rewritten:
+
+1. **By value (automatic)** — the `domain` differs from the source domain, so it is recognized
+   as a cross-domain reference and kept as-is. No flag required.
+2. **By flag (explicit)** — setting `crossDomain: true` on an object pins its `domain` even if
+   the value happens to equal the source domain.
 
 **Root-level exclusion** — the entire component is skipped:
 ```json
@@ -251,12 +274,39 @@ Components or references that intentionally target a different domain can opt ou
 }
 ```
 
-After replacement with `appDomain: "my-domain"`:
-- `my-workflow.domain` → `"my-domain"`
-- `local-task.domain` → `"my-domain"`
-- `cross-domain-task.domain` → `"payments"` (unchanged)
+After replacement with source domain `account` (the package's own domain) and
+`appDomain: "my-domain"`:
+- `my-workflow.domain` → `"my-domain"` (equals source)
+- `local-task.domain` → `"my-domain"` (equals source)
+- `cross-domain-task.domain` → `"payments"` (different domain → preserved; the `crossDomain: true` flag also pins it explicitly)
+
+### Subprocess (`process`) Example
+
+A SubProcess task's `process` reference follows the same source-domain match. With source
+domain `local-test-domain` and `appDomain: "real-domain"`:
+
+```json
+{
+  "key": "parent-flow",
+  "domain": "local-test-domain",
+  "flow": "sys-flows",
+  "attributes": {
+    "tasks": [
+      { "process": { "key": "start-another-flow", "domain": "local-test-domain", "flow": "sys-flows", "version": "1.0.0" } },
+      { "process": { "key": "sms-flow", "domain": "notification", "flow": "sys-flows", "version": "1.0.0" } }
+    ]
+  }
+}
+```
+
+After replacement:
+- `start-another-flow` `process.domain` → `"real-domain"` (equals source → replaced)
+- `sms-flow` `process.domain` → `"notification"` (different domain → preserved, genuine cross-domain subflow)
 
 ### Example
+
+In this example the source domain is `core` (the package's own domain), so every `domain`
+equal to `core` is rewritten to `my-domain`.
 
 **Before (`replaceDomain: true`, `appDomain: "my-domain"`):**
 ```json

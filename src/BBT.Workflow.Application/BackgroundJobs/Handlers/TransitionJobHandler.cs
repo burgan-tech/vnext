@@ -83,6 +83,14 @@ public sealed class TransitionJobHandler(
                             args.TransitionKey);
                     context.Actor = args.ExecutionActor;
                     context.CallerMode = args.CallerSync ? ExecMode.Sync : ExecMode.Async;
+                    context.ChainToken = args.ChainToken;
+
+                    // Transition-per-job: this job runs exactly ONE transition; its auto-chain
+                    // continuation is enqueued as the next job via the outbox instead of running
+                    // in-process. Requires outbox continuations to be enabled.
+                    context.EnqueueContinuations =
+                        executionOptions.Value.TransitionPerJob &&
+                        executionOptions.Value.UseOutboxContinuations;
 
                     // Use the background-specific method that handles pre-reserved instances
                     var result = await workflowExecutionService.ExecuteTransitionAsync(context, linkedCts.Token);

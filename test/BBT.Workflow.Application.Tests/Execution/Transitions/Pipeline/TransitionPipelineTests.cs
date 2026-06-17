@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
@@ -95,8 +96,20 @@ public class TransitionPipelineTests
             .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<Instance>(0)));
 
-        _pipeline = new TransitionPipeline(
+        // The single-transition step runner now lives in TransitionExecutor (S2).
+        // Wrap the mock steps in a real executor so pipeline behavior is preserved.
+        var executor = new TransitionExecutor(
             _mockSteps,
+            Substitute.For<ILogger<TransitionExecutor>>());
+
+        // Continuation realization is now pluggable (S3); Inline reproduces the
+        // original in-process auto-chain.
+        var continuationDispatcher = new ContinuationDispatcher(
+            new IContinuationStrategy[] { new InlineContinuationStrategy() });
+
+        _pipeline = new TransitionPipeline(
+            executor,
+            continuationDispatcher,
             _mockLockScopeFactory,
             _mockReservedResolver,
             _mockBusyMarker,

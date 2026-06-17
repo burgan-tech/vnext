@@ -95,4 +95,5 @@ The current trace is enriched with `vnext.chain.depth`, `vnext.pipeline.profile`
 - `src/BBT.Workflow.Domain/Execution/Transitions/Pipeline/PipelineExecutionProfile.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/PipelineProfileResolver.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`
+- [Async Transition Execution Modes](async-transition-execution-modes.md) — how the `WorkflowExecution` flags route async continuations.
 

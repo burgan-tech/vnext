@@ -33,7 +33,8 @@ public static class SchemaFieldVisibilityService
 
     /// <summary>
     /// Determines whether a property with the given role grants is visible to the caller.
-    /// Semantics: DENY wins; if no DENY match for any caller role, then any ALLOW match for any caller role → visible.
+    /// Semantics: DENY wins. If at least one ALLOW grant exists, any ALLOW match for a caller role → visible (default hidden otherwise).
+    /// A grant set with no ALLOW grant is a blacklist: visible unless a caller role is explicitly denied.
     /// </summary>
     public static bool IsPathVisibleForCaller(
         IReadOnlyList<RoleGrant> roleGrants,

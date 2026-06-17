@@ -1,26 +1,21 @@
-using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
-using BBT.Aether.Uow;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.SubFlow;
+using BBT.Workflow.Workers.Inbox.Forwarding;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
 /// <summary>
-/// Handles ChildSubflowCancelRequestedEvent to propagate cancellation to child subflows.
-/// This handler delegates the actual cancellation logic to IChildSubflowCancellationService.
+/// Forwards <see cref="ChildSubflowCancelRequestedEvent"/> to the Orchestration <c>child-cancel</c>
+/// internal endpoint via Dapr service invocation. Thin relay: Orchestration's
+/// <c>IChildSubflowCancellationService</c> cancels the child subflow.
 /// </summary>
 internal sealed class ChildSubflowCancelRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
-    IServiceScopeFactory scopeFactory,
-    ILogger<ChildSubflowCancelRequestedEventHandler> logger
-) : IEventHandler<ChildSubflowCancelRequestedEvent>
+    IOrchestrationForwarder forwarder,
+    ILogger<ChildSubflowCancelRequestedEventHandler> logger) : IEventHandler<ChildSubflowCancelRequestedEvent>
 {
-    /// <summary>
-    /// Handles the ChildSubflowCancelRequestedEvent by delegating to the cancellation service.
-    /// </summary>
     public async Task HandleAsync(CloudEventEnvelope<ChildSubflowCancelRequestedEvent> envelope,
         CancellationToken cancellationToken)
     {
@@ -49,26 +44,10 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
                 eventData.Domain,
                 eventData.Flow);
 
-            await scopeFactory.ExecuteWithWorkflowAsync(eventData.Domain, eventData.Flow, eventData.Version,
-                async (sp, ct) =>
-                {
-                    var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                    var cancellationService = sp.GetRequiredService<IChildSubflowCancellationService>();
-
-                    await using var uow = await uowManager.BeginAsync(new UnitOfWorkOptions
-                    {
-                        Scope = UnitOfWorkScopeOption.RequiresNew
-                    }, ct);
-
-                    await cancellationService.CancelChildSubflowAsync(
-                        eventData.InstanceId,
-                        eventData.Domain,
-                        eventData.Flow,
-                        eventData.Version,
-                        ct);
-
-                    await uow.CommitAsync(ct);
-                }, cancellationToken);
+            var version = string.IsNullOrEmpty(eventData.Version) ? string.Empty : $"?version={eventData.Version}";
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-cancel{version}";
+            await forwarder.ForwardAsync(HttpMethod.Post, route, new { },
+                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
         }
     }
 }

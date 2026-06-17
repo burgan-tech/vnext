@@ -13,6 +13,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Functions;
 
@@ -165,17 +166,54 @@ public sealed class FunctionAppService(
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
 
-        var executeResult = await taskCoordinator.ExecuteAsync(
-            function.GetExecuteTasks(),
-            null,
-            TaskTrigger.Extension,
-            scriptContext,
-            cancellationToken);
+        Result executeResult;
+        try
+        {
+            executeResult = await taskCoordinator.ExecuteAsync(
+                function.GetExecuteTasks(),
+                null,
+                TaskTrigger.Extension,
+                scriptContext,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Custom function {FunctionKey} execution threw an exception. Domain={Domain}, InstanceId={InstanceId}",
+                function.Key,
+                function.Domain,
+                instance?.Id);
+
+            return Result<FunctionResponseOutput>.Fail(Error.Failure(
+                WorkflowErrorCodes.ExtensionExecutionFailed,
+                $"Function '{function.Key}' execution failed: {ex.Message}"));
+        }
 
         if (!executeResult.IsSuccess)
-            return Result<FunctionResponseOutput>.Fail(executeResult.Error);
+        {
+            Logger.LogError(
+                "Custom function {FunctionKey} execution failed. Domain={Domain}, InstanceId={InstanceId}, Error={ErrorMessage}",
+                function.Key,
+                function.Domain,
+                instance?.Id,
+                executeResult.Error.Message ?? "Unknown error");
 
-        return await BuildResponseAsync(function, scriptContext, cancellationToken);
+            return Result<FunctionResponseOutput>.Fail(executeResult.Error);
+        }
+
+        var responseResult = await BuildResponseAsync(function, scriptContext, cancellationToken);
+        if (!responseResult.IsSuccess)
+        {
+            Logger.LogError(
+                "Custom function {FunctionKey} response mapping failed. Domain={Domain}, InstanceId={InstanceId}, Error={ErrorMessage}",
+                function.Key,
+                function.Domain,
+                instance?.Id,
+                responseResult.Error.Message ?? "Unknown error");
+        }
+
+        return responseResult;
     }
 
     /// <summary>
@@ -190,20 +228,36 @@ public sealed class FunctionAppService(
     {
         if (function.Output != null)
         {
-            var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
-                function.Output.DecodedCode, cancellationToken: cancellationToken);
-            var scriptResponse = await handler.OutputHandler(scriptContext);
-
-            if (function.RawResponse)
-                return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
-                    function,
-                    scriptContext,
-                    scriptResponse.Data));
-
-            return Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput
+            try
             {
-                Data = new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = scriptResponse.Data }
-            });
+                var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
+                    function.Output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
+                var scriptResponse = await handler.OutputHandler(scriptContext);
+
+                if (function.RawResponse)
+                    return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
+                        function,
+                        scriptContext,
+                        scriptResponse.Data));
+
+                return Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput
+                {
+                    Data = new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = scriptResponse.Data }
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(
+                    ex,
+                    "Custom function {FunctionKey} output ScriptMapping failed. Domain={Domain}, InstanceId={InstanceId}",
+                    function.Key,
+                    function.Domain,
+                    scriptContext.Instance?.Id);
+
+                return Result<FunctionResponseOutput>.Fail(Error.Failure(
+                    WorkflowErrorCodes.ExtensionExecutionFailed,
+                    $"Function '{function.Key}' output ScriptMapping failed: {ex.Message}"));
+            }
         }
 
         if (function.RawResponse)

@@ -134,6 +134,23 @@ public interface IComponentCacheStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves a mapping (script-library) component definition (<c>sys-mappings</c>) from the cache.
+    /// </summary>
+    /// <param name="domain">The domain identifier where the mapping belongs.</param>
+    /// <param name="key">The unique key/name identifier of the mapping component.</param>
+    /// <param name="version">The specific version of the mapping. If null, returns the latest version.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>
+    /// A <see cref="Task{TResult}"/> whose result contains a <see cref="Result{T}"/> with the
+    /// <see cref="Mapping"/> if found, or <see cref="Error.NotFound"/> otherwise.
+    /// </returns>
+    Task<Result<Mapping>> GetMappingAsync(
+        string domain,
+        string key,
+        string? version,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Stores an entity in the cache.
     /// </summary>
     /// <typeparam name="T">The type of entity to store. Must implement <see cref="IDomainEntity"/>.</typeparam>

@@ -2,11 +2,13 @@ using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.DistributedLock;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Gateway;
@@ -27,8 +29,15 @@ namespace BBT.Workflow.Execution.Strategies;
 /// lock — so they are accepted and enqueued even while the main flow is Busy, mirroring
 /// the sync <see cref="Pipeline.TransitionPipeline"/>. Under the lock, checks if an active
 /// job already exists and returns 409 if so. Sets the instance to Busy before enqueueing so callers immediately see
-/// the correct in-progress status. The UoW boundary in TransitionRunner guarantees
-/// atomicity: if the Dapr enqueue fails the UoW rolls back and the instance stays Active.
+/// the correct in-progress status.
+/// <para>
+/// Continuation/enqueue atomicity is governed by <c>WorkflowExecutionOptions.UseOutboxContinuations</c>:
+/// when ON, the durable intent + a <c>TransitionContinuationRequested</c> outbox row commit in one
+/// unit of work and the Inbox performs the Dapr enqueue (fully transactional). When OFF (default),
+/// the durable <c>InstanceJob</c> intent is committed in its own unit of work FIRST and the Dapr
+/// enqueue happens AFTER — so a failed commit can never orphan an enqueued job; a crash in the
+/// narrow window between the intent commit and the enqueue is recovered by the ChainReaper.
+/// </para>
 /// </summary>
 public sealed class AsyncTransitionStrategy(
     IBackgroundJobService backgroundJobService,
@@ -40,6 +49,7 @@ public sealed class AsyncTransitionStrategy(
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
     IInstanceCommandGateway instanceCommandGateway,
+    IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
@@ -206,15 +216,86 @@ public sealed class AsyncTransitionStrategy(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var (jobName, jobPayload, schedule, metadata) = BuildJobPayload(context, transContext, activity);
+        // S4: when outbox-routed continuations are enabled, persist the durable job intent and
+        // publish a TransitionContinuationRequested event ATOMICALLY (same UoW). The actual Dapr
+        // enqueue is performed by the Inbox handler — closing the dual-write gap. Otherwise keep
+        // the legacy pre-commit Dapr enqueue.
+        if (executionOptions.Value.UseOutboxContinuations)
+            return await PublishContinuationViaOutboxAsync(context, transContext, activity, cancellationToken);
 
-        // Enqueue to Dapr - external service, TryAsync is appropriate
+        // OFF (direct) path — intent-first ordering for atomicity:
+        // 1) Commit the durable InstanceJob intent in its OWN unit of work, THEN
+        // 2) enqueue to Dapr.
+        // This closes the dual-write gap: a Dapr job can never exist without a tracking
+        // InstanceJob (the previous order — enqueue then commit — could orphan a job if the
+        // commit failed). If the process crashes after the intent commit but before the
+        // enqueue, the ChainReaper backstop recovers the pending intent. The job is keyed by
+        // JobName (not the Dapr-returned id), so a generated id for the intent is sufficient —
+        // mirroring the outbox path.
+        var (jobName, jobPayload, schedule, metadata) = BuildJobPayload(context, transContext, activity);
+        var jobId = Guid.NewGuid();
+
+        await using (var jobUow = await uowManager.BeginAsync(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, cancellationToken))
+        {
+            await SaveJobRecordAsync(context, transContext, jobName, jobId, cancellationToken);
+            await jobUow.CommitAsync(cancellationToken);
+        }
+
+        // Side-effect AFTER the intent is durable. Dapr is external → TryAsync.
         var enqueueResult = await EnqueueToDaprAsync(jobName, jobPayload, schedule, metadata, cancellationToken);
         if (!enqueueResult.IsSuccess)
             return Result<string>.Fail(enqueueResult.Error);
 
-        // Save job record - repository call, no Try needed (infrastructure exceptions bubble up)
-        await SaveJobRecordAsync(context, transContext, jobName, enqueueResult.Value!, cancellationToken);
+        return Result<string>.Ok(jobName);
+    }
+
+    /// <summary>
+    /// Persists the durable job intent (<see cref="InstanceJob"/>) and publishes a
+    /// <see cref="TransitionContinuationRequested"/> event through the transactional outbox
+    /// within a single unit of work, so the intent and the outbox row commit atomically.
+    /// The Inbox handler then performs the real Dapr enqueue (at-least-once).
+    /// </summary>
+    private async Task<Result<string>> PublishContinuationViaOutboxAsync(
+        WorkflowExecutionContext context,
+        TransitionExecutionContext transContext,
+        Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        var jobName = $"trans-{context.InstanceId}-{context.TransitionKey}";
+
+        // The active-job guard keys on JobName, so a generated job id is sufficient here;
+        // the real Dapr job id is produced later by the Inbox handler's enqueue.
+        var jobId = Guid.NewGuid();
+
+        var continuation = new TransitionContinuationRequested
+        {
+            InstanceId = transContext.InstanceId,
+            Domain = transContext.Domain,
+            Flow = transContext.WorkflowKey,
+            Version = transContext.Workflow.Version,
+            TransitionKey = transContext.TransitionKey,
+            JobName = jobName,
+            Data = context.Data?.Attributes,
+            InstanceKey = context.Data?.Key,
+            Tags = context.Data?.Tags,
+            Stage = context.Data?.Stage,
+            Headers = context.Headers,
+            RouteValues = context.RouteValues,
+            ExecutionActor = context.Actor.ToString(),
+            TraceParent = activity?.Id,
+            TraceState = activity?.TraceStateString,
+            ChainToken = transContext.ChainToken, // propagate chain ownership (S6)
+            ChainDepth = transContext.ChainDepth
+        };
+
+        await using var uow = await uowManager.BeginAsync(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, cancellationToken);
+
+        await SaveJobRecordAsync(context, transContext, jobName, jobId, cancellationToken);
+        await eventBus.PublishAsync(continuation, subject: null, useOutbox: true, cancellationToken);
+
+        await uow.CommitAsync(cancellationToken);
 
         return Result<string>.Ok(jobName);
     }
