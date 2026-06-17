@@ -299,6 +299,14 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public dynamic? QueryParameters { get; private set; }
 
     /// <summary>
+    /// The original, unmodified request body exactly as received (a literal string, NOT camelCased or
+    /// re-serialized like <see cref="Body"/>). Intended for signature verification (JWS / mTLS) where the
+    /// payload must match the bytes that were signed. Null when no raw body is available for the current
+    /// execution (e.g. internal executions with neither an HTTP request nor a job scope).
+    /// </summary>
+    public string? RawBody { get; private set; }
+
+    /// <summary>
     /// The active workflow instance that is currently being processed or executed.
     /// This represents the live instance with its current state, data, and execution history.
     /// </summary>
@@ -606,6 +614,15 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetQueryParameters(object? queryParameters)
         {
             _context.QueryParameters = queryParameters;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the original raw request body (literal string, no re-serialization) for signature verification.
+        /// </summary>
+        public Builder SetRawBody(string? rawBody)
+        {
+            _context.RawBody = rawBody;
             return this;
         }
 

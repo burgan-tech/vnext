@@ -48,6 +48,13 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     public JsonElement? Data { get; set; }
 
     /// <summary>
+    /// Gets or sets the original, unmodified request body (as a literal string) captured at accept time.
+    /// Carried so background mappings can verify signatures (JWS / mTLS) over the exact payload bytes.
+    /// A string round-trips byte-for-byte through the camelCased job payload serialization, unlike <see cref="Data"/>.
+    /// </summary>
+    public string? RawBody { get; set; }
+
+    /// <summary>
     /// Gets or sets the instance key (Optional).
     /// </summary>
     public string? InstanceKey { get; set; }

@@ -8,6 +8,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -58,6 +59,10 @@ public sealed class TransitionJobHandler(
 
                 try
                 {
+                    // Expose the original raw request body to mappings built inside this job (no live
+                    // HttpContext here) so background signature verification (JWS/mTLS) can run.
+                    using var rawBodyScope = RawBodyExecutionScope.Set(args.RawBody);
+
                     BackgroundJobActivityHelper.EnrichActivity(activity, args);
                     BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
