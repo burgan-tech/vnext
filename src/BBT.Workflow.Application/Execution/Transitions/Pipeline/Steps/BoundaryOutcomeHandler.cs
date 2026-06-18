@@ -86,6 +86,7 @@ public static class BoundaryOutcomeHandler
             errorCode: executionError.NormalizedError.Code,
             errorLayer: executionError.NormalizedError.Layer.ToString(),
             statusCode: executionError.StatusCode,
+            stackTrace: executionError.StackTrace,
             traceId: context.TraceId);
 
         context.Instance.AddIncident(incident);
@@ -106,6 +107,7 @@ public static class BoundaryOutcomeHandler
             errorCode: error?.NormalizedError.Code ?? action?.PropagatedError?.Code ?? "Unknown",
             errorLayer: error?.NormalizedError.Layer.ToString() ?? "Pipeline",
             statusCode: error?.StatusCode,
+            stackTrace: error?.StackTrace,
             boundaryAction: action?.Action.ToString(),
             boundaryLevel: action?.ResolvedAtLevel?.ToString(),
             retryCount: action?.RetryPolicy?.MaxRetries ?? 0,

@@ -858,6 +858,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
             errorCode: "Task:Http:404",
             errorLayer: "Task",
             statusCode: 404,
+            stackTrace: "at Child.Task.Invoke() in Child.cs:line 42",
             boundaryAction: "Abort",
             boundaryLevel: "Global",
             traceId: "trace-1"));
@@ -879,6 +880,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal(404, faultedEvent.IncidentStatusCode);
         Assert.Equal("Task:Http:404", faultedEvent.IncidentErrorCode);
         Assert.Equal("Abort", faultedEvent.IncidentBoundaryAction);
+        Assert.Equal("at Child.Task.Invoke() in Child.cs:line 42", faultedEvent.IncidentStackTrace);
         Assert.True(faultedEvent.InstanceData.HasValue);
         Assert.Equal(42, faultedEvent.InstanceData.Value.GetProperty("childValue").GetInt32());
     }

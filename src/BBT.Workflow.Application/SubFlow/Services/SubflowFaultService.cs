@@ -106,13 +106,6 @@ public sealed class SubflowFaultService(
 
                     parentWorkflow = parentWorkflowResult.Value!;
 
-                    await outputMappingService.ApplyAsync(
-                        parentInstance,
-                        parentWorkflow,
-                        correlation.ParentState,
-                        input.InstanceData,
-                        cancellationToken);
-
                     var executionError = BuildExecutionError(input);
                     var currentState = parentWorkflow.GetState(parentInstance.GetCurrentState).Value;
                     var resolution = errorBoundaryResolver.Resolve(
@@ -127,6 +120,9 @@ public sealed class SubflowFaultService(
                         retryExecutor: null,
                         cancellationToken);
 
+                    // Record the incident on the parent BEFORE running output mapping so the
+                    // subflow fault (including stack trace) is visible to the output-mapping
+                    // script via ScriptContext.Incident, enabling error-driven routing.
                     var incident = RecordIncident(
                         parentInstance,
                         input,
@@ -141,6 +137,13 @@ public sealed class SubflowFaultService(
                     {
                         parentInstance.Fault(input.Domain);
                     }
+
+                    await outputMappingService.ApplyAsync(
+                        parentInstance,
+                        parentWorkflow,
+                        correlation.ParentState,
+                        input.InstanceData,
+                        cancellationToken);
 
                     await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                     await uow.CommitAsync(cancellationToken);
@@ -225,7 +228,7 @@ public sealed class SubflowFaultService(
             errorCode: $"SubFlow:Faulted:{input.IncidentErrorCode ?? "Unknown"}",
             errorLayer: "SubFlow",
             statusCode: input.IncidentStatusCode,
-            stackTrace: null,
+            stackTrace: input.IncidentStackTrace,
             boundaryAction: boundaryAction.ToString(),
             boundaryLevel: boundaryLevel?.ToString(),
             traceId: input.IncidentTraceId);
