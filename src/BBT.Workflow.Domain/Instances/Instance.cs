@@ -452,6 +452,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     IncidentMessage = activeIncident?.Message,
                     IncidentErrorCode = activeIncident?.ErrorCode,
                     IncidentErrorLayer = activeIncident?.ErrorLayer,
+                    IncidentStackTrace = activeIncident?.StackTrace,
                     IncidentStatusCode = activeIncident?.StatusCode,
                     IncidentTraceId = activeIncident?.TraceId,
                     IncidentTaskKey = activeIncident?.Task,
