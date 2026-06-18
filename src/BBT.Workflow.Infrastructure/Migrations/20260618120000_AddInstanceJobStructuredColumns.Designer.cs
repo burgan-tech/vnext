@@ -518,10 +518,6 @@ namespace BBT.Workflow.Migrations
                         .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName")
                         .HasFilter("\"IsActive\" = true");
 
-                    b.HasIndex("InstanceId", "JobType", "TransitionKey")
-                        .HasDatabaseName("IX_InstanceJobs_Active_Instance_Type_Key")
-                        .HasFilter("\"IsActive\" = true");
-
                     b.ToTable("InstanceJobs", "public");
                 });
 

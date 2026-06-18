@@ -457,12 +457,6 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(i => new { i.InstanceId, i.JobName })
                 .HasFilter("\"IsActive\" = true")
                 .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");
-
-            // Supports GetActiveForStateCancellationAsync: filter active jobs by
-            // (InstanceId, JobType, TransitionKey). Partial on active rows to stay compact.
-            b.HasIndex(i => new { i.InstanceId, i.JobType, i.TransitionKey })
-                .HasFilter("\"IsActive\" = true")
-                .HasDatabaseName("IX_InstanceJobs_Active_Instance_Type_Key");
         });
     }
 }

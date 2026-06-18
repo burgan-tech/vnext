@@ -20,13 +20,6 @@ public sealed class InstanceCancellationService(
     ILogger<InstanceCancellationService> logger)
     :  IInstanceCancellationService
 {
-    /// <summary>
-    /// Job types eligible for state-scoped cancellation: timer-based scheduled transitions and the
-    /// long-poll acknowledge fallback (whose well-known key is passed as a pseudo transition key).
-    /// </summary>
-    private static readonly JobType[] StateCancellationJobTypes =
-        [JobType.ScheduledTransition, JobType.LongPollAck];
-
     /// <inheritdoc />
     public async Task<Result> ProcessCancellationAsync(
         Guid instanceId,
@@ -97,20 +90,18 @@ public sealed class InstanceCancellationService(
                 return Result.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString()));
             }
 
-            // Structured (DB-side) match: scheduled-transition and long-poll-ack jobs whose
-            // targeted key is in the requested set. Async-transition (tx) jobs are intentionally
-            // NOT cancelled here — they guard themselves via the instance lock. Legacy rows
-            // (JobType.Unknown) are also returned for the transitional suffix-based fallback.
-            var candidates = await instanceJobRepository.GetActiveForStateCancellationAsync(
-                instance.Id,
-                StateCancellationJobTypes,
-                transitionKeys,
-                cancellationToken);
+            // The caller (e.g. CancelScheduledJobsStep) already resolved which transitions must be
+            // cancelled, so we simply match this instance's active jobs by their targeted key —
+            // no extra job-type conditioning. Matching uses the structured TransitionKey column
+            // instead of the previous fragile JobName suffix parse.
+            var allJobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
 
-            var jobsToCancel = candidates
-                .Where(job => job.JobType != JobType.Unknown
-                    // Transitional fallback for pre-rollout rows: old "-{key}" suffix match.
-                    || transitionKeys.Any(key => job.JobName.EndsWith($"-{key}", StringComparison.Ordinal)))
+            var jobsToCancel = allJobs
+                .Where(job => (job.TransitionKey != null && transitionKeys.Contains(job.TransitionKey))
+                    // Transitional fallback for pre-rollout rows (no structured columns):
+                    // old "-{key}" suffix match. Removable once no legacy rows remain.
+                    || (job.JobType == JobType.Unknown
+                        && transitionKeys.Any(key => job.JobName.EndsWith($"-{key}", StringComparison.Ordinal))))
                 .ToList();
 
             if (!jobsToCancel.Any())

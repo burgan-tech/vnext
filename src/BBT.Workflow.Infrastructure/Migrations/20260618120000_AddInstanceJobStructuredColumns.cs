@@ -6,8 +6,7 @@ namespace BBT.Workflow.Migrations
 {
     /// <summary>
     /// Adds the structured projection columns <c>JobType</c> and <c>TransitionKey</c> to
-    /// <c>InstanceJobs</c>, plus a partial composite index supporting state-scoped job
-    /// cancellation (filter active jobs by <c>InstanceId</c> + <c>JobType</c> + <c>TransitionKey</c>).
+    /// <c>InstanceJobs</c>.
     ///
     /// <para>
     /// These columns project the structured <c>JobName</c> (URN-style: <c>vnext.job.v1.{type}.{instanceId}[.{segment}]</c>)
@@ -36,23 +35,11 @@ namespace BBT.Workflow.Migrations
                 type: "character varying(100)",
                 maxLength: 100,
                 nullable: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_InstanceJobs_Active_Instance_Type_Key",
-                schema: "public",
-                table: "InstanceJobs",
-                columns: new[] { "InstanceId", "JobType", "TransitionKey" },
-                filter: "\"IsActive\" = true");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropIndex(
-                name: "IX_InstanceJobs_Active_Instance_Type_Key",
-                schema: "public",
-                table: "InstanceJobs");
-
             migrationBuilder.DropColumn(
                 name: "JobType",
                 schema: "public",
