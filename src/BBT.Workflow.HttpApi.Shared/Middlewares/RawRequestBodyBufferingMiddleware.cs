@@ -15,7 +15,7 @@ public sealed class RawRequestBodyBufferingMiddleware(RequestDelegate next)
     public const string RawBodyItemsKey = "__vnext.RawRequestBody";
 
     // Cap to protect memory; these JSON APIs carry small payloads.
-    private const long MaxBufferedBytes = 1024 * 1024; // 1 MB
+    private const long MaxBufferedBytes = 5 * 1024 * 1024; // 5 MB
 
     /// <summary>
     /// Captures the raw body (when applicable) and invokes the next middleware.
@@ -24,7 +24,9 @@ public sealed class RawRequestBodyBufferingMiddleware(RequestDelegate next)
     {
         if (ShouldCapture(context.Request))
         {
-            context.Request.EnableBuffering();
+            // Match the in-memory threshold to MaxBufferedBytes so captured bodies (capped at the same
+            // size by ShouldCapture) never spill to a temp file — avoids IOException on read-only /tmp.
+            context.Request.EnableBuffering(bufferThreshold: (int)MaxBufferedBytes);
 
             using var reader = new StreamReader(
                 context.Request.Body,
