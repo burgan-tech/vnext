@@ -22,12 +22,6 @@ public sealed class MonitorStatsService(
     : ApplicationService(serviceProvider), IMonitorStatsService
 {
 
-    /// <summary>
-    /// Default look-back window (in days) applied to the domain-wide counter when the caller's filter
-    /// does not constrain <c>createdAt</c>. Bounds how much data each schema scan considers.
-    /// </summary>
-    private const int DefaultWindowDays = 7;
-
     /// <inheritdoc />
     public async Task<Result<MonitorInstanceCountersResponse>> GetInstanceCountersAsync(
         MonitorGetInstanceCountersInput input,
@@ -181,18 +175,16 @@ public sealed class MonitorStatsService(
     private async Task<MonitorInstanceCountersResponse> CountAcrossDomainAsync(
         string domain, string? filter, CancellationToken ct)
     {
-        var effectiveFilter = BuildEffectiveFilter(filter, DateTime.UtcNow.AddDays(-DefaultWindowDays));
-
         var workflowKeys = await GetWorkflowKeysForDomainAsync(domain, ct);
         if (workflowKeys.Count == 0)
-            return new MonitorInstanceCountersResponse { AppliedFilter = effectiveFilter };
+            return new MonitorInstanceCountersResponse { AppliedFilter = filter };
 
         // One grouped aggregation query per schema (status breakdown in a single round-trip),
-        // each bounded by the effective createdAt window, fanned out across schemas.
+        // fanned out across schemas.
         var perSchema = await Task.WhenAll(
-            workflowKeys.Select(key => CountInIsolatedSchemaAsync(key, effectiveFilter, ct)));
+            workflowKeys.Select(key => CountInIsolatedSchemaAsync(key, filter, ct)));
 
-        var response = new MonitorInstanceCountersResponse { AppliedFilter = effectiveFilter };
+        var response = new MonitorInstanceCountersResponse { AppliedFilter = filter };
         foreach (var r in perSchema)
         {
             response.Active    += r.Active;
@@ -214,26 +206,6 @@ public sealed class MonitorStatsService(
 
         using (currentSchema.Use(schemaKey))
             return await repo.GetStatusCountsAsync(effectiveFilter, ct);
-    }
-
-    /// <summary>
-    /// Builds the filter actually applied to the domain-wide count. When the caller supplies no filter,
-    /// defaults to "created in the last <see cref="DefaultWindowDays"/> days". When the caller's filter
-    /// already constrains <c>createdAt</c>, it is honoured verbatim; otherwise the default window is
-    /// AND-merged so an unbounded full-schema scan is never issued by default.
-    /// </summary>
-    private static string BuildEffectiveFilter(string? userFilter, DateTime defaultFromUtc)
-    {
-        var defaultClause =
-            $"{{\"createdAt\":{{\"ge\":\"{defaultFromUtc:yyyy-MM-ddTHH:mm:ssZ}\"}}}}";
-
-        if (string.IsNullOrWhiteSpace(userFilter))
-            return defaultClause;
-
-        if (userFilter.Contains("createdAt", StringComparison.OrdinalIgnoreCase))
-            return userFilter;
-
-        return $"{{\"and\":[{userFilter},{defaultClause}]}}";
     }
 
     private static async Task<MonitorInstanceCountersResponse> CountInCurrentSchemaAsync(

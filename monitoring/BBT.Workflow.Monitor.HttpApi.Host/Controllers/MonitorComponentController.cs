@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Components;
@@ -77,8 +78,8 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
 
     /// <summary>
     /// Lists or fetches published component definitions (flows, tasks, schemas, views, functions, extensions).
-    /// When <paramref name="key"/> is supplied without <paramref name="version"/>, the latest version is returned;
-    /// when <paramref name="version"/> is supplied, that exact version is returned.
+    /// When <paramref name="key"/> is supplied, returns that single component (no pagination metadata).
+    /// When <paramref name="key"/> is omitted, returns a paged list with <c>pagination</c> and <c>items</c>.
     /// </summary>
     /// <param name="domain">The tenant/domain key.</param>
     /// <param name="type">
@@ -86,14 +87,16 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
     /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
     /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>.
     /// </param>
-    /// <param name="key">Optional single component key; returns that component or 404.</param>
+    /// <param name="key">Optional single component key; returns that component or 404. Paging is ignored.</param>
     /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
+    /// <param name="page">1-based page number (list mode only). Default: 1.</param>
+    /// <param name="pageSize">Items per page (list mode only). Range: 1–100. Default: 20.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">Component definitions returned successfully</response>
-    /// <response code="400">Unknown component type</response>
+    /// <response code="400">Unknown component type or invalid pagination parameters</response>
     /// <response code="404">Specific <paramref name="key"/> not found</response>
     [HttpGet("{domain}/components/definition")]
-    [ProducesResponseType(typeof(MonitorComponentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(MonitorPagedResponse<JsonElement>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetComponentsAsync(
@@ -101,15 +104,19 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
         [FromQuery] [Required] string type,
         [FromQuery] string? key = null,
         [FromQuery] string? version = null,
+        [FromQuery] [Range(1, 1000)] int page = 1,
+        [FromQuery] [Range(1, 100)] int pageSize = 20,
         CancellationToken cancellationToken = default
     )
     {
         var input = new MonitorGetComponentsInput
         {
-            Domain = domain.Trim(),
+            Domain        = domain.Trim(),
             ComponentType = type.Trim(),
-            Key = string.IsNullOrWhiteSpace(key) ? null : key.Trim(),
-            Version = string.IsNullOrWhiteSpace(version) ? null : version.Trim(),
+            Key           = string.IsNullOrWhiteSpace(key)     ? null : key.Trim(),
+            Version       = string.IsNullOrWhiteSpace(version) ? null : version.Trim(),
+            Page          = page,
+            PageSize      = pageSize,
         };
 
         var result = await queryService.GetComponentsAsync(input, cancellationToken);

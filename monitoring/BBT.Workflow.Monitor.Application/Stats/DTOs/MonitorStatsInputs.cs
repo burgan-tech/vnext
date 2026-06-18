@@ -22,8 +22,6 @@ public sealed class MonitorGetInstanceCountersInput : IHasDomain
 
     /// <summary>
     /// Optional GraphQL/legacy filter applied to the domain-wide count (ignored when <see cref="Workflow"/> is set).
-    /// The primary use is a <c>createdAt</c> date-range to bound how much data is scanned.
-    /// When the filter does not constrain <c>createdAt</c>, a default "last 7 days" window is AND-merged.
     /// </summary>
     public string? Filter { get; set; }
 }

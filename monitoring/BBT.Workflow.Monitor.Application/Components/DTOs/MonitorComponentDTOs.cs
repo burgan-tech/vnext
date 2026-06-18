@@ -41,24 +41,6 @@ public sealed class MonitorGetComponentsInput
 }
 
 /// <summary>
-/// Generic component query response.
-/// Items are serialised as raw JSON elements so that all component types share a single contract.
-/// The client interprets <see cref="ComponentType"/> to deserialise each item accordingly.
-/// </summary>
-public sealed class MonitorComponentResponse
-{
-    /// <summary>
-    /// The component type that was queried (mirrors <see cref="MonitorGetComponentsInput.ComponentType"/>).
-    /// </summary>
-    public string ComponentType { get; set; } = string.Empty;
-
-    /// <summary>
-    /// The result items. Each element is the JSON representation of the matching component.
-    /// </summary>
-    public List<JsonElement> Items { get; set; } = [];
-}
-
-/// <summary>
 /// Supported component type constants for monitor queries.
 /// </summary>
 public static class MonitorComponentTypes
@@ -164,8 +146,11 @@ public sealed class MonitorComponentSummaryItem
     /// <summary>Display name for mapping script libraries. Present for <c>sys-mappings</c>.</summary>
     public string? Name { get; set; }
 
-    /// <summary>Free-text developer notes from the definition's <c>_comment</c> field. Null when absent.</summary>
-    public string? Comment { get; set; }
+    /// <summary>UTC timestamp when this component was first published.</summary>
+    public DateTime? CreatedAt { get; set; }
+
+    /// <summary>UTC timestamp of the most recent update to this component. Null if never modified after creation.</summary>
+    public DateTime? ModifiedAt { get; set; }
 }
 
 /// <summary>
@@ -216,8 +201,11 @@ public sealed class MonitorComponentDetailResponse
     /// <summary>Display name for mapping script libraries. Present for <c>sys-mappings</c>.</summary>
     public string? Name { get; set; }
 
-    /// <summary>Free-text developer notes from the definition's <c>_comment</c> field. Null when absent.</summary>
-    public string? Comment { get; set; }
+    /// <summary>UTC timestamp when this component was first published.</summary>
+    public DateTime? CreatedAt { get; set; }
+
+    /// <summary>UTC timestamp of the most recent update to this component. Null if never modified after creation.</summary>
+    public DateTime? ModifiedAt { get; set; }
 
     /// <summary>All published versions of this component, sorted descending (newest first).</summary>
     public List<string>? Versions { get; set; }

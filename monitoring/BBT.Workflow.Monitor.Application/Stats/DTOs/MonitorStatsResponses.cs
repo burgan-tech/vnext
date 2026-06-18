@@ -22,9 +22,8 @@ public sealed class MonitorInstanceCountersResponse
     public long Total { get; set; }
 
     /// <summary>
-    /// The effective filter actually applied to the domain-wide count (including the default
-    /// "last 7 days" <c>createdAt</c> window when the caller did not specify one). Null for
-    /// the workflow-scoped query, which is not filtered.
+    /// The filter applied to the domain-wide count, echoed back from the request. Null when
+    /// no filter was supplied or for the workflow-scoped query.
     /// </summary>
     public string? AppliedFilter { get; set; }
 }

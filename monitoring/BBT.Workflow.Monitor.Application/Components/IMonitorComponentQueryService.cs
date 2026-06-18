@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Components.DTOs;
@@ -13,10 +14,10 @@ public interface IMonitorComponentQueryService
 {
     /// <summary>
     /// Returns component definitions for the given type and domain.
-    /// When <c>Key</c> is set, returns that component or 404.
-    /// When <c>Key</c> is omitted, returns the full list: snapshot first, then runtime DB load and cache warm if empty.
+    /// When <c>Key</c> is set, returns that single component (no pagination metadata).
+    /// When <c>Key</c> is omitted, returns a paged list via <c>Page</c>/<c>PageSize</c> from the input.
     /// </summary>
-    Task<Result<MonitorComponentResponse>> GetComponentsAsync(
+    Task<Result<MonitorPagedResponse<JsonElement>>> GetComponentsAsync(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default
     );
