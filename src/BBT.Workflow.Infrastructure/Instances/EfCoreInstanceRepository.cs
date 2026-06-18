@@ -139,10 +139,12 @@ public sealed class EfCoreInstanceRepository(
             }
         }
 
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic by returning the most recent instance for the key.
         return await query
-            .FirstOrDefaultAsync(
-                p => p.Key == identifier,
-                cancellationToken);
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -181,10 +183,12 @@ public sealed class EfCoreInstanceRepository(
             }
         }
 
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic by returning the most recent instance for the key.
         return await query
-            .FirstOrDefaultAsync(
-                p => p.Key == identifier,
-                cancellationToken);
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -212,10 +216,12 @@ public sealed class EfCoreInstanceRepository(
             }
         }
 
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic by returning the most recent instance for the key.
         return await query
-            .FirstOrDefaultAsync(
-                p => p.Key == identifier,
-                cancellationToken);
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -240,10 +246,12 @@ public sealed class EfCoreInstanceRepository(
             }
         }
 
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic by returning the most recent instance for the key.
         return await query
-            .FirstOrDefaultAsync(
-                p => p.Key == identifier,
-                cancellationToken);
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <summary>
