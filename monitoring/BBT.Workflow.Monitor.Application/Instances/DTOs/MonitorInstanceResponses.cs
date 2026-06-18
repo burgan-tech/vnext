@@ -30,9 +30,6 @@ public sealed class MonitorInstanceResponse
 
     /// <summary>Instance lifecycle metadata.</summary>
     public MonitorInstanceMetadata? Metadata { get; set; }
-
-    /// <summary>Active child correlations (sub-flows, sub-processes).</summary>
-    public List<MonitorCorrelationInfo>? ActiveCorrelations { get; set; }
 }
 
 /// <summary>

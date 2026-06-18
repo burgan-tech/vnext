@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using BBT.Aether.AspNetCore.Controllers;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Components;
 using BBT.Workflow.Monitor.Components.DTOs;
 using Microsoft.AspNetCore.Mvc;
@@ -20,25 +21,27 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
     : AetherControllerBase
 {
     /// <summary>
-    /// Returns a lightweight summary of published components for the given type and domain.
-    /// When <paramref name="key"/> is omitted, returns a list of all published components (<see cref="MonitorComponentSummaryResponse"/>).
+    /// Returns a paged lightweight summary of published components for the given type and domain.
+    /// When <paramref name="key"/> is omitted, returns a standard paged list with <c>pagination</c> and <c>items</c>.
     /// When <paramref name="key"/> is provided, returns a single flat detail object (<see cref="MonitorComponentDetailResponse"/>)
-    /// that includes the component's <c>flow</c> identifier and all published versions — no <c>items</c> wrapper.
+    /// that includes all published versions — no <c>items</c> wrapper, paging ignored.
     /// </summary>
     /// <param name="domain">The tenant/domain key.</param>
     /// <param name="type">
     /// Component type. Supported values:
     /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
-    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>.
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>, <c>sys-mappings</c>.
     /// </param>
-    /// <param name="key">Optional single component key. When provided, returns detail or 404.</param>
+    /// <param name="key">Optional single component key. When provided, returns detail or 404. Paging is ignored.</param>
     /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
+    /// <param name="page">1-based page number (list mode only). Default: 1.</param>
+    /// <param name="pageSize">Items per page (list mode only). Range: 1–100. Default: 20.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <response code="200">Summary list or single component detail returned successfully</response>
-    /// <response code="400">Unknown component type</response>
+    /// <response code="200">Paged summary list or single component detail returned successfully</response>
+    /// <response code="400">Unknown component type or invalid pagination parameters</response>
     /// <response code="404">Specific <paramref name="key"/> not found</response>
     [HttpGet("{domain}/components")]
-    [ProducesResponseType(typeof(MonitorComponentSummaryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorComponentSummaryItem>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(MonitorComponentDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -47,6 +50,8 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
         [FromQuery] [Required] string type,
         [FromQuery] string? key = null,
         [FromQuery] string? version = null,
+        [FromQuery] [Range(1, 1000)] int page = 1,
+        [FromQuery] [Range(1, 100)] int pageSize = 20,
         CancellationToken cancellationToken = default
     )
     {
@@ -56,6 +61,8 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
             ComponentType = type.Trim(),
             Key           = string.IsNullOrWhiteSpace(key)     ? null : key.Trim(),
             Version       = string.IsNullOrWhiteSpace(version) ? null : version.Trim(),
+            Page          = page,
+            PageSize      = pageSize,
         };
 
         if (input.Key is not null)

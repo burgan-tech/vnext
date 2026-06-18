@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Components.DTOs;
 
 namespace BBT.Workflow.Monitor.Components;
@@ -34,7 +35,7 @@ public interface IMonitorComponentQueryService
     /// component type and domain — without the full definition payload.
     /// Snapshot first; falls back to runtime DB load and cache warm if snapshot is empty.
     /// </summary>
-    Task<Result<MonitorComponentSummaryResponse>> GetComponentSummaryAsync(
+    Task<Result<MonitorPagedResponse<MonitorComponentSummaryItem>>> GetComponentSummaryAsync(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default
     );

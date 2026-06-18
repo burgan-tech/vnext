@@ -2,7 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
-using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Monitor.Instances;
 using BBT.Workflow.Monitor.Instances.DTOs;
@@ -20,9 +19,7 @@ namespace BBT.Workflow.Monitor.Controllers;
 [Route("api/v{version:apiVersion}/monitor")]
 [ServiceFilter(typeof(ResponseHeaderFilter))]
 public sealed class MonitorInstanceController(
-    IMonitorInstanceQueryService queryService,
-    IPaginationLinkGenerator linkGenerator,
-    IUrlTemplateBuilder urlTemplateBuilder
+    IMonitorInstanceQueryService queryService
 ) : AetherControllerBase
 {
     /// <summary>
@@ -43,8 +40,6 @@ public sealed class MonitorInstanceController(
         CancellationToken cancellationToken = default
     )
     {
-        var route = urlTemplateBuilder.BuildInstanceListUrl(domain, workflow);
-
         var input = new MonitorGetInstancesInput
         {
             Domain = domain,
@@ -53,26 +48,11 @@ public sealed class MonitorInstanceController(
             Page = page,
             PageSize = pageSize,
             Sort = sort,
-            PageUrl = route,
             GroupBy = groupBy,
             Aggregations = aggregations,
         };
 
         var result = await queryService.GetInstancesAsync(input, cancellationToken);
-
-        if (!result.IsSuccess)
-            return FromResult(result);
-
-        var response = result.Value!;
-        var tempList = new HateoasPagedList<MonitorInstanceResponse>(
-            response.Items.OfType<MonitorInstanceResponse>().ToList(),
-            page,
-            pageSize,
-            response.Items.Count == pageSize
-        );
-
-        response.Links = linkGenerator.Relative().GenerateLinks(tempList, route);
-
         return result.ToActionResult(HttpContext);
     }
 

@@ -8,6 +8,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Instances.DTOs;
 using WorkflowTaskStatus = BBT.Workflow.Definitions.TaskStatus;
 
@@ -44,13 +45,13 @@ public sealed class MonitorInstanceQueryService(
     }
 
     /// <inheritdoc />
-    public async Task<Result<InstanceListWithGroupsResponse<MonitorInstanceResponse>>> GetInstancesAsync(
+    public async Task<Result<MonitorPagedResponse<object>>> GetInstancesAsync(
         MonitorGetInstancesInput input,
         CancellationToken cancellationToken = default)
     {
         var validationError = ValidateQueryParameters(input);
         if (validationError is { } error)
-            return Result<InstanceListWithGroupsResponse<MonitorInstanceResponse>>.Fail(error);
+            return Result<MonitorPagedResponse<object>>.Fail(error);
 
         return await ResultExtensions.TryAsync(async ct =>
         {
@@ -64,19 +65,25 @@ public sealed class MonitorInstanceQueryService(
                 ct);
 
             if (result.Groups is { Count: > 0 })
-                return InstanceListWithGroupsResponse<MonitorInstanceResponse>.FromGroups(result.Groups);
+                return new MonitorPagedResponse<object>
+                {
+                    Items = result.Groups.Cast<object>().ToList()
+                };
 
             var items = result.PagedList.Items
-                .Select(i => MapToResponse(i, input.Domain))
+                .Select(i => (object)MapToResponse(i, input.Domain))
                 .ToList();
 
-            var pagedList = new HateoasPagedList<MonitorInstanceResponse>(
-                items,
-                result.PagedList.CurrentPage,
-                result.PagedList.PageSize,
-                result.PagedList.HasNext);
-
-            return InstanceListWithGroupsResponse<MonitorInstanceResponse>.FromPagedList(pagedList);
+            return new MonitorPagedResponse<object>
+            {
+                Pagination = new MonitorPaginationInfo
+                {
+                    Page = result.PagedList.CurrentPage,
+                    PageSize = result.PagedList.PageSize,
+                    HasNext = result.PagedList.HasNext
+                },
+                Items = items
+            };
         }, cancellationToken);
     }
 
@@ -841,20 +848,7 @@ public sealed class MonitorInstanceQueryService(
                 CreatedByBehalfOf = instance.CreatedByBehalfOf,
                 ModifiedBy = instance.ModifiedBy,
                 ModifiedByBehalfOf = instance.ModifiedByBehalfOf
-            },
-            ActiveCorrelations = instance.ActiveCorrelations
-                .Select(c => new MonitorCorrelationInfo
-                {
-                    Id = c.Id,
-                    ParentState = c.ParentState,
-                    SubFlowInstanceId = c.SubFlowInstanceId,
-                    SubFlowDomain = c.SubFlowDomain,
-                    SubFlowName = c.SubFlowName,
-                    SubFlowVersion = c.SubFlowVersion,
-                    SubFlowType = c.SubFlowType.Code,
-                    SubFlowCurrentState = c.SubFlowCurrentState
-                })
-                .ToList()
+            }
         };
     }
 

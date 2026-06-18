@@ -30,6 +30,14 @@ public sealed class MonitorGetComponentsInput
     /// When omitted, the latest version is returned.
     /// </summary>
     public string? Version { get; set; }
+
+    /// <summary>1-based page number. Ignored when <see cref="Key"/> is provided.</summary>
+    [Range(1, 1000)]
+    public int Page { get; set; } = 1;
+
+    /// <summary>Number of items per page. Ignored when <see cref="Key"/> is provided.</summary>
+    [Range(1, 100)]
+    public int PageSize { get; set; } = 20;
 }
 
 /// <summary>
@@ -113,15 +121,6 @@ public sealed class MonitorComponentStatsResponse
     public int Total => Flows + Tasks + Schemas + Views + Functions + Extensions + Mappings;
 }
 
-/// <summary>Summary list response for a single component type — lightweight alternative to /definition.</summary>
-public sealed class MonitorComponentSummaryResponse
-{
-    /// <summary>The component type that was queried.</summary>
-    public string ComponentType { get; set; } = string.Empty;
-
-    /// <summary>Summary items — one per published component.</summary>
-    public List<MonitorComponentSummaryItem> Items { get; set; } = [];
-}
 
 /// <summary>Lightweight summary of a single published component (list query, no key).</summary>
 public sealed class MonitorComponentSummaryItem
@@ -129,20 +128,41 @@ public sealed class MonitorComponentSummaryItem
     /// <summary>Component key.</summary>
     public string? Key { get; set; }
 
-    /// <summary>Semantic version.</summary>
+    /// <summary>Semantic version of the component definition.</summary>
     public string? Version { get; set; }
 
     /// <summary>Owning domain.</summary>
     public string? Domain { get; set; }
 
-    /// <summary>Human-readable labels (multi-language). Null when the component type does not define labels.</summary>
+    /// <summary>Component stream identifier (e.g. <c>sys-flows</c>, <c>sys-tasks</c>).</summary>
+    public string? Flow { get; set; }
+
+    /// <summary>Version of the flow stream format (e.g. <c>1.0.0</c>).</summary>
+    public string? FlowVersion { get; set; }
+
+    /// <summary>Classification tags attached to this component at publish time. Null when none.</summary>
+    public List<string>? Tags { get; set; }
+
+    /// <summary>Human-readable labels (multi-language). Present for <c>sys-flows</c> and <c>sys-views</c>.</summary>
     public List<MonitorComponentLabel>? Labels { get; set; }
 
     /// <summary>
-    /// Component type discriminator when present in the definition (e.g. <c>WorkflowType</c>, <c>TaskType</c>, <c>ViewType</c>).
-    /// Null for component types that do not carry a <c>type</c> field.
+    /// Type discriminator. Present for <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, and <c>sys-views</c>.
     /// </summary>
     public JsonElement? Type { get; set; }
+
+    /// <summary>Scope identifier. Present for <c>sys-functions</c> and <c>sys-extensions</c>.</summary>
+    public string? Scope { get; set; }
+
+    /// <summary>Display identifier (e.g. <c>"form"</c>, <c>"list"</c>). Present for <c>sys-views</c>.</summary>
+    public string? Display { get; set; }
+
+    /// <summary>Renderer identifier (e.g. <c>"default"</c>). Present for <c>sys-views</c>.</summary>
+    public string? Renderer { get; set; }
+
+    /// <summary>Display name for mapping script libraries. Present for <c>sys-mappings</c>.</summary>
+    public string? Name { get; set; }
 
     /// <summary>Free-text developer notes from the definition's <c>_comment</c> field. Null when absent.</summary>
     public string? Comment { get; set; }
@@ -169,14 +189,32 @@ public sealed class MonitorComponentDetailResponse
     /// </summary>
     public string? Flow { get; set; }
 
-    /// <summary>Human-readable labels (multi-language). Null when the component type does not define labels.</summary>
+    /// <summary>Version of the flow stream format.</summary>
+    public string? FlowVersion { get; set; }
+
+    /// <summary>Classification tags attached to this component at publish time. Null when none.</summary>
+    public List<string>? Tags { get; set; }
+
+    /// <summary>Human-readable labels (multi-language). Present for <c>sys-flows</c> and <c>sys-views</c>.</summary>
     public List<MonitorComponentLabel>? Labels { get; set; }
 
     /// <summary>
-    /// Component type discriminator when present in the definition (e.g. <c>WorkflowType</c>, <c>TaskType</c>, <c>ViewType</c>).
-    /// Null for component types that do not carry a <c>type</c> field.
+    /// Type discriminator. Present for <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, and <c>sys-views</c>.
     /// </summary>
     public JsonElement? Type { get; set; }
+
+    /// <summary>Scope identifier. Present for <c>sys-functions</c> and <c>sys-extensions</c>.</summary>
+    public string? Scope { get; set; }
+
+    /// <summary>Display identifier (e.g. <c>"form"</c>, <c>"list"</c>). Present for <c>sys-views</c>.</summary>
+    public string? Display { get; set; }
+
+    /// <summary>Renderer identifier (e.g. <c>"default"</c>). Present for <c>sys-views</c>.</summary>
+    public string? Renderer { get; set; }
+
+    /// <summary>Display name for mapping script libraries. Present for <c>sys-mappings</c>.</summary>
+    public string? Name { get; set; }
 
     /// <summary>Free-text developer notes from the definition's <c>_comment</c> field. Null when absent.</summary>
     public string? Comment { get; set; }

@@ -2,11 +2,14 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.Domain.Entities;
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Instances;
 using Mapping = BBT.Workflow.Definitions.Mapping;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Components.DTOs;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,7 +34,7 @@ public sealed class MonitorComponentQueryService(
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new UndefinedJsonElementConverter() }
+        Converters = { new UndefinedJsonElementConverter(), new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
     private sealed class UndefinedJsonElementConverter : JsonConverter<JsonElement>
@@ -269,18 +272,38 @@ public sealed class MonitorComponentQueryService(
     }
 
     /// <inheritdoc />
-    public async Task<Result<MonitorComponentSummaryResponse>> GetComponentSummaryAsync(
+    public async Task<Result<MonitorPagedResponse<MonitorComponentSummaryItem>>> GetComponentSummaryAsync(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default)
     {
-        var fullResult = await GetComponentsAsync(input, cancellationToken);
-        if (!fullResult.IsSuccess)
-            return Result<MonitorComponentSummaryResponse>.Fail(fullResult.Error);
+        var canonicalType = NormalizeComponentType(input.ComponentType);
+        if (canonicalType is null)
+            return Result<MonitorPagedResponse<MonitorComponentSummaryItem>>.Fail(
+                Error.Validation("component.unknownType",
+                    $"Unknown component type '{input.ComponentType}'."));
 
-        return Result<MonitorComponentSummaryResponse>.Ok(new MonitorComponentSummaryResponse
+        var loadResult = await LoadSummaryWithMetadataAsync(input.Domain, canonicalType, cancellationToken);
+        if (!loadResult.IsSuccess)
+            return Result<MonitorPagedResponse<MonitorComponentSummaryItem>>.Fail(loadResult.Error);
+
+        var allItems = loadResult.Value!
+            .Select(e => ProjectToSummary(e.Serialized, e.FlowVersion, e.Tags, canonicalType))
+            .ToList();
+
+        var pagedItems = allItems
+            .Skip((input.Page - 1) * input.PageSize)
+            .Take(input.PageSize)
+            .ToList();
+
+        return Result<MonitorPagedResponse<MonitorComponentSummaryItem>>.Ok(new MonitorPagedResponse<MonitorComponentSummaryItem>
         {
-            ComponentType = fullResult.Value!.ComponentType,
-            Items         = fullResult.Value.Items.Select(ProjectToSummary).ToList()
+            Pagination = new MonitorPaginationInfo
+            {
+                Page     = input.Page,
+                PageSize = input.PageSize,
+                HasNext  = allItems.Count > input.Page * input.PageSize
+            },
+            Items = pagedItems
         });
     }
 
@@ -289,6 +312,12 @@ public sealed class MonitorComponentQueryService(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default)
     {
+        var canonicalType = NormalizeComponentType(input.ComponentType);
+        if (canonicalType is null)
+            return Result<MonitorComponentDetailResponse>.Fail(
+                Error.Validation("component.unknownType",
+                    $"Unknown component type '{input.ComponentType}'."));
+
         var fullResult = await GetComponentsAsync(input, cancellationToken);
         if (!fullResult.IsSuccess)
             return Result<MonitorComponentDetailResponse>.Fail(fullResult.Error);
@@ -299,21 +328,26 @@ public sealed class MonitorComponentQueryService(
                 Error.NotFound("component.notFound",
                     $"Component '{input.Key}' not found for type '{input.ComponentType}'."));
 
+        var (flowVersion, tags) = await GetInstanceMetaAsync(input.Domain, canonicalType, input.Key!, cancellationToken);
         var allVersions = await GetAllVersionsAsync(input, cancellationToken);
-        var summary = ProjectToSummary(el);
-
-        string? flow = el.TryGetProperty("flow", out var flowEl) ? flowEl.GetString() : null;
+        var summary = ProjectToSummary(el, flowVersion, tags, canonicalType);
 
         return Result<MonitorComponentDetailResponse>.Ok(new MonitorComponentDetailResponse
         {
-            Key      = summary.Key,
-            Version  = summary.Version,
-            Domain   = summary.Domain,
-            Flow     = flow,
-            Labels   = summary.Labels,
-            Type     = summary.Type,
-            Comment  = summary.Comment,
-            Versions = allVersions
+            Key         = summary.Key,
+            Version     = summary.Version,
+            Domain      = summary.Domain,
+            Flow        = summary.Flow,
+            FlowVersion = summary.FlowVersion,
+            Tags        = summary.Tags,
+            Labels      = summary.Labels,
+            Type        = summary.Type,
+            Scope       = summary.Scope,
+            Display     = summary.Display,
+            Renderer    = summary.Renderer,
+            Name        = summary.Name,
+            Comment     = summary.Comment,
+            Versions    = allVersions
         });
     }
 
@@ -348,39 +382,154 @@ public sealed class MonitorComponentQueryService(
             .ToList();
     }
 
-    private static MonitorComponentSummaryItem ProjectToSummary(JsonElement el)
-    {
-        List<MonitorComponentLabel>? labels = null;
-        if (el.TryGetProperty("labels", out var labelsEl) && labelsEl.ValueKind == JsonValueKind.Array)
-        {
-            labels = labelsEl.EnumerateArray()
-                .Select(l => new MonitorComponentLabel
-                {
-                    Language = l.TryGetProperty("language", out var lang) ? lang.GetString() : null,
-                    Label    = l.TryGetProperty("label",    out var lbl)  ? lbl.GetString()  : null
-                })
-                .ToList();
+    // ── Metadata-aware loading ──────────────────────────────────────────────
 
-            if (labels.Count == 0) labels = null;
+    private sealed record ComponentEntry(JsonElement Serialized, string? FlowVersion, List<string>? Tags);
+
+    private Task<Result<List<ComponentEntry>>> LoadSummaryWithMetadataAsync(
+        string requestDomain, string componentType, CancellationToken ct) =>
+        componentType switch
+        {
+            MonitorComponentTypes.Flows      => LoadLatestWithMetadataAsync<Definitions.Workflow>(requestDomain, componentType, ct),
+            MonitorComponentTypes.Tasks      => LoadLatestWithMetadataAsync<WorkflowTask>(requestDomain, componentType, ct),
+            MonitorComponentTypes.Schemas    => LoadLatestWithMetadataAsync<SchemaDefinition>(requestDomain, componentType, ct),
+            MonitorComponentTypes.Extensions => LoadLatestWithMetadataAsync<Extension>(requestDomain, componentType, ct),
+            MonitorComponentTypes.Functions  => LoadLatestWithMetadataAsync<Function>(requestDomain, componentType, ct),
+            MonitorComponentTypes.Views      => LoadLatestWithMetadataAsync<View>(requestDomain, componentType, ct),
+            MonitorComponentTypes.Mappings   => LoadLatestWithMetadataAsync<Mapping>(requestDomain, componentType, ct),
+            _ => Task.FromResult(Result<List<ComponentEntry>>.Fail(
+                Error.Validation("component.unknownType", $"Unknown component type '{componentType}'.")))
+        };
+
+    private async Task<Result<List<ComponentEntry>>> LoadLatestWithMetadataAsync<T>(
+        string requestDomain, string componentType, CancellationToken cancellationToken)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        runtimeInfoProvider.Check(requestDomain);
+
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var instanceRepo  = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
+        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+
+        var allItems = new List<(T Entity, string? FlowVersion, List<string>? Tags)>();
+
+        using (currentSchema.Use(componentType))
+        {
+            const int pageSize = 100;
+            int skip = 0;
+            List<InstanceAndDataModel> page;
+
+            do
+            {
+                page = await instanceRepo.GetActiveDataListPagedAsync(skip, pageSize, cancellationToken);
+                foreach (var item in page)
+                {
+                    try
+                    {
+                        var entity = item.InstanceData.Data.JsonElement
+                            .Deserialize<T>(JsonSerializerConstants.JsonOptions);
+                        if (entity is null) continue;
+
+                        entity.SetReference(new Reference(
+                            item.Instance.Key ?? string.Empty,
+                            requestDomain,
+                            componentType,
+                            item.InstanceData.Version));
+
+                        allItems.Add((entity, item.Instance.FlowVersion, item.Instance.Tags));
+                    }
+                    catch { /* skip malformed records */ }
+                }
+
+                skip += pageSize;
+            }
+            while (page.Count == pageSize);
         }
 
-        string? comment = null;
-        if (el.TryGetProperty("_comment", out var commentEl) && commentEl.ValueKind == JsonValueKind.String)
-            comment = commentEl.GetString();
+        var latest = allItems
+            .Where(x => !string.IsNullOrWhiteSpace(x.Entity.Key))
+            .GroupBy(x => x.Entity.Key!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(x => x.Entity.Version, new SemVersionComparer()).First())
+            .ToList();
 
-        JsonElement? type = null;
-        if (el.TryGetProperty("type", out var typeEl) && typeEl.ValueKind != JsonValueKind.Undefined)
-            type = typeEl.Clone();
+        foreach (var (entity, _, _) in latest)
+        {
+            var setResult = await componentCacheStore.SetAsync(entity, cancellationToken);
+            if (!setResult.IsSuccess)
+                return Result<List<ComponentEntry>>.Fail(setResult.Error);
+        }
+
+        var entries = latest
+            .Select(x => new ComponentEntry(Serialize(x.Entity), x.FlowVersion, x.Tags))
+            .ToList();
+
+        return Result<List<ComponentEntry>>.Ok(entries);
+    }
+
+    private async Task<(string? FlowVersion, List<string>? Tags)> GetInstanceMetaAsync(
+        string domain, string componentType, string key, CancellationToken cancellationToken)
+    {
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var instanceRepo  = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
+        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+
+        using (currentSchema.Use(componentType))
+        {
+            var instance = await instanceRepo.FindByIdentifierAsReadOnlyAsync(key, cancellationToken);
+            return (instance?.FlowVersion, instance?.Tags);
+        }
+    }
+
+    // ── Projection helpers ───────────────────────────────────────────────────
+
+    private static MonitorComponentSummaryItem ProjectToSummary(
+        JsonElement el, string? flowVersion, List<string>? tags, string componentType)
+    {
+        var labels = ExtractLabels(el);
+        var type   = el.TryGetProperty("type", out var typeEl) && typeEl.ValueKind != JsonValueKind.Undefined
+                     ? typeEl.Clone()
+                     : (JsonElement?)null;
+
+        string? scope    = el.TryGetProperty("scope",    out var scopeEl)    && scopeEl.ValueKind    == JsonValueKind.String ? scopeEl.GetString()    : null;
+        string? display  = el.TryGetProperty("display",  out var displayEl)  && displayEl.ValueKind  == JsonValueKind.String ? displayEl.GetString()  : null;
+        string? renderer = el.TryGetProperty("renderer", out var rendererEl) && rendererEl.ValueKind == JsonValueKind.String ? rendererEl.GetString() : null;
+        string? name     = el.TryGetProperty("name",     out var nameEl)     && nameEl.ValueKind     == JsonValueKind.String ? nameEl.GetString()     : null;
+        string? comment  = el.TryGetProperty("_comment", out var cmtEl) && cmtEl.ValueKind == JsonValueKind.String
+                           ? cmtEl.GetString()
+                           : null;
 
         return new MonitorComponentSummaryItem
         {
-            Key     = el.TryGetProperty("key",     out var keyEl) ? keyEl.GetString() : null,
-            Version = el.TryGetProperty("version", out var verEl) ? verEl.GetString() : null,
-            Domain  = el.TryGetProperty("domain",  out var domEl) ? domEl.GetString() : null,
-            Labels  = labels,
-            Type    = type,
-            Comment = comment
+            Key         = el.TryGetProperty("key",     out var keyEl) ? keyEl.GetString() : null,
+            Version     = el.TryGetProperty("version", out var verEl) ? verEl.GetString() : null,
+            Domain      = el.TryGetProperty("domain",  out var domEl) ? domEl.GetString() : null,
+            Flow        = el.TryGetProperty("flow",    out var flwEl) ? flwEl.GetString() : null,
+            FlowVersion = string.IsNullOrWhiteSpace(flowVersion) ? null : flowVersion,
+            Tags        = tags is { Count: > 0 } ? tags : null,
+            Labels      = componentType is MonitorComponentTypes.Flows or MonitorComponentTypes.Views ? labels : null,
+            Type        = type,
+            Scope       = componentType is MonitorComponentTypes.Functions or MonitorComponentTypes.Extensions ? scope : null,
+            Display     = componentType == MonitorComponentTypes.Views ? display : null,
+            Renderer    = componentType == MonitorComponentTypes.Views ? renderer : null,
+            Name        = componentType == MonitorComponentTypes.Mappings ? name : null,
+            Comment     = comment
         };
+    }
+
+    private static List<MonitorComponentLabel>? ExtractLabels(JsonElement el)
+    {
+        if (!el.TryGetProperty("labels", out var labelsEl) || labelsEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var labels = labelsEl.EnumerateArray()
+            .Select(l => new MonitorComponentLabel
+            {
+                Language = l.TryGetProperty("language", out var lang) ? lang.GetString() : null,
+                Label    = l.TryGetProperty("label",    out var lbl)  ? lbl.GetString()  : null
+            })
+            .ToList();
+
+        return labels.Count == 0 ? null : labels;
     }
 
     /// <inheritdoc />

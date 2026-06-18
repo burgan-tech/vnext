@@ -1,5 +1,5 @@
 using BBT.Aether.Results;
-using BBT.Workflow.Instances;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Instances.DTOs;
 
 namespace BBT.Workflow.Monitor.Instances;
@@ -22,7 +22,7 @@ public interface IMonitorInstanceQueryService
     /// <summary>
     /// Returns a paged, filterable list of instances using GraphQL filter syntax.
     /// </summary>
-    Task<Result<InstanceListWithGroupsResponse<MonitorInstanceResponse>>> GetInstancesAsync(
+    Task<Result<MonitorPagedResponse<object>>> GetInstancesAsync(
         MonitorGetInstancesInput input,
         CancellationToken cancellationToken = default);
 
