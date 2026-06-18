@@ -63,6 +63,7 @@ internal sealed class InstanceSubFaultedEventHandler(
                 IncidentMessage = eventData.IncidentMessage,
                 IncidentErrorCode = eventData.IncidentErrorCode,
                 IncidentErrorLayer = eventData.IncidentErrorLayer,
+                IncidentStackTrace = eventData.IncidentStackTrace,
                 IncidentStatusCode = eventData.IncidentStatusCode,
                 IncidentTraceId = eventData.IncidentTraceId,
                 IncidentTaskKey = eventData.IncidentTaskKey,

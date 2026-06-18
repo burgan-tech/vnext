@@ -130,6 +130,33 @@ public sealed class SubflowFaultServiceTests
             Times.Exactly(2));
     }
 
+    [Fact]
+    public async Task FaultAsync_ShouldRecordIncidentBeforeRunningOutputMapping()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(ErrorBoundary.AbortAll);
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"childStatus":"Faulted"}"""));
+
+        SetupParent(parentInstance, parentWorkflow);
+
+        // Capture whether the parent already carries the subflow incident at the moment
+        // output mapping runs, so the mapping script can route on the fault.
+        var incidentVisibleToMapping = false;
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(
+                It.IsAny<Instance>(),
+                It.IsAny<Definitions.Workflow>(),
+                It.IsAny<string>(),
+                It.IsAny<JsonElement?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => incidentVisibleToMapping = parentInstance.HasActiveIncident)
+            .Returns(Task.CompletedTask);
+
+        await CreateService().FaultAsync(input, CancellationToken.None);
+
+        incidentVisibleToMapping.ShouldBeTrue();
+    }
+
     private SubflowFaultService CreateService()
     {
         var resolver = new ErrorBoundaryResolver(Mock.Of<ILogger<ErrorBoundaryResolver>>());
@@ -208,6 +235,7 @@ public sealed class SubflowFaultServiceTests
             IncidentErrorCode = "Http.NotFound",
             IncidentErrorLayer = ErrorLayer.Task.ToString(),
             IncidentStatusCode = 404,
+            IncidentStackTrace = "at Child.CallApi() in Child.cs:line 12",
             IncidentTaskKey = "call-child-api",
             IncidentTransition = "submit"
         };
