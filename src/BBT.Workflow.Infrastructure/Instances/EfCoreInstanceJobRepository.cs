@@ -18,6 +18,23 @@ public sealed class EfCoreInstanceJobRepository(
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<List<InstanceJob>> GetActiveForStateCancellationAsync(
+        Guid instanceId,
+        IReadOnlyCollection<JobType> matchTypes,
+        IReadOnlyCollection<string> transitionKeys,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .Where(j => j.InstanceId == instanceId && j.IsActive == true
+                && ((matchTypes.Contains(j.JobType)
+                        && j.TransitionKey != null
+                        && transitionKeys.Contains(j.TransitionKey))
+                    // Transitional fallback: legacy rows carry no structured columns; the service
+                    // matches them by the old "-{key}" suffix until none remain.
+                    || j.JobType == JobType.Unknown))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task MarkAsProcessedAsync(Guid instanceId, string jobName,
         CancellationToken cancellationToken = default)
     {

@@ -49,7 +49,8 @@ public sealed class EnqueueContinuationStrategy(
         if (next is null)
             return Result<WorkflowExecutionContext?>.Ok(null);
 
-        var jobName = $"trans-{current.InstanceId}-{next.TransitionKey}";
+        var jobName = JobName.ForAsyncTransition(current.InstanceId, next.TransitionKey);
+        var jobNameValue = jobName.Value;
 
         // Durable intent for the active-job guard / reaper — atomic with the transition commit
         // because we run inside the pipeline's ambient UoW (TransitionRunner).
@@ -68,18 +69,18 @@ public sealed class EnqueueContinuationStrategy(
         // to the transactional outbox so the continuation is never lost.
         if (executionOptions.Value.DirectEnqueueContinuations)
         {
-            var enqueueResult = await EnqueueDirectlyAsync(current, next.TransitionKey, jobName, cancellationToken);
+            var enqueueResult = await EnqueueDirectlyAsync(current, next.TransitionKey, jobNameValue, cancellationToken);
             if (enqueueResult.IsSuccess)
             {
-                logger.TransitionContinuationEnqueued(current.InstanceId, next.TransitionKey, jobName);
+                logger.TransitionContinuationEnqueued(current.InstanceId, next.TransitionKey, jobNameValue);
                 return Result<WorkflowExecutionContext?>.Ok(null);
             }
 
             logger.TransitionContinuationFellBackToOutbox(
-                current.InstanceId, next.TransitionKey, jobName, enqueueResult.Error.Message);
+                current.InstanceId, next.TransitionKey, jobNameValue, enqueueResult.Error.Message);
         }
 
-        await PublishViaOutboxAsync(current, next.TransitionKey, jobName, cancellationToken);
+        await PublishViaOutboxAsync(current, next.TransitionKey, jobNameValue, cancellationToken);
 
         // No in-process next context — a separate job resumes the chain.
         return Result<WorkflowExecutionContext?>.Ok(null);

@@ -417,11 +417,11 @@ public sealed class InstanceCommandAppService(
 
         try
         {
-            var jobName = $"timeout-{instance.Id}";
+            var jobName = JobName.ForTimeout(instance.Id);
             var activity = Activity.Current;
             var payload = new WorkflowTimeoutPayload
             {
-                JobName = jobName,
+                JobName = jobName.Value,
                 Domain = workflow.Domain,
                 InstanceId = instance.Id,
                 FlowName = workflow.Key,
@@ -452,7 +452,7 @@ public sealed class InstanceCommandAppService(
             // Enqueue the timeout job
             var jobId = await backgroundJobService.EnqueueAsync(
                 FlowTimeoutJobHandler.HandlerName,
-                jobName,
+                jobName.Value,
                 payload,
                 schedule,
                 metadata,

@@ -114,7 +114,7 @@ public class AsyncTransitionStrategyTests
         _mockBackgroundJobService.Verify(
             x => x.EnqueueAsync(
                 TransitionJobHandler.HandlerName,
-                It.Is<string>(id => id.StartsWith($"trans-{workflowContext.InstanceId}")),
+                It.Is<string>(id => id.StartsWith($"vnext.job.v1.tx.{workflowContext.InstanceId:N}")),
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<string>(),
                 It.IsAny<Dictionary<string, object>>(),
