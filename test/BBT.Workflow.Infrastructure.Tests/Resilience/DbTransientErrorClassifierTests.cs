@@ -131,6 +131,28 @@ public class DbTransientErrorClassifierTests
     }
 
     // -------------------------------------------------------------------------
+    // Saturation signals → FALSE (retrying amplifies the connection storm)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void PostgresException_TooManyConnections_53300_ReturnsFalse()
+    {
+        // 53300 = too_many_connections (PgBouncer / PostgreSQL server-side saturation).
+        // Retrying this would amplify the connection storm — must never be retriable.
+        var ex = CreatePostgresException("53300");
+        DbTransientErrorClassifier.IsRetriableTransient(ex).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void PostgresException_UndefinedTable_42P01_ReturnsFalse()
+    {
+        // 42P01 = undefined_table — a schema/logic error, not a transient fault.
+        // Asserts that the transient set boundary is respected for unrelated SqlStates.
+        var ex = CreatePostgresException("42P01");
+        DbTransientErrorClassifier.IsRetriableTransient(ex).ShouldBeFalse();
+    }
+
+    // -------------------------------------------------------------------------
     // Unrelated exceptions → FALSE
     // -------------------------------------------------------------------------
 

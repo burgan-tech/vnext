@@ -25,6 +25,15 @@ public static class DbTransientErrorClassifier
     /// Transient PostgreSQL <c>SqlState</c> codes that indicate a connection-level error
     /// that can be safely retried.
     /// </summary>
+    /// <remarks>
+    /// <b>Saturation signals are intentionally excluded.</b>
+    /// PgBouncer / PostgreSQL server-side saturation (<c>SqlState 53300</c>,
+    /// <c>too_many_connections</c>) and Npgsql client pool exhaustion
+    /// (<c>"pool has been exhausted"</c>) are NOT in this set and are never retried.
+    /// Retrying under saturation amplifies the connection storm and makes the outage worse.
+    /// The pool-exhaustion guard in <see cref="IsRetriableTransient"/> handles the Npgsql
+    /// client side; <see cref="SaturationSqlStates"/> handles the server side.
+    /// </remarks>
     private static readonly HashSet<string> TransientSqlStates = new(StringComparer.OrdinalIgnoreCase)
     {
         "08000", // connection_exception
@@ -37,13 +46,25 @@ public static class DbTransientErrorClassifier
     };
 
     /// <summary>
+    /// PostgreSQL <c>SqlState</c> codes that represent server-side resource saturation.
+    /// These are NEVER retriable: retrying amplifies the connection storm.
+    /// Npgsql's driver marks some of these as <c>IsTransient = true</c>, so we must
+    /// explicitly veto them before applying the generic <c>IsTransient</c> check.
+    /// </summary>
+    private static readonly HashSet<string> SaturationSqlStates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "53300", // too_many_connections  (PgBouncer / PostgreSQL)
+        "53400", // configuration_limit_exceeded
+    };
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="ex"/> (or any exception in its inner-exception
     /// chain) represents a retriable transient database fault.
     /// </summary>
     /// <remarks>
     /// <b>Rules (evaluated in order):</b>
     /// <list type="number">
-    ///   <item>If ANY exception in the chain contains <c>"pool has been exhausted"</c> → <c>false</c> (never retry).</item>
+    ///   <item>If ANY exception in the chain contains <c>"pool has been exhausted"</c> OR is a <see cref="PostgresException"/> with a saturation SqlState (53300, 53400) → <c>false</c> (never retry).</item>
     ///   <item>If any exception is an <see cref="NpgsqlException"/> with <c>IsTransient == true</c> → <c>true</c>.</item>
     ///   <item>If any exception is a <see cref="PostgresException"/> whose <c>SqlState</c> is in the transient set → <c>true</c>.</item>
     ///   <item>If any exception is a <see cref="SocketException"/> → <c>true</c>.</item>
@@ -63,8 +84,10 @@ public static class DbTransientErrorClassifier
         // Flatten the full exception chain (handles AggregateException and nested inner exceptions).
         var chain = FlattenChain(ex);
 
-        // Rule 1 — pool-exhaustion is NEVER retriable; short-circuit immediately.
-        if (chain.Any(e => ContainsPoolExhaustion(e.Message)))
+        // Rule 1 — saturation signals are NEVER retriable; short-circuit immediately.
+        // Pool-exhaustion (Npgsql client side) and server-side too_many_connections (53300)
+        // both amplify the connection storm when retried.
+        if (chain.Any(e => ContainsPoolExhaustion(e.Message) || IsSaturationSqlState(e)))
         {
             return false;
         }
@@ -81,6 +104,12 @@ public static class DbTransientErrorClassifier
     {
         return message is not null &&
                message.Contains("pool has been exhausted", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSaturationSqlState(Exception e)
+    {
+        return e is PostgresException pgEx &&
+               SaturationSqlStates.Contains(pgEx.SqlState ?? string.Empty);
     }
 
     private static bool IsTransientCandidate(Exception e)
