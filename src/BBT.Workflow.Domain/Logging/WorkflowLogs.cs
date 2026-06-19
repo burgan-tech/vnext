@@ -183,6 +183,33 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
+    /// Logs when a transient DB fault causes the Polly retry pipeline to schedule another attempt
+    /// for a transition. Pool-exhaustion and server-side saturation are never retried.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10128,
+        Level = LogLevel.Warning,
+        Message = "Transient DB fault on transition {TransitionKey}; retry attempt {AttemptNumber} (delay {DelayMs} ms)")]
+    public static partial void TransitionDbRetryAttempt(
+        this ILogger logger,
+        string transitionKey,
+        int attemptNumber,
+        long delayMs);
+
+    /// <summary>
+    /// Logs when publishing a deferred domain event after UoW commit fails.
+    /// The exception is swallowed intentionally — it must not trigger a retry.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10129,
+        Level = LogLevel.Error,
+        Message = "Failed to publish deferred event {EventType} after transition commit")]
+    public static partial void TransitionDeferredEventPublishFailed(
+        this ILogger logger,
+        Exception exception,
+        string eventType);
+
+    /// <summary>
     /// Logs when a cancel transition is detected.
     /// </summary>
     [LoggerMessage(

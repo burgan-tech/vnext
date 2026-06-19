@@ -4,6 +4,7 @@ using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Resilience;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,8 @@ namespace BBT.Workflow.Execution.Services;
 /// </summary>
 public sealed class TransitionRunner : ITransitionRunner
 {
+    private static readonly ResiliencePropertyKey<string> TransitionKeyProperty = new("TransitionKey");
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<TransitionRunner> _logger;
     private readonly ResiliencePipeline<Result<TransitionCoreOutput>> _pipeline;
@@ -63,7 +66,16 @@ public sealed class TransitionRunner : ITransitionRunner
                 BackoffType = DelayBackoffType.Exponential,
                 UseJitter = opts.UseJitter,
                 ShouldHandle = new PredicateBuilder<Result<TransitionCoreOutput>>()
-                    .Handle<Exception>(classifier.IsRetriableTransient)
+                    .Handle<Exception>(classifier.IsRetriableTransient),
+                OnRetry = args =>
+                {
+                    args.Context.Properties.TryGetValue(TransitionKeyProperty, out var transitionKey);
+                    _logger.TransitionDbRetryAttempt(
+                        transitionKey ?? "unknown",
+                        args.AttemptNumber + 1,
+                        (long)args.RetryDelay.TotalMilliseconds);
+                    return default;
+                }
             })
             .Build();
 
@@ -80,15 +92,24 @@ public sealed class TransitionRunner : ITransitionRunner
         WorkflowExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var hopResult = await _pipeline.ExecuteAsync(
-            async ct => await ScopeDelegate(context, ct),
-            cancellationToken);
+        var pollyContext = ResilienceContextPool.Shared.Get(cancellationToken);
+        pollyContext.Properties.Set(TransitionKeyProperty, context.TransitionKey ?? "unknown");
+        try
+        {
+            var hopResult = await _pipeline.ExecuteAsync(
+                async ctx => await ScopeDelegate(context, ctx.CancellationToken),
+                pollyContext);
 
-        if (!hopResult.IsSuccess)
-            return Result<TransitionOutput>.Fail(hopResult.Error);
+            if (!hopResult.IsSuccess)
+                return Result<TransitionOutput>.Fail(hopResult.Error);
 
-        var coreOutput = hopResult.Value!;
-        return Result<TransitionOutput>.Ok(coreOutput.Output);
+            var coreOutput = hopResult.Value!;
+            return Result<TransitionOutput>.Ok(coreOutput.Output);
+        }
+        finally
+        {
+            ResilienceContextPool.Shared.Return(pollyContext);
+        }
     }
 
     /// <summary>
@@ -131,6 +152,7 @@ public sealed class TransitionRunner : ITransitionRunner
     /// Publishes deferred domain events via IDistributedEventBus after UoW commit.
     /// Each event passes through HookedDistributedEventBus, preserving hook behavior.
     /// Events include pre-extracted metadata from AddDistributedEvent time.
+    /// Exceptions are swallowed here intentionally — they must NOT propagate to trigger a retry.
     /// </summary>
     private async Task PublishDeferredEventsAsync(
         IServiceProvider sp,
@@ -150,10 +172,7 @@ public sealed class TransitionRunner : ITransitionRunner
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Failed to publish deferred event {EventType} for transition",
-                    envelope.Event.GetType().Name);
+                _logger.TransitionDeferredEventPublishFailed(ex, envelope.Event.GetType().Name);
             }
         }
     }
