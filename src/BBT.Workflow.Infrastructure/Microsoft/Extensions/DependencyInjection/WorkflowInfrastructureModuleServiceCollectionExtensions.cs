@@ -100,13 +100,13 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // Instance Gateways - route between local and remote execution
         services.AddInstanceGatewayServices();
         
+        // Resilience
+        services.TryAddSingleton<IDbTransientErrorClassifier, DbTransientErrorClassifierAdapter>();
+
         // Monitoring
         services.AddSingleton<IWorkflowMetrics, PrometheusWorkflowMetrics>();
         services.AddSingleton<WorkflowDatabaseInterceptor>();
         services.AddSingleton<WorkflowTransactionInterceptor>();
-
-        // Resilience — transient DB error classifier
-        services.TryAddSingleton<IDbTransientErrorClassifier, DbTransientErrorClassifierAdapter>();
         
         // Hosted Services
         services.AddHostedService<SystemHealthMonitoringHostedService>();

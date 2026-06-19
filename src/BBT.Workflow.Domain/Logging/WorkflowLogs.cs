@@ -556,31 +556,6 @@ public static partial class WorkflowLogs
         int excludedCount,
         string transitionKey);
 
-    /// <summary>
-    /// Logs a retry attempt for a transient database connection fault during transition execution.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10128,
-        Level = LogLevel.Warning,
-        Message = "Transient DB fault on transition {TransitionKey} — retrying (attempt {AttemptNumber}, delay {DelayMs}ms)")]
-    public static partial void TransitionDbRetryAttempt(
-        this ILogger logger,
-        string transitionKey,
-        int attemptNumber,
-        long delayMs);
-
-    /// <summary>
-    /// Logs when a deferred domain event fails to publish after transition commit.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10129,
-        Level = LogLevel.Error,
-        Message = "Failed to publish deferred event {EventType} for transition")]
-    public static partial void TransitionDeferredEventPublishFailed(
-        this ILogger logger,
-        Exception exception,
-        string eventType);
-
     #endregion
 
     #region Task Execution

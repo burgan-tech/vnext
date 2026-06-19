@@ -20,7 +20,8 @@ public class TransitionRunnerRetryTests
 {
     private static TransitionRunner CreateRunner(
         IDbTransientErrorClassifier classifier,
-        DbRetryOptions? options = null)
+        DbRetryOptions? options = null,
+        Func<WorkflowExecutionContext, CancellationToken, Task<Result<TransitionCoreOutput>>>? scopeDelegate = null)
     {
         var opts = options ?? new DbRetryOptions
         {
@@ -34,7 +35,9 @@ public class TransitionRunnerRetryTests
         var logger = NullLogger<TransitionRunner>.Instance;
         var retryOptions = Options.Create(opts);
 
-        return new TransitionRunner(scopeFactory, logger, retryOptions, classifier);
+        return scopeDelegate != null
+            ? new TransitionRunner(scopeFactory, logger, retryOptions, classifier) { ScopeDelegate = scopeDelegate }
+            : new TransitionRunner(scopeFactory, logger, retryOptions, classifier);
     }
 
     private static WorkflowExecutionContext CreateContext() =>
@@ -58,19 +61,17 @@ public class TransitionRunnerRetryTests
         var classifier = Substitute.For<IDbTransientErrorClassifier>();
         classifier.IsRetriableTransient(Arg.Any<Exception>()).Returns(true);
 
-        var runner = CreateRunner(classifier);
         var context = CreateContext();
         var fakeOutput = CreateFakeOutput();
-
         var callCount = 0;
 
-        runner.ScopeDelegate = (ctx, ct) =>
+        var runner = CreateRunner(classifier, scopeDelegate: (ctx, ct) =>
         {
             callCount++;
             if (callCount == 1)
                 throw new SocketException();
             return Task.FromResult(Result<TransitionCoreOutput>.Ok(fakeOutput));
-        };
+        });
 
         // Act
         var result = await runner.RunAsync(context);
@@ -88,17 +89,15 @@ public class TransitionRunnerRetryTests
         // Pool exhaustion returns false — never retry
         classifier.IsRetriableTransient(Arg.Any<Exception>()).Returns(false);
 
-        var runner = CreateRunner(classifier);
         var context = CreateContext();
-
         var callCount = 0;
         var poolException = new InvalidOperationException("pool has been exhausted");
 
-        runner.ScopeDelegate = (ctx, ct) =>
+        var runner = CreateRunner(classifier, scopeDelegate: (ctx, ct) =>
         {
             callCount++;
             throw poolException;
-        };
+        });
 
         // Act
         var ex = await Should.ThrowAsync<InvalidOperationException>(() => runner.RunAsync(context));
@@ -123,17 +122,15 @@ public class TransitionRunnerRetryTests
             UseJitter = false
         };
 
-        var runner = CreateRunner(classifier, opts);
         var context = CreateContext();
-
         var callCount = 0;
         var transientException = new SocketException();
 
-        runner.ScopeDelegate = (ctx, ct) =>
+        var runner = CreateRunner(classifier, opts, scopeDelegate: (ctx, ct) =>
         {
             callCount++;
             throw transientException;
-        };
+        });
 
         // Act & Assert: Polly exhausts all retries and rethrows
         await Should.ThrowAsync<SocketException>(() => runner.RunAsync(context));
@@ -147,13 +144,11 @@ public class TransitionRunnerRetryTests
     {
         // Arrange
         var classifier = Substitute.For<IDbTransientErrorClassifier>();
-
-        var runner = CreateRunner(classifier);
         var context = CreateContext();
         var error = new BBT.Aether.Results.Error("TEST_ERROR", "Something went wrong");
 
-        runner.ScopeDelegate = (ctx, ct) =>
-            Task.FromResult(Result<TransitionCoreOutput>.Fail(error));
+        var runner = CreateRunner(classifier, scopeDelegate: (ctx, ct) =>
+            Task.FromResult(Result<TransitionCoreOutput>.Fail(error)));
 
         // Act
         var result = await runner.RunAsync(context);

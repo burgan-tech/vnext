@@ -157,13 +157,10 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         {
             services.Configure<ResultRetryOptions>(
                 configuration.GetSection(ResultRetryOptions.SectionName));
-            services.Configure<DbRetryOptions>(
-                configuration.GetSection(DbRetryOptions.SectionName));
         }
         else
         {
             services.Configure<ResultRetryOptions>(_ => { });
-            services.Configure<DbRetryOptions>(_ => { });
         }
 
         services.AddSingleton<IResultResiliencePipelineFactory, ResultResiliencePipelineFactory>();

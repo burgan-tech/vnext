@@ -13,6 +13,7 @@ using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Transitions.Factory;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Resilience;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -27,11 +28,16 @@ public static class PipelineServiceCollectionExtensions
     {
         // Core execution service (facade + core executor)
         services.AddScoped<IWorkflowExecutionService, WorkflowExecutionService>();
-        services.AddScoped<IWorkflowExecutionCore>(sp => 
+        services.AddScoped<IWorkflowExecutionCore>(sp =>
             (IWorkflowExecutionCore)sp.GetRequiredService<IWorkflowExecutionService>());
-        
-        // Transition Runner (owns chaining with isolated scope + UoW per hop)
-        services.AddScoped<ITransitionRunner, TransitionRunner>();
+
+        // Transition Runner: singleton so the Polly ResiliencePipeline is built once and reused.
+        // Safe as singleton: constructor deps are all singleton-safe (IServiceScopeFactory,
+        // ILogger, IOptions<DbRetryOptions>, IDbTransientErrorClassifier); scoped services
+        // (IWorkflowExecutionCore, IUnitOfWorkManager, ICurrentUser) are resolved per-call
+        // via the scope the runner creates internally — no captive-dependency risk.
+        services.Configure<DbRetryOptions>(_ => { }); // ensure IOptions<DbRetryOptions> is always resolvable
+        services.AddSingleton<ITransitionRunner, TransitionRunner>();
         
         // Execution Strategies
         services.AddScoped<IExecutionStrategyFactory, ExecutionStrategyFactory>();
