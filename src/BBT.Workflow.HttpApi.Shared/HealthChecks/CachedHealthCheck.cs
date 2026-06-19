@@ -8,14 +8,27 @@ namespace BBT.Workflow.HttpApi.Shared.HealthChecks;
 /// a <see cref="SemaphoreSlim"/> so the inner check is invoked at most once per TTL
 /// window even under parallel probe load.
 /// </summary>
-public sealed class CachedHealthCheck : IHealthCheck
+/// <remarks>
+/// Dispose this instance when it is no longer needed to release the underlying
+/// <see cref="SemaphoreSlim"/>.
+/// </remarks>
+public sealed class CachedHealthCheck : IHealthCheck, IDisposable
 {
     private readonly IHealthCheck _inner;
     private readonly TimeSpan _ttl;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    // _last is only written inside the gate, but read on the lock-free fast path.
+    // A Volatile.Read ensures the reading thread sees the most-recently committed value
+    // without a full memory barrier. At worst the fast path may briefly see a stale-but-valid
+    // result from a just-expired window, causing at most one redundant inner call — acceptable
+    // for a health check.
     private HealthCheckResult _last;
-    private DateTimeOffset _expiresAt = DateTimeOffset.MinValue;
+
+    // Stored as UTC ticks (long) so the 64-bit read/write is atomic on 64-bit runtimes.
+    // Volatile.Read/Write provides the acquire/release fence needed for the lock-free fast path.
+    private long _expiresAtTicks = DateTimeOffset.MinValue.UtcTicks;
 
     /// <summary>
     /// Initializes a new instance of <see cref="CachedHealthCheck"/>.
@@ -34,19 +47,21 @@ public sealed class CachedHealthCheck : IHealthCheck
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        // Fast path: result still fresh — no lock needed
-        if (_timeProvider.GetUtcNow() < _expiresAt)
+        // Fast path: result still fresh. Volatile.Read ensures we see the latest written ticks.
+        if (_timeProvider.GetUtcNow().UtcTicks < Volatile.Read(ref _expiresAtTicks))
             return _last;
 
         await _gate.WaitAsync(cancellationToken);
         try
         {
             // Double-checked: another caller may have refreshed while we waited
-            if (_timeProvider.GetUtcNow() < _expiresAt)
+            if (_timeProvider.GetUtcNow().UtcTicks < Volatile.Read(ref _expiresAtTicks))
                 return _last;
 
             _last = await _inner.CheckHealthAsync(context, cancellationToken);
-            _expiresAt = _timeProvider.GetUtcNow() + _ttl;
+            // Write _last before updating the expiry so the fast path never reads
+            // a new expiry paired with a stale result.
+            Volatile.Write(ref _expiresAtTicks, (_timeProvider.GetUtcNow() + _ttl).UtcTicks);
             return _last;
         }
         finally
@@ -54,4 +69,7 @@ public sealed class CachedHealthCheck : IHealthCheck
             _gate.Release();
         }
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _gate.Dispose();
 }

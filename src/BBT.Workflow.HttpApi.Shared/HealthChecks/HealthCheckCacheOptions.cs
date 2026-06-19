@@ -2,6 +2,9 @@ namespace BBT.Workflow.HttpApi.Shared.HealthChecks;
 
 /// <summary>
 /// Configuration options for <see cref="CachedHealthCheck"/>.
+/// Consumed at DI registration time to supply the TTL passed to the
+/// <see cref="CachedHealthCheck"/> constructor. Bind via
+/// <c>IOptions&lt;HealthCheckCacheOptions&gt;</c> in the registration extension.
 /// </summary>
 public sealed class HealthCheckCacheOptions
 {

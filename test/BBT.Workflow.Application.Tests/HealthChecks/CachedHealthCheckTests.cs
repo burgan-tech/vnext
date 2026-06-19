@@ -97,6 +97,20 @@ public class CachedHealthCheckTests
         callCount.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task Pre_cancelled_token_throws_OperationCanceledException()
+    {
+        var inner = Substitute.For<IHealthCheck>();
+        var clock = new FakeTimeProvider();
+        var sut = new CachedHealthCheck(inner, TimeSpan.FromSeconds(10), clock);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => sut.CheckHealthAsync(Ctx(), cts.Token));
+    }
+
     /// <summary>
     /// Minimal controllable <see cref="TimeProvider"/> for tests — advances time on demand.
     /// </summary>
