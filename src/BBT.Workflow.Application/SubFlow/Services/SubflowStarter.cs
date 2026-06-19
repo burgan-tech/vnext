@@ -238,25 +238,27 @@ public sealed class SubflowStarter(
 
         return await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            // Compile the mapping script to the appropriate interface
-            var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-                subFlowConfig.Mapping,
-                cancellationToken: ct);
-
             // Cast to the appropriate mapping interface and execute InputHandler
-            if (subFlowConfig.Type.Code == "S" && mappingInstance is ISubFlowMapping subFlowMapping)
+            if (subFlowConfig.Type.Code == "S")
             {
+                var subFlowMapping = await scriptEngine.CompileToInstanceAsync<ISubFlowMapping>(
+                    subFlowConfig.Mapping,
+                    cancellationToken: ct);
                 return await subFlowMapping.InputHandler(context);
             }
 
-            if (subFlowConfig.Type.Code == "P" && mappingInstance is ISubProcessMapping subProcessMapping)
+            if (subFlowConfig.Type.Code == "P")
             {
+                var subProcessMapping = await scriptEngine.CompileToInstanceAsync<ISubProcessMapping>(
+                    subFlowConfig.Mapping,
+                    cancellationToken: ct);
                 return await subProcessMapping.InputHandler(context);
             }
 
             // If we reach here, casting failed
             throw new InvalidOperationException(
                 $"Failed to cast mapping instance to {mappingInterfaceType.Name} for SubFlow type '{subFlowConfig.Type.Code}'");
-        }, cancellationToken, ex => WorkflowErrors.SubFlowInputMappingFailed(subFlowConfig.Process.Key, ex.Message));
+        }, cancellationToken, ex => WorkflowErrors.SubFlowInputMappingFailed(
+            subFlowConfig.Process.Key, ex.Message, ex.StackTrace));
     }
 }

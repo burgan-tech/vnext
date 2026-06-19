@@ -362,11 +362,16 @@ public static class WorkflowErrors
     /// </summary>
     /// <param name="subFlowKey">The key of the SubFlow.</param>
     /// <param name="reason">The reason for the mapping failure.</param>
-    public static Error SubFlowInputMappingFailed(string subFlowKey, string reason)
+    /// <param name="stackTrace">
+    /// Optional exception stack trace carried in <see cref="Error.Detail"/> so the
+    /// post-commit fault path can record it on the instance incident. The SubFlow key
+    /// is already part of the message, so no diagnostic context is lost.
+    /// </param>
+    public static Error SubFlowInputMappingFailed(string subFlowKey, string reason, string? stackTrace = null)
         => Error.Failure(
             WorkflowErrorCodes.SubflowStartFailed,
             $"SubFlow '{subFlowKey}' input mapping failed: {reason}",
-            detail: subFlowKey);
+            detail: stackTrace ?? subFlowKey);
 
     /// <summary>
     /// Correlation not found for SubFlow start.

@@ -146,7 +146,8 @@ public sealed class PostCommitExecutor(
                     {
                         return PostCommitResult.Fail(
                             execResult.Error,
-                            new PostCommitFaultRequest(decision.FaultErrorCode, decision.FaultErrorMessage));
+                            new PostCommitFaultRequest(
+                                decision.FaultErrorCode, decision.FaultErrorMessage, execResult.Error.Detail));
                     }
 
                     if (!decision.ShouldContinue)
@@ -184,7 +185,7 @@ public sealed class PostCommitExecutor(
         {
             return PostCommitResult.Fail(
                 error,
-                new PostCommitFaultRequest(decision.FaultErrorCode, decision.FaultErrorMessage));
+                new PostCommitFaultRequest(decision.FaultErrorCode, decision.FaultErrorMessage, error.Detail));
         }
 
         return PostCommitResult.Fail(error);

@@ -8,7 +8,11 @@ namespace BBT.Workflow.Execution.PostCommit;
 /// </summary>
 /// <param name="ErrorCode">The error code that caused the fault.</param>
 /// <param name="ErrorMessage">The error message describing the fault.</param>
-public sealed record PostCommitFaultRequest(string ErrorCode, string? ErrorMessage);
+/// <param name="StackTrace">
+/// Optional exception stack trace (sourced from the originating error's detail) so the
+/// pipeline can record it on the instance incident.
+/// </param>
+public sealed record PostCommitFaultRequest(string ErrorCode, string? ErrorMessage, string? StackTrace = null);
 
 /// <summary>
 /// Result of post-commit job execution.

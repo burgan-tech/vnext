@@ -52,6 +52,19 @@ public class EnqueueContinuationStrategyTests
         var strategy = CreateStrategy(directEnqueue: true);
         var context = CreateContextWithNextTransition("approve");
 
+        // Capture the InstanceJob intent and the jobId passed to the enqueuer to prove they match.
+        InstanceJob? insertedJob = null;
+        _jobRepository
+            .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Callback<InstanceJob, bool, CancellationToken>((j, _, _) => insertedJob = j)
+            .ReturnsAsync((InstanceJob j, bool _, CancellationToken _) => j);
+
+        Guid enqueuedJobId = Guid.Empty;
+        _jobEnqueuer
+            .Setup(x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, Guid, CancellationToken>((_, id, _) => enqueuedJobId = id)
+            .Returns(Task.CompletedTask);
+
         var result = await strategy.DispatchAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
@@ -63,8 +76,16 @@ public class EnqueueContinuationStrategyTests
                     p.TransitionKey == "approve"
                     && p.InstanceId == context.InstanceId
                     && p.ExecutionActor == ExecutionActor.System),
+                It.IsAny<Guid>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+
+        // JobId consistency: the InstanceJob intent carries the SAME id passed to the enqueuer
+        // (no placeholder), so cancellation-by-id resolves the BackgroundJobInfo.
+        insertedJob.ShouldNotBeNull();
+        enqueuedJobId.ShouldNotBe(Guid.Empty);
+        insertedJob!.JobId.ShouldBe(enqueuedJobId);
+        insertedJob.Id.ShouldBe(enqueuedJobId);
 
         _eventBus.Verify(
             x => x.PublishAsync(
@@ -86,7 +107,7 @@ public class EnqueueContinuationStrategyTests
         var context = CreateContextWithNextTransition("approve");
 
         _jobEnqueuer
-            .Setup(x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Dapr unavailable"));
 
         var result = await strategy.DispatchAsync(context, CancellationToken.None);
@@ -95,7 +116,7 @@ public class EnqueueContinuationStrategyTests
         result.Value.ShouldBeNull();
 
         _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
+            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Once);
 
         _eventBus.Verify(
@@ -119,7 +140,7 @@ public class EnqueueContinuationStrategyTests
         result.Value.ShouldBeNull();
 
         _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
+            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Never);
 
         _eventBus.Verify(
@@ -146,7 +167,7 @@ public class EnqueueContinuationStrategyTests
             x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
+            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _eventBus.Verify(
             x => x.PublishAsync(

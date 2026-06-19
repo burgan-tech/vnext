@@ -428,6 +428,13 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasMaxLength(InstanceJobConstants.MaxJobNameLength);
 
+            b.Property(p => p.JobType)
+                .IsRequired()
+                .HasConversion<int>();
+
+            b.Property(p => p.TransitionKey)
+                .HasMaxLength(InstanceConstants.MaxKeyLength);
+
             b.Property(p => p.JobId)
                 .IsRequired();
 
