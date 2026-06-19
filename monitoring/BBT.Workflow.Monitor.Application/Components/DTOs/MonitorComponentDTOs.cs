@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
+using BBT.Workflow.Monitor.Components.Filters;
 
 namespace BBT.Workflow.Monitor.Components.DTOs;
 
@@ -38,6 +39,9 @@ public sealed class MonitorGetComponentsInput
     /// <summary>Number of items per page. Ignored when <see cref="Key"/> is provided.</summary>
     [Range(1, 100)]
     public int PageSize { get; set; } = 20;
+
+    /// <summary>Optional filter applied to list results. Ignored when <see cref="Key"/> is provided.</summary>
+    public MonitorComponentFilterInput? Filter { get; set; }
 }
 
 /// <summary>

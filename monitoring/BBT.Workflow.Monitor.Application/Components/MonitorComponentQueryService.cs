@@ -11,6 +11,7 @@ using BBT.Workflow.Instances;
 using Mapping = BBT.Workflow.Definitions.Mapping;
 using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Components.DTOs;
+using BBT.Workflow.Monitor.Components.Filters;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -284,9 +285,12 @@ public sealed class MonitorComponentQueryService(
         if (!loadResult.IsSuccess)
             return Result<MonitorPagedResponse<MonitorComponentSummaryItem>>.Fail(loadResult.Error);
 
-        var allItems = loadResult.Value!
-            .Select(e => ProjectToSummary(e.Serialized, e.FlowVersion, e.Tags, e.CreatedAt, e.ModifiedAt, canonicalType))
-            .ToList();
+        var projected = loadResult.Value!
+            .Select(e => ProjectToSummary(e.Serialized, e.FlowVersion, e.Tags, e.CreatedAt, e.ModifiedAt, canonicalType));
+
+        var allItems = (input.Filter is not null && !input.Filter.IsEmpty)
+            ? MonitorComponentFilter.Apply(projected, input.Filter).ToList()
+            : projected.ToList();
 
         var pagedItems = allItems
             .Skip((input.Page - 1) * input.PageSize)
@@ -451,7 +455,7 @@ public sealed class MonitorComponentQueryService(
             .Select(g => g.OrderByDescending(x => x.Entity.Version, new SemVersionComparer()).First())
             .ToList();
 
-        foreach (var (entity, _, _) in latest)
+        foreach (var (entity, _, _, _, _) in latest)
         {
             var setResult = await componentCacheStore.SetAsync(entity, cancellationToken);
             if (!setResult.IsSuccess)
