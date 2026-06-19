@@ -1,6 +1,7 @@
 using BBT.Workflow.HttpApi.Shared.HealthChecks;
 using HealthChecks.NpgSql;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Prometheus;
@@ -39,20 +40,23 @@ public static class HealthChecksServiceCollectionExtensions
         if (includeDatabaseCheck)
         {
             var configuration = services.GetConfiguration();
-            var connectionString = configuration.GetConnectionString("Default")!;
+            var connectionString = configuration.GetConnectionString("Default")
+                ?? throw new InvalidOperationException(
+                    "Connection string 'Default' is required for the database health check.");
+
+            // Register as singleton so the factory returns the SAME CachedHealthCheck instance
+            // on every probe — ensuring the 10 s TTL actually applies and no SemaphoreSlim leak.
+            services.TryAddSingleton<CachedHealthCheck>(sp =>
+            {
+                var ttl = sp.GetService<IOptions<HealthCheckCacheOptions>>()?.Value.Ttl
+                          ?? new HealthCheckCacheOptions().Ttl;
+                IHealthCheck inner = new NpgSqlHealthCheck(new NpgSqlHealthCheckOptions(connectionString));
+                return new CachedHealthCheck(inner, ttl, TimeProvider.System);
+            });
 
             healthChecksBuilder.Add(new HealthCheckRegistration(
                 name: "database",
-                factory: sp =>
-                {
-                    var ttl = sp.GetService<IOptions<HealthCheckCacheOptions>>()?.Value.Ttl
-                              ?? new HealthCheckCacheOptions().Ttl;
-
-                    IHealthCheck inner = new NpgSqlHealthCheck(
-                        new NpgSqlHealthCheckOptions(connectionString));
-
-                    return new CachedHealthCheck(inner, ttl, TimeProvider.System);
-                },
+                factory: sp => sp.GetRequiredService<CachedHealthCheck>(),
                 failureStatus: HealthStatus.Unhealthy,
                 tags: ["ready"],
                 timeout: TimeSpan.FromSeconds(2)));

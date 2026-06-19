@@ -1,4 +1,5 @@
 using System.Linq;
+using BBT.Workflow.HttpApi.Shared.HealthChecks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -53,6 +54,11 @@ public class AppHealthChecksRegistrationTests
         db.ShouldNotBeNull();
         db.Tags.ShouldContain("ready");
         db.Timeout.ShouldBe(System.TimeSpan.FromSeconds(2));
+
+        // Verify the factory returns a CachedHealthCheck singleton —
+        // the same instance must be returned on every call so the TTL actually applies.
+        db.Factory(sp).ShouldBeOfType<CachedHealthCheck>();
+        db.Factory(sp).ShouldBeSameAs(db.Factory(sp));
     }
 
     [Fact]
