@@ -30,6 +30,12 @@ public sealed record ExecutionError
     public string? ErrorMessage { get; init; }
 
     /// <summary>
+    /// Gets the original exception stack trace, when the error originated from a thrown exception.
+    /// Null for business-level (response/result) failures that carry no stack trace.
+    /// </summary>
+    public string? StackTrace { get; init; }
+
+    /// <summary>
     /// Gets the normalized error for Error Boundary policy matching.
     /// </summary>
     public required NormalizedError NormalizedError { get; init; }

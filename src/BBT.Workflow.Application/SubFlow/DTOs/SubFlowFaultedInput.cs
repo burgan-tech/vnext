@@ -79,6 +79,11 @@ public record SubFlowFaultedInput
     public string? IncidentErrorLayer { get; init; }
 
     /// <summary>
+    /// Exception stack trace from the SubFlow's active incident, when available.
+    /// </summary>
+    public string? IncidentStackTrace { get; init; }
+
+    /// <summary>
     /// HTTP status code from the SubFlow's active incident, when available.
     /// </summary>
     public int? IncidentStatusCode { get; init; }

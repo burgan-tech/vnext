@@ -291,7 +291,7 @@ public sealed class InstanceController(
             ChainToken = continuation.ChainToken
         };
 
-        await transitionJobEnqueuer.EnqueueAsync(payload, cancellationToken);
+        await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);
         return Ok();
     }
 

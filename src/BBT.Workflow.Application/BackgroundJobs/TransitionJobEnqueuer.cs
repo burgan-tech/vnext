@@ -9,13 +9,17 @@ namespace BBT.Workflow.BackgroundJobs;
 
 /// <summary>
 /// Default <see cref="ITransitionJobEnqueuer"/> over the Aether background-job service / Dapr Jobs.
+/// Enqueues with <c>useAmbientUnitOfWork: true</c> so the durable job row joins the transition
+/// pipeline's ambient unit of work (committing atomically with the transition) and the Dapr schedule
+/// is deferred to post-commit — avoiding the nested-UoW / shared-DbContext collision
+/// ("A second operation was started on this context instance").
 /// </summary>
 public sealed class TransitionJobEnqueuer(
     IBackgroundJobService backgroundJobService,
     IOptions<WorkflowExecutionOptions> executionOptions) : ITransitionJobEnqueuer
 {
     /// <inheritdoc />
-    public Task EnqueueAsync(TransitionJobPayload payload, CancellationToken cancellationToken = default)
+    public Task EnqueueAsync(TransitionJobPayload payload, Guid jobId, CancellationToken cancellationToken = default)
     {
         var fp = executionOptions.Value.FailurePolicy;
         var failurePolicy = JobScheduleFailurePolicy.Constant(
@@ -38,6 +42,8 @@ public sealed class TransitionJobEnqueuer(
             schedule,
             metadata,
             failurePolicy,
+            useAmbientUnitOfWork: true,
+            jobId: jobId,
             cancellationToken);
     }
 }

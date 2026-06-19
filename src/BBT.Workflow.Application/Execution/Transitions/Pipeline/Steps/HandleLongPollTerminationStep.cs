@@ -121,12 +121,12 @@ public sealed class HandleLongPollTerminationStep(
         Guid token,
         CancellationToken cancellationToken)
     {
-        var jobName = $"lpack-{context.InstanceId}-{LongPollAckConstants.JobKey}";
+        var jobName = JobName.ForLongPollAck(context.InstanceId);
         var activity = Activity.Current;
 
         var payload = new LongPollAckTimeoutPayload
         {
-            JobName = jobName,
+            JobName = jobName.Value,
             Domain = context.Domain,
             InstanceId = context.InstanceId,
             FlowName = context.WorkflowKey,
@@ -149,10 +149,11 @@ public sealed class HandleLongPollTerminationStep(
 
         var jobId = await backgroundJobService.EnqueueAsync(
             LongPollAckTimeoutJobHandler.HandlerName,
-            jobName,
+            jobName.Value,
             payload,
             schedule,
             metadata,
+            useAmbientUnitOfWork: true,
             cancellationToken: cancellationToken);
 
         await jobRepository.InsertAsync(

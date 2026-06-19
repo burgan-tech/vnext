@@ -6,9 +6,10 @@ namespace BBT.Workflow.Execution.LongPoll;
 public static class LongPollAckConstants
 {
     /// <summary>
-    /// Job-name suffix key for the acknowledge fallback schedule. The fallback job is named
-    /// <c>lpack-{instanceId}-{JobKey}</c> so it can be cancelled via the existing
-    /// transition-key-suffix cancellation path on acknowledge.
+    /// Well-known segment key for the acknowledge fallback schedule. The fallback job is built via
+    /// <see cref="BBT.Workflow.Instances.JobName.ForLongPollAck"/> (type <c>la</c>) carrying this
+    /// key as its segment, so it can be cancelled via the structured state-transition cancellation
+    /// path on acknowledge (matched by job type + this key).
     /// </summary>
     public const string JobKey = "longpoll-ack";
 }

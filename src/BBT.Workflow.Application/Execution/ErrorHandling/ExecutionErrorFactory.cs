@@ -41,6 +41,7 @@ public sealed class ExecutionErrorFactory : IExecutionErrorFactory
             TaskType = taskType,
             StatusCode = normalized.StatusCode,
             ErrorMessage = exception.Message,
+            StackTrace = exception.StackTrace,
             NormalizedError = taskNormalizedError,
             ExecutionDurationMs = executionDurationMs,
             Metadata = new Dictionary<string, object>

@@ -38,6 +38,13 @@ public sealed class TransitionContinuationRequested : IDistributedEvent
     /// <summary>The deterministic job name (used for the active-job idempotency guard).</summary>
     public required string JobName { get; init; }
 
+    /// <summary>
+    /// The caller-generated job id. Threaded so the downstream enqueue uses the SAME id for
+    /// <c>BackgroundJobInfo.Id</c> as the upstream <c>InstanceJob.JobId</c> — keeping the two in sync
+    /// (no placeholder) so cancellation-by-id works across the outbox path.
+    /// </summary>
+    public required Guid JobId { get; init; }
+
     /// <summary>The transition payload data (JSON), if any.</summary>
     public JsonElement? Data { get; init; }
 

@@ -90,14 +90,20 @@ public sealed class InstanceCancellationService(
                 return Result.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString()));
             }
 
-            // Get all active jobs for this instance
+            // The caller (e.g. CancelScheduledJobsStep) already resolved which transitions must be
+            // cancelled, so we simply match this instance's active jobs by their targeted key —
+            // no extra job-type conditioning. Matching uses the structured TransitionKey column
+            // instead of the previous fragile JobName suffix parse.
             var allJobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
-            
-            // Filter jobs by transition keys
-            // Job name format: trans-{instanceId}-{transitionKey}
-            var jobsToCancel = allJobs.Where(job => 
-                transitionKeys.Any(key => job.JobName.EndsWith($"-{key}"))).ToList();
-            
+
+            var jobsToCancel = allJobs
+                .Where(job => (job.TransitionKey != null && transitionKeys.Contains(job.TransitionKey))
+                    // Transitional fallback for pre-rollout rows (no structured columns):
+                    // old "-{key}" suffix match. Removable once no legacy rows remain.
+                    || (job.JobType == JobType.Unknown
+                        && transitionKeys.Any(key => job.JobName.EndsWith($"-{key}", StringComparison.Ordinal))))
+                .ToList();
+
             if (!jobsToCancel.Any())
             {
                 return Result.Ok();

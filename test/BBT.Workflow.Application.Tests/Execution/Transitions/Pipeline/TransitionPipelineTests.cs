@@ -483,6 +483,47 @@ public class TransitionPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenPostCommitFaults_ShouldRecordIncidentAndFaultInstance()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        // Queue a post-commit job so the executor is invoked.
+        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
+
+        // Simulate a subflow input-mapping failure that the failure policy classifies
+        // as a system error (Instance:* prefix) -> ShouldMarkInstanceFaulted.
+        var error = Error.Failure(
+            "Instance:100023",
+            "SubFlow 'credit-bureau-inquiry' input mapping failed: " +
+            "'System.Dynamic.ExpandoObject' does not contain a definition for 'application'");
+
+        _mockPostCommitExecutor.ExecuteAsync(
+            Arg.Any<IReadOnlyList<IPostCommitJob>>(),
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(PostCommitResult.Fail(
+                error,
+                new PostCommitFaultRequest(error.Code, error.Message, "   at SubFlowMapping.InputHandler()")));
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        context.Instance.HasActiveIncident.ShouldBeTrue();
+        await _mockInstanceRepository.Received(1)
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted) && x.HasActiveIncident),
+                true,
+                Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunAsync_WhenStepReturnsStop_ShouldStopPipeline()
     {
         // Arrange
