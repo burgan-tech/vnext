@@ -17,7 +17,28 @@
 
 **Tech Stack:** .NET 10, Aether UoW (`IUnitOfWorkManager`, explicit `BeginTransactionAsync`), Polly (Faz 2 retry — KORUNACAK), xUnit + NSubstitute + Shouldly. Branch: `feature/phase4-transaction-boundary` (Faz 2+3 dahil).
 
-**Spec kaynağı:** [2026-06-19-vnext-load-test-remediation.md](2026-06-19-vnext-load-test-remediation.md) Faz 4 (Seçenek A). Async yol (`AsyncTransitionStrategy`) zaten ayrı kısa UoW disiplinine sahip — referans.
+**Spec kaynağı:** [2026-06-19-vnext-load-test-remediation.md](2026-06-19-vnext-load-test-remediation.md) Faz 4. Async yol (`AsyncTransitionStrategy`) zaten ayrı kısa UoW disiplinine sahip — referans.
+
+## KARAR (2026-06-19, kullanıcı onaylı): Seçenek B — Adım-bazlı kısa UoW
+
+Bulgu: `OnExecute(30)/OnExit(40)/OnEntry(60)` üçü de aynı kalıp — `taskCoordinator.ExecuteWithDetailsAsync` (uzak çağrı) + sonra `instanceRepository.UpdateAsync(instance, saveChanges:true)`. `TaskCoordinator` görevleri **kendi child DI scope'larında** çalıştırıp `InstanceTask` sonuçlarını orada yazıyor — yani görev sonuçları zaten ana transaction'da DEĞİL. Ana transaction yalnızca **Instance aggregate yazımlarını** (SetBusy, record, per-step instance UpdateAsync, ChangeState) tutuyor ve uzak çağrı boyunca **boşta-ama-açık** kalıyor → pinli bağlantı.
+
+**Seçilen tasarım (B):** TransitionRunner'daki tek büyük `RequiresNew` UoW KALDIRILIR. Her adım kendi kısa UoW'unu yönetir; hiçbir `taskCoordinator` (uzak) çağrısı boyunca transaction açık kalmaz.
+
+| Adım | Yapı |
+|---|---|
+| SetBusy(19), CreateTransitionRecord(20) | kısa UoW → erken commit (busy guard + record durable) |
+| ResourceLock(25) | script-lock; ana transaction yok |
+| OnExecute(30), OnExit(40), OnEntry(60) | uzak görev **transaction'sız** → instance yazımı **kendi kısa UoW'unda** commit → bağlantı bırakılır |
+| ChangeState(50) | kısa UoW → commit |
+| Finalize(110) | kısa UoW → record tamamla |
+
+Çapraz-adım atomiklik yerine: erken transition record + `successfulTaskIds` idempotency + ChainReaper ile kurtarma (async yol felsefesi).
+
+### B'nin getirdiği ve Task 4.1'in çözmesi gereken 3 ETKİLEŞİM
+1. **Faz 2 retry çakışması (kritik):** Bir adım commit edildikten SONRA transient hata gelirse, `TransitionRunner.RunAsync`'i baştan retry etmek commit edilmiş adımları yeniden çalıştırır. → retry seam'i adım-bazına inmeli VEYA `ResumePointStepOrder`/`RequestResumeFrom` resume mekanizmasına dayanmalı. Mevcut resume desteği doğrulanacak.
+2. **Kısmi ilerleme kurtarma:** Adım commit'i sonrası crash'te instance Busy + record var ama state yarım. `ResumePointStepOrder` persist ediliyor mu, ChainReaper/resume nasıl topluyor?
+3. **Busy + lock + crash:** Erken Busy işareti crash'te takılı kalmasın (busy-timeout/sweeper teyidi). Dağıtık lock korunur (DB transaction'ından bağımsız).
 
 ---
 
