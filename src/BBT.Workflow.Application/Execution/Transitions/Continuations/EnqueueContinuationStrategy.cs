@@ -52,13 +52,18 @@ public sealed class EnqueueContinuationStrategy(
         var jobName = JobName.ForAsyncTransition(current.InstanceId, next.TransitionKey);
         var jobNameValue = jobName.Value;
 
+        // Single caller-generated id, reused for the durable InstanceJob.JobId AND the underlying
+        // BackgroundJobInfo.Id (direct + outbox paths). Keeps the two in sync so cancellation-by-id
+        // works — no placeholder.
+        var jobId = Guid.NewGuid();
+
         // Durable intent for the active-job guard / reaper — atomic with the transition commit
         // because we run inside the pipeline's ambient UoW (TransitionRunner).
         await jobRepository.InsertAsync(
             InstanceJob.Create(
-                Guid.NewGuid(),
+                jobId,
                 jobName,
-                Guid.NewGuid(),
+                jobId,
                 current.Domain,
                 current.WorkflowKey,
                 current.InstanceId),
@@ -69,7 +74,7 @@ public sealed class EnqueueContinuationStrategy(
         // to the transactional outbox so the continuation is never lost.
         if (executionOptions.Value.DirectEnqueueContinuations)
         {
-            var enqueueResult = await EnqueueDirectlyAsync(current, next.TransitionKey, jobNameValue, cancellationToken);
+            var enqueueResult = await EnqueueDirectlyAsync(current, next.TransitionKey, jobNameValue, jobId, cancellationToken);
             if (enqueueResult.IsSuccess)
             {
                 logger.TransitionContinuationEnqueued(current.InstanceId, next.TransitionKey, jobNameValue);
@@ -80,7 +85,7 @@ public sealed class EnqueueContinuationStrategy(
                 current.InstanceId, next.TransitionKey, jobNameValue, enqueueResult.Error.Message);
         }
 
-        await PublishViaOutboxAsync(current, next.TransitionKey, jobNameValue, cancellationToken);
+        await PublishViaOutboxAsync(current, next.TransitionKey, jobNameValue, jobId, cancellationToken);
 
         // No in-process next context — a separate job resumes the chain.
         return Result<WorkflowExecutionContext?>.Ok(null);
@@ -88,12 +93,20 @@ public sealed class EnqueueContinuationStrategy(
 
     /// <summary>
     /// Enqueues the next-hop Dapr job directly via <see cref="ITransitionJobEnqueuer"/>.
-    /// Wrapped in <see cref="ResultExtensions.TryAsync{T}"/> because Dapr is an external service.
+    /// <para>
+    /// The enqueuer joins the ambient transition unit of work (transactional enqueue): the durable
+    /// job row commits atomically with the transition and the actual Dapr schedule is deferred to
+    /// post-commit. Consequently the <see cref="ResultExtensions.TryAsync{T}"/> wrapper here only
+    /// catches SYNCHRONOUS failures (intent persistence / scheduler registration); a Dapr scheduling
+    /// failure that happens after commit is recovered by the ChainReaper backstop, not by the
+    /// outbox fallback below.
+    /// </para>
     /// </summary>
     private Task<Result<bool>> EnqueueDirectlyAsync(
         TransitionExecutionContext current,
         string transitionKey,
         string jobName,
+        Guid jobId,
         CancellationToken cancellationToken)
     {
         var activity = Activity.Current;
@@ -118,7 +131,7 @@ public sealed class EnqueueContinuationStrategy(
         return ResultExtensions.TryAsync(
             async ct =>
             {
-                await jobEnqueuer.EnqueueAsync(payload, ct);
+                await jobEnqueuer.EnqueueAsync(payload, jobId, ct);
                 return true;
             },
             cancellationToken,
@@ -137,6 +150,7 @@ public sealed class EnqueueContinuationStrategy(
         TransitionExecutionContext current,
         string transitionKey,
         string jobName,
+        Guid jobId,
         CancellationToken cancellationToken)
     {
         var continuation = new TransitionContinuationRequested
@@ -147,6 +161,7 @@ public sealed class EnqueueContinuationStrategy(
             Version = current.Workflow.Version,
             TransitionKey = transitionKey,
             JobName = jobName,
+            JobId = jobId,
             Data = null, // chained auto-transitions carry no new request payload
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),

@@ -113,7 +113,8 @@ public sealed class AsyncTransitionStrategy(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var jobName = JobName.ForAsyncTransition(context.InstanceId, context.TransitionKey).Value;
+        var jobName = JobName.ForAsyncTransition(
+            Guid.Parse(context.InstanceId), context.TransitionKey).Value;
         EnrichTelemetry(activity, ctx, jobName);
 
         Result<TransitionExecutionContext> lockScopeResult =
@@ -246,7 +247,7 @@ public sealed class AsyncTransitionStrategy(
         }
 
         // Side-effect AFTER the intent is durable. Dapr is external → TryAsync.
-        var enqueueResult = await EnqueueToDaprAsync(jobName.Value, jobPayload, schedule, metadata, cancellationToken);
+        var enqueueResult = await EnqueueToDaprAsync(jobName.Value, jobPayload, schedule, metadata, jobId, cancellationToken);
         if (!enqueueResult.IsSuccess)
             return Result<string>.Fail(enqueueResult.Error);
 
@@ -267,8 +268,9 @@ public sealed class AsyncTransitionStrategy(
     {
         var jobName = JobName.ForAsyncTransition(transContext.InstanceId, transContext.TransitionKey);
 
-        // The active-job guard keys on JobName, so a generated job id is sufficient here;
-        // the real Dapr job id is produced later by the Inbox handler's enqueue.
+        // Single caller-generated id, reused for the InstanceJob.JobId intent AND threaded on the
+        // event so the downstream enqueue sets BackgroundJobInfo.Id to the same value — keeping them
+        // in sync for cancellation-by-id.
         var jobId = Guid.NewGuid();
 
         var continuation = new TransitionContinuationRequested
@@ -279,6 +281,7 @@ public sealed class AsyncTransitionStrategy(
             Version = transContext.Workflow.Version,
             TransitionKey = transContext.TransitionKey,
             JobName = jobName.Value,
+            JobId = jobId,
             Data = context.Data?.Attributes,
             InstanceKey = context.Data?.Key,
             Tags = context.Data?.Tags,
@@ -312,6 +315,7 @@ public sealed class AsyncTransitionStrategy(
         TransitionJobPayload jobPayload,
         string schedule,
         Dictionary<string, object> metadata,
+        Guid jobId,
         CancellationToken cancellationToken)
     {
         var fp = executionOptions.Value.FailurePolicy;
@@ -320,6 +324,10 @@ public sealed class AsyncTransitionStrategy(
             (uint)fp.MaxRetries);
 
         return ResultExtensions.TryAsync(
+            // Non-ambient (default useAmbientUnitOfWork:false): this enqueue runs AFTER the durable
+            // intent UoW has already committed (intent-first ordering), so there is no ambient
+            // transition UoW to join — keep the self-contained RequiresNew path. The caller-supplied
+            // jobId is reused as BackgroundJobInfo.Id so it matches the InstanceJob.JobId intent.
             async ct => await backgroundJobService.EnqueueAsync(
                 TransitionJobHandler.HandlerName,
                 jobName,
@@ -327,7 +335,8 @@ public sealed class AsyncTransitionStrategy(
                 schedule,
                 metadata,
                 failurePolicy,
-                ct),
+                jobId: jobId,
+                cancellationToken: ct),
             cancellationToken,
             ex => Error.Dependency(
                 WorkflowErrorCodes.Dependency,

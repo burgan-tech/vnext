@@ -42,6 +42,7 @@ public class HandleLongPollTerminationStepTests
         _jobService.EnqueueAsync(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
                 Arg.Any<string>(), Arg.Any<Dictionary<string, object>>(),
+                useAmbientUnitOfWork: Arg.Any<bool>(),
                 cancellationToken: Arg.Any<CancellationToken>())
             .Returns(Guid.NewGuid());
         _guidGenerator.Create().Returns(Guid.NewGuid());
@@ -90,6 +91,7 @@ public class HandleLongPollTerminationStepTests
         await _jobService.Received(1).EnqueueAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
             Arg.Any<string>(), Arg.Any<Dictionary<string, object>>(),
+            useAmbientUnitOfWork: true,
             cancellationToken: Arg.Any<CancellationToken>());
         await _jobRepository.Received(1).InsertAsync(Arg.Any<InstanceJob>(), true, Arg.Any<CancellationToken>());
     }

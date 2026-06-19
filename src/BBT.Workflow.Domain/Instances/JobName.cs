@@ -84,7 +84,7 @@ public sealed record JobName
             return false;
         }
 
-        const string expectedPrefix = Prefix + Delimiter; // "vnext.job.v1."
+        string expectedPrefix = Prefix + Delimiter; // "vnext.job.v1."
         if (!value.StartsWith(expectedPrefix, StringComparison.Ordinal))
         {
             return false;

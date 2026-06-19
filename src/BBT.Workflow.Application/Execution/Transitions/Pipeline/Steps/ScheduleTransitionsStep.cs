@@ -8,7 +8,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Timer;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Tasks.Coordinator;
@@ -172,6 +171,7 @@ public sealed class ScheduleTransitionsStep(
             info.Payload,
             info.ScheduleExpression,
             metadata: info.Metadata,
+            useAmbientUnitOfWork: true,
             cancellationToken: cancellationToken);
 
         await jobRepository.InsertAsync(
