@@ -5,12 +5,14 @@ using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
 using BBT.Workflow.Infrastructure.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.HostedServices;
+using BBT.Workflow.Infrastructure.Resilience;
 using BBT.Workflow.Infrastructure.Security;
 using BBT.Workflow.Infrastructure.Scripting;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Remote.Extensions;
+using BBT.Workflow.Resilience;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
 using BBT.Workflow.Scripting;
@@ -102,6 +104,9 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddSingleton<IWorkflowMetrics, PrometheusWorkflowMetrics>();
         services.AddSingleton<WorkflowDatabaseInterceptor>();
         services.AddSingleton<WorkflowTransactionInterceptor>();
+
+        // Resilience — transient DB error classifier
+        services.TryAddSingleton<IDbTransientErrorClassifier, DbTransientErrorClassifierAdapter>();
         
         // Hosted Services
         services.AddHostedService<SystemHealthMonitoringHostedService>();
