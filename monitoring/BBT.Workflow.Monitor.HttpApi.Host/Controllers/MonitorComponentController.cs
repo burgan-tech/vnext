@@ -157,7 +157,7 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
 
     /// <summary>
     /// Lists or fetches published component definitions (flows, tasks, schemas, views, functions, extensions).
-    /// When <paramref name="key"/> is supplied, returns that single component (no pagination) — passing
+    /// When <paramref name="key"/> is supplied, returns the single definition object directly — passing
     /// <c>page</c> or <c>pageSize</c> alongside <paramref name="key"/> returns 400.
     /// When <paramref name="key"/> is omitted, returns a paged list with <c>pagination</c> and <c>items</c>.
     /// </summary>
@@ -167,15 +167,16 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
     /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
     /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>.
     /// </param>
-    /// <param name="key">Optional single component key; returns that component or 404. Paging is ignored.</param>
+    /// <param name="key">Optional single component key; returns the raw definition or 404. Paging is ignored.</param>
     /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
     /// <param name="page">1-based page number (list mode only). Default: 1.</param>
     /// <param name="pageSize">Items per page (list mode only). Range: 1–100. Default: 20.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <response code="200">Component definitions returned successfully</response>
+    /// <response code="200">Single definition object (when key is provided) or paged list returned successfully</response>
     /// <response code="400">Unknown component type, pagination params with key, or invalid parameters</response>
     /// <response code="404">Specific <paramref name="key"/> not found</response>
     [HttpGet("{domain}/components/definition")]
+    [ProducesResponseType(typeof(JsonElement), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(MonitorPagedResponse<JsonElement>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -211,6 +212,9 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
                     p => new[] { $"'{p}' is not allowed when 'key' is provided." });
                 return BadRequest(new ValidationProblemDetails { Errors = errors });
             }
+
+            var single = await queryService.GetSingleComponentAsync(input, cancellationToken);
+            return FromResult(single);
         }
 
         var result = await queryService.GetComponentsAsync(input, cancellationToken);

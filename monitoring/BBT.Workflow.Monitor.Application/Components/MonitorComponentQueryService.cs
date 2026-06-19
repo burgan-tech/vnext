@@ -142,17 +142,69 @@ public sealed class MonitorComponentQueryService(
     {
         if (!string.IsNullOrWhiteSpace(input.Key))
         {
-            var one = await getByKey(input.Domain, input.Key, input.Version, cancellationToken);
-            if (!one.IsSuccess)
-                return Result<MonitorPagedResponse<JsonElement>>.Fail(one.Error);
+            // Load all versions for this key from the runtime DB and apply SemVer-aware selection.
+            // This guarantees correct resolution even for old versions not in cache and ensures
+            // ?version=1.0 matches the latest 1.0.x, ?version=1 matches the latest 1.x.x etc.
+            var allEntitiesResult = await LoadAllVersionsForKeyFromRuntimeAsync<T>(
+                input.Domain, input.Key, cancellationToken);
+            if (!allEntitiesResult.IsSuccess)
+                return Result<MonitorPagedResponse<JsonElement>>.Fail(allEntitiesResult.Error);
+
+            var entities = allEntitiesResult.Value!;
+            var allVersions = entities
+                .Select(e => e.Version!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var resolvedVersion = InstanceDataVersionComparer.FindBestMatch(allVersions, input.Version);
+            if (resolvedVersion is null)
+            {
+                var versionHint = input.Version is not null ? $" at version '{input.Version}'" : string.Empty;
+                return Result<MonitorPagedResponse<JsonElement>>.Fail(
+                    Error.NotFound("component.notFound",
+                        $"Component '{input.Key}'{versionHint} not found for type '{input.ComponentType}'."));
+            }
+
+            var matched = entities.FirstOrDefault(e =>
+                string.Equals(e.Version, resolvedVersion, StringComparison.OrdinalIgnoreCase));
+            if (matched is null)
+            {
+                return Result<MonitorPagedResponse<JsonElement>>.Fail(
+                    Error.NotFound("component.notFound",
+                        $"Component '{input.Key}' version '{resolvedVersion}' could not be loaded."));
+            }
 
             return Result<MonitorPagedResponse<JsonElement>>.Ok(new MonitorPagedResponse<JsonElement>
             {
-                Items = [Serialize(one.Value!)]
+                Items = [Serialize(matched)]
             });
         }
 
         return await GetFullListFromRuntimeAsync<T>(input, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads all published versions of a single component key from the runtime backend (DB).
+    /// Used for SemVer-aware version resolution when <c>key</c> is provided.
+    /// </summary>
+    private async Task<Result<List<T>>> LoadAllVersionsForKeyFromRuntimeAsync<T>(
+        string domain, string key, CancellationToken cancellationToken)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        runtimeInfoProvider.Check(domain);
+
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
+
+        var all = (await runtimeService.GetAsync<T>(cancellationToken))
+            .Where(e => e is not null
+                        && string.Equals(e.Key, key, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(e.Version))
+            .Cast<T>()
+            .ToList();
+
+        return Result<List<T>>.Ok(all);
     }
 
     private async Task<Result<MonitorPagedResponse<JsonElement>>> GetFullListFromRuntimeAsync<T>(
@@ -310,6 +362,18 @@ public sealed class MonitorComponentQueryService(
     }
 
     /// <inheritdoc />
+    public async Task<Result<JsonElement>> GetSingleComponentAsync(
+        MonitorGetComponentsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var listResult = await GetComponentsAsync(input, cancellationToken);
+        if (!listResult.IsSuccess)
+            return Result<JsonElement>.Fail(listResult.Error);
+
+        return Result<JsonElement>.Ok(listResult.Value!.Items[0]);
+    }
+
+    /// <inheritdoc />
     public async Task<Result<MonitorComponentDetailResponse>> GetComponentDetailAsync(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default)
@@ -380,8 +444,8 @@ public sealed class MonitorComponentQueryService(
                 && string.Equals(x.Domain, input.Domain, StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrWhiteSpace(x.Version))
             .Select(x => x!.Version!)
-            .OrderByDescending(v => v, StringComparer.OrdinalIgnoreCase)
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(v => v, InstanceDataVersionComparer.StringVersionComparer.Instance)
             .ToList();
     }
 

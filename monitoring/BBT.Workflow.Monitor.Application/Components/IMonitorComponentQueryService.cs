@@ -14,10 +14,18 @@ public interface IMonitorComponentQueryService
 {
     /// <summary>
     /// Returns component definitions for the given type and domain.
-    /// When <c>Key</c> is set, returns that single component (no pagination metadata).
     /// When <c>Key</c> is omitted, returns a paged list via <c>Page</c>/<c>PageSize</c> from the input.
     /// </summary>
     Task<Result<MonitorPagedResponse<JsonElement>>> GetComponentsAsync(
+        MonitorGetComponentsInput input,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Returns a single raw component definition identified by <c>key</c> and optional <c>version</c>.
+    /// Returns 404 when the component is not found.
+    /// </summary>
+    Task<Result<JsonElement>> GetSingleComponentAsync(
         MonitorGetComponentsInput input,
         CancellationToken cancellationToken = default
     );
