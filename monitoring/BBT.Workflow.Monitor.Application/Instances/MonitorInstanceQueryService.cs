@@ -165,6 +165,15 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceTimelineInput input,
         CancellationToken cancellationToken = default)
     {
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
+            input.Instance, cancellationToken);
+
+        if (instance is null)
+            return Result<MonitorInstanceTimelineResponse>.Fail(
+                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        var instanceContext = MapInstanceContext(instance);
+
         if (input.TaskId is { } taskId)
         {
             if (taskId == Guid.Empty)
@@ -178,16 +187,10 @@ public sealed class MonitorInstanceQueryService(
 
             return Result<MonitorInstanceTimelineResponse>.Ok(new MonitorInstanceTimelineResponse
             {
+                Instance = instanceContext,
                 Task = MapTask(task)
             });
         }
-
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
-            input.Instance, cancellationToken);
-
-        if (instance is null)
-            return Result<MonitorInstanceTimelineResponse>.Fail(
-                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
 
         var transitions = await instanceTransitionRepository.GetByInstanceIdAsReadOnlyAsync(
             instance.Id, cancellationToken);
@@ -212,6 +215,7 @@ public sealed class MonitorInstanceQueryService(
 
             return Result<MonitorInstanceTimelineResponse>.Ok(new MonitorInstanceTimelineResponse
             {
+                Instance = instanceContext,
                 Transitions = [item]
             });
         }
@@ -235,11 +239,19 @@ public sealed class MonitorInstanceQueryService(
 
         return Result<MonitorInstanceTimelineResponse>.Ok(new MonitorInstanceTimelineResponse
         {
+            Instance = instanceContext,
             Transitions = items
         });
     }
 
-    private static MonitorTransitionItem MapTransition(InstanceTransition t) => new()
+    private static MonitorTimelineInstanceContext MapInstanceContext(Instance i) => new()
+    {
+        CurrentState   = i.CurrentState,
+        EffectiveState = i.EffectiveState,
+        Status         = i.Status
+    };
+
+    private static MonitorTransitionItem MapTransition(InstanceTransitionSlim t) => new()
     {
         Id = t.Id,
         TransitionId = t.TransitionId,
@@ -258,7 +270,7 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceStateInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorInstanceStateResponse>.Fail(
@@ -322,7 +334,7 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceFaultsInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorInstanceFaultResponse>.Fail(
@@ -403,7 +415,7 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceHierarchyInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorHierarchyNode>.Fail(
@@ -449,7 +461,7 @@ public sealed class MonitorInstanceQueryService(
                 IDisposable? childScope = string.IsNullOrWhiteSpace(childSchema) ? null : currentSchema.Use(childSchema!);
                 try
                 {
-                    child = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+                    child = await instanceRepository.FindByIdentifierSlimAsync(
                         c.SubFlowInstanceId.ToString(), cancellationToken);
                 }
                 finally
@@ -486,7 +498,7 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceViewInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(input.Instance, cancellationToken);
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorInstanceViewResponse?>.Fail(
                 Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
@@ -556,7 +568,7 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceTasksInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorInstanceTaskListResponse>.Fail(
@@ -577,7 +589,7 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceTaskDetailInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorTaskDetailResponse>.Fail(
@@ -856,7 +868,7 @@ public sealed class MonitorInstanceQueryService(
     public async Task<Result<MonitorParentResponse>> GetInstanceParentAsync(
         MonitorGetParentInput input, CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(input.Instance, cancellationToken);
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorParentResponse>.Fail(
                 Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
@@ -865,7 +877,7 @@ public sealed class MonitorInstanceQueryService(
         if (correlation is null)
             return Result<MonitorParentResponse>.Ok(new MonitorParentResponse { Parent = null });
 
-        var parent = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var parent = await instanceRepository.FindByIdentifierSlimAsync(
             correlation.ParentInstanceId.ToString(), cancellationToken);
 
         return Result<MonitorParentResponse>.Ok(new MonitorParentResponse

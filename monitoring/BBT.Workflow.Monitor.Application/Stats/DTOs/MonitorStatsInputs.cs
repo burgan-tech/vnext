@@ -21,7 +21,9 @@ public sealed class MonitorGetInstanceCountersInput : IHasDomain
     public string? Version { get; set; }
 
     /// <summary>
-    /// Optional GraphQL/legacy filter applied to the domain-wide count (ignored when <see cref="Workflow"/> is set).
+    /// Optional GraphQL/legacy filter (e.g. <c>{"createdAt":{"ge":"2026-01-01T00:00:00Z"}}</c>).
+    /// Applied to both workflow-scoped and domain-wide counts.
+    /// Cannot be combined with <see cref="Version"/> for workflow-scoped queries.
     /// </summary>
     public string? Filter { get; set; }
 }

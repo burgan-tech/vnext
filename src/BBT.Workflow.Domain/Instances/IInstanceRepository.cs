@@ -15,6 +15,13 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds an instance by its identifier (GUID or key) without loading DataList.
+    /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
+    /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.
+    /// </summary>
+    Task<Instance?> FindByIdentifierSlimAsync(string identifier, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
     /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
     /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,
@@ -191,4 +198,12 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// the per-flow schemas — not in any single ambient/default schema.
     /// </summary>
     Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paged list of active-instance + data pairs projected to a slim summary,
+    /// ordered by instance Id. Excludes unused Instance columns (CurrentState, Status, etc.).
+    /// Non-tracking — intended for monitoring component list queries only.
+    /// </summary>
+    Task<List<ActiveInstanceDataSummary>> GetActiveDataSummariesPagedAsync(
+        int skip, int take, CancellationToken cancellationToken = default);
 }

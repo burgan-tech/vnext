@@ -102,13 +102,26 @@ public class EfCoreInstanceTransitionRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<InstanceTransition>> GetByInstanceIdAsReadOnlyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    public async Task<List<InstanceTransitionSlim>> GetByInstanceIdAsReadOnlyAsync(Guid instanceId, CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
         return await context.InstanceTransitions
             .AsNoTracking()
             .Where(p => p.InstanceId == instanceId)
             .OrderBy(p => p.StartedAt)
+            .Select(t => new InstanceTransitionSlim(
+                t.Id,
+                t.InstanceId,
+                t.TransitionId,
+                t.FromState,
+                t.ToState,
+                t.StartedAt,
+                t.FinishedAt,
+                t.Duration,
+                t.TriggerType,
+                t.CreatedAt,
+                t.CreatedBy,
+                t.CreatedByBehalfOf))
             .ToListAsync(cancellationToken);
     }
 

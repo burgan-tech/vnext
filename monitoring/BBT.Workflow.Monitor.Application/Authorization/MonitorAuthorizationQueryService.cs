@@ -41,7 +41,7 @@ public sealed class MonitorAuthorizationQueryService(
         MonitorGetInstancePermissionsInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
 
         if (instance is null)

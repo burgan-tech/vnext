@@ -188,6 +188,29 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<Instance?> FindByIdentifierSlimAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .AsNoTracking()
+            .AsSplitQuery();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query
+                .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+            if (response != null)
+                return response;
+        }
+
+        return await query
+            .FirstOrDefaultAsync(i => i.Key == identifier, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
@@ -997,6 +1020,45 @@ public sealed class EfCoreInstanceRepository(
             .Skip(skip)
             .Take(take)
             .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<ActiveInstanceDataSummary>> GetActiveDataSummariesPagedAsync(
+        int skip, int take, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var raw = await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .OrderBy(i => i.Id)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new
+                {
+                    i.Key,
+                    i.FlowVersion,
+                    i.Tags,
+                    i.CreatedAt,
+                    i.ModifiedAt,
+                    DataJson = d.Data.Json,
+                    d.Version,
+                    d.IsLatest
+                })
+            .AsNoTracking()
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        return raw.Select(r => new ActiveInstanceDataSummary(
+            r.Key,
+            r.FlowVersion,
+            r.Tags,
+            r.CreatedAt,
+            r.ModifiedAt,
+            JsonSerializer.Deserialize<JsonElement>(r.DataJson, JsonSerializerConstants.JsonOptions),
+            r.Version,
+            r.IsLatest))
+            .ToList();
     }
 
     public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(

@@ -22,8 +22,7 @@ public sealed class MonitorInstanceCountersResponse
     public long Total { get; set; }
 
     /// <summary>
-    /// The filter applied to the domain-wide count, echoed back from the request. Null when
-    /// no filter was supplied or for the workflow-scoped query.
+    /// The GraphQL filter echoed back from the request. Null when no filter was supplied.
     /// </summary>
     public string? AppliedFilter { get; set; }
 }

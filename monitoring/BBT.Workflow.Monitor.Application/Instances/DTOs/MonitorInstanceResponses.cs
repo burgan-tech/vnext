@@ -138,12 +138,32 @@ public sealed class MonitorDataVersion
 }
 
 /// <summary>
+/// Snapshot of the instance's current position in the workflow graph.
+/// Populated in every timeline response mode (full, transitionId, taskId).
+/// </summary>
+public sealed class MonitorTimelineInstanceContext
+{
+    /// <summary>The engine-internal state the instance is currently in.</summary>
+    public string? CurrentState { get; set; }
+
+    /// <summary>The state exposed to the external world. Differs from <see cref="CurrentState"/> in SubFlow/Wizard scenarios.</summary>
+    public string? EffectiveState { get; set; }
+
+    /// <summary>Current lifecycle status of the instance (Active, Busy, Completed, Faulted, Passive).</summary>
+    public InstanceStatus? Status { get; set; }
+}
+
+/// <summary>
 /// Response for the unified instance timeline endpoint.
 /// In timeline / single-transition modes <see cref="Transitions"/> is populated;
 /// in single-task mode <see cref="Task"/> is populated and <see cref="Transitions"/> is empty.
+/// <see cref="Instance"/> is always populated regardless of mode.
 /// </summary>
 public sealed class MonitorInstanceTimelineResponse
 {
+    /// <summary>Current position and lifecycle status of the instance in the workflow graph.</summary>
+    public MonitorTimelineInstanceContext? Instance { get; set; }
+
     /// <summary>
     /// Ordered list of transitions, oldest first.
     /// Contains the full timeline, or a single element when a specific transition was requested.

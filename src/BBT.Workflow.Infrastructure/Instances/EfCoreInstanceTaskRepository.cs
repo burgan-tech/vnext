@@ -68,6 +68,7 @@ public class EfCoreInstanceTaskRepository(
     {
         var dbSet = await GetDbSetAsync();
         return await dbSet
+            .AsNoTracking()
             .Where(t => t.TransitionId == transitionId)
             .OrderBy(t => t.StartedAt)
             .ToListAsync(cancellationToken);

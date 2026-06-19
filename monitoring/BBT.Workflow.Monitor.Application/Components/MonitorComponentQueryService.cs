@@ -420,26 +420,26 @@ public sealed class MonitorComponentQueryService(
         {
             const int pageSize = 100;
             int skip = 0;
-            List<InstanceAndDataModel> page;
+            List<ActiveInstanceDataSummary> page;
 
             do
             {
-                page = await instanceRepo.GetActiveDataListPagedAsync(skip, pageSize, cancellationToken);
+                page = await instanceRepo.GetActiveDataSummariesPagedAsync(skip, pageSize, cancellationToken);
                 foreach (var item in page)
                 {
                     try
                     {
-                        var entity = item.InstanceData.Data.JsonElement
+                        var entity = item.DataBlob
                             .Deserialize<T>(JsonSerializerConstants.JsonOptions);
                         if (entity is null) continue;
 
                         entity.SetReference(new Reference(
-                            item.Instance.Key ?? string.Empty,
+                            item.Key ?? string.Empty,
                             requestDomain,
                             componentType,
-                            item.InstanceData.Version));
+                            item.DataVersion));
 
-                        allItems.Add((entity, item.Instance.FlowVersion, item.Instance.Tags, item.Instance.CreatedAt, item.Instance.ModifiedAt));
+                        allItems.Add((entity, item.FlowVersion, item.Tags, item.CreatedAt, item.ModifiedAt));
                     }
                     catch { /* skip malformed records */ }
                 }
@@ -478,7 +478,7 @@ public sealed class MonitorComponentQueryService(
 
         using (currentSchema.Use(componentType))
         {
-            var instance = await instanceRepo.FindByIdentifierAsReadOnlyAsync(key, cancellationToken);
+            var instance = await instanceRepo.FindByIdentifierSlimAsync(key, cancellationToken);
             return (instance?.FlowVersion, instance?.Tags, instance?.CreatedAt, instance?.ModifiedAt);
         }
     }

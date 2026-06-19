@@ -32,7 +32,7 @@ public sealed class MonitorStatsService(
             if (string.IsNullOrWhiteSpace(input.Workflow))
                 return await CountAcrossDomainAsync(input.Domain, input.Filter, ct);
 
-            return await CountInCurrentSchemaAsync(instanceRepository, input.Version, ct);
+            return await CountInCurrentSchemaAsync(instanceRepository, input.Filter, input.Version, ct);
         }, cancellationToken);
     }
 
@@ -209,16 +209,35 @@ public sealed class MonitorStatsService(
     }
 
     private static async Task<MonitorInstanceCountersResponse> CountInCurrentSchemaAsync(
-        IInstanceRepository repo, string? flowVersion, CancellationToken ct)
+        IInstanceRepository repo, string? filter, string? flowVersion, CancellationToken ct)
     {
-        var response = new MonitorInstanceCountersResponse
+        MonitorInstanceCountersResponse response;
+
+        if (filter is not null)
         {
-            Active    = await repo.CountByStatusAsync(InstanceStatus.Active,    flowVersion, ct),
-            Busy      = await repo.CountByStatusAsync(InstanceStatus.Busy,      flowVersion, ct),
-            Completed = await repo.CountByStatusAsync(InstanceStatus.Completed, flowVersion, ct),
-            Faulted   = await repo.CountByStatusAsync(InstanceStatus.Faulted,   flowVersion, ct),
-            Passive   = await repo.CountByStatusAsync(InstanceStatus.Passive,   flowVersion, ct),
-        };
+            var counts = await repo.GetStatusCountsAsync(filter, ct);
+            response = new MonitorInstanceCountersResponse
+            {
+                Active    = counts.Active,
+                Busy      = counts.Busy,
+                Completed = counts.Completed,
+                Faulted   = counts.Faulted,
+                Passive   = counts.Passive,
+                AppliedFilter = filter
+            };
+        }
+        else
+        {
+            response = new MonitorInstanceCountersResponse
+            {
+                Active    = await repo.CountByStatusAsync(InstanceStatus.Active,    flowVersion, ct),
+                Busy      = await repo.CountByStatusAsync(InstanceStatus.Busy,      flowVersion, ct),
+                Completed = await repo.CountByStatusAsync(InstanceStatus.Completed, flowVersion, ct),
+                Faulted   = await repo.CountByStatusAsync(InstanceStatus.Faulted,   flowVersion, ct),
+                Passive   = await repo.CountByStatusAsync(InstanceStatus.Passive,   flowVersion, ct),
+            };
+        }
+
         response.Total = response.Active + response.Busy + response.Completed + response.Faulted + response.Passive;
         return response;
     }

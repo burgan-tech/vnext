@@ -15,21 +15,42 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
 {
     /// <summary>
     /// Returns status-based instance counters for a specific workflow.
+    /// Accepts an optional GraphQL <paramref name="filter"/> (e.g. a <c>createdAt</c> date-range or
+    /// <c>currentState</c> constraint). When <paramref name="filter"/> is supplied, the <paramref name="version"/>
+    /// parameter must be omitted — combine both criteria inside the filter JSON instead.
     /// </summary>
     /// <response code="200">Counters returned successfully</response>
+    /// <response code="400">Both <c>filter</c> and <c>version</c> were supplied simultaneously</response>
     [HttpGet("{domain}/workflows/{workflow}/stats/instances")]
     [ProducesResponseType(typeof(MonitorInstanceCountersResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> GetWorkflowInstanceCountersAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromQuery] string? version = null,
+        [FromQuery] string? filter  = null,
         CancellationToken cancellationToken = default)
     {
+        var parsedVersion = string.IsNullOrWhiteSpace(version) ? null : version.Trim();
+        var parsedFilter  = string.IsNullOrWhiteSpace(filter)  ? null : filter.Trim();
+
+        if (parsedFilter is not null && parsedVersion is not null)
+        {
+            return BadRequest(new ValidationProblemDetails
+            {
+                Errors =
+                {
+                    ["filter"] = ["Cannot use 'filter' and 'version' simultaneously. Include the version constraint inside the filter JSON instead."]
+                }
+            });
+        }
+
         var input = new MonitorGetInstanceCountersInput
         {
             Domain   = domain,
             Workflow = workflow,
-            Version  = string.IsNullOrWhiteSpace(version) ? null : version.Trim()
+            Version  = parsedVersion,
+            Filter   = parsedFilter
         };
         var result = await statsService.GetInstanceCountersAsync(input, cancellationToken);
         return FromResult(result);
