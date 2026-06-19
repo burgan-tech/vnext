@@ -46,7 +46,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddRuntimeMiddleware()
             .AddHeaderService()
             .AddHostedServices()
-            .AddAppHealthChecks();
+            .AddAppHealthChecks(includeDatabaseCheck: false);
         return services;
     }
     private static IServiceCollection AddHostedServices(this IServiceCollection services)

@@ -46,7 +46,7 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddRuntimeMiddleware()
             .AddHeaderService()
             .AddHostedServices()
-            .AddAppHealthChecks();
+            .AddAppHealthChecks(includeDatabaseCheck: false);
 
         // Inbox processing dependencies:
         //  - IDistributedLockService: the Aether InboxProcessor coordinates with a distributed
