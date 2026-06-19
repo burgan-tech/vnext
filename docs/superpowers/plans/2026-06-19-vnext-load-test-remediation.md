@@ -77,7 +77,9 @@
 
 ---
 
-## Faz 2 — DB Resilience (EnableRetryOnFailure + Akıllı Sınıflandırma)
+## Faz 2 — DB Resilience (YENİDEN ŞEKİLLENDİRİLDİ) → detay: [2026-06-19-phase2-resilience.md](2026-06-19-phase2-resilience.md)
+
+> **Önemli düzeltme:** EF Core `EnableRetryOnFailure` bu kod tabanında KULLANILAMAZ — Aether UoW explicit `Database.BeginTransactionAsync` kullanıyor; retrying execution strategy "user-initiated transactions" ile çakışır. Yaklaşım: **uygulama-seviyesi Polly retry**, `TransitionRunner.ExecuteWithScopeAsync` seam'inde (commit öncesi, güvenli), pool-exhaustion HARİÇ. Ayrıca PGBouncer'ın 5432'de olduğu (baypas YOK) DB ekibince teyit edildi. Aşağıdaki orijinal alt-başlık tarihsel; uygulanan plan ayrı dosyadadır.
 
 **Goal:** Gerçek geçici DB hatalarında dayanıklılık; **pool exhaustion'ı transient sayıp retry ETMEMEK** (kuyruğu büyütmesin).
 
