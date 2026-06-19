@@ -289,6 +289,21 @@ public class TransitionPipeline
             "Marking instance {InstanceId} as faulted due to post-commit failure: {ErrorCode} - {ErrorMessage}",
             context.InstanceId, faultRequest.ErrorCode, faultRequest.ErrorMessage);
 
+        if (!context.Instance.HasActiveIncident)
+        {
+            var incident = InstanceIncidentFactory.Create(
+                state: context.Instance.GetCurrentState,
+                transition: context.TransitionKey,
+                taskKey: null,
+                message: faultRequest.ErrorMessage ?? "Post-commit execution failed",
+                errorCode: faultRequest.ErrorCode,
+                errorLayer: "PostCommit",
+                stackTrace: faultRequest.StackTrace,
+                traceId: context.TraceId);
+
+            context.Instance.AddIncident(incident);
+        }
+
         context.Instance.Fault(context.Domain);
         context.ExtractAndDeferInstanceEvents();
         await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
