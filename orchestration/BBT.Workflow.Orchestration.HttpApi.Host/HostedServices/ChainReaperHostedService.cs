@@ -5,7 +5,7 @@ using BBT.Workflow.Hosting;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.Options;
 
-namespace BBT.Workflow.Workers.Outbox.HostedServices;
+namespace BBT.Workflow.HostedServices;
 
 /// <summary>
 /// Periodically sweeps for stuck-Busy auto-chains (instances Busy with an active chain token,
@@ -17,7 +17,7 @@ namespace BBT.Workflow.Workers.Outbox.HostedServices;
 /// live in those per-flow schemas — not in any single ambient/default schema. A hosted service
 /// has no request-scoped <see cref="ICurrentSchema"/>, so this worker first discovers all flow
 /// keys from <c>sys_flows</c> and then runs the reaper once per flow schema, each in its own DI
-/// scope with the schema established via <c>ICurrentSchema.Use(flowKey)</c> (mirrors
+/// scope with the schema established via <c>IcurrentSchema.Change(flowKey)</c> (mirrors
 /// <c>SchemaMigrationRunner</c> / <c>MultiSchemaMigrator</c>). A fresh scope per schema avoids
 /// change-tracker bleed across schemas. Interval is fixed here; promote to options if needed.
 /// </remarks>
@@ -93,7 +93,7 @@ public sealed class ChainReaperHostedService(
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
 
-                using (currentSchema.Use(flowKey))
+                using (currentSchema.Change(flowKey))
                 {
                     var reaper = scope.ServiceProvider.GetRequiredService<IChainReaperService>();
                     await reaper.SweepAsync(stoppingToken);
