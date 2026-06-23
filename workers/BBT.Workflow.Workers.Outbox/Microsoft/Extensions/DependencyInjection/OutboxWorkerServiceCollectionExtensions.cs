@@ -39,7 +39,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddDistributedCache(configuration)
             .AddDistributedLock(configuration)
             .AddTransitionLockScope()
-            .AddAetherBackgroundJob<WorkflowDbContext>()
+            .AddAetherBackgroundJob<MessagingDbContext>()
             .AddDaprJobScheduler()
             .AddRedis()
             .AddExceptionHandling()
@@ -49,6 +49,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddAppHealthChecks();
         return services;
     }
+    
     private static IServiceCollection AddHostedServices(this IServiceCollection services)
     {
         services.AddHostedService<OutboxProcessorHostedService>();

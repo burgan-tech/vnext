@@ -181,7 +181,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddBackgroundJob(this IServiceCollection services)
     {
-        services.AddAetherBackgroundJob<WorkflowDbContext>(options =>
+        services.AddAetherBackgroundJob<MessagingDbContext>(options =>
         {
             options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
