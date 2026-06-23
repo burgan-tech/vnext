@@ -1,5 +1,6 @@
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.DistributedLock;
+using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Inbox.Forwarding;
 using BBT.Workflow.Workers.Inbox.HostedServices;
@@ -82,6 +83,9 @@ public static class InboxWorkerServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        var schemaSwitchingMode = configuration.GetValue("Aether:SchemaSwitchingMode",
+            SchemaSwitchingMode.SessionSearchPath);
+
         services.AddSchemaResolution(options =>
         {
             options.HeaderKey = "X-Workflow";
@@ -92,7 +96,10 @@ public static class InboxWorkerServiceCollectionExtensions
 
         services.AddAetherUnitOfWorkMiddleware();
 
-        services.AddAetherDbContext<MessagingDbContext>((_, options) =>
+        services.AddAetherNpgsql<MessagingDbContext>(
+            configuration.GetConnectionString("Default")!,
+            schemaSwitchingMode,
+            (_, options) =>
         {
             options.UseNpgsql(configuration.GetConnectionString("Default"),
                     npgsqlOptions =>
