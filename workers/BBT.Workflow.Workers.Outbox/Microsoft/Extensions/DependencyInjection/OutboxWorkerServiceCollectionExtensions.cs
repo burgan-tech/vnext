@@ -1,6 +1,7 @@
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
+using BBT.Workflow.Workers.Outbox.HostedServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -43,8 +44,7 @@ public static class OutboxWorkerServiceCollectionExtensions
 
     private static IServiceCollection AddHostedServices(this IServiceCollection services)
     {
-        // OutboxProcessorHostedService is registered automatically by AddAetherOutbox<TContext>()
-        // ChainReaperHostedService was moved to Orchestration host (orchestration concern)
+        services.AddHostedService<OutboxProcessorHostedService>();
         return services;
     }
 
