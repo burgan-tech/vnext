@@ -130,12 +130,18 @@ public static partial class WorkflowLogs
         string jobName,
         string reason);
 
+    /// <summary>
+    /// Logs when an instance cannot be found during busy marking — operation is skipped silently.
+    /// </summary>
     [LoggerMessage(
         EventId = 10128,
         Level = LogLevel.Warning,
         Message = "Instance {InstanceId} not found for busy marker — skipping")]
     public static partial void InstanceNotFoundForBusyMarker(this ILogger logger, Guid instanceId);
 
+    /// <summary>
+    /// Logs when an instance is successfully marked Busy in an isolated RequiresNew UoW.
+    /// </summary>
     [LoggerMessage(
         EventId = 10129,
         Level = LogLevel.Debug,
