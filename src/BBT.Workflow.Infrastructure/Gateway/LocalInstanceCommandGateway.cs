@@ -157,8 +157,8 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
         return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version ?? string.Empty,
             async (sp, ct) =>
             {
-                var busyService = sp.GetRequiredService<IInstanceBusyPropagationService>();
-                await busyService.MarkBusyAsync(input, ct);
+                var busyManager = sp.GetRequiredService<IInstanceBusyManager>();
+                await busyManager.MarkBusyWithPropagationAsync(input.InstanceId, ct);
                 return Result.Ok();
             }, cancellationToken);
     }
