@@ -26,7 +26,7 @@ public sealed class LongPollAckTimeoutJobHandler(
     public async Task HandleAsync(LongPollAckTimeoutPayload args, CancellationToken cancellationToken)
     {
         using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("LongPollAckTimeout.Execute", args);
-        using (currentSchema.Use(args.FlowName))
+        using (currentSchema.Change(args.FlowName))
         {
             using (logger.BeginScope(new Dictionary<string, object>
                    {

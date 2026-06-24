@@ -85,7 +85,7 @@ public sealed class InstanceCompletedCleanupEventHook(
             var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
             var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
 
-            using (currentSchema.Use(eventData.Flow))
+            using (currentSchema.Change(eventData.Flow))
             {
                 await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
                 {

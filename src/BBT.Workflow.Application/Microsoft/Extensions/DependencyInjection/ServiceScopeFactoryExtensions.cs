@@ -258,7 +258,7 @@ public static class ServiceScopeFactoryExtensions
         var componentCacheStore = sp.GetRequiredService<IComponentCacheStore>();
         var workflowContext = sp.GetRequiredService<IWorkflowContext>();
 
-        using (currentSchema.Use(workflowKey))
+        using (currentSchema.Change(workflowKey))
         {
             var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflowKey, workflowVersion, ct);
 

@@ -130,7 +130,7 @@ public sealed class InstanceExtensionService(
         HashSet<string>? extensionRequested,
         CancellationToken cancellationToken)
     {
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Extensions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Extensions))
         {
             var allExtensionsResult = await componentCacheStore.GetAllExtensionsAsync(
                 runtimeInfoProvider.Domain,

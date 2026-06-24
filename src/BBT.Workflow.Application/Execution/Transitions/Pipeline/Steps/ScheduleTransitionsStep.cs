@@ -171,7 +171,7 @@ public sealed class ScheduleTransitionsStep(
             info.Payload,
             info.ScheduleExpression,
             metadata: info.Metadata,
-            useAmbientUnitOfWork: true,
+            directly: true,
             cancellationToken: cancellationToken);
 
         await jobRepository.InsertAsync(

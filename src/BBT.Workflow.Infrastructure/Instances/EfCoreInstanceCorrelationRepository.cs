@@ -14,7 +14,7 @@ namespace BBT.Workflow.Instances;
 /// <param name="dbContext">The workflow database context for data operations.</param>
 /// <param name="serviceProvider">Service provider for dependency injection.</param>
 public sealed class EfCoreInstanceCorrelationRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider)
     : EfCoreRepository<WorkflowDbContext, InstanceCorrelation, Guid>(dbContext, serviceProvider),
         IInstanceCorrelationRepository

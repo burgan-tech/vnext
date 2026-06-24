@@ -12,7 +12,7 @@ namespace BBT.Workflow.BackgroundJobs.Recovery;
 /// <remarks>
 /// Operates within the CURRENT schema only — one sweep == one flow schema. The hosting
 /// <c>ChainReaperHostedService</c> enumerates all flow schemas from <c>sys_flows</c> and invokes
-/// this once per schema with <c>ICurrentSchema.Use(flowKey)</c> already established, so all
+/// this once per schema with <c>IcurrentSchema.Change(flowKey)</c> already established, so all
 /// repository queries here resolve to that flow's schema. Re-enqueue of a recoverable
 /// continuation is intentionally NOT attempted here (conservative): a stuck chain with no live
 /// job is faulted.

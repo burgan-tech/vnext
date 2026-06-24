@@ -34,7 +34,7 @@ public sealed class TransitionJobHandler(
     {
         // Restore trace context from the original request for distributed tracing correlation
         using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TransitionJob.Execute", args);
-        using (currentSchema.Use(args.Workflow))
+        using (currentSchema.Change(args.Workflow))
         {
             using (logger.BeginScope(new Dictionary<string, object>
                    {

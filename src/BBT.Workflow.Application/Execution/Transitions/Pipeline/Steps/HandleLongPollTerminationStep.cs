@@ -153,7 +153,7 @@ public sealed class HandleLongPollTerminationStep(
             payload,
             schedule,
             metadata,
-            useAmbientUnitOfWork: true,
+            directly: true,
             cancellationToken: cancellationToken);
 
         await jobRepository.InsertAsync(

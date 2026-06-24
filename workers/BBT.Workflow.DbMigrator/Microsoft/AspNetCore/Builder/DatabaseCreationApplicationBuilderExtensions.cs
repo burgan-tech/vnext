@@ -35,7 +35,7 @@ public static class DatabaseCreationApplicationBuilderExtensions
             // In Development, we set a temporary "public" schema so EnsureCreatedAsync can
             // resolve the context without a schema-resolution middleware in place.
             var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-            using (currentSchema.Use("public"))
+            using (currentSchema.Change("public"))
             {
                 // Handle WorkflowDbContext
                 var workflowDbContext = scope.ServiceProvider.GetRequiredService<WorkflowDbContext>();
