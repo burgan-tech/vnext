@@ -130,6 +130,18 @@ public static partial class WorkflowLogs
         string jobName,
         string reason);
 
+    [LoggerMessage(
+        EventId = 10128,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} not found for busy marker — skipping")]
+    public static partial void InstanceNotFoundForBusyMarker(this ILogger logger, Guid instanceId);
+
+    [LoggerMessage(
+        EventId = 10129,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} marked Busy via isolated UoW")]
+    public static partial void InstanceMarkedBusy(this ILogger logger, Guid instanceId);
+
     /// <summary>
     /// Logs when a foreign transition is rejected by the chain-token gate because the instance
     /// is Busy with an active auto-chain owned by a different token.
