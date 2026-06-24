@@ -33,9 +33,6 @@ public sealed class InstanceCancellationService(
         }))
         try
         {
-            await using var uow = uowManager.Begin(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
-
             var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
 
             if (instance == null)
@@ -66,8 +63,6 @@ public sealed class InstanceCancellationService(
             }
 
             logger.InstanceCanceledJobsProcessed(instanceId, jobs.Count);
-
-            await uow.CommitAsync(cancellationToken);
 
             return Result.Ok();
         }

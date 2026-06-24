@@ -89,7 +89,8 @@ public sealed class InstanceFaultedCleanupEventHook(
                 {
                     await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                     {
-                        Scope = UnitOfWorkScopeOption.RequiresNew
+                        Scope = UnitOfWorkScopeOption.RequiresNew,
+                        IsTransactional = true
                     });
 
                     await cancellationService.ProcessCancellationAsync(eventData.InstanceId, ct);

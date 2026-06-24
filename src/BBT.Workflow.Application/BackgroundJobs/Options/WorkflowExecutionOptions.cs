@@ -45,6 +45,20 @@ public sealed class WorkflowExecutionOptions
     public bool EnableChainReaper { get; set; }
 
     /// <summary>
+    /// Maximum number of flow schemas swept concurrently by the chain reaper.
+    /// Higher values reduce sweep wall-clock time at the cost of more concurrent DB connections.
+    /// Default: 4.
+    /// </summary>
+    public int ChainReaperMaxConcurrentSweeps { get; set; } = 4;
+
+    /// <summary>
+    /// Per-flow sweep timeout in seconds. A flow that exceeds this limit is skipped with a warning
+    /// so a single slow or broken schema cannot stall the whole sweep cycle.
+    /// Default: 30.
+    /// </summary>
+    public int ChainReaperFlowTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process

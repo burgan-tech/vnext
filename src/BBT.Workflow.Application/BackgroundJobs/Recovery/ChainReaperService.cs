@@ -42,11 +42,14 @@ public sealed class ChainReaperService(
 
         var candidates = await instanceRepository.GetStuckBusyChainsAsync(olderThan, MaxPerSweep, cancellationToken);
 
+        // Bulk-check which candidates still have a live job — avoids N+1 round-trips.
+        var instancesWithActiveJob = await jobRepository.GetInstanceIdsWithActiveJobAsync(
+            candidates.Select(i => i.Id), cancellationToken);
+
         foreach (var instance in candidates)
         {
             // A live/pending job means the chain is still progressing — leave it alone.
-            var activeJobs = await jobRepository.GetListActiveAsync(instance.Id, cancellationToken);
-            if (activeJobs.Count > 0)
+            if (instancesWithActiveJob.Contains(instance.Id))
             {
                 skippedActive++;
                 continue;

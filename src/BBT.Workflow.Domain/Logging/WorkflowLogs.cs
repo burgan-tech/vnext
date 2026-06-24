@@ -187,6 +187,17 @@ public static partial class WorkflowLogs
         int skippedActive);
 
     /// <summary>
+    /// Logs when the per-flow sweep timeout elapses before the reaper finishes a schema.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10127,
+        Level = LogLevel.Warning,
+        Message = "Chain reaper sweep timed out for flow schema {FlowKey}; schema skipped this cycle")]
+    public static partial void ChainReaperFlowSweepTimedOut(
+        this ILogger logger,
+        string flowKey);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>

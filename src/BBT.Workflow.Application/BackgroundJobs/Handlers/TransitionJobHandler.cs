@@ -58,7 +58,7 @@ public sealed class TransitionJobHandler(
                 bool needsRecovery = false;
 
                 try
-                {
+                {   
                     // Expose the original raw request body to mappings built inside this job (no live
                     // HttpContext here) so background signature verification (JWS/mTLS) can run.
                     using var rawBodyScope = RawBodyExecutionScope.Set(args.RawBody);
