@@ -1,5 +1,6 @@
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +18,7 @@ public sealed class InstanceCancellationService(
     IInstanceRepository instanceRepository,
     IInstanceJobRepository instanceJobRepository,
     IBackgroundJobService backgroundJobService,
+    IUnitOfWorkManager uowManager,
     ILogger<InstanceCancellationService> logger)
     :  IInstanceCancellationService
 {
@@ -31,6 +33,9 @@ public sealed class InstanceCancellationService(
         }))
         try
         {
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
             var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
 
             if (instance == null)
@@ -40,7 +45,7 @@ public sealed class InstanceCancellationService(
             }
 
             var jobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
-            
+
             if (!jobs.Any())
             {
                 return Result.Ok();
@@ -52,7 +57,7 @@ public sealed class InstanceCancellationService(
                 {
                     await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
                     job.MarkAsProcessed();
-                    await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+                    await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -61,6 +66,8 @@ public sealed class InstanceCancellationService(
             }
 
             logger.InstanceCanceledJobsProcessed(instanceId, jobs.Count);
+
+            await uow.CommitAsync(cancellationToken);
 
             return Result.Ok();
         }
@@ -83,6 +90,9 @@ public sealed class InstanceCancellationService(
         }))
         try
         {
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
             var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
             if (instance == null)
             {
@@ -115,7 +125,7 @@ public sealed class InstanceCancellationService(
                 {
                     await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
                     job.MarkAsProcessed();
-                    await instanceJobRepository.UpdateAsync(job, true, cancellationToken);
+                    await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -127,6 +137,8 @@ public sealed class InstanceCancellationService(
                 jobsToCancel.Count,
                 instanceId,
                 string.Join(", ", transitionKeys));
+
+            await uow.CommitAsync(cancellationToken);
 
             return Result.Ok();
         }
