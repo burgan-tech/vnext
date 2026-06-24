@@ -65,7 +65,7 @@ public sealed class TransitionRunner(
 
                     await uow.CommitAsync(ct);
 
-                    await PublishDeferredEventsAsync(sp, coreResult.Value!, ct);
+                    await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
 
                     return coreResult;
                 }
@@ -79,6 +79,7 @@ public sealed class TransitionRunner(
     /// </summary>
     private async Task PublishDeferredEventsAsync(
         IServiceProvider sp,
+        IUnitOfWorkManager uowManager,
         TransitionCoreOutput coreOutput,
         CancellationToken ct)
     {
@@ -91,7 +92,14 @@ public sealed class TransitionRunner(
         {
             try
             {
+                // Each deferred event needs its own RequiresNew UoW for outbox storage.
+                // The main transition UoW is already committed at this point, so outbox
+                // writes must go into a fresh isolated transaction.
+                await using var evtUow = uowManager.Begin(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
                 await eventBus.PublishAsync(envelope.Event, envelope.Metadata, cancellationToken: ct);
+                await evtUow.CommitAsync(ct);
             }
             catch (Exception ex)
             {
