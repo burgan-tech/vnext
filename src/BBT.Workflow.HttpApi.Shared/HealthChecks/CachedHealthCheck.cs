@@ -14,6 +14,7 @@ public sealed class CachedHealthCheck : IHealthCheck, IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private HealthCheckResult? _cached;
+    // volatile is not valid on long (CS0677); the await boundary in CheckHealthAsync provides the required memory barrier.
     private long _expiresAt = long.MinValue;
 
     public CachedHealthCheck(IHealthCheck inner, TimeSpan ttl, TimeProvider timeProvider)

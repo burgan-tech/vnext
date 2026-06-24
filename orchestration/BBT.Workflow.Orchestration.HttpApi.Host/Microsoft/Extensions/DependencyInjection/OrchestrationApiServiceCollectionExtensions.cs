@@ -84,9 +84,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         // Singleton: TTL state + SemaphoreSlim must survive across probes.
         services.TryAddSingleton<CachedHealthCheck>(sp =>
         {
-            var ttl = sp.GetService<IOptions<HealthCheckCacheOptions>>()?.Value.Ttl
-                      ?? new HealthCheckCacheOptions().Ttl;
-
+            var ttl = sp.GetRequiredService<IOptions<HealthCheckCacheOptions>>().Value.Ttl;
             IHealthCheck inner = new NpgSqlHealthCheck(new NpgSqlHealthCheckOptions(connectionString));
             return new CachedHealthCheck(inner, ttl, TimeProvider.System);
         });
