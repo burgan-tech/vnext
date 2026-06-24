@@ -9,27 +9,10 @@ public sealed class WorkflowExecutionOptions
     public TransitionJobFailurePolicyOptions FailurePolicy { get; set; } = new();
 
     /// <summary>
-    /// Selects the async continuation/enqueue atomicity model.
-    /// <para>
-    /// ON: continuations are enqueued through the transactional outbox — a
-    /// <c>TransitionContinuationRequested</c> event commits in the same UoW as the durable job
-    /// intent, and the Inbox forwards it to Orchestration which performs the Dapr enqueue. Fully
-    /// transactional, at the cost of the outbox/inbox poll hop.
-    /// </para>
-    /// <para>
-    /// OFF (default): the durable <c>InstanceJob</c> intent is committed in its own UoW FIRST,
-    /// then the Dapr enqueue happens — so a Dapr job can never exist without a tracking intent
-    /// (closes the dual-write gap). A crash between the intent commit and the enqueue is recovered
-    /// by the ChainReaper. Faster (no poll hop), recommended for low-latency transitions.
-    /// </para>
-    /// </summary>
-    public bool UseOutboxContinuations { get; set; }
-
-    /// <summary>
     /// When enabled, async transitions execute one transition per background job
     /// (transition-per-job) rather than running the entire auto-chain inside a single job.
-    /// Requires <see cref="UseOutboxContinuations"/> so each committed transition enqueues the
-    /// next via the outbox. Default: false.
+    /// Each committed transition enqueues the next via <c>ITransitionEnqueueGateway</c>.
+    /// Default: false.
     /// </summary>
     public bool TransitionPerJob { get; set; }
 

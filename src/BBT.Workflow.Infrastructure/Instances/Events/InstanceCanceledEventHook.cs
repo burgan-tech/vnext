@@ -86,10 +86,10 @@ public sealed class InstanceCanceledEventHook(
 
             using (currentSchema.Change(eventData.Flow))
             {
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
                     Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                });
 
                 await cancellationService.ProcessCancellationAsync(eventData.InstanceId, ct);
                 await uow.CommitAsync(ct);

@@ -35,10 +35,10 @@ public sealed class LocalInstanceRetryGateway : IInstanceRetryGateway
                 var retryService = sp.GetRequiredService<IInstanceRetryAppService>();
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
 
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
                     Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                });
                 var result =  await retryService.RetryAsync(input, ct);
                 await uow.CommitAsync(ct);
                 return result;

@@ -181,12 +181,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddBackgroundJob(this IServiceCollection services)
     {
+        var configuration = services.GetConfiguration();
         services.AddAetherBackgroundJob<MessagingDbContext>(options =>
         {
             options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
             options.AddHandler<LongPollAckTimeoutJobHandler>(LongPollAckTimeoutJobHandler.HandlerName);
+            options.Schema = configuration["Aether:Outbox:Schema"];
         });
 
         services.AddDaprJobScheduler();

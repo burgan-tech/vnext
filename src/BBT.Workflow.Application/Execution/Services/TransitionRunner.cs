@@ -56,9 +56,8 @@ public sealed class TransitionRunner(
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
-                    await using var uow = await uowManager.BeginAsync(
-                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                        ct);
+                    await using var uow = uowManager.Begin(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
                     var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
                     if (!coreResult.IsSuccess)

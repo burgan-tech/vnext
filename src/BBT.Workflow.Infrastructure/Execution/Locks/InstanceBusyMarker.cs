@@ -37,9 +37,8 @@ public sealed class InstanceBusyMarker(
             return;
         }
 
-        await using var innerUow = await unitOfWorkManager.BeginAsync(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-            cancellationToken);
+        await using var innerUow = unitOfWorkManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
         instance.Busy();
         await instanceRepository.UpdateAsync(instance, false, cancellationToken);

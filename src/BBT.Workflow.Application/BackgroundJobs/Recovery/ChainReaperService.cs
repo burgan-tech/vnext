@@ -37,8 +37,8 @@ public sealed class ChainReaperService(
         var faulted = 0;
         var skippedActive = 0;
 
-        await using var uow = await uowManager.BeginAsync(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, cancellationToken);
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
         var candidates = await instanceRepository.GetStuckBusyChainsAsync(olderThan, MaxPerSweep, cancellationToken);
 

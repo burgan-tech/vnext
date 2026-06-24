@@ -54,9 +54,8 @@ public sealed class SubflowFaultService(
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
 
-                await using (var uow = await uowManager.BeginAsync(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                    cancellationToken))
+                await using (var uow = uowManager.Begin(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
                 {
                     parentInstance = await instanceRepository.FindAsync(
                         input.InstanceId, true, cancellationToken);
@@ -342,9 +341,8 @@ public sealed class SubflowFaultService(
     {
         try
         {
-            await using var revertUow = await uowManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                cancellationToken);
+            await using var revertUow =  uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             var correlation = parentInstance.RevertCorrelation(subInstanceId);
             if (correlation != null)
