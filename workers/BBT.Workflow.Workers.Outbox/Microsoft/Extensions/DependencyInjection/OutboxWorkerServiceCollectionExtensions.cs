@@ -1,7 +1,6 @@
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
-using BBT.Workflow.Workers.Outbox.HostedServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -16,8 +15,6 @@ public static class OutboxWorkerServiceCollectionExtensions
     /// <summary>
     /// Adds Worker Outbox specific services
     /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddWorkerOutboxModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
@@ -37,14 +34,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddHostedServices()
             .AddAppHealthChecks();
-        return services;
-    }
-
-    private static IServiceCollection AddHostedServices(this IServiceCollection services)
-    {
-        services.AddHostedService<OutboxProcessorHostedService>();
         return services;
     }
 
@@ -84,8 +74,11 @@ public static class OutboxWorkerServiceCollectionExtensions
                     .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
             });
 
-        services.AddAetherOutbox<MessagingDbContext>(options =>
-            configuration.GetSection("Aether:Outbox").Bind(options));
+        // withHostedService: true → SDK registers OutboxBackgroundService with adaptive polling.
+        // No manual AddHostedService call needed.
+        services.AddAetherOutbox<MessagingDbContext>(
+            options => configuration.GetSection("Aether:Outbox").Bind(options),
+            withHostedService: true);
 
         return services;
     }
