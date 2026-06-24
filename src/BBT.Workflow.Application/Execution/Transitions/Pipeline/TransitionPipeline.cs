@@ -24,7 +24,7 @@ public class TransitionPipeline
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly ITransitionLockScopeFactory _lockScopeFactory;
     private readonly IReservedTransitionResolver _reservedTransitionResolver;
-    private readonly IInstanceBusyMarker _busyMarker;
+    private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
     private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
@@ -46,7 +46,7 @@ public class TransitionPipeline
         ContinuationDispatcher continuationDispatcher,
         ITransitionLockScopeFactory lockScopeFactory,
         IReservedTransitionResolver reservedTransitionResolver,
-        IInstanceBusyMarker busyMarker,
+        IInstanceBusyManager busyMarker,
         ITransitionContextFactory contextFactory,
         IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
