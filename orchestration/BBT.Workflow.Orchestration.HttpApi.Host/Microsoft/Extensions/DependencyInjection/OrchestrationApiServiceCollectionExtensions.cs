@@ -1,7 +1,12 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Controllers.Instances;
 using BBT.Workflow.HostedServices;
+using BBT.Workflow.HttpApi.Shared.HealthChecks;
 using BBT.Workflow.Orchestration.Services;
+using HealthChecks.NpgSql;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -43,7 +48,7 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddRuntimeMiddleware()
             .AddHeaderService()
             .AddHostedServices()
-            .AddAppHealthChecks();
+            .AddAppHealthChecks().AddOrchestrationDbHealthCheck(configuration);
         return services;
     }
 
@@ -62,6 +67,34 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();
         services.AddScoped<IDomainFunctionHandler, DefaultDomainFunctionHandler>();
         services.AddScoped<IDomainFunctionHandlerFactory, DomainFunctionHandlerFactory>();
+        return services;
+    }
+
+    private static IServiceCollection AddOrchestrationDbHealthCheck(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var connectionString = configuration.GetConnectionString("Default")
+            ?? throw new InvalidOperationException(
+                "Connection string 'Default' is required for the database health check.");
+
+        // Singleton: TTL state + SemaphoreSlim must survive across probes.
+        services.TryAddSingleton<CachedHealthCheck>(sp =>
+        {
+            var ttl = sp.GetService<IOptions<HealthCheckCacheOptions>>()?.Value.Ttl
+                      ?? new HealthCheckCacheOptions().Ttl;
+
+            IHealthCheck inner = new NpgSqlHealthCheck(new NpgSqlHealthCheckOptions(connectionString));
+            return new CachedHealthCheck(inner, ttl, TimeProvider.System);
+        });
+
+        services.AddHealthChecks().Add(new HealthCheckRegistration(
+            name: "database",
+            factory: sp => sp.GetRequiredService<CachedHealthCheck>(),
+            failureStatus: HealthStatus.Unhealthy,
+            tags: ["ready"],
+            timeout: TimeSpan.FromSeconds(2)));
+
         return services;
     }
 
