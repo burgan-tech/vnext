@@ -19,6 +19,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj"/>
         <ProjectReference Include="..\..\src\BBT.Workflow.Events.Contracts\BBT.Workflow.Events.Contracts.csproj"/>
+        <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Npgsql/BBT.Aether.Npgsql.csproj" />
     </ItemGroup>
 </Project>
 
