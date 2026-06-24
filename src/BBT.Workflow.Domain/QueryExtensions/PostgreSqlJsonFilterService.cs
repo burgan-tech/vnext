@@ -613,7 +613,7 @@ public static class PostgreSqlJsonFilterService
         // Use BuildJsonTextAccessor for proper nested/single level handling
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
         
-        var condition = $"{accessor} ILIKE {{{paramIndex}}}";
+        var condition = $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
         
         return (condition, parameters);
     }
@@ -628,7 +628,7 @@ public static class PostgreSqlJsonFilterService
         // Use BuildJsonTextAccessor for proper nested/single level handling
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
         
-        var condition = $"{accessor} ILIKE {{{paramIndex}}}";
+        var condition = $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
         
         return (condition, parameters);
     }
@@ -643,7 +643,7 @@ public static class PostgreSqlJsonFilterService
         // Use BuildJsonTextAccessor for proper nested/single level handling
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
         
-        var condition = $"{accessor} ILIKE {{{paramIndex}}}";
+        var condition = $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
         
         return (condition, parameters);
     }
