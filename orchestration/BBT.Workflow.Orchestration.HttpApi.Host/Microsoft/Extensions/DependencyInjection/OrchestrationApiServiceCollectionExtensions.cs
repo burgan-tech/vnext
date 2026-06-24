@@ -74,6 +74,9 @@ public static class OrchestrationApiServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.Configure<HealthCheckCacheOptions>(
+            configuration.GetSection(HealthCheckCacheOptions.SectionName));
+
         var connectionString = configuration.GetConnectionString("Default")
             ?? throw new InvalidOperationException(
                 "Connection string 'Default' is required for the database health check.");
