@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Contracts;
 using BBT.Workflow.Shared.Merging;
 using Microsoft.Extensions.Logging;
 
@@ -305,6 +306,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// and other request-specific data through the URL query string.
     /// </remarks>
     public dynamic? QueryParameters { get; private set; }
+
+    /// <summary>
+    /// The raw inbound external event payload (pub/sub message / input-binding body) made available to
+    /// <see cref="IEventMapping"/> during event-driven start/transition. Null outside event-driven executions.
+    /// </summary>
+    public dynamic? EventPayload { get; private set; }
 
     /// <summary>
     /// The original, unmodified request body exactly as received (a literal string, NOT camelCased or
@@ -622,6 +629,15 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetQueryParameters(object? queryParameters)
         {
             _context.QueryParameters = queryParameters;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the raw inbound event payload consumed by <see cref="IEventMapping"/>.
+        /// </summary>
+        public Builder SetEventPayload(object? eventPayload)
+        {
+            _context.EventPayload = eventPayload;
             return this;
         }
 

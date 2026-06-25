@@ -253,12 +253,12 @@ public class TransitionValidationService(
 
     /// <summary>
     /// Validates event trigger execution rules.
-    /// Event transitions should be initiated by User actors (external event sources).
+    /// Event transitions are the exclusive entry point of the event subsystem and are dispatched under
+    /// the <see cref="ExecutionActor.System"/> actor.
     /// </summary>
     private static Result ValidateEventTrigger(TransitionExecutionContext context)
     {
-        // Actor should be User for event transitions (external webhooks/events)
-        if (context.Actor != ExecutionActor.User)
+        if (context.Actor != ExecutionActor.System)
         {
             return Result.Fail(WorkflowErrors.InvalidActorForEventTransition(
                 context.InstanceId,

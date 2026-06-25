@@ -477,28 +477,9 @@ public class TransitionValidationServiceTests
     }
 
     [Fact]
-    public async Task ValidateTriggerTypeAsync_EventTrigger_WithUserActor_ShouldReturnSuccess()
+    public async Task ValidateTriggerTypeAsync_EventTrigger_WithSystemActor_ShouldReturnSuccess()
     {
-        // Arrange
-        var context = CreateValidTransitionContext();
-        typeof(TransitionExecutionContext)
-            .GetProperty(nameof(TransitionExecutionContext.Trigger))!
-            .SetValue(context, TriggerType.Event);
-        typeof(TransitionExecutionContext)
-            .GetProperty(nameof(TransitionExecutionContext.Actor))!
-            .SetValue(context, ExecutionActor.User);
-
-        // Act
-        var result = await _service.ValidateTriggerTypeAsync(context, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task ValidateTriggerTypeAsync_EventTrigger_WithSystemActor_ShouldReturnFailure()
-    {
-        // Arrange
+        // Arrange — event transitions are dispatched by the event subsystem under the System actor.
         var context = CreateValidTransitionContext();
         typeof(TransitionExecutionContext)
             .GetProperty(nameof(TransitionExecutionContext.Trigger))!
@@ -511,9 +492,28 @@ public class TransitionValidationServiceTests
         var result = await _service.ValidateTriggerTypeAsync(context, CancellationToken.None);
 
         // Assert
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ValidateTriggerTypeAsync_EventTrigger_WithUserActor_ShouldReturnFailure()
+    {
+        // Arrange — a manual (User) actor cannot trigger an event transition.
+        var context = CreateValidTransitionContext();
+        typeof(TransitionExecutionContext)
+            .GetProperty(nameof(TransitionExecutionContext.Trigger))!
+            .SetValue(context, TriggerType.Event);
+        typeof(TransitionExecutionContext)
+            .GetProperty(nameof(TransitionExecutionContext.Actor))!
+            .SetValue(context, ExecutionActor.User);
+
+        // Act
+        var result = await _service.ValidateTriggerTypeAsync(context, CancellationToken.None);
+
+        // Assert
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.UnauthorizedTransition);
-        result.Error.Message.ShouldContain("Event transitions require User actor");
+        result.Error.Message.ShouldContain("Event transitions can only be triggered by the event subsystem");
     }
 
     #endregion

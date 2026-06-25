@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Instances;
 
@@ -22,6 +23,13 @@ public sealed class TransitionInput(
     public Dictionary<string, string?> Headers { get; set; } = new();
     public Dictionary<string, string?> RouteValues { get; set; } = new();
     public bool Sync { get; set; } = sync;
+
+    /// <summary>
+    /// Who is triggering the transition. Defaults to <see cref="ExecutionActor.User"/> for the normal
+    /// API path. The event subsystem sets <see cref="ExecutionActor.System"/> so the transition runs
+    /// under the Event pipeline profile and event-actor validation.
+    /// </summary>
+    public ExecutionActor Actor { get; set; } = ExecutionActor.User;
 
     /// <summary>
     /// Extension data to evaluate and include in the sync response. Keys are extension identifiers.

@@ -28,6 +28,7 @@ internal sealed class ScriptContextBuilder(
     private Dictionary<string, string?>? _headers;
     private Dictionary<string, object?>? _routeValues;
     private Dictionary<string, object?>? _queryParameters;
+    private object? _eventPayload;
     private Dictionary<string, object?> _taskResponse = new();
     private Dictionary<string, object?> _outputResponse = new();
     private Dictionary<string, object> _metadata = new();
@@ -158,6 +159,12 @@ internal sealed class ScriptContextBuilder(
         return this;
     }
 
+    public IScriptContextBuilder WithEventPayload(object? eventPayload)
+    {
+        _eventPayload = eventPayload;
+        return this;
+    }
+
     public IScriptContextBuilder WithTaskResponse(Dictionary<string, object?> taskResponse)
     {
         _taskResponse = taskResponse;
@@ -224,6 +231,7 @@ internal sealed class ScriptContextBuilder(
             .SetHeaders(_headers)
             .SetRouteValues(_routeValues)
             .SetQueryParameters(_queryParameters)
+            .SetEventPayload(_eventPayload)
             .SetTaskResponse(_taskResponse)
             .SetOutputResponse(_outputResponse)
             .SetMetadata(_metadata)

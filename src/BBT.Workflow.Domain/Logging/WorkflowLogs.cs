@@ -2006,6 +2006,65 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Event-driven transitions
+
+    /// <summary>
+    /// Logs when an external event is received for a workflow.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40990,
+        Level = LogLevel.Information,
+        Message = "Event received. Domain: {Domain}, Workflow: {Workflow}, Action: {Action}, TransitionKey: {TransitionKey}")]
+    public static partial void EventReceived(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string action,
+        string? transitionKey);
+
+    /// <summary>
+    /// Logs when an event refers to a workflow/transition that has no event definition.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40991,
+        Level = LogLevel.Warning,
+        Message = "Event has no matching event definition. Domain: {Domain}, Workflow: {Workflow}, TransitionKey: {TransitionKey}")]
+    public static partial void EventDefinitionMissing(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string? transitionKey);
+
+    /// <summary>
+    /// Logs when an event-transition cannot be correlated to an active instance and is therefore ignored.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40992,
+        Level = LogLevel.Information,
+        Message = "Event ignored - no active instance for key. Domain: {Domain}, Workflow: {Workflow}, InstanceKey: {InstanceKey}, TransitionKey: {TransitionKey}")]
+    public static partial void EventInstanceNotFoundIgnored(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string? instanceKey,
+        string? transitionKey);
+
+    /// <summary>
+    /// Logs when the event mapping fails to compile or execute.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40993,
+        Level = LogLevel.Error,
+        Message = "Event mapping failed. Domain: {Domain}, Workflow: {Workflow}, TransitionKey: {TransitionKey}, Error: {Error}")]
+    public static partial void EventMappingFailed(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string? transitionKey,
+        string error);
+
+    #endregion
+
     #region Authorization (authorize / permissions)
 
     /// <summary>

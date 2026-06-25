@@ -622,6 +622,7 @@ public sealed class InstanceCommandAppService(
             WorkflowVersion = resolvedInstance.FlowVersion,
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
+            Actor = input.Actor,
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),

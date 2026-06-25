@@ -1,6 +1,7 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Contracts;
 
 namespace BBT.Workflow.Scripting;
 
@@ -85,7 +86,12 @@ public interface IScriptContextBuilder
     /// Sets the query parameters for the ScriptContext.
     /// </summary>
     IScriptContextBuilder WithQueryParameters(Dictionary<string, string?>? queryParameters);
-    
+
+    /// <summary>
+    /// Sets the raw inbound event payload consumed by <see cref="IEventMapping"/> during event-driven start/transition.
+    /// </summary>
+    IScriptContextBuilder WithEventPayload(object? eventPayload);
+
     /// <summary>
     /// Sets the task response data for the ScriptContext.
     /// </summary>

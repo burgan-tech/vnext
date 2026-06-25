@@ -10,7 +10,7 @@ namespace BBT.Workflow.Definitions.Specifications;
 /// Ensures that transitions are executed by the appropriate actor (User or System).
 /// Business Rules:
 /// - Manual transitions: User actor (external API/UI requests)
-/// - Event transitions: User actor (external webhooks/events)
+/// - Event transitions: System actor (exclusively dispatched by the event subsystem — single entry point)
 /// - Automatic transitions: System actor (pipeline-managed)
 /// - Scheduled transitions: System actor (background jobs)
 /// </summary>
@@ -39,7 +39,7 @@ public sealed class ActorAuthorizationSpecification : ITransitionSpecification
             TriggerType.Manual => Result.Ok(),
             TriggerType.Automatic => ValidateAutomaticActor(context),
             TriggerType.Scheduled => ValidateScheduledActor(context),
-            TriggerType.Event => Result.Ok(),
+            TriggerType.Event => ValidateEventActor(context),
             _ => Result.Fail(Error.NotSupported(
                 "UnsupportedTriggerType",
                 $"Trigger type {context.Trigger} is not supported"))
@@ -82,6 +82,23 @@ public sealed class ActorAuthorizationSpecification : ITransitionSpecification
         if (context.Actor != ExecutionActor.System)
         {
             return Result.Fail(WorkflowErrors.InvalidActorForScheduledTransition(
+                context.InstanceId,
+                context.Actor));
+        }
+
+        return Result.Ok();
+    }
+
+    /// <summary>
+    /// Validates event trigger execution rules.
+    /// Event transitions are the single, exclusive entry point of the event subsystem: they are
+    /// dispatched by the event endpoint under the System actor and cannot be triggered manually (User).
+    /// </summary>
+    private static Result ValidateEventActor(TransitionExecutionContext context)
+    {
+        if (context.Actor != ExecutionActor.System)
+        {
+            return Result.Fail(WorkflowErrors.InvalidActorForEventTransition(
                 context.InstanceId,
                 context.Actor));
         }
