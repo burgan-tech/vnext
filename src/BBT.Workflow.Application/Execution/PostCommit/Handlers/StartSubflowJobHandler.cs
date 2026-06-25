@@ -25,11 +25,16 @@ public sealed class StartSubflowJobHandler(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var rootId = context.Instance.GetRootInstanceId();
+        var scopeProps = new Dictionary<string, object>
         {
-            [TelemetryConstants.TagNames.InstanceId] = context.InstanceId,
-            [TelemetryConstants.TagNames.RootInstanceId] = context.Instance.GetRootInstanceId()
-        }))
+            [TelemetryConstants.TagNames.InstanceId] = context.InstanceId
+        };
+        if (rootId != context.InstanceId)
+        {
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = rootId;
+        }
+        using (logger.BeginScope(scopeProps))
         {
             // Refresh instance to get the correlation that was added during the step
             var instanceResult = await instanceRepository.GetResultAsync(context.InstanceId.ToString(), true, cancellationToken);

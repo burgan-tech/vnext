@@ -57,4 +57,22 @@ public class InstanceMetadataExtensionsTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.Equal(rootId, result);
     }
+
+    [Fact]
+    public void GetRootInstanceId_WhenRootKeyIsGuidEmpty_ReturnsSelfId()
+    {
+        // Arrange — stored value is Guid.Empty (defensive guard)
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, "flow-d", "1.0.0", "key-d");
+        instance.SetMetaData(new ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.RootInstanceId] = Guid.Empty
+        });
+
+        // Act
+        var result = instance.GetRootInstanceId();
+
+        // Assert
+        Assert.Equal(instanceId, result);
+    }
 }
