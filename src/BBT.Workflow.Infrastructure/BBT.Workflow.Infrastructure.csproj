@@ -7,6 +7,7 @@
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="BBT.Aether.Infrastructure" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.9" />
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="$(MicrosoftPackageVersion)" />
@@ -19,7 +20,6 @@
     </PackageReference>
     <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
     <PackageReference Include="prometheus-net" Version="$(PrometheusVersion)" />
-    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Infrastructure/BBT.Aether.Infrastructure.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
   </ItemGroup>
