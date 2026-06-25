@@ -32,6 +32,10 @@ public static class TelemetryConstants
         /// Subflow instance ID for subflow/subprocess correlation in traces and logs.
         /// </summary>
         public const string SubflowInstanceId = "vnext.subflow.instance.id";
+        /// <summary>
+        /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
+        /// </summary>
+        public const string RootInstanceId = "vnext.root.instance.id";
     }
 
     /// <summary>
@@ -43,5 +47,10 @@ public static class TelemetryConstants
         /// Request header carrying the parent instance ID when invoking subflow/subprocess remotely.
         /// </summary>
         public const string ParentInstanceId = "X-Parent-Instance-Id";
+        /// <summary>
+        /// Request header carrying the root (ancestor) instance ID across the full subflow chain.
+        /// Remains constant at A's ID regardless of nesting depth.
+        /// </summary>
+        public const string RootInstanceId = "X-Root-Instance-Id";
     }
 }
