@@ -81,9 +81,18 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer");
+
                     b.Property<string>("LastError")
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTime?>("LastRunAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("MaxRetryCount")
+                        .HasColumnType("integer");
 
                     b.Property<DateTime?>("ModifiedAt")
                         .HasColumnType("timestamp with time zone")
@@ -99,6 +108,9 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("character varying(36)")
                         .HasColumnName("ModifiedByBehalfOf");
 
+                    b.Property<DateTime?>("NextRetryAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<JsonElement>("Payload")
                         .HasColumnType("jsonb");
 
@@ -106,6 +118,12 @@ namespace BBT.Workflow.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasDefaultValue(0);
+
+                    b.Property<DateTime?>("RunningSince")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("RunningToken")
+                        .HasColumnType("uuid");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
@@ -121,7 +139,13 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("Status", "HandledTime")
                         .HasDatabaseName("IX_BackgroundJobs_Processing");
 
-                    b.ToTable("BackgroundJobs", "public");
+                    b.HasIndex("Status", "NextRetryAt")
+                        .HasDatabaseName("IX_BackgroundJobs_Arming");
+
+                    b.HasIndex("Status", "RunningSince")
+                        .HasDatabaseName("IX_BackgroundJobs_Running");
+
+                    b.ToTable("BackgroundJobs", (string)null);
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.Instance", b =>

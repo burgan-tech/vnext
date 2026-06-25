@@ -9,27 +9,10 @@ public sealed class WorkflowExecutionOptions
     public TransitionJobFailurePolicyOptions FailurePolicy { get; set; } = new();
 
     /// <summary>
-    /// Selects the async continuation/enqueue atomicity model.
-    /// <para>
-    /// ON: continuations are enqueued through the transactional outbox — a
-    /// <c>TransitionContinuationRequested</c> event commits in the same UoW as the durable job
-    /// intent, and the Inbox forwards it to Orchestration which performs the Dapr enqueue. Fully
-    /// transactional, at the cost of the outbox/inbox poll hop.
-    /// </para>
-    /// <para>
-    /// OFF (default): the durable <c>InstanceJob</c> intent is committed in its own UoW FIRST,
-    /// then the Dapr enqueue happens — so a Dapr job can never exist without a tracking intent
-    /// (closes the dual-write gap). A crash between the intent commit and the enqueue is recovered
-    /// by the ChainReaper. Faster (no poll hop), recommended for low-latency transitions.
-    /// </para>
-    /// </summary>
-    public bool UseOutboxContinuations { get; set; }
-
-    /// <summary>
     /// When enabled, async transitions execute one transition per background job
     /// (transition-per-job) rather than running the entire auto-chain inside a single job.
-    /// Requires <see cref="UseOutboxContinuations"/> so each committed transition enqueues the
-    /// next via the outbox. Default: false.
+    /// Each committed transition enqueues the next via <c>ITransitionEnqueueGateway</c>.
+    /// Default: false.
     /// </summary>
     public bool TransitionPerJob { get; set; }
 
@@ -60,6 +43,20 @@ public sealed class WorkflowExecutionOptions
     /// Enables the stuck-Busy chain reaper (S7) sweep. Default: false.
     /// </summary>
     public bool EnableChainReaper { get; set; }
+
+    /// <summary>
+    /// Maximum number of flow schemas swept concurrently by the chain reaper.
+    /// Higher values reduce sweep wall-clock time at the cost of more concurrent DB connections.
+    /// Default: 4.
+    /// </summary>
+    public int ChainReaperMaxConcurrentSweeps { get; set; } = 4;
+
+    /// <summary>
+    /// Per-flow sweep timeout in seconds. A flow that exceeds this limit is skipped with a warning
+    /// so a single slow or broken schema cannot stall the whole sweep cycle.
+    /// Default: 30.
+    /// </summary>
+    public int ChainReaperFlowTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical

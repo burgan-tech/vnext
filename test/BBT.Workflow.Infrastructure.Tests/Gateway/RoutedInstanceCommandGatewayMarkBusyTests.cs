@@ -5,15 +5,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
-using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.DefinitionContext;
-using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Shouldly;
@@ -74,7 +71,6 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
 
         var schema = Substitute.For<ICurrentSchema>();
         schema.Name.Returns((string?)null);
-        schema.When(x => x.Set(Arg.Any<string>())).Do(_ => { });
 
         var workflow = DeserializeMinimalWorkflow(workflowKey, domain);
         var cacheStore = Substitute.For<IComponentCacheStore>();
@@ -83,8 +79,8 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
 
         var workflowContext = Substitute.For<IWorkflowContext>();
 
-        var busyService = Substitute.For<IInstanceBusyPropagationService>();
-        busyService.MarkBusyAsync(Arg.Any<MarkBusyInput>(), Arg.Any<CancellationToken>())
+        var busyService = Substitute.For<IInstanceBusyManager>();
+        busyService.MarkBusyWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         var services = new ServiceCollection();
@@ -107,8 +103,8 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
 
         result.IsSuccess.ShouldBeTrue();
         runtimeInfo.Received(1).IsDomainMatch(input.Domain);
-        await busyService.Received(1).MarkBusyAsync(
-            Arg.Is<MarkBusyInput>(x => x.InstanceId == input.InstanceId),
+        await busyService.Received(1).MarkBusyWithPropagationAsync(
+            Arg.Is<Guid>(x => x == input.InstanceId),
             Arg.Any<CancellationToken>());
         await remoteService.Received(0).MarkBusyAsync(Arg.Any<MarkBusyInput>(), Arg.Any<CancellationToken>());
     }

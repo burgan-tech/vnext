@@ -20,6 +20,13 @@ namespace BBT.Workflow.Data;
 /// cached per schema via <c>SchemaAwareModelCacheKeyFactory</c>, so no <c>SET search_path</c>
 /// directive is ever sent — making this context safe under PgBouncer transaction-mode pooling.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>DEPRECATED:</b> <see cref="BackgroundJobInfo"/> / <see cref="IHasEfCoreBackgroundJobs"/>
+/// implementasyonu bu context'ten kaldırılacak. Birincil store <c>MessagingDbContext</c>'tir
+/// (sys_queues.BackgroundJobs). Bu DbSet ve interface yalnızca geriye dönük uyum için tutulmaktadır.
+/// </para>
+/// </remarks>
 public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreBackgroundJobs
 {
     private readonly ICurrentSchema? _currentSchema;
@@ -29,9 +36,8 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     /// </summary>
     public WorkflowDbContext(
         DbContextOptions<WorkflowDbContext> options,
-        ICurrentSchema? currentSchema = null,
-        IDomainEventSink? eventSink = null)
-        : base(options, eventSink)
+        ICurrentSchema? currentSchema = null)
+        : base(options)
     {
         _currentSchema = currentSchema;
     }
@@ -72,8 +78,13 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     public virtual DbSet<InstanceJob> InstanceJobs { get; set; }
 
     /// <summary>
-    /// Gets or sets the background jobs
+    /// Gets or sets the background jobs.
     /// </summary>
+    /// <remarks>
+    /// <b>[DEPRECATED]</b> Birincil store <c>MessagingDbContext.BackgroundJobs</c>'a taşındı (sys_queues).
+    /// Bu DbSet yalnızca geriye dönük uyum için tutulmaktadır.
+    /// </remarks>
+    [Obsolete("Use MessagingDbContext.BackgroundJobs. This DbSet will be removed in a future major version.")]
     public virtual DbSet<BackgroundJobInfo> BackgroundJobs { get; set; }
 
     /// <summary>

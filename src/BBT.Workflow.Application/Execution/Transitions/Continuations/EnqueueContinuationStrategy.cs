@@ -1,15 +1,9 @@
 using System.Diagnostics;
-using BBT.Aether.Events;
 using BBT.Aether.Results;
-using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Continuations;
 
@@ -17,13 +11,14 @@ namespace BBT.Workflow.Execution.Continuations;
 /// Realizes the auto-chain continuation as a SEPARATE background job (transition-per-job).
 /// Instead of running the next transition in-process, it persists a durable job intent
 /// (<see cref="InstanceJob"/>) within the AMBIENT transition unit of work — so "this transition
-/// committed" and "next transition tracked" are atomic — and then enqueues the next hop.
+/// committed" and "next transition tracked" are atomic — and then delegates the enqueue
+/// decision to <see cref="ITransitionEnqueueGateway"/>.
 /// <para>
-/// How the next hop is enqueued is governed by <see cref="WorkflowExecutionOptions.DirectEnqueueContinuations"/>:
+/// How the next hop is enqueued is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
 /// </para>
 /// <list type="bullet">
 /// <item>ON (default): the Dapr job is enqueued DIRECTLY (no outbox/inbox poll hop). If the direct
-/// enqueue fails, the strategy falls back to publishing a <see cref="TransitionContinuationRequested"/>
+/// enqueue fails, the gateway falls back to publishing a <see cref="TransitionContinuationRequested"/>
 /// event through the transactional outbox so durability is preserved.</item>
 /// <item>OFF: a <see cref="TransitionContinuationRequested"/> event is always published through the
 /// transactional outbox; the Inbox handler then performs the real Dapr enqueue.</item>
@@ -31,11 +26,8 @@ namespace BBT.Workflow.Execution.Continuations;
 /// Returns Ok(null) to end the in-process loop; a separate job resumes the chain.
 /// </summary>
 public sealed class EnqueueContinuationStrategy(
-    IDistributedEventBus eventBus,
     IInstanceJobRepository jobRepository,
-    ITransitionJobEnqueuer jobEnqueuer,
-    IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<EnqueueContinuationStrategy> logger) : IContinuationStrategy
+    ITransitionEnqueueGateway enqueueGateway) : IContinuationStrategy
 {
     /// <inheritdoc />
     public ContinuationMode Mode => ContinuationMode.Enqueue;
@@ -70,51 +62,13 @@ public sealed class EnqueueContinuationStrategy(
             true,
             cancellationToken);
 
-        // Default: enqueue the Dapr job directly (no outbox/inbox poll hop). On failure, fall back
-        // to the transactional outbox so the continuation is never lost.
-        if (executionOptions.Value.DirectEnqueueContinuations)
-        {
-            var enqueueResult = await EnqueueDirectlyAsync(current, next.TransitionKey, jobNameValue, jobId, cancellationToken);
-            if (enqueueResult.IsSuccess)
-            {
-                logger.TransitionContinuationEnqueued(current.InstanceId, next.TransitionKey, jobNameValue);
-                return Result<WorkflowExecutionContext?>.Ok(null);
-            }
-
-            logger.TransitionContinuationFellBackToOutbox(
-                current.InstanceId, next.TransitionKey, jobNameValue, enqueueResult.Error.Message);
-        }
-
-        await PublishViaOutboxAsync(current, next.TransitionKey, jobNameValue, jobId, cancellationToken);
-
-        // No in-process next context — a separate job resumes the chain.
-        return Result<WorkflowExecutionContext?>.Ok(null);
-    }
-
-    /// <summary>
-    /// Enqueues the next-hop Dapr job directly via <see cref="ITransitionJobEnqueuer"/>.
-    /// <para>
-    /// The enqueuer joins the ambient transition unit of work (transactional enqueue): the durable
-    /// job row commits atomically with the transition and the actual Dapr schedule is deferred to
-    /// post-commit. Consequently the <see cref="ResultExtensions.TryAsync{T}"/> wrapper here only
-    /// catches SYNCHRONOUS failures (intent persistence / scheduler registration); a Dapr scheduling
-    /// failure that happens after commit is recovered by the ChainReaper backstop, not by the
-    /// outbox fallback below.
-    /// </para>
-    /// </summary>
-    private Task<Result<bool>> EnqueueDirectlyAsync(
-        TransitionExecutionContext current,
-        string transitionKey,
-        string jobName,
-        Guid jobId,
-        CancellationToken cancellationToken)
-    {
         var activity = Activity.Current;
-        var payload = new TransitionJobPayload
+
+        var directPayload = new TransitionJobPayload
         {
-            JobName = jobName,
+            JobName = jobNameValue,
             InstanceId = current.InstanceId,
-            TransitionKey = transitionKey,
+            TransitionKey = next.TransitionKey,
             Domain = current.Domain,
             Workflow = current.WorkflowKey,
             Version = current.Workflow.Version,
@@ -128,39 +82,14 @@ public sealed class EnqueueContinuationStrategy(
             ChainToken = current.ChainToken // propagate chain ownership (S6)
         };
 
-        return ResultExtensions.TryAsync(
-            async ct =>
-            {
-                await jobEnqueuer.EnqueueAsync(payload, jobId, ct);
-                return true;
-            },
-            cancellationToken,
-            ex => Error.Dependency(
-                WorkflowErrorCodes.Dependency,
-                $"Failed to enqueue transition job '{jobName}': {ex.Message}",
-                "Dapr"));
-    }
-
-    /// <summary>
-    /// Publishes a <see cref="TransitionContinuationRequested"/> event through the transactional
-    /// outbox within the ambient transition UoW. Used as the legacy path and the direct-enqueue
-    /// fallback; the Inbox handler performs the real Dapr enqueue (at-least-once).
-    /// </summary>
-    private Task PublishViaOutboxAsync(
-        TransitionExecutionContext current,
-        string transitionKey,
-        string jobName,
-        Guid jobId,
-        CancellationToken cancellationToken)
-    {
-        var continuation = new TransitionContinuationRequested
+        var outboxEvent = new TransitionContinuationRequested
         {
             InstanceId = current.InstanceId,
             Domain = current.Domain,
             Flow = current.WorkflowKey,
             Version = current.Workflow.Version,
-            TransitionKey = transitionKey,
-            JobName = jobName,
+            TransitionKey = next.TransitionKey,
+            JobName = jobNameValue,
             JobId = jobId,
             Data = null, // chained auto-transitions carry no new request payload
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
@@ -170,6 +99,9 @@ public sealed class EnqueueContinuationStrategy(
             ChainDepth = current.ChainDepth + 1
         };
 
-        return eventBus.PublishAsync(continuation, subject: null, useOutbox: true, cancellationToken);
+        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);
+
+        // No in-process next context — a separate job resumes the chain.
+        return Result<WorkflowExecutionContext?>.Ok(null);
     }
 }

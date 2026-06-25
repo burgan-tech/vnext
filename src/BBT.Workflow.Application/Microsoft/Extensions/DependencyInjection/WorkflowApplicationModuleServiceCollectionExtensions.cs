@@ -72,7 +72,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();
-        services.AddScoped<IInstanceBusyPropagationService, InstanceBusyPropagationService>();
+        services.AddScoped<IInstanceBusyManager, InstanceBusyManager>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
         services.AddScoped<IChildSubflowFaultService, ChildSubflowFaultService>();
         services.AddScoped<ITransitionJobEnqueuer, TransitionJobEnqueuer>();

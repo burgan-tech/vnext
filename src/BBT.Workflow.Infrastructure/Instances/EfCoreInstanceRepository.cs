@@ -19,7 +19,7 @@ using BBT.Workflow.Definitions.Schemas;
 namespace BBT.Workflow.Instances;
 
 public sealed class EfCoreInstanceRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
     IWorkflowMetrics workflowMetrics,
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -1186,7 +1186,7 @@ public sealed class EfCoreInstanceRepository(
         var dbSet = await GetDbSetAsync();
 
         // Schema is resolved by the schema-aware DbContext from the ambient ICurrentSchema,
-        // established by the caller (ChainReaperHostedService via ICurrentSchema.Use(flowKey)).
+        // established by the caller (ChainReaperHostedService via IcurrentSchema.Change(flowKey)).
         // Tracked (no AsNoTracking): the reaper faults / updates the returned instances.
         return await dbSet
             .Where(i => i.Status == InstanceStatus.Busy
@@ -1204,7 +1204,7 @@ public sealed class EfCoreInstanceRepository(
         // Flow definitions are stored as instances in the sys_flows schema; switch to it for this
         // read only so a background sweep (no request scope) can enumerate the per-flow schemas.
         // Mirrors the discovery in SchemaMigrationRunner.
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Flows))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
         {
             var dbSet = await GetDbSetAsync();
             return await dbSet

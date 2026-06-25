@@ -91,7 +91,7 @@ internal sealed class MultiSchemaMigrationHostedService(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        using (currentSchema.Use(schemaName))
+        using (currentSchema.Change(schemaName))
         {
             var orchestrator = scope.ServiceProvider.GetRequiredService<ISchemaMigrationOrchestrator>();
 

@@ -43,7 +43,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Functions))
         {
             return await componentCacheStore
                 .GetFunctionAsync(domain, key, version, cancellationToken)
@@ -64,7 +64,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(flow))
+        using (currentSchema.Change(flow))
         {
             var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
             if (instance == null)
@@ -83,7 +83,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Functions))
         {
             var result = await instanceRepository.GetActiveDataListAsync(cancellationToken);
             return Result<List<InstanceAndDataModel>>.Ok(result);

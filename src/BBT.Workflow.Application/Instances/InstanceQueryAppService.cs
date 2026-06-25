@@ -1676,7 +1676,7 @@ public sealed class InstanceQueryAppService(
         runtimeInfoProvider.Check(domain);
 
         List<InstanceKeyModel> workflowSchemas;
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Flows))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
         {
             workflowSchemas = await instanceRepository.GetActiveInstanceKeysAsync(cancellationToken);
         }
@@ -1714,7 +1714,7 @@ public sealed class InstanceQueryAppService(
                 var scopedSchema = sp.GetRequiredService<ICurrentSchema>();
                 var scopedRepo = sp.GetRequiredService<IInstanceRepository>();
 
-                using (scopedSchema.Use(schema.Key))
+                using (scopedSchema.Change(schema.Key))
                 {
                     return await scopedRepo.GetHumanTaskInstancesAsync(innerCt);
                 }
@@ -1927,7 +1927,7 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         List<InstanceCorrelation> correlations;
-        using (currentSchema.Use(parentFlow))
+        using (currentSchema.Change(parentFlow))
         {
             correlations = await instanceCorrelationRepository.GetByParentAsync(parentInstanceId, cancellationToken);
         }
@@ -1944,7 +1944,7 @@ public sealed class InstanceQueryAppService(
             var childDomain = correlation.SubFlowDomain;
             Instance? childInstance = null;
 
-            using (currentSchema.Use(childFlow))
+            using (currentSchema.Change(childFlow))
             {
                 childInstance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
                     correlation.SubFlowInstanceId.ToString(),

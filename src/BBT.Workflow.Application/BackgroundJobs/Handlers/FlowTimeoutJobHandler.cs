@@ -38,7 +38,7 @@ public sealed class FlowTimeoutJobHandler(
     public async Task HandleAsync(WorkflowTimeoutPayload args, CancellationToken cancellationToken)
     {
         using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TimeoutJob.Execute", args);
-        using (currentSchema.Use(args.FlowName))
+        using (currentSchema.Change(args.FlowName))
         {
             using (logger.BeginScope(new Dictionary<string, object>
                    {

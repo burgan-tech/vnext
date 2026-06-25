@@ -269,7 +269,8 @@ public sealed class InstanceCommandAppService(
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
-        await using var uow = await UnitOfWorkManager.BeginRequiresNew(cancellationToken);
+        await using var uow = UnitOfWorkManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
         var result = await CreateAndPrepareInstanceAsync(
                 workflow,
                 input.Instance.Id ?? guidGenerator.Create(),

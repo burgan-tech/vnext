@@ -3,9 +3,10 @@ using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Hosting;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Options;
 
-namespace BBT.Workflow.Workers.Outbox.HostedServices;
+namespace BBT.Workflow.HostedServices;
 
 /// <summary>
 /// Periodically sweeps for stuck-Busy auto-chains (instances Busy with an active chain token,
@@ -17,7 +18,7 @@ namespace BBT.Workflow.Workers.Outbox.HostedServices;
 /// live in those per-flow schemas — not in any single ambient/default schema. A hosted service
 /// has no request-scoped <see cref="ICurrentSchema"/>, so this worker first discovers all flow
 /// keys from <c>sys_flows</c> and then runs the reaper once per flow schema, each in its own DI
-/// scope with the schema established via <c>ICurrentSchema.Use(flowKey)</c> (mirrors
+/// scope with the schema established via <c>IcurrentSchema.Change(flowKey)</c> (mirrors
 /// <c>SchemaMigrationRunner</c> / <c>MultiSchemaMigrator</c>). A fresh scope per schema avoids
 /// change-tracker bleed across schemas. Interval is fixed here; promote to options if needed.
 /// </remarks>
@@ -69,8 +70,11 @@ public sealed class ChainReaperHostedService(
 
     /// <summary>
     /// Discovers every flow key from <c>sys_flows</c> and runs the reaper once per flow schema,
-    /// each in its own scope with the schema established. One bad schema (e.g. not yet migrated
-    /// with the chain-token columns) is logged and skipped so it cannot abort the whole sweep.
+    /// each in its own scope with the schema established. Sweeps up to
+    /// <c>WorkflowExecutionOptions.ChainReaperMaxConcurrentSweeps</c> schemas concurrently so the
+    /// total wall-clock time scales sub-linearly with the number of flows. A per-flow timeout
+    /// (<c>ChainReaperFlowTimeoutSeconds</c>) ensures one slow schema cannot block the others.
+    /// One bad schema is logged and skipped so it cannot abort the whole sweep.
     /// </summary>
     private async Task SweepAllFlowSchemasAsync(CancellationToken stoppingToken)
     {
@@ -82,31 +86,53 @@ public sealed class ChainReaperHostedService(
             flowKeys = await instanceRepository.GetActiveFlowKeysAsync(stoppingToken);
         }
 
-        // 2) Sweep each flow schema in its own scope, with the per-flow schema established so the
-        //    DI-scoped repositories/DbContext resolve the correct schema for that flow.
-        foreach (var flowKey in flowKeys)
-        {
-            stoppingToken.ThrowIfCancellationRequested();
+        if (flowKeys.Count == 0)
+            return;
 
+        var opts = executionOptions.Value;
+        var maxConcurrent = Math.Max(1, opts.ChainReaperMaxConcurrentSweeps);
+        var flowTimeout = TimeSpan.FromSeconds(Math.Max(10, opts.ChainReaperFlowTimeoutSeconds));
+
+        // 2) Sweep each flow schema in its own scope, bounded to maxConcurrent in-flight at a time.
+        //    SemaphoreSlim gates entry; Task.Run ensures all tasks are issued eagerly so the
+        //    semaphore can release slots as earlier schemas finish.
+        using var semaphore = new SemaphoreSlim(maxConcurrent, maxConcurrent);
+
+        var tasks = flowKeys.Select(flowKey => Task.Run(async () =>
+        {
+            await semaphore.WaitAsync(stoppingToken);
             try
             {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                cts.CancelAfter(flowTimeout);
+
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
 
-                using (currentSchema.Use(flowKey))
+                using (currentSchema.Change(flowKey))
                 {
                     var reaper = scope.ServiceProvider.GetRequiredService<IChainReaperService>();
-                    await reaper.SweepAsync(stoppingToken);
+                    await reaper.SweepAsync(cts.Token);
                 }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (OperationCanceledException)
             {
-                throw;
+                logger.ChainReaperFlowSweepTimedOut(flowKey);
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Chain reaper sweep failed for flow schema {FlowKey}", flowKey);
             }
-        }
+            finally
+            {
+                semaphore.Release();
+            }
+        }, stoppingToken));
+
+        await Task.WhenAll(tasks);
     }
 }

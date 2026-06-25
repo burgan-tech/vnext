@@ -56,8 +56,18 @@ public sealed class GetInstancesTaskExecutorTests
         var gateway = Substitute.For<IInstanceQueryGateway>();
         var groups = new List<GroupSummary>
         {
-            new() { Name = "open", Count = 2 },
-            new() { Name = "done", Count = 3 }
+            new()
+            {
+                Name = "open",
+                Count = 2,
+                Keys = new Dictionary<string, object?> { ["status"] = "open" }
+            },
+            new()
+            {
+                Name = "done",
+                Count = 3,
+                Keys = new Dictionary<string, object?> { ["status"] = "done" }
+            }
         };
         gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok(InstanceListWithGroupsResponse<GetInstanceOutput>.FromGroups(groups)));
@@ -82,6 +92,51 @@ public sealed class GetInstancesTaskExecutorTests
         using var doc = JsonDocument.Parse(dataJson);
         Assert.Equal(2, doc.RootElement.GetProperty("items").GetArrayLength());
         Assert.Equal("open", doc.RootElement.GetProperty("items")[0].GetProperty("name").GetString());
+        var keys0 = doc.RootElement.GetProperty("items")[0].GetProperty("keys");
+        Assert.Equal("open", keys0.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenListReturnsMultiKeyGroups_SerializesKeysPerField()
+    {
+        var task = WorkflowTaskFactory.CreateGetInstancesTask(
+            domain: "test-domain",
+            flow: "test-flow",
+            filter: """{"groupBy":{"fields":["attributes.scope","attributes.channel"]}}""");
+
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        var groups = new List<GroupSummary>
+        {
+            new()
+            {
+                Name = "scope-a_EFT",
+                Sum = 1000m,
+                Keys = new Dictionary<string, object?>
+                {
+                    ["attributes.scope"] = "scope-a",
+                    ["attributes.channel"] = "EFT"
+                }
+            }
+        };
+        gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok(InstanceListWithGroupsResponse<GetInstanceOutput>.FromGroups(groups)));
+
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns("test-domain");
+
+        var executor = CreateExecutor(gateway, runtime);
+
+        var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var dataJson = JsonSerializer.Serialize(result.Value!.Data, JsonSerializerConstants.JsonOptions);
+        using var doc = JsonDocument.Parse(dataJson);
+        var item0 = doc.RootElement.GetProperty("items")[0];
+        Assert.Equal("scope-a_EFT", item0.GetProperty("name").GetString());
+        Assert.Equal(1000m, item0.GetProperty("sum").GetDecimal());
+        var keys = item0.GetProperty("keys");
+        Assert.Equal("scope-a", keys.GetProperty("attributes.scope").GetString());
+        Assert.Equal("EFT", keys.GetProperty("attributes.channel").GetString());
     }
 
     [Fact]
