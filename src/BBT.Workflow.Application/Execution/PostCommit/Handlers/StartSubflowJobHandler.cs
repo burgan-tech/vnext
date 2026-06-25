@@ -27,7 +27,8 @@ public sealed class StartSubflowJobHandler(
     {
         using (logger.BeginScope(new Dictionary<string, object>
         {
-            [TelemetryConstants.TagNames.InstanceId] = context.InstanceId
+            [TelemetryConstants.TagNames.InstanceId] = context.InstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = context.Instance.GetRootInstanceId()
         }))
         {
             // Refresh instance to get the correlation that was added during the step
