@@ -2276,16 +2276,18 @@ public static partial class WorkflowLogs
         string bindingName);
 
     /// <summary>
-    /// Logs when a state-notify job runs but the state no longer declares a notification mapping.
+    /// Logs when a state-notify job runs but no notification entry is dispatched
+    /// (no state entries on the state, or none matched its rule).
     /// </summary>
     [LoggerMessage(
         EventId = 10096,
         Level = LogLevel.Debug,
-        Message = "State notification skipped (no mapping). InstanceId={InstanceId}, State={StateKey}")]
-    public static partial void StateNotificationSkippedNoMapping(
+        Message = "State notification skipped. InstanceId={InstanceId}, State={StateKey}, Reason={Reason}")]
+    public static partial void StateNotificationSkipped(
         this ILogger logger,
         Guid instanceId,
-        string stateKey);
+        string stateKey,
+        string reason);
 
     /// <summary>
     /// Logs when a state-level notification dispatch fails.

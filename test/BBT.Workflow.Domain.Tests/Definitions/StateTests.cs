@@ -658,7 +658,7 @@ public class StateTests
     }
 
     [Fact]
-    public void Deserialize_ShouldPopulateNotificationMapping_WhenPresent()
+    public void Deserialize_ShouldPopulateNotifications_WithTypeRuleAndMapping()
     {
         // Arrange — uses the canonical options so the ScriptCodeJsonConverter is applied.
         const string json = """
@@ -667,9 +667,18 @@ public class StateTests
             "stateType": "Intermediate",
             "subType": "None",
             "versionStrategy": "Patch",
-            "notification": {
-                "mapping": { "code": "Y29kZQ==", "encoding": "Base64" }
-            }
+            "notifications": [
+                {
+                    "type": "state",
+                    "rule": { "code": "cnVsZQ==", "encoding": "Base64" },
+                    "mapping": { "code": "Y29kZQ==", "encoding": "Base64" }
+                },
+                {
+                    "type": "command",
+                    "rule": null,
+                    "mapping": { "code": "" }
+                }
+            ]
         }
         """;
 
@@ -678,13 +687,51 @@ public class StateTests
 
         // Assert
         Assert.NotNull(state);
-        Assert.NotNull(state!.Notification);
-        Assert.True(state.Notification!.HasMapping);
-        Assert.Equal("Y29kZQ==", state.Notification.Mapping!.Code);
+        Assert.Equal(2, state!.Notifications.Count);
+        Assert.True(state.HasStateNotifications);
+
+        var first = state.Notifications.First();
+        Assert.Equal(StateNotificationType.State, first.Type);
+        Assert.True(first.HasRule);
+        Assert.Equal("cnVsZQ==", first.Rule!.Code);
+        Assert.True(first.HasMapping);
+        Assert.Equal("Y29kZQ==", first.Mapping!.Code);
+
+        var second = state.Notifications.Last();
+        Assert.Equal(StateNotificationType.Command, second.Type);
+        Assert.False(second.HasRule);
+        Assert.False(second.HasMapping);
     }
 
     [Fact]
-    public void Deserialize_ShouldHaveNullNotification_WhenOmitted()
+    public void Deserialize_ShouldDefaultTypeToState_WhenTypeOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "approved",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "notifications": [
+                { "mapping": { "code": "Y29kZQ==", "encoding": "Base64" } }
+            ]
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Single(state!.Notifications);
+        Assert.Equal(StateNotificationType.State, state.Notifications.First().Type);
+        Assert.Null(state.Notifications.First().Rule);
+        Assert.True(state.HasStateNotifications);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldHaveEmptyNotifications_WhenOmitted()
     {
         // Arrange
         const string json = """
@@ -701,7 +748,8 @@ public class StateTests
 
         // Assert
         Assert.NotNull(state);
-        Assert.Null(state!.Notification);
+        Assert.Empty(state!.Notifications);
+        Assert.False(state.HasStateNotifications);
     }
 
     private static System.Text.Json.JsonSerializerOptions EnumNamingSerializerOptions => new()

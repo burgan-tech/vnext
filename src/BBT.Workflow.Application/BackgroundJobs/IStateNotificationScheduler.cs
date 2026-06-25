@@ -1,22 +1,23 @@
+using BBT.Workflow.Execution;
+
 namespace BBT.Workflow.BackgroundJobs;
 
 /// <summary>
-/// Schedules the durable, one-shot job that dispatches a settled state's notification directive.
+/// Schedules the durable, one-shot job that dispatches a settled state's notification entries.
 /// Enqueued from the transition pipeline once the instance state/status is finalized; the actual
-/// notification dispatch runs off the request thread so the client response is never blocked.
+/// notification dispatch (including rule evaluation) runs off the request thread so the client
+/// response is never blocked.
 /// </summary>
 public interface IStateNotificationScheduler
 {
     /// <summary>
-    /// Enqueues a state-notify job for the settled state. The durable <c>InstanceJob</c> row joins
-    /// the ambient transition unit of work (atomic with the transition commit); the Dapr enqueue is
-    /// deferred to post-commit.
+    /// Enqueues a state-notify job for the settled state, carrying the request context
+    /// (headers, route values, body) so rule and mapping scripts can run against a full
+    /// <c>ScriptContext</c> in the durable job. The <c>InstanceJob</c> row joins the ambient
+    /// transition unit of work (atomic with the transition commit); the Dapr enqueue is deferred
+    /// to post-commit.
     /// </summary>
     Task ScheduleAsync(
-        Guid instanceId,
-        string domain,
-        string flowName,
-        string version,
-        string stateKey,
+        TransitionExecutionContext context,
         CancellationToken cancellationToken = default);
 }

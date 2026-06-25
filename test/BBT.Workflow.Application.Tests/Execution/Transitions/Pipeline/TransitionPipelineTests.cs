@@ -605,14 +605,10 @@ public class TransitionPipelineTests
         // Act
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
-        // Assert: settled (no next transition) + target declares a notification mapping -> scheduled once
+        // Assert: settled (no next transition) + target declares a state notification -> scheduled once
         result.IsSuccess.ShouldBeTrue();
         await _mockStateNotificationScheduler.Received(1).ScheduleAsync(
-            context.InstanceId,
-            context.Domain,
-            context.WorkflowKey,
-            context.Workflow.Version,
-            "approved",
+            Arg.Is<TransitionExecutionContext>(c => c.Target!.Key == "approved"),
             Arg.Any<CancellationToken>());
     }
 
@@ -632,8 +628,7 @@ public class TransitionPipelineTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         await _mockStateNotificationScheduler.DidNotReceive().ScheduleAsync(
-            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -689,11 +684,11 @@ public class TransitionPipelineTests
 
         // Assert: scheduled once, for the resting state only
         await _mockStateNotificationScheduler.Received(1).ScheduleAsync(
-            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<string>(), "final", Arg.Any<CancellationToken>());
+            Arg.Is<TransitionExecutionContext>(c => c.Target!.Key == "final"),
+            Arg.Any<CancellationToken>());
         await _mockStateNotificationScheduler.DidNotReceive().ScheduleAsync(
-            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<string>(), "intermediate", Arg.Any<CancellationToken>());
+            Arg.Is<TransitionExecutionContext>(c => c.Target!.Key == "intermediate"),
+            Arg.Any<CancellationToken>());
     }
 
     #endregion
@@ -703,16 +698,16 @@ public class TransitionPipelineTests
     private static State CreateStateWithNotification(string key)
     {
         // Uses JsonSerializerConstants.JsonOptions so the ScriptCodeJsonConverter is applied and the
-        // mapping's Code is populated (HasMappingCode == true).
+        // mapping's Code is populated. The state declares a single 'state' notification entry.
         var json = $$"""
         {
             "key": "{{key}}",
             "stateType": "Intermediate",
             "subType": "None",
             "versionStrategy": "Patch",
-            "notification": {
-                "mapping": { "code": "Y29kZQ==", "encoding": "Base64" }
-            }
+            "notifications": [
+                { "type": "state", "mapping": { "code": "Y29kZQ==", "encoding": "Base64" } }
+            ]
         }
         """;
 

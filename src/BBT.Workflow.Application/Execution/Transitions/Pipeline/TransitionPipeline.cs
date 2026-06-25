@@ -382,25 +382,20 @@ public class TransitionPipeline
     }
 
     /// <summary>
-    /// Schedules a state-level notification when the settled target state declares a
-    /// <c>notification</c> directive with a mapping. Runs at the chain's rest point — the instance
-    /// state and status are finalized and committed with the ambient UoW — so the durable job's
-    /// dispatch (off the request thread) observes the committed state. Already within lock scope.
+    /// Schedules a state-level notification job when the settled target state declares at least one
+    /// <c>state</c> notification entry. Runs at the chain's rest point — the instance state and status
+    /// are finalized and committed with the ambient UoW — so the durable job's dispatch (off the
+    /// request thread) observes the committed state. Rule evaluation and per-entry dispatch happen in
+    /// the job. Already within lock scope.
     /// </summary>
     private async Task MaybeScheduleStateNotificationAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        if (context.Target?.Notification is not { HasMapping: true })
+        if (context.Target?.HasStateNotifications != true)
             return;
 
-        await _stateNotificationScheduler.ScheduleAsync(
-            context.InstanceId,
-            context.Domain,
-            context.WorkflowKey,
-            context.Workflow.Version,
-            context.Target.Key,
-            cancellationToken);
+        await _stateNotificationScheduler.ScheduleAsync(context, cancellationToken);
 
         _logger.StateNotificationScheduled(context.InstanceId, context.Target.Key);
     }
