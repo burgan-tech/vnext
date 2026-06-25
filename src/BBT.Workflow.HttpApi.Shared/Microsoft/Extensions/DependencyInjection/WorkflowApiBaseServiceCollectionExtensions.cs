@@ -73,6 +73,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.Replace(ServiceDescriptor.Singleton<BBT.Workflow.Scripting.IRequestRawBodyProvider,
             BBT.Workflow.Middlewares.HttpContextRawBodyProvider>());
+        services.Configure<BBT.Workflow.Middlewares.RawRequestBodyBufferingOptions>(
+            configuration.GetSection(BBT.Workflow.Middlewares.RawRequestBodyBufferingOptions.SectionPath));
 
         services.AddControllers()
             .AddJsonOptions(options =>
