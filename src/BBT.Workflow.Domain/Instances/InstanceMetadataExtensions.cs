@@ -83,4 +83,22 @@ public static class InstanceMetadataExtensions
 
         return default;
     }
+
+    /// <summary>
+    /// Returns the root (ancestor) instance ID stored in <see cref="DomainConsts.MetaDataKeys.RootInstanceId"/>.
+    /// If the key is absent (i.e. this instance IS the root), returns the instance's own <see cref="Instance.Id"/>.
+    /// </summary>
+    public static Guid GetRootInstanceId(this Instance instance)
+    {
+        if (instance.ExtraProperties != null
+            && instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.RootInstanceId, out var raw)
+            && raw != null
+            && Guid.TryParse(raw.ToString(), out var rootId)
+            && rootId != Guid.Empty)
+        {
+            return rootId;
+        }
+
+        return instance.Id;
+    }
 }
