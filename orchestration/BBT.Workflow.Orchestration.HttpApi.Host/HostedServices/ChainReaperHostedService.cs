@@ -1,4 +1,5 @@
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Hosting;
@@ -79,9 +80,14 @@ public sealed class ChainReaperHostedService(
     private async Task SweepAllFlowSchemasAsync(CancellationToken stoppingToken)
     {
         // 1) Discover all flow keys (own scope; the repository switches to sys_flows internally).
+        //    GetActiveFlowKeysAsync calls GetDbSetAsync which requires an active UoW — open a
+        //    read-only RequiresNew scope so Aether's DbContextProvider has one available.
         IReadOnlyList<string> flowKeys;
         await using (var discoveryScope = scopeFactory.CreateAsyncScope())
         {
+            var uowManager = discoveryScope.ServiceProvider.GetRequiredService<IUnitOfWorkManager>();
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { IsTransactional = false, Scope = UnitOfWorkScopeOption.RequiresNew });
             var instanceRepository = discoveryScope.ServiceProvider.GetRequiredService<IInstanceRepository>();
             flowKeys = await instanceRepository.GetActiveFlowKeysAsync(stoppingToken);
         }
