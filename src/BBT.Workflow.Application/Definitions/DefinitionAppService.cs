@@ -34,7 +34,7 @@ public sealed class DefinitionAppService(
     public async Task<Result> PublishAsync(PublishInput input, CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
-        using (currentSchema.Use(input.Flow))
+        using (currentSchema.Change(input.Flow))
         {
             if (input.Flow == RuntimeSysSchemaInfo.Flows)
             {
@@ -58,7 +58,7 @@ public sealed class DefinitionAppService(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var schema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        using (schema.Use(flow))
+        using (schema.Change(flow))
         {
             var orchestrator = scope.ServiceProvider.GetRequiredService<ISchemaMigrationOrchestrator>();
             try
@@ -188,7 +188,7 @@ public sealed class DefinitionAppService(
         PublishInput input,
         CancellationToken cancellationToken)
     {
-        using (currentSchema.Use(input.Key))
+        using (currentSchema.Change(input.Key))
         {
             await using var scopeProvider = ServiceProvider.CreateAsyncScope();
             var instanceRepo = scopeProvider.ServiceProvider.GetRequiredService<IInstanceRepository>();
@@ -288,7 +288,7 @@ public sealed class DefinitionAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using (currentSchema.Use(input.Flow))
+        using (currentSchema.Change(input.Flow))
         {
             var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken);
             if (instance == null)

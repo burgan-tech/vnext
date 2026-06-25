@@ -26,7 +26,7 @@ public sealed class RuntimeService(
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
         var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
 
-        using (currentSchema.Use(schemaInfo.Schema))
+        using (currentSchema.Change(schemaInfo.Schema))
         {
             var result = new List<T?>();
             int skip = 0;
@@ -81,7 +81,7 @@ public sealed class RuntimeService(
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
         var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
 
-        using (currentSchema.Use(schemaInfo.Schema))
+        using (currentSchema.Change(schemaInfo.Schema))
         {
             var items = await instanceRepository.GetActiveDataListByKeyAsync(key, cancellationToken);
             var result = new List<T?>();
@@ -125,7 +125,7 @@ public sealed class RuntimeService(
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
         var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
 
-        using (currentSchema.Use(schemaInfo.Schema))
+        using (currentSchema.Change(schemaInfo.Schema))
         {
             var keys = await instanceRepository.GetActiveInstanceKeysAsync(cancellationToken);
             return keys
@@ -139,7 +139,7 @@ public sealed class RuntimeService(
     {
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
         var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
-        using (currentSchema.Use(schemaInfo.Schema))
+        using (currentSchema.Change(schemaInfo.Schema))
         {
             var item = await instanceRepository.FindActiveDataAsync(key, version, cancellationToken);
 

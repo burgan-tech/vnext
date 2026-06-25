@@ -91,7 +91,7 @@ public sealed class SchemaMigrationRunner(
 
         try
         {
-            using (currentSchema.Use(RuntimeSysSchemaInfo.Flows))
+            using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
             {
                 List<string> domainSchemas;
                 try
@@ -189,7 +189,7 @@ public sealed class SchemaMigrationRunner(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        using (currentSchema.Use(schemaName))
+        using (currentSchema.Change(schemaName))
         {
             var orchestrator = scope.ServiceProvider.GetRequiredService<ISchemaMigrationOrchestrator>();
             try

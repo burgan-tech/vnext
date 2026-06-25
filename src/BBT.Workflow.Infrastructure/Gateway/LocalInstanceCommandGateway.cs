@@ -1,4 +1,3 @@
-using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Instances;
@@ -36,10 +35,10 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
 
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
                     Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                });
                 
                 var result =  await commandService.StartAsync(input, ct);
 
@@ -59,10 +58,10 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
                     Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                });
 
                 var result = await commandService.StartAsync(input, ct);
                 await uow.CommitAsync(ct);
@@ -83,10 +82,10 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
 
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
                     Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                });
                 
                 var result =  await commandService.TransitionAsync(
                     instanceId.ToString(),
@@ -123,10 +122,10 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             var subflowStateService = sp.GetRequiredService<ISubflowStateService>();
             var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
 
-            await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+            await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
             {
                 Scope = UnitOfWorkScopeOption.RequiresNew
-            }, ct);
+            });
 
             await subflowStateService.UpdateParentStateAsync(input, ct);
             await uow.CommitAsync(ct);
@@ -157,8 +156,8 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
         return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version ?? string.Empty,
             async (sp, ct) =>
             {
-                var busyService = sp.GetRequiredService<IInstanceBusyPropagationService>();
-                await busyService.MarkBusyAsync(input, ct);
+                var busyManager = sp.GetRequiredService<IInstanceBusyManager>();
+                await busyManager.MarkBusyWithPropagationAsync(input.InstanceId, ct);
                 return Result.Ok();
             }, cancellationToken);
     }

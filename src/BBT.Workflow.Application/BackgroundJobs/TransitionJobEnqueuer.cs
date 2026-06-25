@@ -1,4 +1,5 @@
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.Domain.Entities;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -42,8 +43,9 @@ public sealed class TransitionJobEnqueuer(
             schedule,
             metadata,
             failurePolicy,
-            useAmbientUnitOfWork: true,
+            directly:true,
             jobId: jobId,
+            kind: JobKind.OneShot,
             cancellationToken);
     }
 }

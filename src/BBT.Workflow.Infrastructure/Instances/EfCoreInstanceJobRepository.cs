@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 namespace BBT.Workflow.Instances;
 
 public sealed class EfCoreInstanceJobRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider)
     : EfCoreRepository<WorkflowDbContext, InstanceJob, Guid>(dbContext, serviceProvider),
         IInstanceJobRepository
@@ -43,4 +43,20 @@ public sealed class EfCoreInstanceJobRepository(
         CancellationToken cancellationToken = default)
         => await (await GetQueryableAsync())
             .AnyAsync(j => j.InstanceId == instanceId && j.JobName == jobName && j.IsActive == true, cancellationToken);
+
+    public async Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(
+        IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default)
+    {
+        var ids = instanceIds.ToList();
+        if (ids.Count == 0)
+            return [];
+
+        var result = await (await GetQueryableAsync())
+            .Where(j => ids.Contains(j.InstanceId) && j.IsActive == true)
+            .Select(j => j.InstanceId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return [.. result];
+    }
 }

@@ -29,7 +29,7 @@ public class TransitionPipelineTests
     private readonly ILogger<TransitionPipeline> _mockLogger;
     private readonly ITransitionLockScopeFactory _mockLockScopeFactory;
     private readonly IReservedTransitionResolver _mockReservedResolver;
-    private readonly IInstanceBusyMarker _mockBusyMarker;
+    private readonly IInstanceBusyManager _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
@@ -42,7 +42,7 @@ public class TransitionPipelineTests
         _mockLogger = Substitute.For<ILogger<TransitionPipeline>>();
         _mockLockScopeFactory = Substitute.For<ITransitionLockScopeFactory>();
         _mockReservedResolver = Substitute.For<IReservedTransitionResolver>();
-        _mockBusyMarker = Substitute.For<IInstanceBusyMarker>();
+        _mockBusyMarker = Substitute.For<IInstanceBusyManager>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();

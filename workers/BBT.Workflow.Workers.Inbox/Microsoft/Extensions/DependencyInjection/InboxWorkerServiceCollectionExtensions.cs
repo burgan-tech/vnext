@@ -1,8 +1,7 @@
 using BBT.Aether.AspNetCore.MultiSchema;
-using BBT.Aether.DistributedLock;
+using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
 using BBT.Workflow.Workers.Inbox.Forwarding;
-using BBT.Workflow.Workers.Inbox.HostedServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -45,25 +44,7 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddHostedServices()
             .AddAppHealthChecks();
-
-        // Inbox processing dependencies:
-        //  - IDistributedLockService: the Aether InboxProcessor coordinates with a distributed
-        //    lock. Register only the Dapr lock service (not the orchestration ResourceLock).
-        //  - AetherOutboxOptions: shared poll options consumed by InboxProcessorHostedService and
-        //    the Aether processors. Bound from the "Aether:Outbox" config section (ProcessingInterval,
-        //    BatchSize, LeaseDuration, RetentionPeriod, MaxRetryCount, RetryBaseDelay); absent keys
-        //    keep Aether defaults. The outbox processor AddAetherOutbox registers is never run here
-        //    (no OutboxProcessorHostedService) — it is harmless.
-        services.AddDaprDistributedLock(configuration["DAPR_LOCK_STORE_NAME"]!);
-
-        services.AddAetherOutbox<MessagingDbContext>(options =>
-            configuration.GetSection("Aether:Outbox").Bind(options));
-
-        // Inbox dedup store (IInboxStore) on the messaging DbContext. The Inbox only CONSUMES
-        // events; it never publishes domain events (no AddAetherDomainEvents).
-        services.AddAetherInbox<MessagingDbContext>();
 
         // Inbox = thin forwarder: deliver events to Orchestration via Dapr service invocation.
         // Singleton — depends only on configuration/logger and owns one Dapr-invokable HttpClient.
@@ -73,15 +54,17 @@ public static class InboxWorkerServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers only the messaging DbContext (sys_queues: inbox/outbox tables) plus the schema
-    /// resolution + unit-of-work middleware the event-processing controller relies on. Mirrors the
-    /// messaging slice of the API hosts' <c>AddDbContext</c> without the WorkflowDbContext, its
-    /// interceptors, or the data-seed service.
+    /// Registers only the messaging DbContext (sys_queues: inbox tables) plus the schema
+    /// resolution + unit-of-work middleware the event-processing controller relies on. Also
+    /// registers the inbox processor and its background service via AddAetherInbox.
     /// </summary>
     private static IServiceCollection AddInboxMessagingDbContext(
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        var schemaSwitchingMode = configuration.GetValue("Aether:SchemaSwitchingMode",
+            SchemaSwitchingMode.SessionSearchPath);
+
         services.AddSchemaResolution(options =>
         {
             options.HeaderKey = "X-Workflow";
@@ -92,7 +75,10 @@ public static class InboxWorkerServiceCollectionExtensions
 
         services.AddAetherUnitOfWorkMiddleware();
 
-        services.AddAetherDbContext<MessagingDbContext>((_, options) =>
+        services.AddAetherNpgsql<MessagingDbContext>(
+            configuration.GetConnectionString("Default")!,
+            schemaSwitchingMode,
+            (_, options) =>
         {
             options.UseNpgsql(configuration.GetConnectionString("Default"),
                     npgsqlOptions =>
@@ -102,12 +88,13 @@ public static class InboxWorkerServiceCollectionExtensions
                 .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
 
-        return services;
-    }
+        // withHostedService: true → SDK registers InboxBackgroundService with adaptive polling.
+        // AetherInboxOptions is a separate class from AetherOutboxOptions (no longer share config).
+        // Schema MUST be set — InboxProcessor skips all runs with a warning if Schema is null.
+        services.AddAetherInbox<MessagingDbContext>(
+            options => configuration.GetSection("Aether:Inbox").Bind(options),
+            withHostedService: true);
 
-    private static IServiceCollection AddHostedServices(this IServiceCollection services)
-    {
-        services.AddHostedService<InboxProcessorHostedService>();
         return services;
     }
 }

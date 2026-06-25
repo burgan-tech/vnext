@@ -1,31 +1,27 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Prometheus;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Extensions for configuring health checks in Workflow API applications
+/// Extensions for configuring health checks in Workflow API applications.
+/// Registers only the lightweight "self" liveness check.
+/// Database readiness check is added separately by hosts that own a DB connection (Orchestration).
 /// </summary>
 public static class HealthChecksServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds standard health checks for Workflow API applications
+    /// Adds the base health checks shared by all Workflow application hosts:
+    /// a "self" liveness check (tagged "live") and Prometheus forwarding.
+    /// Does NOT include a database check — add that per-host where needed.
     /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddAppHealthChecks(this IServiceCollection services)
     {
-        var configuration = services.GetConfiguration();
-        var healthChecksBuilder = services
+        services
             .AddHealthChecks()
-            .ForwardToPrometheus();
-            
-        // Add standard health checks for Workflow APIs
-        healthChecksBuilder
-            .AddNpgSql(configuration.GetConnectionString("Default")!, name: "database", tags: ["ready"]) // PostgreSQL health check
-            .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]); // Self health check
-        
+            .ForwardToPrometheus()
+            .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
+
         return services;
     }
 } 

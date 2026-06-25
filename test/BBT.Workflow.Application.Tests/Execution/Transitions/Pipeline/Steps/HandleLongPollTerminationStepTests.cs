@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.Domain.Entities;
 using BBT.Aether.Guids;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
@@ -42,8 +43,9 @@ public class HandleLongPollTerminationStepTests
         _jobService.EnqueueAsync(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
                 Arg.Any<string>(), Arg.Any<Dictionary<string, object>>(),
-                useAmbientUnitOfWork: Arg.Any<bool>(),
-                cancellationToken: Arg.Any<CancellationToken>())
+                Arg.Any<JobScheduleFailurePolicy?>(), Arg.Any<bool>(),
+                Arg.Any<Guid?>(), Arg.Any<JobKind?>(),
+                Arg.Any<CancellationToken>())
             .Returns(Guid.NewGuid());
         _guidGenerator.Create().Returns(Guid.NewGuid());
         _step = new HandleLongPollTerminationStep(
@@ -70,7 +72,7 @@ public class HandleLongPollTerminationStepTests
         result.Value!.SkipToOrder.ShouldBeNull();
         context.Instance.IsAwaitingLongPollAck.ShouldBeFalse();
         await _jobService.DidNotReceiveWithAnyArgs().EnqueueAsync<LongPollAckTimeoutPayload>(
-            default!, default!, default!, default!, default!, default);
+            default!, default!, default!, default!, default, default, default, default, default, default);
     }
 
     [Fact]
@@ -91,7 +93,8 @@ public class HandleLongPollTerminationStepTests
         await _jobService.Received(1).EnqueueAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
             Arg.Any<string>(), Arg.Any<Dictionary<string, object>>(),
-            useAmbientUnitOfWork: true,
+            Arg.Any<JobScheduleFailurePolicy?>(), directly: true,
+            Arg.Any<Guid?>(), Arg.Any<JobKind?>(),
             cancellationToken: Arg.Any<CancellationToken>());
         await _jobRepository.Received(1).InsertAsync(Arg.Any<InstanceJob>(), true, Arg.Any<CancellationToken>());
     }
@@ -108,7 +111,7 @@ public class HandleLongPollTerminationStepTests
         result.IsSuccess.ShouldBeTrue();
         result.Value!.SkipToOrder.ShouldBeNull(); // not applicable → Continue
         await _jobService.DidNotReceiveWithAnyArgs().EnqueueAsync<LongPollAckTimeoutPayload>(
-            default!, default!, default!, default!, default!, default);
+            default!, default!, default!, default!, default, default, default, default, default, default);
     }
 
     [Fact]
@@ -145,7 +148,7 @@ public class HandleLongPollTerminationStepTests
         result.Value!.SkipToOrder.ShouldBeNull();
         context.Instance.IsAwaitingLongPollAck.ShouldBeFalse();
         await _jobService.DidNotReceiveWithAnyArgs().EnqueueAsync<LongPollAckTimeoutPayload>(
-            default!, default!, default!, default!, default!, default);
+            default!, default!, default!, default!, default, default, default, default, default, default);
     }
 
     private TransitionExecutionContext CreateContext(Definitions.Workflow workflow, State target)

@@ -65,9 +65,8 @@ public sealed class SubflowCompletionService(
                 Instance? parentInstance;
                 Definitions.Workflow? parentWorkflow;
                 
-                await using (var correlationUow = await uowManager.BeginAsync(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                    cancellationToken))
+                await using (var correlationUow =  uowManager.Begin(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
                 {
                     parentInstance = await instanceRepository.FindAsync(
                         completedInput.InstanceId, true, cancellationToken);
@@ -265,9 +264,8 @@ public sealed class SubflowCompletionService(
     {
         try
         {
-            await using var revertUow = await uowManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                cancellationToken);
+            await using var revertUow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             await RevertAndPersistCorrelationAsync(parentInstance, subInstanceId, parentInstanceId, cancellationToken);
             await revertUow.CommitAsync(cancellationToken);

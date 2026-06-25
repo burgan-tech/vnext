@@ -23,7 +23,7 @@ namespace BBT.Workflow.Infrastructure.Security;
 public class SchemaValidator : ISchemaValidator
 {
     private readonly IDistributedCache _cache;
-    private readonly IDbContextProvider<WorkflowDbContext> _dbContextProvider;
+    private readonly IAetherDbContextProvider<WorkflowDbContext> _dbContextProvider;
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
     private const string CacheKey = "valid_schemas_list";
     
@@ -58,7 +58,7 @@ public class SchemaValidator : ISchemaValidator
 
     public SchemaValidator(
         IDistributedCache cache,
-        IDbContextProvider<WorkflowDbContext> dbContextProvider)
+        IAetherDbContextProvider<WorkflowDbContext> dbContextProvider)
     {
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         _dbContextProvider = dbContextProvider ?? throw new ArgumentNullException(nameof(dbContextProvider));
@@ -195,7 +195,7 @@ public class SchemaValidator : ISchemaValidator
         try
         {
             // Get DbContext using the provider's GetDbContext method
-            var dbContext = _dbContextProvider.GetDbContext();
+            var dbContext = await _dbContextProvider.GetDbContextAsync(cancellationToken);
             
             // Query sys_flows schema to get all active flow keys
             var flowKeys = await dbContext.Instances

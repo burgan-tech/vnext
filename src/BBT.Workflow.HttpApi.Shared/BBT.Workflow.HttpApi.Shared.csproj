@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="BBT.Aether.AspNetCore" Version="$(AetherPackageVersion)" />
+    <PackageReference Include="BBT.Aether.Npgsql" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />

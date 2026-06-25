@@ -41,7 +41,6 @@ public static class OutboxWorkerApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
-        app.UseWorkflowHttpMetrics();
         app.UseHttpMetrics();
         app.MapMetrics(); 
         app.MapControllers();

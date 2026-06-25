@@ -24,7 +24,8 @@ namespace BBT.Workflow.Schemas;
 public sealed class MultiSchemaMigrator<TContext>(
     IConfiguration configuration,
     ISchemaNameFormatter schemaNameFormatter,
-    ILogger<MultiSchemaMigrator<TContext>> logger
+    ILogger<MultiSchemaMigrator<TContext>> logger,
+    ICurrentSchema currentSchema
 ) : IMultiSchemaMigrator<TContext>
     where TContext : DbContext
 {
@@ -54,23 +55,23 @@ public sealed class MultiSchemaMigrator<TContext>(
             .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         optionsBuilder.ReplaceService<IMigrationsSqlGenerator, MultiSchemaNpgsqlMigrationsSqlGenerator>();
 
-        // WorkflowDbContext requires ICurrentSchema. Use a static wrapper so the migration
-        // context maps entity tables to the target schema without touching the DI-scoped instance.
-        var staticSchema = new StaticCurrentSchema(schemaName);
-        await using var ctx = new WorkflowDbContext(optionsBuilder.Options, staticSchema);
+        using (currentSchema.Change(schema))
+        {
+            await using var ctx = new WorkflowDbContext(optionsBuilder.Options, currentSchema);
 
-        await EnsureSchemaExistsAsync(ctx, schemaName, cancellationToken);
+            await EnsureSchemaExistsAsync(ctx, schemaName, cancellationToken);
 
-        // MigrateAsync is fully idempotent:
-        //   - creates __Workflow_Migrations history table if it does not exist yet
-        //   - applies only the migrations not yet recorded in the history table
-        //   - no-ops when all migrations are already applied
-        // GetPendingMigrationsAsync is intentionally avoided because it issues a SELECT
-        // against the history table before MigrateAsync has had a chance to create it,
-        // causing a "relation does not exist" error on a brand-new schema.
-        await ctx.Database.MigrateAsync(cancellationToken);
+            // MigrateAsync is fully idempotent:
+            //   - creates __Workflow_Migrations history table if it does not exist yet
+            //   - applies only the migrations not yet recorded in the history table
+            //   - no-ops when all migrations are already applied
+            // GetPendingMigrationsAsync is intentionally avoided because it issues a SELECT
+            // against the history table before MigrateAsync has had a chance to create it,
+            // causing a "relation does not exist" error on a brand-new schema.
+            await ctx.Database.MigrateAsync(cancellationToken);
 
-        logger.LogInformation("Migration completed for schema: {Schema}", schemaName);
+            logger.LogInformation("Migration completed for schema: {Schema}", schemaName);
+        }
     }
 
     private static async Task EnsureSchemaExistsAsync(
@@ -79,25 +80,4 @@ public sealed class MultiSchemaMigrator<TContext>(
         await ctx.Database.ExecuteSqlRawAsync(
             $"CREATE SCHEMA IF NOT EXISTS \"{schema}\"", cancellationToken);
     }
-}
-
-/// <summary>
-/// Minimal <see cref="ICurrentSchema"/> implementation that always returns a fixed schema name.
-/// Used exclusively during migration to inject the target schema into <see cref="WorkflowDbContext"/>
-/// without involving the DI-scoped <see cref="ICurrentSchema"/> resolver.
-/// </summary>
-internal sealed class StaticCurrentSchema : ICurrentSchema
-{
-    private string _name;
-
-    public StaticCurrentSchema(string name) => _name = name;
-
-    /// <inheritdoc />
-    public string? Name => _name;
-
-    /// <inheritdoc />
-    public bool IsResolved => true;
-
-    /// <inheritdoc />
-    public void Set(string schema) => _name = schema;
 }

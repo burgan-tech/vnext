@@ -84,12 +84,13 @@ public sealed class InstanceCanceledEventHook(
             var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
             var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
 
-            using (currentSchema.Use(eventData.Flow))
+            using (currentSchema.Change(eventData.Flow))
             {
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                    Scope = UnitOfWorkScopeOption.RequiresNew,
+                    IsTransactional = true
+                });
 
                 await cancellationService.ProcessCancellationAsync(eventData.InstanceId, ct);
                 await uow.CommitAsync(ct);

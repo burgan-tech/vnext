@@ -56,18 +56,17 @@ public sealed class TransitionRunner(
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
-                    await using var uow = await uowManager.BeginAsync(
-                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                        ct);
+                    await using var uow = uowManager.Begin(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
                     var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
+                    await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
+                    
                     await uow.CommitAsync(ct);
-
-                    await PublishDeferredEventsAsync(sp, coreResult.Value!, ct);
-
+                    
                     return coreResult;
                 }
             }, cancellationToken);
@@ -80,6 +79,7 @@ public sealed class TransitionRunner(
     /// </summary>
     private async Task PublishDeferredEventsAsync(
         IServiceProvider sp,
+        IUnitOfWorkManager uowManager,
         TransitionCoreOutput coreOutput,
         CancellationToken ct)
     {
