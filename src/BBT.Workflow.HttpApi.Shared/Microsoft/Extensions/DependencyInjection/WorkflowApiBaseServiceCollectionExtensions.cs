@@ -188,6 +188,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
             options.AddHandler<LongPollAckTimeoutJobHandler>(LongPollAckTimeoutJobHandler.HandlerName);
+            options.AddHandler<StateNotifyJobHandler>(StateNotifyJobHandler.HandlerName);
             options.Schema = configuration["Aether:Outbox:Schema"];
         });
 

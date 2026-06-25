@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.PostCommit;
@@ -27,6 +28,7 @@ public class TransitionPipeline
     private readonly IInstanceRepository _instanceRepository;
     private readonly ITransitionValidationService _validationService;
     private readonly IPipelineProfileResolver _profileResolver;
+    private readonly IStateNotificationScheduler _stateNotificationScheduler;
     private readonly ILogger<TransitionPipeline> _logger;
 
     /// <summary>
@@ -49,6 +51,7 @@ public class TransitionPipeline
         IInstanceRepository instanceRepository,
         ITransitionValidationService validationService,
         IPipelineProfileResolver profileResolver,
+        IStateNotificationScheduler stateNotificationScheduler,
         ILogger<TransitionPipeline> logger)
     {
         _executor = executor;
@@ -61,6 +64,7 @@ public class TransitionPipeline
         _instanceRepository = instanceRepository;
         _validationService = validationService;
         _profileResolver = profileResolver;
+        _stateNotificationScheduler = stateNotificationScheduler;
         _logger = logger;
     }
 
@@ -182,6 +186,11 @@ public class TransitionPipeline
                 ? ContinuationMode.Enqueue
                 : ContinuationMode.Inline;
 
+            // Capture before dispatch: the Enqueue strategy CONSUMES NextTransition, so reading it
+            // afterwards is unreliable. The chain has truly settled only when there was no next
+            // transition AND the dispatcher produced no in-process continuation.
+            var hadNextTransition = context.Directives.NextTransition is not null;
+
             var continuationResult = await _continuationDispatcher.DispatchAsync(
                 continuationMode, context, cancellationToken);
             if (!continuationResult.IsSuccess)
@@ -194,6 +203,13 @@ public class TransitionPipeline
                 // (inside lock, no re-acquire needed).
                 await ApplyResolvedStatusAsync(context, cancellationToken);
                 await ApplyChainOwnershipAsync(context, cancellationToken);
+
+                // State settled (state + status finalized): fire the state-level notification if the
+                // resting state declares one. Skipped when a continuation was enqueued — the chain is
+                // not yet at rest and the settle hook fires again when the final hop completes.
+                if (!hadNextTransition)
+                    await MaybeScheduleStateNotificationAsync(context, cancellationToken);
+
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
@@ -363,5 +379,29 @@ public class TransitionPipeline
         _logger.LogDebug(
             "Instance {InstanceId} released chain ownership at rest (stays Busy)",
             context.InstanceId);
+    }
+
+    /// <summary>
+    /// Schedules a state-level notification when the settled target state declares a
+    /// <c>notification</c> directive with a mapping. Runs at the chain's rest point — the instance
+    /// state and status are finalized and committed with the ambient UoW — so the durable job's
+    /// dispatch (off the request thread) observes the committed state. Already within lock scope.
+    /// </summary>
+    private async Task MaybeScheduleStateNotificationAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.Target?.Notification is not { HasMapping: true })
+            return;
+
+        await _stateNotificationScheduler.ScheduleAsync(
+            context.InstanceId,
+            context.Domain,
+            context.WorkflowKey,
+            context.Workflow.Version,
+            context.Target.Key,
+            cancellationToken);
+
+        _logger.StateNotificationScheduled(context.InstanceId, context.Target.Key);
     }
 }

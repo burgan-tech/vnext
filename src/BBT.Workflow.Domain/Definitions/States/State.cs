@@ -90,6 +90,9 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("interaction")]
     private StateInteraction? interaction;
 
+    [JsonInclude] [JsonPropertyName("notification")]
+    private StateNotification? notification;
+
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
@@ -129,6 +132,14 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonIgnore]
     public StateInteraction? Interaction => interaction;
+
+    /// <summary>
+    /// State-level notification directive. When present and a mapping is configured, the engine
+    /// dispatches a state notification after the transition pipeline settles (state/status finalized).
+    /// Null when the state does not declare a notification.
+    /// </summary>
+    [JsonIgnore]
+    public StateNotification? Notification => notification;
 
     /// <summary>
     /// True when entering this state must terminate the client's active long-poll request

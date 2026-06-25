@@ -23,6 +23,12 @@
       "apiEndpoints": [
         "POST {domain}/workflows/{workflow}/instances/{instance}/longpoll/ack"
       ]
+    },
+    "stateNotification": {
+      "since": "0.0.63",
+      "status": "stable",
+      "description": "Declarative state-level notification. A state may declare a notification object with a State Notify Mapping (notification.mapping, compiled to IStateNotificationMapping, same contract as the NotificationTask state channel). After the transition pipeline settles and the instance state/status is finalized and committed, the engine schedules a durable one-shot background job (handler 'state.notify') that dispatches the state notification through the platform-managed state Dapr binding (vnext-notification-state) off the request thread, so the client response is never blocked. Fires once per settle (not on intermediate auto-chain hops). The state-channel payload is the slim pointer { domain, flow, id, version } — consumers re-fetch full state via the State function. Independent of and backward-compatible with the existing NotificationTask state channel.",
+      "schemaPath": "state.notification"
     }
   }
 }

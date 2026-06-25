@@ -657,6 +657,53 @@ public class StateTests
         Assert.Null(state.LongPollAckRoles);
     }
 
+    [Fact]
+    public void Deserialize_ShouldPopulateNotificationMapping_WhenPresent()
+    {
+        // Arrange — uses the canonical options so the ScriptCodeJsonConverter is applied.
+        const string json = """
+        {
+            "key": "approved",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "notification": {
+                "mapping": { "code": "Y29kZQ==", "encoding": "Base64" }
+            }
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.NotNull(state!.Notification);
+        Assert.True(state.Notification!.HasMapping);
+        Assert.Equal("Y29kZQ==", state.Notification.Mapping!.Code);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldHaveNullNotification_WhenOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "approved",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch"
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Null(state!.Notification);
+    }
+
     private static System.Text.Json.JsonSerializerOptions EnumNamingSerializerOptions => new()
     {
         PropertyNameCaseInsensitive = true,

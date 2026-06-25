@@ -2251,6 +2251,54 @@ public static partial class WorkflowLogs
         int skippedCount,
         int failedCount);
 
+    /// <summary>
+    /// Logs when a state-level notification job is scheduled after the pipeline settles.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10094,
+        Level = LogLevel.Information,
+        Message = "State notification scheduled. InstanceId={InstanceId}, State={StateKey}")]
+    public static partial void StateNotificationScheduled(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
+
+    /// <summary>
+    /// Logs when a state-level notification is successfully dispatched to the state Dapr binding.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10095,
+        Level = LogLevel.Information,
+        Message = "State notification dispatched. InstanceId={InstanceId}, BindingName={BindingName}")]
+    public static partial void StateNotificationDispatched(
+        this ILogger logger,
+        Guid instanceId,
+        string bindingName);
+
+    /// <summary>
+    /// Logs when a state-notify job runs but the state no longer declares a notification mapping.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10096,
+        Level = LogLevel.Debug,
+        Message = "State notification skipped (no mapping). InstanceId={InstanceId}, State={StateKey}")]
+    public static partial void StateNotificationSkippedNoMapping(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
+
+    /// <summary>
+    /// Logs when a state-level notification dispatch fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10097,
+        Level = LogLevel.Warning,
+        Message = "State notification failed. InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void StateNotificationFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string errorMessage);
+
     #endregion
   
     #region Server Configuration
