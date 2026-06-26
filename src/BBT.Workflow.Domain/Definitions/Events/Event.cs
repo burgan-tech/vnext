@@ -1,5 +1,5 @@
 using System.Text.Json.Serialization;
-using BBT.Workflow.Scripting.Contracts;
+using BBT.Workflow.Scripting;
 
 namespace BBT.Workflow.Definitions.Events;
 

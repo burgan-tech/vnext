@@ -7,7 +7,6 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Scripting.Contracts;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 
@@ -81,7 +80,9 @@ public sealed class EventAppService(
                 .WithRuntime(runtimeInfoProvider)
                 .WithTransition(transition)
                 .WithHeaders(input.Headers)
-                .WithEventPayload(input.Payload.ToDynamic())
+                // Cast to object? so the dynamic from ToDynamic() doesn't turn the whole fluent
+                // chain dynamic (which would make BuildAsync fail to resolve at runtime).
+                .WithEventPayload((object?)input.Payload.ToDynamic())
                 .BuildAsync(cancellationToken);
 
             var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(

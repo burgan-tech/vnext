@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.Scripting.Contracts;
 using BBT.Workflow.Shared.Merging;
 using Microsoft.Extensions.Logging;
 

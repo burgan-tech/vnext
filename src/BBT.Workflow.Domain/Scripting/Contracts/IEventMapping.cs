@@ -1,4 +1,4 @@
-namespace BBT.Workflow.Scripting.Contracts;
+namespace BBT.Workflow.Scripting;
 
 /// <summary>
 /// Defines the contract for mapping an inbound external event (e.g. a pub/sub message or input-binding
