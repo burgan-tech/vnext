@@ -66,4 +66,14 @@ public interface IMonitorComponentQueryService
     Task<Result<MonitorDependencyResponse>> GetWorkflowDependenciesAsync(
         string domain, string workflow, string? version,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paged list of all published versions for a specific component.
+    /// Each item includes the version string, publish timestamp, isLatest flag, and flow stream version.
+    /// Results are ordered latest-first.
+    /// Returns 404 when no versions are found on the first page.
+    /// </summary>
+    Task<Result<MonitorPagedResponse<MonitorComponentVersionItem>>> GetComponentVersionsAsync(
+        MonitorGetComponentVersionsInput input,
+        CancellationToken cancellationToken = default);
 }

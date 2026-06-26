@@ -206,4 +206,18 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// </summary>
     Task<List<ActiveInstanceDataSummary>> GetActiveDataSummariesPagedAsync(
         int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paged, slim projection of all published versions for the component
+    /// identified by <paramref name="key"/> in the current schema.
+    /// Results are ordered latest-first (<c>IsLatest DESC</c>, <c>PublishedAt DESC</c>).
+    /// Pass <paramref name="take"/> as <c>pageSize + 1</c> to determine <c>hasNext</c>
+    /// without an extra COUNT query.
+    /// Only monitoring consumes this method (additive, monitoring-only).
+    /// </summary>
+    Task<List<ComponentVersionSummary>> GetVersionsPagedAsync(
+        string key,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
 }

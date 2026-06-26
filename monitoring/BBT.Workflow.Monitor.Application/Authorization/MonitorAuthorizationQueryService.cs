@@ -52,8 +52,9 @@ public sealed class MonitorAuthorizationQueryService(
             return Result<MonitorInstancePermissionsResponse>.Fail(
                 Error.Validation("instance.invalidFlow", $"Instance '{input.Instance}' has no workflow reference."));
 
+        var resolvedVersion = !string.IsNullOrEmpty(input.Version) ? input.Version : instance.FlowVersion;
         var flowResult = await componentCacheStore.GetFlowAsync(
-            input.Domain, instance.Flow, instance.FlowVersion, cancellationToken);
+            input.Domain, instance.Flow, resolvedVersion, cancellationToken);
 
         if (!flowResult.IsSuccess || flowResult.Value is not { } flow)
             return Result<MonitorInstancePermissionsResponse>.Fail(
@@ -66,14 +67,21 @@ public sealed class MonitorAuthorizationQueryService(
             t.AvailableIn.Count == 0
             || t.AvailableIn.Any(s => string.Equals(s, instance.CurrentState, StringComparison.OrdinalIgnoreCase)));
 
-        var transitions = stateTransitions.Concat(availableShared)
+        var transitions = stateTransitions
             .Select(t => new MonitorTransitionPermission
+            {
+                Key = t.Key,
+                From = !string.IsNullOrEmpty(t.From) ? t.From : instance.CurrentState,
+                Target = t.Target,
+                Roles = AuthorizationMatrixMapper.Map(t.Roles)
+            })
+            .Concat(availableShared.Select(t => new MonitorTransitionPermission
             {
                 Key = t.Key,
                 From = t.From,
                 Target = t.Target,
                 Roles = AuthorizationMatrixMapper.Map(t.Roles)
-            })
+            }))
             .ToList();
 
         var response = new MonitorInstancePermissionsResponse

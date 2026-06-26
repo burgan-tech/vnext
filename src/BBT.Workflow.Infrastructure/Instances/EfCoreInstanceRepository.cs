@@ -1061,6 +1061,28 @@ public sealed class EfCoreInstanceRepository(
             .ToList();
     }
 
+    public async Task<List<ComponentVersionSummary>> GetVersionsPagedAsync(
+        string key, int skip, int take, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new ComponentVersionSummary(
+                    d.Version,
+                    d.IsLatest,
+                    i.FlowVersion,
+                    d.EnteredAt))
+            .OrderByDescending(x => x.IsLatest)
+            .ThenByDescending(x => x.PublishedAt)
+            .Skip(skip)
+            .Take(take)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
         DateTime since, int skip, int take, CancellationToken cancellationToken = default)
     {

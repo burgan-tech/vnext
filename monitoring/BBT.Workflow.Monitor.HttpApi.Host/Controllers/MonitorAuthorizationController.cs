@@ -44,6 +44,7 @@ public sealed class MonitorAuthorizationController(
     /// <summary>
     /// Instance-scoped permissions view. Returns workflow-level roles, the current state's roles,
     /// transitions available from the current state, and workflow functions — derived from the instance's live state.
+    /// Add <c>?version=</c> to resolve permissions against a specific flow version instead of the instance's own version.
     /// Add <c>?role=</c> to filter the response to only entries where that role appears.
     /// </summary>
     /// <response code="200">Instance permissions returned.</response>
@@ -55,6 +56,7 @@ public sealed class MonitorAuthorizationController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
+        [FromQuery] string? version = null,
         [FromQuery] string? role = null,
         CancellationToken cancellationToken = default)
     {
@@ -63,6 +65,7 @@ public sealed class MonitorAuthorizationController(
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
+            Version = version,
             Role = role
         };
         return FromResult(await authorizationService.GetInstancePermissionsAsync(input, cancellationToken));

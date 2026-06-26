@@ -40,6 +40,13 @@ public sealed class MonitorGetInstancePermissionsInput : IHasDomain
     public string Instance { get; set; } = string.Empty;
 
     /// <summary>
+    /// Optional flow version override. When provided, the permissions are resolved against this specific
+    /// version of the flow definition instead of the version the instance is running on.
+    /// When omitted, the instance's own flow version is used.
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
     /// When provided, the response is filtered to only include entries where this role appears.
     /// When omitted, all role entries for the current state are returned.
     /// </summary>

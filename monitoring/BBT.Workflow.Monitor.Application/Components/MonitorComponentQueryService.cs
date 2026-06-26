@@ -608,6 +608,58 @@ public sealed class MonitorComponentQueryService(
         return Result<MonitorDependencyResponse>.Ok(DependencyExtractor.Extract(flow));
     }
 
+    /// <inheritdoc />
+    public async Task<Result<MonitorPagedResponse<MonitorComponentVersionItem>>> GetComponentVersionsAsync(
+        MonitorGetComponentVersionsInput input, CancellationToken cancellationToken = default)
+    {
+        var componentType = NormalizeComponentType(input.ComponentType);
+        if (componentType is null)
+            return Result<MonitorPagedResponse<MonitorComponentVersionItem>>.Fail(
+                Error.Validation("component.invalidType",
+                    $"Unknown component type '{input.ComponentType}'. " +
+                    $"Supported: {string.Join(", ", MonitorComponentTypes.Flows, MonitorComponentTypes.Tasks, MonitorComponentTypes.Schemas, MonitorComponentTypes.Extensions, MonitorComponentTypes.Functions, MonitorComponentTypes.Views, MonitorComponentTypes.Mappings)}."));
+
+        var skip = (input.Page - 1) * input.PageSize;
+
+        await using var scope = serviceScopeFactory.CreateAsyncScope();
+        var instanceRepo  = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
+        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
+
+        using (currentSchema.Use(componentType))
+        {
+            var raw = await instanceRepo.GetVersionsPagedAsync(
+                input.Key, skip, input.PageSize + 1, cancellationToken);
+
+            if (raw.Count == 0 && input.Page == 1)
+                return Result<MonitorPagedResponse<MonitorComponentVersionItem>>.Fail(
+                    Error.NotFound("component.notFound",
+                        $"Component '{input.Key}' not found in '{componentType}'."));
+
+            var hasNext = raw.Count > input.PageSize;
+            var items   = raw.Take(input.PageSize)
+                             .Select(v => new MonitorComponentVersionItem
+                             {
+                                 Version     = v.Version,
+                                 IsLatest    = v.IsLatest,
+                                 FlowVersion = v.FlowVersion,
+                                 PublishedAt = v.PublishedAt
+                             })
+                             .ToList();
+
+            return Result<MonitorPagedResponse<MonitorComponentVersionItem>>.Ok(
+                new MonitorPagedResponse<MonitorComponentVersionItem>
+                {
+                    Pagination = new MonitorPaginationInfo
+                    {
+                        Page     = input.Page,
+                        PageSize = input.PageSize,
+                        HasNext  = hasNext
+                    },
+                    Items = items
+                });
+        }
+    }
+
     private static JsonElement Serialize<T>(T value) where T : class
     {
         var json = JsonSerializer.Serialize(value, SerializerOptions);

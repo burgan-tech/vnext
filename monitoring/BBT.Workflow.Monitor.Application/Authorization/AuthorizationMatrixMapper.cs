@@ -14,18 +14,34 @@ public static class AuthorizationMatrixMapper
     public static List<MonitorRoleGrant> Map(IEnumerable<RoleGrant> grants)
         => grants.Select(g => new MonitorRoleGrant { Role = g.Role, Grant = g.Grant }).ToList();
 
-    /// <summary>Projects all transitions (state-scoped + shared) from a workflow into permission DTOs.</summary>
+    /// <summary>
+    /// Projects all transitions (state-scoped + shared) from a workflow into permission DTOs.
+    /// State-scoped transitions use the parent state key as <c>From</c> when the transition's
+    /// own <c>From</c> is not set (the common case in JSON definitions where transitions are
+    /// nested inside the state object).
+    /// </summary>
     public static List<MonitorTransitionPermission> MapTransitions(WorkflowDefinition flow)
-        => flow.States.SelectMany(s => s.Transitions)
-            .Concat(flow.SharedTransitions)
-            .Select(t => new MonitorTransitionPermission
+    {
+        var stateTransitions = flow.States.SelectMany(s => s.Transitions.Select(t =>
+            new MonitorTransitionPermission
+            {
+                Key = t.Key,
+                From = !string.IsNullOrEmpty(t.From) ? t.From : s.Key,
+                Target = t.Target,
+                Roles = Map(t.Roles)
+            }));
+
+        var sharedTransitions = flow.SharedTransitions.Select(t =>
+            new MonitorTransitionPermission
             {
                 Key = t.Key,
                 From = t.From,
                 Target = t.Target,
                 Roles = Map(t.Roles)
-            })
-            .ToList();
+            });
+
+        return stateTransitions.Concat(sharedTransitions).ToList();
+    }
 
     /// <summary>Projects all states from a workflow into state-permission DTOs.</summary>
     public static List<MonitorStatePermission> MapStates(WorkflowDefinition flow)

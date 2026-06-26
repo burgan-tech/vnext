@@ -253,4 +253,79 @@ public sealed class MonitorComponentController(IMonitorComponentQueryService que
         [FromRoute] string domain, [FromRoute] string workflow,
         [FromQuery] string? version = null, CancellationToken cancellationToken = default)
         => FromResult(await queryService.GetWorkflowDependenciesAsync(domain, workflow, version, cancellationToken));
+
+    /// <summary>
+    /// Returns a paged list of all published versions for the given component key and type.
+    /// Each item includes the version string, publish timestamp, <c>isLatest</c> flag, and flow stream version.
+    /// Results are ordered latest-first (<c>isLatest</c> first, then by <c>publishedAt</c> descending).
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="type">
+    /// Component type. Required. Supported values:
+    /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>, <c>sys-mappings</c>.
+    /// </param>
+    /// <param name="key">Component key. Required.</param>
+    /// <param name="page">1-based page number. Default: 1.</param>
+    /// <param name="pageSize">Items per page (1–100). Default: 20.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Paged version list returned successfully.</response>
+    /// <response code="400">Missing or invalid <paramref name="type"/> or <paramref name="key"/>.</response>
+    /// <response code="404">Component not found.</response>
+    [HttpGet("{domain}/components/versions")]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorComponentVersionItem>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComponentVersionsAsync(
+        [FromRoute] string domain,
+        [FromQuery][Required] string type,
+        [FromQuery][Required] string key,
+        [FromQuery][Range(1, 1000)] int page     = 1,
+        [FromQuery][Range(1, 100)]  int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentVersionsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = type.Trim(),
+            Key           = key.Trim(),
+            Page          = page,
+            PageSize      = pageSize
+        };
+        return FromResult(await queryService.GetComponentVersionsAsync(input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Returns a paged list of all published versions for the given workflow definition.
+    /// Equivalent to <c>GET {domain}/components/versions?type=sys-flows&amp;key={workflow}</c>.
+    /// Each item includes the version string, publish timestamp, <c>isLatest</c> flag, and flow stream version.
+    /// Results are ordered latest-first.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="workflow">Workflow definition key.</param>
+    /// <param name="page">1-based page number. Default: 1.</param>
+    /// <param name="pageSize">Items per page (1–100). Default: 20.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Paged version list returned successfully.</response>
+    /// <response code="404">Workflow definition not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/versions")]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorComponentVersionItem>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkflowVersionsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromQuery][Range(1, 1000)] int page     = 1,
+        [FromQuery][Range(1, 100)]  int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentVersionsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = MonitorComponentTypes.Flows,
+            Key           = workflow.Trim(),
+            Page          = page,
+            PageSize      = pageSize
+        };
+        return FromResult(await queryService.GetComponentVersionsAsync(input, cancellationToken));
+    }
 }

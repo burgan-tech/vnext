@@ -215,6 +215,55 @@ public sealed class MonitorComponentDetailResponse
     public List<string>? Versions { get; set; }
 }
 
+/// <summary>
+/// Input for querying the published version list of a specific component.
+/// </summary>
+public sealed class MonitorGetComponentVersionsInput
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required]
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Component type schema (e.g. <c>sys-flows</c>, <c>sys-tasks</c>).
+    /// </summary>
+    [Required]
+    public string ComponentType { get; set; } = string.Empty;
+
+    /// <summary>Component key to list versions for.</summary>
+    [Required]
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>1-based page number.</summary>
+    [Range(1, 1000)]
+    public int Page { get; set; } = 1;
+
+    /// <summary>Number of items per page (1–100).</summary>
+    [Range(1, 100)]
+    public int PageSize { get; set; } = 20;
+}
+
+/// <summary>
+/// A single published version entry returned by the component version-list endpoint.
+/// </summary>
+public sealed class MonitorComponentVersionItem
+{
+    /// <summary>Semantic version string (e.g. <c>1.0.3-pkg.1.22.0+credit</c>).</summary>
+    public string Version { get; set; } = string.Empty;
+
+    /// <summary>Whether this is the currently active (latest) version.</summary>
+    public bool IsLatest { get; set; }
+
+    /// <summary>
+    /// Flow stream format version (e.g. <c>"1.0.0"</c>).
+    /// Null for legacy components published before this field was introduced.
+    /// </summary>
+    public string? FlowVersion { get; set; }
+
+    /// <summary>UTC timestamp when this specific version was published.</summary>
+    public DateTime PublishedAt { get; set; }
+}
+
 /// <summary>A localised display label for a component.</summary>
 public sealed class MonitorComponentLabel
 {
