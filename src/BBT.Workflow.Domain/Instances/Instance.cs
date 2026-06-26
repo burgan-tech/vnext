@@ -212,7 +212,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Stored as JSONB; pruned to <see cref="InstanceIncident.MaxRetainedIncidents"/> entries.
     /// Internal to prevent Aether's TrackRelatedEntities from discovering via reflection.
     /// </summary>
-    public IReadOnlyCollection<InstanceIncident> Incidents => _incidents.AsReadOnly();
+    internal IReadOnlyCollection<InstanceIncident> Incidents => _incidents.AsReadOnly();
 
     /// <summary>
     /// Indicates whether the instance has at least one unresolved incident.
