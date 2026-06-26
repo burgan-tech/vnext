@@ -893,4 +893,45 @@ public sealed class MonitorInstanceQueryService(
             }
         });
     }
+
+    /// <inheritdoc />
+    public async Task<Result<MonitorInstanceIncidentsResponse>> GetInstanceIncidentsAsync(
+        MonitorGetInstanceIncidentsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindByIdentifierSlimAsync(
+            input.Instance, cancellationToken);
+
+        if (instance is null)
+            return Result<MonitorInstanceIncidentsResponse>.Fail(
+                Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
+
+        var items = instance.GetIncidentsForMonitor()
+            .OrderByDescending(i => i.CreatedAt)
+            .Select(MapToIncident)
+            .ToList();
+
+        return Result<MonitorInstanceIncidentsResponse>.Ok(
+            new MonitorInstanceIncidentsResponse { Items = items });
+    }
+
+    private static MonitorIncidentItem MapToIncident(InstanceIncident incident) => new()
+    {
+        Id             = incident.Id,
+        CreatedAt      = incident.CreatedAt,
+        State          = incident.State,
+        Transition     = incident.Transition,
+        Task           = incident.Task,
+        Message        = incident.Message,
+        StackTrace     = incident.StackTrace,
+        TraceId        = incident.TraceId,
+        ErrorCode      = incident.ErrorCode,
+        ErrorLayer     = incident.ErrorLayer,
+        StatusCode     = incident.StatusCode,
+        BoundaryAction = incident.BoundaryAction,
+        BoundaryLevel  = incident.BoundaryLevel,
+        IsResolved     = incident.IsResolved,
+        ResolvedAt     = incident.ResolvedAt,
+        RetryCount     = incident.RetryCount
+    };
 }

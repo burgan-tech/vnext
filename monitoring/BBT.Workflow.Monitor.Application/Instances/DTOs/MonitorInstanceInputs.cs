@@ -231,3 +231,16 @@ public sealed class MonitorGetParentInput : IHasDomain
     /// <summary>The sub-flow instance identifier (business key or GUID).</summary>
     [Required] public string Instance { get; set; } = string.Empty;
 }
+
+/// <summary>Input for querying the error boundary incident history of an instance.</summary>
+public sealed class MonitorGetInstanceIncidentsInput : IHasDomain
+{
+    /// <summary>The tenant/domain key.</summary>
+    [Required] public string Domain { get; set; } = string.Empty;
+
+    /// <summary>The workflow (flow) key.</summary>
+    [Required] public string Workflow { get; set; } = string.Empty;
+
+    /// <summary>The instance business key or GUID.</summary>
+    [Required] public string Instance { get; set; } = string.Empty;
+}

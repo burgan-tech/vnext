@@ -215,6 +215,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     internal IReadOnlyCollection<InstanceIncident> Incidents => _incidents.AsReadOnly();
 
     /// <summary>
+    /// Returns the incident list for read-only monitoring queries.
+    /// Exposed as a method (not a property) so Aether's TrackRelatedEntities reflection scan
+    /// does not discover the incidents collection as a navigation candidate.
+    /// </summary>
+    public IReadOnlyList<InstanceIncident> GetIncidentsForMonitor() => _incidents.AsReadOnly();
+
+    /// <summary>
     /// Indicates whether the instance has at least one unresolved incident.
     /// Backed by a stored generated column with partial B-tree index for efficient querying.
     /// </summary>

@@ -477,3 +477,65 @@ public sealed class MonitorParentItem
     /// <summary>Correlation type code: "S" (SubFlow) or "P" (SubProcess).</summary>
     public string? CorrelationType { get; set; }
 }
+
+/// <summary>Response envelope for the instance incident history endpoint.</summary>
+public sealed class MonitorInstanceIncidentsResponse
+{
+    /// <summary>
+    /// Error boundary incidents recorded for this instance, ordered newest-first.
+    /// At most <c>5</c> incidents are retained by the domain.
+    /// </summary>
+    public List<MonitorIncidentItem> Items { get; set; } = [];
+}
+
+/// <summary>A single error boundary incident recorded on a workflow instance.</summary>
+public sealed class MonitorIncidentItem
+{
+    /// <summary>Unique incident identifier.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>When the incident occurred (UTC).</summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>State where the error occurred.</summary>
+    public string State { get; set; } = string.Empty;
+
+    /// <summary>Transition that was executing when the error occurred.</summary>
+    public string Transition { get; set; } = string.Empty;
+
+    /// <summary>Task key that failed; null for pipeline-level errors.</summary>
+    public string? Task { get; set; }
+
+    /// <summary>Human-readable error message (truncated to 1024 chars by the domain).</summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>Exception stack trace when available (truncated to 4096 chars by the domain).</summary>
+    public string? StackTrace { get; set; }
+
+    /// <summary>OpenTelemetry trace identifier for correlation with distributed traces.</summary>
+    public string? TraceId { get; set; }
+
+    /// <summary>Normalized error code, e.g. "Task:Http:503".</summary>
+    public string ErrorCode { get; set; } = string.Empty;
+
+    /// <summary>Error layer: "Transport", "Task", or "Pipeline".</summary>
+    public string ErrorLayer { get; set; } = string.Empty;
+
+    /// <summary>HTTP status code when applicable.</summary>
+    public int? StatusCode { get; set; }
+
+    /// <summary>Error boundary action taken, e.g. "Abort", "Retry", "Rollback", "Notify", "Log", "Ignore".</summary>
+    public string? BoundaryAction { get; set; }
+
+    /// <summary>Error boundary level that matched, e.g. "Task", "State", "Global".</summary>
+    public string? BoundaryLevel { get; set; }
+
+    /// <summary>Whether this incident has been resolved by retry or a successful error-boundary transition.</summary>
+    public bool IsResolved { get; set; }
+
+    /// <summary>When the incident was resolved (UTC); null if still active.</summary>
+    public DateTime? ResolvedAt { get; set; }
+
+    /// <summary>Number of retry attempts before resolution or exhaustion.</summary>
+    public int RetryCount { get; set; }
+}

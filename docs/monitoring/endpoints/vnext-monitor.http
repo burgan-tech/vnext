@@ -1,0 +1,261 @@
+### vNext Monitor API — REST Client (VS Code / IntelliJ)
+### Taban: BBT.Workflow.Monitor.HttpApi.Host, varsayılan port 4203
+### Bileşenler: ?type= zorunlu; opsiyonel ?key= (tek kayıt), ?version=
+
+@baseUrl = http://localhost:4203
+@apiVersion = 1.0
+@domain = core
+@workflow = lifecycle-transitions-test-workflow
+@instance = 8e298c72-457c-4cd2-b3f2-e94fd5bf5a41
+@transitionId = b739cc23-45d2-4371-af6a-3c29b83eac13
+@taskId = 660e8400-e29b-41d4-a716-446655440111
+
+### Instance listesi (sayfalı)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=10
+
+### Instance — meta + correlations
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}
+
+### Instance data — veri + versiyon geçmişi
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data
+
+### Instance data — belirli versiyon
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data?version=1.1.0
+
+### Instance view — mevcut state'in görünümü
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/view
+
+### Instance view — belirli transition'ın görünümü
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/view?transitionKey=approve
+
+### Instance timeline — tüm geçiş akışı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline
+
+### Instance timeline — task'lar her geçişe gömülü
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?includeTasks=true
+
+### Instance timeline — tek bir transition'ın detayı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?transitionId={{transitionId}}
+
+### Instance timeline — tek transition + task'ları gömülü
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?transitionId={{transitionId}}&includeTasks=true
+
+### Instance timeline — tek bir task kaydı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?taskId={{taskId}}
+
+### Instance state — anlık durum + yapılabilir geçişler
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/state
+
+### Instance fault detayı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/faults
+
+### Instance incidents — error boundary incident geçmişi (en yeni önce, max 5)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/incidents
+
+### Instance data diff — iki versiyon arası fark
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data/diff?from=1.0.0&to=1.1.0
+
+### Instance hierarchy — alt-süreç ağacı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/hierarchy
+
+### Components — özet liste (key, version, domain, labels, type); tam tanım yok — 1. sayfa, 20 kayıt
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows
+
+### Components — özet liste — 2. sayfa
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&page=2&pageSize=20
+
+### Components — özet liste — task bileşenleri
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-tasks
+
+### Components — tek component detayı (key verilince: flow, versions, type, labels)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key={{workflow}}
+
+### Components — tek component detayı — belirli versiyon
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key={{workflow}}&version=1.0.0
+
+### Components — workflow tanımı (en son versiyon) — tek definition nesnesi döner (items wrapper yok)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows&key=account-opening-workflow
+
+### Components — belirli versiyon — tek definition nesnesi döner (items wrapper yok)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows&key=account-opening-workflow&version=1.0.0
+
+### Components — bir tipin tüm tanımları
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows
+
+### Components — 400: definition'da key ile page/pageSize kullanılamaz
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows&key={{workflow}}&page=2
+
+### Components — createdAt range filter (sys-flows)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&createdAt[gte]=2026-01-01T00:00:00Z&createdAt[lte]=2026-06-01T00:00:00Z
+
+### Components — renderer filter (sys-views only)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-views&renderer=default
+
+### Components — display + renderer combined (sys-views)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-views&display=form&renderer=default
+
+### Components — scope filter (sys-functions)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-functions&scope=global
+
+### Components — name contains filter (sys-mappings)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-mappings&name[contains]=order
+
+### Components — name exact filter (sys-mappings)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-mappings&name[eq]=Order Processing Scripts
+
+### Components — tags contains filter (sys-tasks)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-tasks&tags[contains]=notification
+
+### Components — key exact filter (filter mode, returns list)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key[eq]=order-approval-flow
+
+### Components — key contains filter (partial key search)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key[contains]=order
+
+### Components — flowVersion exact filter
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&flowVersion[eq]=1.0.0
+
+### Components — flowVersion contains filter (all 1.x versions)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&flowVersion[contains]=1.0
+
+### Components — definitionType filter (sys-flows)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&definitionType=F
+
+### Components — 400: renderer on sys-flows (unsupported filter)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&renderer=default
+
+### Components — version exact filter
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&version[eq]=1.0.0
+
+### Components — version contains filter (all 1.x)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&version[contains]=1.0
+
+### Components — 400: both [eq] and [contains] for same field (conflict)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key[eq]=order-flow&key[contains]=order
+
+### Components — 400: version [eq] and [contains] conflict
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&version[eq]=1.0.0&version[contains]=1.0
+
+### Component versions — belirli bir workflow'un tüm versiyonlarını sayfalı listele
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/versions?type=sys-flows&key={{workflow}}
+
+### Component versions — belirli bir workflow versiyonları, ikinci sayfa
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/versions?type=sys-flows&key={{workflow}}&page=2&pageSize=10
+
+### Component versions — sys-tasks bileşeni için versiyon listesi
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/versions?type=sys-tasks&key=my-task-key
+
+### Workflow versions alias — workflow-centric route (type implicit sys-flows)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/versions
+
+### Workflow versions alias — ikinci sayfa
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/versions?page=2&pageSize=10
+
+### Stats — workflow instance sayaçları
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances
+
+### Stats — workflow instance sayaçları — belirli workflow versiyonu
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?version=1.0.0
+
+### Stats — workflow instance sayaçları — GraphQL filter ile tarih aralığı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?filter={"createdAt":{"ge":"2026-05-18T00:00:00Z"}}
+
+### Stats — workflow instance sayaçları — GraphQL filter ile state kısıtı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?filter={"currentState":{"eq":"approve"}}
+
+### Stats — workflow instance sayaçları — filter + version aynı anda (400 döner)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?filter={"createdAt":{"ge":"2026-05-18T00:00:00Z"}}&version=1.0.0
+
+### Stats — domain instance sayaçları (default: son 7 günde başlatılanlar)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances
+
+### Stats — domain instance sayaçları — son 30 gün (createdAt aralığı)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances?filter={"createdAt":{"ge":"2026-05-18T00:00:00Z"}}
+
+### Stats — domain instance sayaçları — belirli tarih aralığı (between)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances?filter={"createdAt":{"between":["2026-03-01T00:00:00Z","2026-06-01T00:00:00Z"]}}
+
+### Stats — domain instance sayaçları — tarih + ek alan (createdAt yoksa son 7 gün otomatik AND'lenir)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances?filter={"currentState":{"eq":"approve"}}
+
+### Stats — canlı state dağılımı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/states
+
+### Stats — canlı state dağılımı — belirli workflow versiyonu
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/states?version=1.0.0
+
+### Stats — hata istatistikleri (faulted breakdown)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/faults
+
+### Stats — task çalıştırma istatistikleri
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/tasks
+
+### Stats — instance tamamlanma süresi istatistikleri
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/duration
+
+### Stats — geçiş istatistikleri (akış yoğunluğu dahil)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/transitions
+
+### Stats — domain component sayım özeti (flow, task, schema, view, function, extension)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/components
+
+### Workflow bağımlılıkları — hangi component'lara bağımlı?
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/dependencies
+
+### Workflow bağımlılıkları — belirli versiyon
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/dependencies?version=1.0.0
+
+### Instance parent — subflow'dan parent'a ters navigasyon
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/parent
+
+### Instance tasks — instance'ın çalıştırdığı tüm task'ler (transition bağlamıyla)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/tasks
+
+### Instance task detail — tek task detayı (tanım, tetikleyici slot, girdi/çıktı)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/tasks/{{taskEntityId}}
+
+### Functions — domain-scope function tanımları (domain geneli, kayıt gerektirmez)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/functions/scope
+
+### Functions — instance'ın workflow'unda kayıtlı function tanımları
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/functions/scope
+
+### Aktif job'lar — workflow bazlı
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs
+
+### Aktif job'lar — domain geneli (best-effort)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs
+
+### Runtime config (secret'sız)
+GET {{baseUrl}}/api/v{{apiVersion}}/config
+
+### Yetkilendirme — workflow yetki matrisi (tümü)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions
+
+### Yetkilendirme — workflow matrisi, role göre filtreli
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions?role=morph-idm.maker
+
+### Yetkilendirme — instance mevcut durumu üzerinden izin görünümü
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/permissions
+
+### Yetkilendirme — instance izin görünümü, role göre filtreli
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/permissions?role=morph-idm.maker
+
+### Yetkilendirme — instance izin görünümü, belirli flow versiyonuna göre
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/permissions?version=1.0.0
+
+### Yetkilendirme — yalnızca transition rolleri (alt görünüm)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions/transitions
+
+### Yetkilendirme — yalnızca function rolleri (alt görünüm)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions/functions
+
+### Health detail (API sürüm segmenti yok)
+GET {{baseUrl}}/monitor/health/detail
+
+### Özet sağlık / ready / live / version / metrics (sürüm segmenti yok)
+GET {{baseUrl}}/health
+GET {{baseUrl}}/ready
+GET {{baseUrl}}/live
+GET {{baseUrl}}/version
+GET {{baseUrl}}/metrics

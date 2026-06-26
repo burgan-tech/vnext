@@ -1065,22 +1065,27 @@ public sealed class EfCoreInstanceRepository(
         string key, int skip, int take, CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
-        return await context.Instances
+        var raw = await context.Instances
             .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
             .Join(context.InstancesData,
                 i => i.Id,
                 d => d.InstanceId,
-                (i, d) => new ComponentVersionSummary(
+                (i, d) => new
+                {
                     d.Version,
                     d.IsLatest,
                     i.FlowVersion,
-                    d.EnteredAt))
+                    PublishedAt = d.EnteredAt
+                })
             .OrderByDescending(x => x.IsLatest)
             .ThenByDescending(x => x.PublishedAt)
             .Skip(skip)
             .Take(take)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
+
+        return raw.Select(r => new ComponentVersionSummary(r.Version, r.IsLatest, r.FlowVersion, r.PublishedAt))
+                  .ToList();
     }
 
     public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(

@@ -95,4 +95,13 @@ public interface IMonitorInstanceQueryService
     Task<Result<MonitorTaskDetailResponse>> GetInstanceTaskDetailAsync(
         MonitorGetInstanceTaskDetailInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the error boundary incident history for an instance, ordered newest-first.
+    /// At most 5 incidents are retained by the domain (<see cref="InstanceIncident.MaxRetainedIncidents"/>).
+    /// Returns an empty <c>Items</c> list when no incidents have been recorded.
+    /// </summary>
+    Task<Result<MonitorInstanceIncidentsResponse>> GetInstanceIncidentsAsync(
+        MonitorGetInstanceIncidentsInput input,
+        CancellationToken cancellationToken = default);
 }

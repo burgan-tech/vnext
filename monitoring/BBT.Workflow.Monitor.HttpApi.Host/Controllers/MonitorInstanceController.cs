@@ -329,4 +329,29 @@ public sealed class MonitorInstanceController(
         return FromResult(await queryService.GetInstanceTaskDetailAsync(input, cancellationToken));
     }
 
+    /// <summary>
+    /// Returns the error boundary incident history for a workflow instance.
+    /// At most 5 incidents are retained; items are ordered newest-first.
+    /// Returns an empty items list when no incidents have been recorded.
+    /// </summary>
+    /// <response code="200">Incident list returned successfully</response>
+    /// <response code="404">Instance not found</response>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/incidents")]
+    [ProducesResponseType(typeof(MonitorInstanceIncidentsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInstanceIncidentsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetInstanceIncidentsInput
+        {
+            Domain   = domain,
+            Workflow = workflow,
+            Instance = instance
+        };
+        return FromResult(await queryService.GetInstanceIncidentsAsync(input, cancellationToken));
+    }
+
 }
