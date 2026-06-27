@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.Domain.Entities;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;

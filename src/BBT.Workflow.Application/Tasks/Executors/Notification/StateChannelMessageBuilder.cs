@@ -56,7 +56,7 @@ internal sealed class StateChannelMessageBuilder(
                 domain = workflow?.Domain ?? string.Empty,
                 flow = workflow?.Key ?? string.Empty,
                 id = instance?.Id.ToString() ?? string.Empty,
-                version = workflow?.Version ?? string.Empty
+                version = instance?.FlowVersion ?? string.Empty
             }
         };
 

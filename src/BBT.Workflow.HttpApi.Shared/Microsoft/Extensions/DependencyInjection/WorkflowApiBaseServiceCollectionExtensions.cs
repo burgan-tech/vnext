@@ -195,16 +195,12 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
             options.AddHandler<LongPollAckTimeoutJobHandler>(LongPollAckTimeoutJobHandler.HandlerName);
             options.AddHandler<StateNotifyJobHandler>(StateNotifyJobHandler.HandlerName);
-
-            // Schema defaults to the outbox/queues schema for backward compatibility; the dedicated
-            // BackgroundJob section (below) can still override it.
-            options.Schema = configuration["Aether:Outbox:Schema"] ?? options.Schema;
-
+            
             // Bind the tunables (Schema, MaxRetryCount, RetryBaseDelay, ArmingInterval,
             // ArmingBatchSize, VisibilityTimeout) from configuration. Absent keys keep the
             // BackgroundJobOptions defaults; the registered handlers are not affected.
             configuration.GetSection(BackgroundJobConfigurationSection).Bind(options);
-        });
+        }, true);
 
         services.AddDaprJobScheduler();
 

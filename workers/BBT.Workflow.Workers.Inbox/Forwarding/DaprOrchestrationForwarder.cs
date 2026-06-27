@@ -134,7 +134,7 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
     /// Timeout, and 429 Too Many Requests.
     /// </summary>
     private static bool IsTransientStatus(HttpStatusCode status) =>
-        (int)status >= 500
+        (int)status > 500
         || status == HttpStatusCode.RequestTimeout
         || status == HttpStatusCode.TooManyRequests;
 
