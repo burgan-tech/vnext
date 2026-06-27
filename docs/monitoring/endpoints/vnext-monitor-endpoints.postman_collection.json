@@ -364,8 +364,20 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/incidents",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v{{apiVersion}}", "monitor", "{{domain}}", "workflows", "{{workflow}}", "instances", "{{instance}}", "incidents"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "incidents"
+              ]
             }
           },
           "response": []
@@ -1437,6 +1449,34 @@
               ]
             }
           }
+        },
+        {
+          "name": "GET {domain}/instances/faulted",
+          "description": "Domain genelinde, zaman aralığında faulted instance listesi.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={\"createdAt\":{\"gt\":\"2026-06-01T00:00:00Z\",\"lt\":\"2026-06-27T00:00:00Z\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "instances",
+                "faulted"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"gt\":\"2026-06-01T00:00:00Z\",\"lt\":\"2026-06-27T00:00:00Z\"}}"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -2029,17 +2069,60 @@
                 "{{workflow}}",
                 "jobs"
               ]
-            }
+            },
+            "description": "Tüm aktif job'lar, sayfalı. Varsayılan: page=1, pageSize=20."
           },
           "response": []
         },
         {
-          "name": "GET {domain}/jobs",
+          "name": "GET {workflow}/jobs?createdAt[gte]=&createdAt[lte]=&page=&pageSize=",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs",
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "createdAt aralığı + sayfalama. page: 1–1000, pageSize: 1–100, varsayılan 20."
+          },
+          "response": []
+        },
+        {
+          "name": "GET {domain}/jobs?createdAt[gte]=&createdAt[lte]= (ZORUNLU)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -2049,8 +2132,19 @@
                 "monitor",
                 "{{domain}}",
                 "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                }
               ]
-            }
+            },
+            "description": "Domain geneli job listesi. createdAt aralığı zorunlu. Sayfalama desteklenmez — page/pageSize verilirse 400 döner."
           },
           "response": []
         },

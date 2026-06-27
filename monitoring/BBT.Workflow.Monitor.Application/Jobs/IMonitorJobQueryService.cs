@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Jobs.DTOs;
 
 namespace BBT.Workflow.Monitor.Jobs;
@@ -7,10 +8,10 @@ namespace BBT.Workflow.Monitor.Jobs;
 public interface IMonitorJobQueryService
 {
     /// <summary>
-    /// Returns active jobs for a specific workflow (when <c>Workflow</c> is set)
-    /// or domain-wide active jobs (best-effort, resolved schema).
+    /// Returns active jobs for a specific workflow (paginated when <c>Workflow</c> is set)
+    /// or domain-wide active jobs (best-effort union, unpaginated — pagination metadata absent).
     /// </summary>
-    Task<Result<MonitorActiveJobsResponse>> GetActiveJobsAsync(
+    Task<Result<MonitorPagedResponse<MonitorJobItem>>> GetActiveJobsAsync(
         MonitorGetActiveJobsInput input,
         CancellationToken cancellationToken = default);
 }

@@ -47,12 +47,36 @@ public sealed class EfCoreInstanceJobRepository(
     /// <inheritdoc />
     public async Task<List<InstanceJob>> GetActiveByFlowAsync(
         string flow,
+        DateTime? createdAtGte,
+        DateTime? createdAtLte,
         CancellationToken cancellationToken = default)
     {
         return await (await GetQueryableAsync())
             .AsNoTracking()
             .Where(j => j.IsActive == true && j.FlowName == flow)
+            .Where(j => createdAtGte == null || j.CreatedAt >= createdAtGte)
+            .Where(j => createdAtLte == null || j.CreatedAt <= createdAtLte)
             .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceJob>> GetActiveByFlowPagedAsync(
+        string flow,
+        DateTime? createdAtGte,
+        DateTime? createdAtLte,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .AsNoTracking()
+            .Where(j => j.IsActive == true && j.FlowName == flow)
+            .Where(j => createdAtGte == null || j.CreatedAt >= createdAtGte)
+            .Where(j => createdAtLte == null || j.CreatedAt <= createdAtLte)
+            .OrderByDescending(j => j.CreatedAt)
+            .Skip(skip)
+            .Take(take + 1)
             .ToListAsync(cancellationToken);
     }
 

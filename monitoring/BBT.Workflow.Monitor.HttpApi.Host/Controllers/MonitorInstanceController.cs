@@ -3,6 +3,7 @@ using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Instances;
 using BBT.Workflow.Monitor.Instances.DTOs;
 using Microsoft.AspNetCore.Mvc;
@@ -19,8 +20,8 @@ namespace BBT.Workflow.Monitor.Controllers;
 [Route("api/v{version:apiVersion}/monitor")]
 [ServiceFilter(typeof(ResponseHeaderFilter))]
 public sealed class MonitorInstanceController(
-    IMonitorInstanceQueryService queryService
-) : AetherControllerBase
+    IMonitorInstanceQueryService queryService,
+    IMonitorDomainFaultService domainFaultService) : AetherControllerBase
 {
     /// <summary>
     /// Returns a paged list of instances with optional GraphQL filter and sorting.
@@ -53,6 +54,32 @@ public sealed class MonitorInstanceController(
         };
 
         var result = await queryService.GetInstancesAsync(input, cancellationToken);
+        return result.ToActionResult(HttpContext);
+    }
+
+    /// <summary>Lists faulted instances across every workflow schema in the domain within a mandatory createdAt window.</summary>
+    /// <remarks>
+    /// The time window and any business filters are supplied via the GraphQL <paramref name="filter"/>;
+    /// a bounded createdAt range (lower and upper bound) is required. The status is fixed to Faulted and
+    /// must not be supplied by the caller.
+    /// </remarks>
+    /// <response code="200">Faulted instances returned (unioned across schemas, createdAt descending).</response>
+    /// <response code="400">The filter is missing, invalid, lacks a bounded createdAt range, or supplies status.</response>
+    [HttpGet("{domain}/instances/faulted")]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorInstanceResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetDomainFaultedInstancesAsync(
+        [FromRoute] string domain,
+        [FromQuery] string? filter = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetDomainFaultedInput
+        {
+            Domain = domain,
+            Filter = filter
+        };
+
+        var result = await domainFaultService.GetDomainFaultedInstancesAsync(input, cancellationToken);
         return result.ToActionResult(HttpContext);
     }
 

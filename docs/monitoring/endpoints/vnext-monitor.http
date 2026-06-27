@@ -220,11 +220,23 @@ GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/functions/scope
 ### Functions — instance'ın workflow'unda kayıtlı function tanımları
 GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/functions/scope
 
-### Aktif job'lar — workflow bazlı
+### Aktif job'lar — workflow bazlı (aralık olmadan, tüm aktif; sayfa 1, varsayılan sayfa boyutu)
 GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs
 
-### Aktif job'lar — domain geneli (best-effort)
-GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs
+### Aktif job'lar — workflow bazlı, sayfalama ile (page + pageSize)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs?page=1&pageSize=20
+
+### Aktif job'lar — workflow bazlı, createdAt aralığı + sayfalama
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1&pageSize=20
+
+### Aktif job'lar — domain geneli (createdAt aralığı ZORUNLU; sayfalama desteklenmez)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z
+
+### Aktif job'lar — domain geneli — 400 (yalnızca bir sınır verildi)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z
+
+### Aktif job'lar — domain geneli — 400 (page parametresi verildi; pagination desteklenmiyor)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1
 
 ### Runtime config (secret'sız)
 GET {{baseUrl}}/api/v{{apiVersion}}/config
@@ -249,6 +261,18 @@ GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/pe
 
 ### Yetkilendirme — yalnızca function rolleri (alt görünüm)
 GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions/functions
+
+### Domain-wide faulted instances — bounded createdAt window (required)
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={"createdAt":{"gt":"2026-06-01T00:00:00Z","lt":"2026-06-27T00:00:00Z"}}
+Accept: application/json
+
+### Domain-wide faulted instances — window + extra business filter
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={"and":[{"createdAt":{"gt":"2026-06-01T00:00:00Z","lt":"2026-06-27T00:00:00Z"}},{"attributes":{"amount":{"gt":1000}}}]}
+Accept: application/json
+
+### Domain-wide faulted instances — NEGATIVE: missing createdAt range → 400
+GET {{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={"attributes":{"amount":{"gt":1000}}}
+Accept: application/json
 
 ### Health detail (API sürüm segmenti yok)
 GET {{baseUrl}}/monitor/health/detail

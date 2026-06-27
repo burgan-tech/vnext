@@ -877,8 +877,20 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/incidents",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v{{apiVersion}}", "monitor", "{{domain}}", "workflows", "{{workflow}}", "instances", "{{instance}}", "incidents"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "incidents"
+              ]
             },
             "description": "Instance'ın error boundary incident geçmişini listeler. Her incident; hangi state/transition/task'ta hata oluştuğunu, error boundary'nin aldığı aksiyonu (Abort/Retry/Rollback), çözülüp çözülmediğini ve distributed trace ID'sini içerir. Maksimum 5 kayıt tutulur, en yeni önce sıralanır."
           },
@@ -922,6 +934,62 @@
                 }
               ]
             }
+          }
+        },
+        {
+          "name": "Domain genelinde faulted instance'lar (zaman aralığı)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={\"createdAt\":{\"gt\":\"2026-06-01T00:00:00Z\",\"lt\":\"2026-06-27T00:00:00Z\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "instances",
+                "faulted"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"gt\":\"2026-06-01T00:00:00Z\",\"lt\":\"2026-06-27T00:00:00Z\"}}"
+                }
+              ]
+            },
+            "description": "Bir domaindeki TÜM workflow'ları tarayıp verilen zaman aralığında hata (Faulted) durumuna düşmüş instance'ları tek listede döner. Zaman aralığı (createdAt alt+üst sınır) zorunludur; istenirse iş verisine göre ek filtre eklenebilir."
+          }
+        },
+        {
+          "name": "Faulted (zaman aralığı eksik → 400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={\"attributes\":{\"amount\":{\"gt\":1000}}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "instances",
+                "faulted"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"attributes\":{\"amount\":{\"gt\":1000}}}"
+                }
+              ]
+            },
+            "description": "Zaman aralığı verilmediğinde isteğin 400 döndüğünü gösterir."
           }
         }
       ]
@@ -2458,7 +2526,7 @@
           }
         },
         {
-          "name": "8-G  Workflow scheduled job'ları ({workflow}/jobs)",
+          "name": "8-G  Workflow scheduled job'ları — aralık olmadan ({workflow}/jobs)",
           "request": {
             "method": "GET",
             "header": [],
@@ -2477,17 +2545,59 @@
                 "jobs"
               ]
             },
-            "description": "Bir workflow altındaki aktif scheduled job ve timer'ları listeler."
+            "description": "Bir workflow altındaki aktif scheduled job ve timer'ları listeler. Sonuçlar sayfalıdır: varsayılan sayfa boyutu 20'dir (pageSize: 1–100, page: 1–1000). createdAt aralığı opsiyoneldir; verilmezse tüm aktif job'lar döner. Yanıt standart envelope içinde döner: { \"pagination\": { \"page\", \"pageSize\", \"hasNext\" }, \"items\": [...] }."
           },
           "response": []
         },
         {
-          "name": "8-H  Domain geneli job listesi ({domain}/jobs)",
+          "name": "8-G2  Workflow scheduled job'ları — createdAt aralığı + sayfalama ({workflow}/jobs)",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs",
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "createdAt aralığı ve sayfalama parametreleri birlikte kullanılır. page (varsayılan 1) ve pageSize (varsayılan 20, maks 100) ile hangi sayfanın döneceği belirlenir. Her iki createdAt sınırı birlikte verilmelidir; biri eksikse 400 döner. Yanıt: { \"pagination\": { \"page\", \"pageSize\", \"hasNext\" }, \"items\": [...] }."
+          },
+          "response": []
+        },
+        {
+          "name": "8-H  Domain geneli job listesi — createdAt aralığı ZORUNLU ({domain}/jobs)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -2497,9 +2607,19 @@
                 "monitor",
                 "{{domain}}",
                 "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                }
               ]
             },
-            "description": "Domain genelinde aktif job'lar (best-effort, resolved schema)."
+            "description": "Domain genelinde aktif job'ları listeler. Bu endpoint için createdAt[gte] ve createdAt[lte] parametrelerinin ikisi birden zorunludur; eksik bırakılırsa 400 döner. Dahil aralık, ISO 8601 UTC biçiminde girilir. Bu endpoint sayfalamayı DESTEKLEMEZ — page veya pageSize parametresi verilirse 400 (jobs.paginationNotSupported) döner. Yanıt envelope'u: { \"items\": [...] } (pagination alanı yoktur)."
           },
           "response": []
         },
@@ -2797,6 +2917,69 @@
             },
             "description": "filter ve version aynı anda kullanılamaz — 400 ValidationProblemDetails döner."
           }
+        },
+        {
+          "name": "9-Z  400 — domain job listesi eksik createdAt sınırı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                }
+              ]
+            },
+            "description": "Domain geneli job listesinde createdAt[gte] verilip createdAt[lte] eksik bırakıldığında API 400 döner. Her iki sınır da birlikte sağlanmalıdır."
+          }
+        },
+        {
+          "name": "9-AA  400 — domain job listesine page parametresi verildi (pagination desteklenmiyor)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Domain geneli job listesi sayfalamayı desteklemez. page veya pageSize parametresi verilirse API 400 (jobs.paginationNotSupported) döner. Sayfalama yalnızca workflow bazlı endpoint'te ({workflow}/jobs) kullanılabilir."
+          },
+          "response": []
         }
       ]
     },

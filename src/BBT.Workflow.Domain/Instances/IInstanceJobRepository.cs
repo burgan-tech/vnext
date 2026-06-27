@@ -10,13 +10,39 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
     Task<bool> AnyActiveByJobNameAsync(Guid instanceId, string jobName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Read-only: all active jobs for a given flow (workflow) in the current schema.
-    /// Additive monitor-support method.
+    /// Read-only: active jobs for a given flow (workflow) in the current schema, optionally
+    /// bounded by a createdAt range. Additive monitor-support method.
     /// </summary>
     /// <param name="flow">The workflow flow name.</param>
+    /// <param name="createdAtGte">Optional inclusive lower bound on <see cref="InstanceJob.CreatedAt"/>.</param>
+    /// <param name="createdAtLte">Optional inclusive upper bound on <see cref="InstanceJob.CreatedAt"/>.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>A list of active <see cref="InstanceJob"/> records for the specified flow.</returns>
-    Task<List<InstanceJob>> GetActiveByFlowAsync(string flow, CancellationToken cancellationToken = default);
+    Task<List<InstanceJob>> GetActiveByFlowAsync(
+        string flow,
+        DateTime? createdAtGte,
+        DateTime? createdAtLte,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: a page of active jobs for a given flow in the current schema, optionally
+    /// bounded by a createdAt range. Fetches one extra row (<c>take + 1</c>) so the caller can
+    /// compute HasNext without a COUNT query. Additive monitor-support method.
+    /// </summary>
+    /// <param name="flow">The workflow flow name.</param>
+    /// <param name="createdAtGte">Optional inclusive lower bound on <see cref="InstanceJob.CreatedAt"/>.</param>
+    /// <param name="createdAtLte">Optional inclusive upper bound on <see cref="InstanceJob.CreatedAt"/>.</param>
+    /// <param name="skip">Number of rows to skip.</param>
+    /// <param name="take">Page size; the query fetches <c>take + 1</c> rows for next-page detection.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>Up to <c>take + 1</c> active <see cref="InstanceJob"/> records, newest first.</returns>
+    Task<List<InstanceJob>> GetActiveByFlowPagedAsync(
+        string flow,
+        DateTime? createdAtGte,
+        DateTime? createdAtLte,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-only: all active jobs for a given domain in the resolved schema (best-effort).

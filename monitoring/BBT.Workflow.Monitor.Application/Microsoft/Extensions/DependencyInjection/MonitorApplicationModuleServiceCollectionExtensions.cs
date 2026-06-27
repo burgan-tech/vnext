@@ -27,6 +27,7 @@ public static class MonitorApplicationModuleServiceCollectionExtensions
 
         services.AddScoped<IRuntimeService, RuntimeService>();
         services.AddScoped<IMonitorInstanceQueryService, MonitorInstanceQueryService>();
+        services.AddScoped<IMonitorDomainFaultService, MonitorDomainFaultService>();
         services.AddScoped<IMonitorComponentQueryService, MonitorComponentQueryService>();
         services.AddScoped<IMonitorStatsService, MonitorStatsService>();
         services.AddScoped<IMonitorAuthorizationQueryService, MonitorAuthorizationQueryService>();

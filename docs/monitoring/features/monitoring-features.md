@@ -147,6 +147,23 @@ Her incident şunları içerir:
 ### Fault Detayı — `GET …/instances/{instance}/faults`
 Faulted bir instance'ın **neden ve nerede** düştüğünü tek noktada toplar: tamamlanamayan geçiş + içindeki başarısız task'lar (istek/yanıt dahil). Kök neden analizi için.
 
+### Domain genelinde faulted instance listesi
+
+`GET {domain}/instances/faulted?filter=<graphql-json>`
+
+Bir domaindeki tüm workflow'ları tarar ve verilen zaman aralığında **Faulted** durumuna düşmüş
+instance'ları tek bir listede döner. Her kayıt hangi workflow'a (flow) ait olduğunu taşır, böylece
+istemci isterse workflow'a göre gruplayabilir.
+
+- **Zorunlu:** `filter` içinde **sınırlı bir `createdAt` aralığı** (hem alt hem üst sınır) verilmelidir;
+  verilmezse `400` döner. Faulted nadir bir durumdur ve zaman aralığı sonucu küçük tutar — bu yüzden
+  sayfalama yoktur, liste tam döner.
+- **status vermeyin:** status bu endpoint tarafından Faulted olarak sabitlenir; `filter` içinde status
+  verirseniz `400` döner.
+- **Ek filtre serbest:** `attributes.*` (iş verisi) ve diğer instance kolonlarıyla ek süzme yapabilirsiniz.
+
+Örnek: `?filter={"createdAt":{"gt":"2026-06-01T00:00:00Z","lt":"2026-06-27T00:00:00Z"}}`
+
 ### SLA Aşımı — `GET …/instances?filter={"and":[{"status":{"eq":"Active"}},{"createdAt":{"lt":"<eşik>"}}]}`
 Belirli süreden uzun süredir Active kalan instance'ları bulur. Filtre kombinasyonu ile çözülür.
 
@@ -360,16 +377,55 @@ Domain genelinde yayınlanmış her bileşen tipinden kaç adet olduğunu tek ç
 Workflow'lara bağlı **zamanlanmış job'ları** (scheduled jobs, timer'lar) görüntülemek için kullanılır. Tetiklenmesi beklenen veya hâlâ çalışan zamanlayıcıları ve hangi instance için tanımlandıklarını gösterir.
 
 ### Workflow Bazlı Aktif Job'lar — `GET {domain}/workflows/{workflow}/jobs`
-Belirli bir workflow altındaki tüm aktif job kayıtlarını listeler.
+Belirli bir workflow altındaki aktif job kayıtlarını listeler.
 
 **Dönen bilgiler:** Her kayıt için `jobId`, `name` (job adı), `flow` (workflow adı), `domain`, `instanceId` (job'un bağlı olduğu instance), `isActive`, `createdAt`, `modifiedAt`.
 
-**Ne zaman kullanılır:** "Bu workflow'un bekleyen zamanlayıcıları var mı?", "Hangi instance'lar hâlâ job kuyruğunda?" sorularını yanıtlamak için.
+**Sayfalama:** Bu endpoint sayfalı sonuç döner. `page` (varsayılan: 1, en fazla 1000) ve `pageSize` (varsayılan: 20, en fazla 100) parametreleriyle hangi sayfanın isteneceği belirlenir. Yanıt standart sayfalama zarfında gelir: `pagination` nesnesi (`page`, `pageSize`, `hasNext`) ve `items` listesi.
+
+**createdAt aralığı (opsiyonel):** `createdAt[gte]` ve `createdAt[lte]` parametreleri ile sonuçları belirli bir zaman dilimiyle daraltabilirsiniz. Her iki parametre de ISO 8601 UTC biçiminde girilir (örn. `2026-06-01T00:00:00Z`), sınırlar dahildir. Aralık verilmezse tüm aktif job'lar döner. Yalnızca biri verilirse API **400** döner — ikisi birlikte ya da hiç verilmemelidir.
+
+**Ne zaman kullanılır:** "Bu workflow'un bekleyen zamanlayıcıları var mı?", "Hangi instance'lar hâlâ job kuyruğunda?" sorularını yanıtlamak için. Belirli bir güne ait job'ları görmek istediğinizde aralık parametrelerini ekleyin; çok sayıda kayıt varsa `page`/`pageSize` ile sayfalayın.
+
+**Yanıt yapısı:**
+```json
+{
+  "pagination": { "page": 1, "pageSize": 20, "hasNext": true },
+  "items": [
+    { "jobId": "...", "name": "...", "instanceId": "...", "flow": "...", "domain": "...", "isActive": true, "createdAt": "...", "modifiedAt": "..." }
+  ]
+}
+```
+
+**Örnekler:**
+```
+GET {domain}/workflows/{workflow}/jobs
+GET {domain}/workflows/{workflow}/jobs?page=1&pageSize=20
+GET {domain}/workflows/{workflow}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1&pageSize=20
+```
 
 ### Domain Genelinde Aktif Job'lar — `GET {domain}/jobs`
-Domain'deki tüm workflow'ların aktif job'larını tek çağrıda döndürür. Çok sayıda workflow içeren domain'lerde genel zamanlayıcı durumunu görmek için best-effort listedir.
+Domain'deki tüm workflow'ların aktif job'larını tek çağrıda döndürür.
 
-**Ne zaman kullanılır:** Domain genelinde bekleyen/aktif zamanlayıcı sayısını özetlemek veya toplu takip yapmak için. Büyük domain'lerde tüm workflow'ların sonuçlarını kapsar.
+**createdAt aralığı (zorunlu):** Bu endpoint için `createdAt[gte]` ve `createdAt[lte]` parametrelerinin **ikisi birden verilmesi zorunludur**. Aralık verilmezse ya da yalnızca biri sağlanırsa API **400** döner. Sınırlar dahildir, ISO 8601 UTC biçiminde girilir. `gte` değeri `lte` değerinden büyük olamaz; olursa 400 döner.
+
+**Sayfalama desteklenmez:** Bu endpoint `page` veya `pageSize` parametresi **kabul etmez**. Bu parametreler verilirse API **400** (`jobs.paginationNotSupported`) döner. Sayfalama ihtiyacı varsa workflow bazlı endpoint (`{domain}/workflows/{workflow}/jobs`) kullanılmalıdır.
+
+**Ne zaman kullanılır:** Domain genelinde belirli bir zaman aralığındaki bekleyen/aktif zamanlayıcıları toplu olarak görmek için. Büyük domain'lerde tüm workflow'ların sonuçlarını kapsayan geniş bir görünüm sunar.
+
+**Yanıt yapısı:** `pagination` alanı **yoktur** (yalnızca `items` döner):
+```json
+{
+  "items": [
+    { "jobId": "...", "name": "...", "instanceId": "...", "flow": "...", "domain": "...", "isActive": true, "createdAt": "...", "modifiedAt": "..." }
+  ]
+}
+```
+
+**Örnek:**
+```
+GET {domain}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z
+```
 
 ---
 

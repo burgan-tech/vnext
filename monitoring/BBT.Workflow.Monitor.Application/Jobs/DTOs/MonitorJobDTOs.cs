@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitor.Jobs.Filters;
 
 namespace BBT.Workflow.Monitor.Jobs.DTOs;
 
@@ -12,13 +13,15 @@ public sealed class MonitorGetActiveJobsInput : IHasDomain
 
     /// <summary>Optional workflow key; when null, domain-wide query (best-effort, resolved schema).</summary>
     public string? Workflow { get; set; }
-}
 
-/// <summary>Active jobs response.</summary>
-public sealed class MonitorActiveJobsResponse
-{
-    /// <summary>List of active scheduled jobs / timers.</summary>
-    public List<MonitorJobItem> Jobs { get; set; } = [];
+    /// <summary>Optional createdAt time-range filter. Mandatory (both bounds) for domain-wide queries.</summary>
+    public MonitorJobFilterInput? Filter { get; set; }
+
+    /// <summary>Page number (1-based). Applied only to the workflow-scoped query.</summary>
+    public int Page { get; set; } = 1;
+
+    /// <summary>Page size. Applied only to the workflow-scoped query.</summary>
+    public int PageSize { get; set; } = 20;
 }
 
 /// <summary>A single active scheduled job or timer.</summary>
