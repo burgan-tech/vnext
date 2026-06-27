@@ -188,6 +188,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddBackgroundJob(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
+
+        // Whether to run the arming/reaper hosted service in this process. Defaults to true
+        // (configurable via BackgroundJob:WithHostedService) so the background-job processor runs
+        // unless explicitly disabled (e.g. for read-only / scale-out roles).
+        var withHostedService = configuration.GetValue(
+            $"{BackgroundJobConfigurationSection}:WithHostedService", true);
+
         services.AddAetherBackgroundJob<MessagingDbContext>(options =>
         {
             options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
@@ -200,7 +207,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // ArmingBatchSize, VisibilityTimeout) from configuration. Absent keys keep the
             // BackgroundJobOptions defaults; the registered handlers are not affected.
             configuration.GetSection(BackgroundJobConfigurationSection).Bind(options);
-        }, true);
+        }, withHostedService: withHostedService);
 
         services.AddDaprJobScheduler();
 
