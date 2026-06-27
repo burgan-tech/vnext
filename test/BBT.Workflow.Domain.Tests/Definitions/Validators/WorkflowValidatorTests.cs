@@ -812,5 +812,73 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
+
+    #region State Notification Validation Tests
+
+    [Fact]
+    public void Validate_ShouldPass_WhenStateNotificationHasMappingAndStateType()
+    {
+        var workflow = DeserializeWorkflow(StateNotificationsWorkflowJson("""
+            { "type": "state", "mapping": { "location": "inline", "code": "dHJ1ZQ==" } }
+        """));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e => e.ErrorMessage!.Contains("Notification at index"));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStateNotificationHasNoMapping()
+    {
+        var workflow = DeserializeWorkflow(StateNotificationsWorkflowJson("""
+            { "type": "state", "mapping": { "code": "" } }
+        """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("must define a mapping", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStateNotificationTypeIsCommand()
+    {
+        var workflow = DeserializeWorkflow(StateNotificationsWorkflowJson("""
+            { "type": "command", "mapping": { "location": "inline", "code": "dHJ1ZQ==" } }
+        """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("unsupported type", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Command", StringComparison.Ordinal));
+    }
+
+    private static string StateNotificationsWorkflowJson(string notificationEntryJson) => $$"""
+    {
+        "type": "F",
+        "labels": [{"label": "Test", "language": "en"}],
+        "states": [
+            {
+                "key": "initial",
+                "stateType": "initial",
+                "labels": [{"label": "Initial", "language": "en"}],
+                "transitions": [],
+                "notifications": [ {{notificationEntryJson}} ]
+            }
+        ],
+        "sharedTransitions": [],
+        "startTransition": {
+            "key": "start",
+            "target": "initial",
+            "triggerType": "manual",
+            "labels": [{"label": "Start", "language": "en"}]
+        }
+    }
+    """;
+
+    #endregion
 }
 

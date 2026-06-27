@@ -143,7 +143,7 @@ public sealed class NotificationTaskExecutor(
             if (string.Equals(channel, StateChannel, StringComparison.OrdinalIgnoreCase))
             {
                 var buildResult = await stateChannelBuilder.BuildAsync(
-                    context, stateMapping, cancellationToken);
+                    context.ScriptContext, stateMapping, cancellationToken);
                 if (!buildResult.IsSuccess)
                     return ChannelDispatchResult.Fail(buildResult.Error.Message ?? "State channel build failed");
                 

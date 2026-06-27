@@ -29,6 +29,12 @@ namespace Microsoft.Extensions.DependencyInjection;
 public static class WorkflowApiBaseServiceCollectionExtensions
 {
     /// <summary>
+    /// Configuration section bound onto the Aether background-job options
+    /// (Schema, MaxRetryCount, RetryBaseDelay, ArmingInterval, ArmingBatchSize, VisibilityTimeout).
+    /// </summary>
+    private const string BackgroundJobConfigurationSection = "BackgroundJob";
+
+    /// <summary>
     /// Registers the centralized JsonSerializerOptions as a singleton in DI.
     /// This allows services to inject JsonSerializerOptions for consistent JSON handling.
     /// </summary>
@@ -184,14 +190,26 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddBackgroundJob(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
+
+        // Whether to run the arming/reaper hosted service in this process. Defaults to true
+        // (configurable via BackgroundJob:WithHostedService) so the background-job processor runs
+        // unless explicitly disabled (e.g. for read-only / scale-out roles).
+        var withHostedService = configuration.GetValue(
+            $"{BackgroundJobConfigurationSection}:WithHostedService", true);
+
         services.AddAetherBackgroundJob<MessagingDbContext>(options =>
         {
             options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
             options.AddHandler<LongPollAckTimeoutJobHandler>(LongPollAckTimeoutJobHandler.HandlerName);
-            options.Schema = configuration["Aether:Outbox:Schema"];
-        });
+            options.AddHandler<StateNotifyJobHandler>(StateNotifyJobHandler.HandlerName);
+            
+            // Bind the tunables (Schema, MaxRetryCount, RetryBaseDelay, ArmingInterval,
+            // ArmingBatchSize, VisibilityTimeout) from configuration. Absent keys keep the
+            // BackgroundJobOptions defaults; the registered handlers are not affected.
+            configuration.GetSection(BackgroundJobConfigurationSection).Bind(options);
+        }, withHostedService: withHostedService);
 
         services.AddDaprJobScheduler();
 

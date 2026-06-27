@@ -96,6 +96,7 @@ public static class TaskServiceCollectionExtensions
 
         // Notification task executor (multi-channel direct Dapr binding dispatch)
         services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
+        services.TryAddScoped<IStateNotificationDispatcher, StateNotificationDispatcher>();
         services.AddTaskExecutor<NotificationTaskExecutor>();
 
         // Trigger task executors (domain-aware: local or remote)

@@ -38,6 +38,7 @@ public class WorkflowValidator
         // State level validations
         ValidateStateLabels(workflow, result);
         ValidateStateAliases(workflow, result);
+        ValidateStateNotifications(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
         foreach (var state in workflow.States)
@@ -263,6 +264,48 @@ public class WorkflowValidator
                 else
                 {
                     ValidateRoleGrants(alias.Roles, $"{aliasPath}.{nameof(StateAlias.Roles)}", result);
+                }
+
+                index++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Validates state notification entries. The notifications array is optional, but when present each entry must:
+    /// - define a mapping (mapping is required);
+    /// - use a supported type — only <see cref="StateNotificationType.State"/> is processed today.
+    /// NOTE (temporary): <see cref="StateNotificationType.Command"/> is reserved for future use and is
+    /// rejected for now. When command notifications go live, relax the type check below to allow it.
+    /// </summary>
+    private void ValidateStateNotifications(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            if (state.Notifications.Count == 0)
+                continue;
+
+            var index = 0;
+            foreach (var notification in state.Notifications)
+            {
+                var notificationPath = $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Notifications)}[{index}]";
+
+                // Mapping is required.
+                if (!notification.HasMapping)
+                {
+                    result.AddError(new ValidationResult(
+                        $"Notification at index {index} in state '{state.Key}' must define a mapping.",
+                        [$"{notificationPath}.{nameof(StateNotification.Mapping)}"]));
+                }
+
+                // Only 'state' is supported for now.
+                // NOTE (temporary): 'command' is reserved for future use. When command notifications
+                // are implemented, relax this check to also allow StateNotificationType.Command.
+                if (notification.Type != StateNotificationType.State)
+                {
+                    result.AddError(new ValidationResult(
+                        $"Notification at index {index} in state '{state.Key}' has unsupported type '{notification.Type}'. Only '{StateNotificationType.State}' is supported.",
+                        [$"{notificationPath}.{nameof(StateNotification.Type)}"]));
                 }
 
                 index++;

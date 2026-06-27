@@ -74,8 +74,11 @@ public sealed class ChainReaperService(
         }
 
         await uow.CommitAsync(cancellationToken);
+        if (faulted > 0 || skippedActive > 0)
+        {
+            logger.ChainReaperSweepCompleted(faulted, skippedActive);
+        }
 
-        logger.ChainReaperSweepCompleted(faulted, skippedActive);
         return faulted;
     }
 }
