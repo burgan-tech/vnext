@@ -76,6 +76,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
         services.AddScoped<IChildSubflowFaultService, ChildSubflowFaultService>();
         services.AddScoped<ITransitionJobEnqueuer, TransitionJobEnqueuer>();
+        services.AddScoped<IStateNotificationScheduler, StateNotificationScheduler>();
 
         // Instance Services
         services.AddScoped<IInstanceCancellationService, InstanceCancellationService>();

@@ -48,7 +48,8 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddRuntimeMiddleware()
             .AddHeaderService()
             .AddHostedServices()
-            .AddAppHealthChecks().AddOrchestrationDbHealthCheck(configuration);
+            .AddAppHealthChecks()
+            .AddOrchestrationDbHealthCheck(configuration);
         return services;
     }
 

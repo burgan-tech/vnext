@@ -21,5 +21,8 @@ public enum JobType
     Timeout = 3,
 
     /// <summary>Long-poll acknowledge fallback (handler <c>longpoll.ack.timeout</c>).</summary>
-    LongPollAck = 4
+    LongPollAck = 4,
+
+    /// <summary>State-level notification dispatch (handler <c>state.notify</c>).</summary>
+    StateNotify = 5
 }

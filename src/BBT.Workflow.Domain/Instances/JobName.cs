@@ -72,6 +72,10 @@ public sealed record JobName
     public static JobName ForLongPollAck(Guid instanceId)
         => Build(JobType.LongPollAck, instanceId, LongPollAckConstants.JobKey);
 
+    /// <summary>Builds the name of a state-level notification dispatch job.</summary>
+    public static JobName ForStateNotify(Guid instanceId, string stateKey)
+        => Build(JobType.StateNotify, instanceId, stateKey);
+
     /// <summary>
     /// Attempts to parse a structured job name. Returns <c>false</c> for any value that does not
     /// match the <c>vnext.job.v1</c> scheme (e.g. legacy names written before the rollout).
@@ -152,6 +156,7 @@ public sealed record JobName
         JobType.ScheduledTransition => "sx",
         JobType.Timeout => "to",
         JobType.LongPollAck => "la",
+        JobType.StateNotify => "sn",
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unsupported job type.")
     };
 
@@ -161,6 +166,7 @@ public sealed record JobName
         "sx" => JobType.ScheduledTransition,
         "to" => JobType.Timeout,
         "la" => JobType.LongPollAck,
+        "sn" => JobType.StateNotify,
         _ => JobType.Unknown
     };
 

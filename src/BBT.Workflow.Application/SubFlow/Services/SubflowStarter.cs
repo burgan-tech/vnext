@@ -89,12 +89,15 @@ public sealed class SubflowStarter(
     {
         using var activity =
             SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
+        // Propagate root instance ID: use parent's stored root, or parent itself if parent is the root
+        var rootInstanceId = parentInstance.GetRootInstanceId();
         SubFlowActivityHelper.EnrichWithStart(
             activity,
             parentInstance.Id,
             subFlowReference.Domain,
             subFlowReference.Key,
-            correlation.SubFlowInstanceId);
+            correlation.SubFlowInstanceId,
+            rootInstanceId);
         activity?.SetTag("vnext.subflow.type", subFlowTypeCode == "S" ? "subflow" : "subprocess");
         activity?.SetTag("vnext.subflow.parent.state", stateKey);
         activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
@@ -106,7 +109,8 @@ public sealed class SubflowStarter(
                    [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
                    [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
                    [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
-                   [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId
+                   [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId,
+                   [TelemetryConstants.TagNames.RootInstanceId] = rootInstanceId,
                }))
         {
             // Prepare instance creation input
@@ -122,7 +126,8 @@ public sealed class SubflowStarter(
                 [
                     $"parent.key:{parentInstance.Key}",
                     $"parent.domain:{workflow.Domain}",
-                    $"parent.flow:{workflow.Key}"
+                    $"parent.flow:{workflow.Key}",
+                    $"root.instance:{rootInstanceId}"
                 ],
                 ExtraProperties = new ExtraPropertyDictionary
                 {
@@ -133,7 +138,8 @@ public sealed class SubflowStarter(
                     [DomainConsts.MetaDataKeys.Version] = workflow.Version,
                     [DomainConsts.MetaDataKeys.State] = stateKey,
                     [DomainConsts.MetaDataKeys.Transition] = transitionKey,
-                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode
+                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode,
+                    [DomainConsts.MetaDataKeys.RootInstanceId] = rootInstanceId
                 }
             };
 
@@ -182,6 +188,7 @@ public sealed class SubflowStarter(
             }
 
             headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
+            headers[TelemetryConstants.HeaderNames.RootInstanceId] = rootInstanceId.ToString();
 
             var subFlowStartInput = new StartInstanceInput(
                 subFlowReference.Domain,

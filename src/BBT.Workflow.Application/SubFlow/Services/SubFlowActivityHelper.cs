@@ -64,12 +64,14 @@ public static class SubFlowActivityHelper
     /// <param name="subFlowDomain">The SubFlow domain.</param>
     /// <param name="subFlowKey">The SubFlow workflow key.</param>
     /// <param name="subFlowInstanceId">The SubFlow instance ID.</param>
+    /// <param name="rootInstanceId">Optional root instance ID for nested subflow chains.</param>
     public static void EnrichWithStart(
         Activity? activity,
         Guid parentInstanceId,
         string subFlowDomain,
         string subFlowKey,
-        Guid subFlowInstanceId)
+        Guid subFlowInstanceId,
+        Guid rootInstanceId = default)
     {
         if (activity is null) return;
 
@@ -77,6 +79,11 @@ public static class SubFlowActivityHelper
         activity.SetTag("vnext.subflow.domain", subFlowDomain);
         activity.SetTag("vnext.subflow.flow", subFlowKey);
         activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subFlowInstanceId);
+        if (rootInstanceId != default)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootInstanceId.ToString());
+            activity.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootInstanceId.ToString());
+        }
         activity.SetTag("vnext.subflow.operation", "start");
     }
 

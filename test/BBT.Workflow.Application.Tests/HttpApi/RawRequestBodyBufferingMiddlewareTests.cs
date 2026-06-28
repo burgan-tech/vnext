@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.Tasks;
 using BBT.Workflow.Middlewares;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 using Shouldly;
 using Xunit;
 
@@ -36,12 +37,14 @@ public class RawRequestBodyBufferingMiddlewareTests
         var context = BuildContext("POST", Body);
         string? downstreamBody = null;
 
-        var middleware = new RawRequestBodyBufferingMiddleware(async ctx =>
-        {
-            // Simulate model binding reading the (rewound) body.
-            using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
-            downstreamBody = await reader.ReadToEndAsync();
-        });
+        var middleware = new RawRequestBodyBufferingMiddleware(
+            async ctx =>
+            {
+                // Simulate model binding reading the (rewound) body.
+                using var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
+                downstreamBody = await reader.ReadToEndAsync();
+            },
+            Options.Create(new RawRequestBodyBufferingOptions()));
 
         await middleware.InvokeAsync(context);
 
@@ -54,7 +57,7 @@ public class RawRequestBodyBufferingMiddlewareTests
     {
         var context = BuildContext("GET", null);
 
-        var middleware = new RawRequestBodyBufferingMiddleware(_ => Task.CompletedTask);
+        var middleware = new RawRequestBodyBufferingMiddleware(_ => Task.CompletedTask, Options.Create(new RawRequestBodyBufferingOptions()));
         await middleware.InvokeAsync(context);
 
         context.Items.ContainsKey(RawRequestBodyBufferingMiddleware.RawBodyItemsKey).ShouldBeFalse();

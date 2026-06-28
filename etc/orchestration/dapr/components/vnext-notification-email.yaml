@@ -7,4 +7,4 @@ spec:
   version: v1
   metadata:
     - name: url
-      value: http://mocklab:3001/api/notification/email
+      value: http://mocklab:5000/api/notification/email
