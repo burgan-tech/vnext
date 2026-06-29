@@ -82,6 +82,17 @@ public sealed class FlowTimeoutJobHandler(
                         return;
                     }
 
+                    var rootId = instance.GetRootInstanceId();
+                    using var rootScope = rootId != args.InstanceId
+                        ? logger.BeginScope(new Dictionary<string, object>
+                          { [TelemetryConstants.TagNames.RootInstanceId] = rootId })
+                        : null;
+                    if (rootId != args.InstanceId)
+                    {
+                        activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                        activity?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                    }
+
                     if (workflow.Timeout is null)
                     {
                         logger.TimeoutConfigMissing(instance.Flow);

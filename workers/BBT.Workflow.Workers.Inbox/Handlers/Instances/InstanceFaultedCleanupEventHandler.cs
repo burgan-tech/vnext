@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Events;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
@@ -30,13 +31,20 @@ internal sealed class InstanceFaultedCleanupEventHandler(
             return;
         }
 
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+        {
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
+                eventData.RootInstanceId.Value.ToString());
+        }
+        using (logger.BeginScope(scopeProps))
         {
             logger.InstanceFaultedCleanupEventReceived(eventData.InstanceId, eventData.Flow);
 
