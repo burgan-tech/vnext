@@ -78,7 +78,7 @@ public sealed class InstanceSubStateChangedEventHook(
                         ["hook_error"] = "SubFlowStateUpdateFailed",
                         ["error_code"] = error.Code ?? "unknown",
                         ["error_prefix"] = error.Prefix ?? "unknown",
-                        ["error_message"] = error.Message
+                        ["error_message"] = error.Message ?? string.Empty
                     };
 
                     if (!string.IsNullOrEmpty(error.Target))
