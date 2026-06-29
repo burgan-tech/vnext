@@ -129,6 +129,12 @@ public class InstanceSubFaultedEvent : IDistributedEvent
     /// </summary>
     public string? IncidentBoundaryLevel { get; init; }
 
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
+
     public override string ToString()
     {
         return $"{nameof(InstanceSubFaultedEvent)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} SubInstanceId={SubInstanceId} FaultedState={FaultedState}";
