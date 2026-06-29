@@ -359,13 +359,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Duration = CompletedAt - CreatedAt;
 
         // Publish cleanup event to cancel all scheduled jobs
+        var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceCompletedCleanupEvent
         {
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
             Version =  FlowVersion,
-            CompletedAt = CompletedAt.Value
+            CompletedAt = CompletedAt.Value,
+            RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
         // Publish completion event for SubItems (SubFlow or SubProcess)
@@ -385,7 +387,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     CompletedState = GetCurrentState,
                     InstanceData = latestData?.Data.JsonElement,
                     CompletedAt = CompletedAt.Value,
-                    Duration = Duration
+                    Duration = Duration,
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null
                 });
             }
         }
@@ -404,13 +407,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
+        var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceFaultedCleanupEvent
         {
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
             Version = FlowVersion,
-            FaultedAt = CompletedAt.Value
+            FaultedAt = CompletedAt.Value,
+            RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
         // Downward: notify active SubFlow children to fault themselves
@@ -424,7 +429,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Domain = correlation.SubFlowDomain,
                 Flow = correlation.SubFlowName,
                 Version = correlation.SubFlowVersion,
-                FaultedAt = CompletedAt.Value
+                FaultedAt = CompletedAt.Value,
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
 
@@ -459,7 +465,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     IncidentTransition = activeIncident?.Transition,
                     IncidentState = activeIncident?.State,
                     IncidentBoundaryAction = activeIncident?.BoundaryAction,
-                    IncidentBoundaryLevel = activeIncident?.BoundaryLevel
+                    IncidentBoundaryLevel = activeIncident?.BoundaryLevel,
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null
                 });
             }
         }
@@ -513,6 +520,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Duration = CompletedAt - CreatedAt;
 
         // Publish cancellation event - event handler will handle cleanup (jobs, correlations)
+        var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceCanceledEvent
         {
             InstanceId = Id,
@@ -521,7 +529,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             Version =   FlowVersion,
             CanceledState = GetCurrentState,
             CanceledAt = CompletedAt.Value,
-            Duration = Duration
+            Duration = Duration,
+            RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
         foreach (var correlation in ActiveCorrelations)
@@ -534,7 +543,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Domain = correlation.SubFlowDomain,
                 Flow = correlation.SubFlowName,
                 CompletedAt = correlation.CompletedAt!.Value,
-                Version = correlation.SubFlowVersion
+                Version = correlation.SubFlowVersion,
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
     }
@@ -796,6 +806,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         var contractInfo = ExtraProperties.ToSubFlowContractInfo();
         if (contractInfo.Id != Guid.Empty)
         {
+            var rootId = this.GetRootInstanceId();
             AddDistributedEvent(new InstanceSubStateChangedEvent
             {
                 ParentInstanceId = contractInfo.Id,
@@ -807,7 +818,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 PreviousState = previousState,
                 NewStateType = (int)(EffectiveStateType ?? StateType.Intermediate),
                 NewStateSubType = (int)(EffectiveStateSubType ?? StateSubType.None),
-                ChangedAt = DateTime.UtcNow
+                ChangedAt = DateTime.UtcNow,
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
     }
