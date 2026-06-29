@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
@@ -26,6 +27,7 @@ public class TransitionPipeline
     private readonly ITransitionContextFactory _contextFactory;
     private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
+    private readonly IUnitOfWorkManager _uowManager;
     private readonly ITransitionValidationService _validationService;
     private readonly IPipelineProfileResolver _profileResolver;
     private readonly IStateNotificationScheduler _stateNotificationScheduler;
@@ -49,6 +51,7 @@ public class TransitionPipeline
         ITransitionContextFactory contextFactory,
         IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
+        IUnitOfWorkManager uowManager,
         ITransitionValidationService validationService,
         IPipelineProfileResolver profileResolver,
         IStateNotificationScheduler stateNotificationScheduler,
@@ -62,6 +65,7 @@ public class TransitionPipeline
         _contextFactory = contextFactory;
         _postCommitExecutor = postCommitExecutor;
         _instanceRepository = instanceRepository;
+        _uowManager = uowManager;
         _validationService = validationService;
         _profileResolver = profileResolver;
         _stateNotificationScheduler = stateNotificationScheduler;
@@ -255,20 +259,27 @@ public class TransitionPipeline
     /// <summary>
     /// Marks the workflow instance as faulted. Already within lock scope —
     /// no re-acquisition needed.
+    /// Uses a RequiresNew UoW scope so that any dirty state left on the current
+    /// DbContext by the failed pipeline step does not block SaveChanges.
     /// </summary>
     private async Task MarkInstanceFaultedAsync(
         TransitionExecutionContext context,
         Error error,
         CancellationToken cancellationToken)
     {
-        _logger.LogWarning(
-            "Marking instance {InstanceId} as faulted due to unhandled pipeline error: {ErrorCode} - {ErrorMessage}",
-            context.InstanceId, error.Code, error.Message);
+        _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
-        if (!context.Instance.HasActiveIncident)
+        await using var faultUow = _uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+
+        // Reload in the new scope so we operate on a clean, tracked entity.
+        var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)
+                       ?? context.Instance;
+
+        if (!instance.HasActiveIncident)
         {
             var incident = InstanceIncidentFactory.Create(
-                state: context.Instance.GetCurrentState,
+                state: instance.GetCurrentState,
                 transition: context.TransitionKey,
                 taskKey: null,
                 message: error.Message ?? "Unhandled pipeline error",
@@ -276,16 +287,14 @@ public class TransitionPipeline
                 errorLayer: "Pipeline",
                 traceId: context.TraceId);
 
-            context.Instance.AddIncident(incident);
+            instance.AddIncident(incident);
         }
 
-        context.Instance.Fault(context.Domain);
-        context.ExtractAndDeferInstanceEvents();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        instance.Fault(context.Domain);
+        await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
+        await faultUow.CommitAsync(cancellationToken);
 
-        _logger.LogInformation(
-            "Instance {InstanceId} marked as faulted successfully. Client will receive Status = 'F'",
-            context.InstanceId);
+        _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }
 
     /// <summary>

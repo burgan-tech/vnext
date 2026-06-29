@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Guids;
+using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -20,7 +21,7 @@ public sealed class SubflowOutputMappingService(
     : ISubflowOutputMappingService
 {
     /// <inheritdoc />
-    public async Task ApplyAsync(
+    public async Task<Result> ApplyAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         string parentStateKey,
@@ -29,12 +30,12 @@ public sealed class SubflowOutputMappingService(
     {
         var parentStateResult = parentWorkflow.GetState(parentStateKey);
         if (!parentStateResult.IsSuccess)
-            return;
+            return Result.Ok();
 
         var parentState = parentStateResult.Value!;
         var subFlowConfig = parentState.SubFlow;
         if (subFlowConfig?.Mapping is null || !subFlowConfig.Mapping.HasMappingCode)
-            return;
+            return Result.Ok();
 
         try
         {
@@ -76,10 +77,16 @@ public sealed class SubflowOutputMappingService(
             {
                 await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
             }
+
+            return Result.Ok();
         }
         catch (Exception ex)
         {
-            logger.SubFlowCompletionFailed(ex, Guid.Empty, parentInstance.Id);
+            logger.SubFlowOutputMappingFailed(ex, parentInstance.Id);
+            return Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
+                parentInstance.Id,
+                ex.Message,
+                stackTrace: ex.ToString()));
         }
     }
 }
