@@ -89,6 +89,17 @@ public sealed class StateNotifyJobHandler(
             .WithBody(args.Data)
             .BuildAsync(cancellationToken);
 
+        var rootId = scriptContext.Instance?.GetRootInstanceId();
+        using var rootScope = (rootId.HasValue && rootId.Value != args.InstanceId)
+            ? logger.BeginScope(new Dictionary<string, object>
+              { [TelemetryConstants.TagNames.RootInstanceId] = rootId.Value })
+            : null;
+        if (rootId.HasValue && rootId.Value != args.InstanceId)
+        {
+            activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.Value.ToString());
+            activity?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.Value.ToString());
+        }
+
         var state = scriptContext.Workflow?.States.SingleOrDefault(s => s.Key == args.StateKey);
 
         var entries = state?.Notifications
