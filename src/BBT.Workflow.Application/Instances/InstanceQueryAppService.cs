@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether;
 using BBT.Aether.Application.Services;
 using BBT.Aether.Domain.Entities;
@@ -56,7 +57,21 @@ public sealed class InstanceQueryAppService(
         InstanceStatus.Faulted,
         InstanceStatus.Passive
     ];
-    
+
+    private IDisposable? BeginRootIdScopeIfSubflow(Instance instance)
+    {
+        var rootId = instance.GetRootInstanceId();
+        if (rootId == instance.Id)
+            return null;
+
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+        Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+        return logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.RootInstanceId] = rootId
+        });
+    }
+
     public async Task<ConditionalResult<GetInstanceOutput>> GetInstanceAsync(
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
@@ -462,7 +477,19 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceIdentifier, cancellationToken);
-        return instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
+        var result = instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
+        if (result.IsSuccess)
+        {
+            var inst = result.Value!;
+            var rootId = inst.GetRootInstanceId();
+            if (rootId != inst.Id)
+            {
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -762,6 +789,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    using var rootScope = BeginRootIdScopeIfSubflow(data.instance);
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 

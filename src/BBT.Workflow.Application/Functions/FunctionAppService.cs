@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
@@ -69,6 +70,13 @@ public sealed class FunctionAppService(
             var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
             if (instance == null)
                 return Result<FunctionResponseOutput>.Fail(WorkflowErrors.InstanceNotFound(instanceKey));
+
+            var rootId = instance.GetRootInstanceId();
+            if (rootId != instance.Id)
+            {
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            }
 
             return await componentCacheStore
                 .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
