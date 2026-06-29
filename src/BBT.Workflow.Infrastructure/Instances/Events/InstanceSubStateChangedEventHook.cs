@@ -35,7 +35,7 @@ public sealed class InstanceSubStateChangedEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
@@ -43,7 +43,11 @@ public sealed class InstanceSubStateChangedEventHook(
             [TelemetryConstants.TagNames.InstanceId] = eventData.ParentInstanceId,
             [TelemetryConstants.TagNames.ParentInstanceId] = eventData.ParentInstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.SubFlowStateChangedEventReceived(
                 eventData.SubInstanceId,
