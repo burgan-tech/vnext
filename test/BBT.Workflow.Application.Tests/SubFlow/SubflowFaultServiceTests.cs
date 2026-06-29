@@ -37,8 +37,17 @@ public sealed class SubflowFaultServiceTests
             .Returns(ValueTask.CompletedTask);
 
         _uowManager
-            .Setup(m => m.BeginAsync(It.IsAny<UnitOfWorkOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_uow.Object);
+            .Setup(m => m.Begin(It.IsAny<UnitOfWorkOptions>()))
+            .Returns(_uow.Object);
+
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(
+                It.IsAny<Instance>(),
+                It.IsAny<Definitions.Workflow>(),
+                It.IsAny<string>(),
+                It.IsAny<JsonElement?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
     }
 
     [Fact]
@@ -126,7 +135,7 @@ public sealed class SubflowFaultServiceTests
         parentInstance.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         parentInstance.Status.ShouldBe(InstanceStatus.Busy);
         _uowManager.Verify(
-            x => x.BeginAsync(It.IsAny<UnitOfWorkOptions>(), It.IsAny<CancellationToken>()),
+            x => x.Begin(It.IsAny<UnitOfWorkOptions>()),
             Times.Exactly(2));
     }
 
@@ -150,7 +159,7 @@ public sealed class SubflowFaultServiceTests
                 It.IsAny<JsonElement?>(),
                 It.IsAny<CancellationToken>()))
             .Callback(() => incidentVisibleToMapping = parentInstance.HasActiveIncident)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(Result.Ok());
 
         await CreateService().FaultAsync(input, CancellationToken.None);
 

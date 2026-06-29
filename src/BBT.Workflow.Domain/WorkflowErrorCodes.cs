@@ -45,6 +45,7 @@ public static class WorkflowErrorCodes
     public const string InstanceNotFaulted = "Instance:100027";
     public const string NoIncompleteTransitionFound = "Instance:100028";
     public const string TimeoutConfigMissing = "Instance:100029";
+    public const string SubflowOutputMappingFailed = "Instance:100030";
 
     #endregion
     

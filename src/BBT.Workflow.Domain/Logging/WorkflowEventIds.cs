@@ -79,6 +79,7 @@ public static class WorkflowEventIds
     public static readonly EventId SubFlowStateChangeApplied = new(40028, nameof(SubFlowStateChangeApplied));
     public static readonly EventId SubFlowStateChangedEventReceived = new(40029, nameof(SubFlowStateChangedEventReceived));
     public static readonly EventId SubFlowStateUpdateFailed = new(40079, nameof(SubFlowStateUpdateFailed));
+    public static readonly EventId SubFlowOutputMappingFailed = new(40080, nameof(SubFlowOutputMappingFailed));
 
     // Warning (40040-40069)
     public static readonly EventId SubFlowCorrelationNotFound = new(40043, nameof(SubFlowCorrelationNotFound));
