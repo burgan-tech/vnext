@@ -1,9 +1,9 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using BBT.Workflow.Logging;
 using Dapr.Client;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Workers.Inbox.Forwarding;
 
@@ -63,6 +63,10 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         request.Headers.Add(
             WorkflowInfo.Name,
             WorkflowInfo.Generate(domain, workflow, version ?? "latest", instanceId));
+
+        var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
+        if (!string.IsNullOrEmpty(rootIdBaggage))
+            request.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RootInstanceId, rootIdBaggage);
 
         HttpResponseMessage response;
         try

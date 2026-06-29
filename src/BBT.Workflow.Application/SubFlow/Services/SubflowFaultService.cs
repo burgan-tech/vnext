@@ -137,12 +137,22 @@ public sealed class SubflowFaultService(
                         parentInstance.Fault(input.Domain);
                     }
 
-                    await outputMappingService.ApplyAsync(
+                    var mappingResult = await outputMappingService.ApplyAsync(
                         parentInstance,
                         parentWorkflow,
                         correlation.ParentState,
                         input.InstanceData,
                         cancellationToken);
+
+                    // Output mapping failure is non-blocking here: the instance is already
+                    // marked Faulted/transitioned above. Just log and proceed so the fault
+                    // is committed and propagated upward via InstanceSubFaultedEvent.
+                    if (!mappingResult.IsSuccess)
+                    {
+                        logger.SubFlowOutputMappingFailed(
+                            new Exception(mappingResult.Error.Message),
+                            parentInstance.Id);
+                    }
 
                     await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                     await uow.CommitAsync(cancellationToken);

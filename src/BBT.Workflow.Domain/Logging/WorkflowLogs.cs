@@ -585,6 +585,30 @@ public static partial class WorkflowLogs
         int excludedCount,
         string transitionKey);
 
+    /// <summary>
+    /// Logs when an instance is about to be marked faulted due to an unhandled pipeline error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10130,
+        Level = LogLevel.Warning,
+        Message = "Marking instance {InstanceId} as faulted due to unhandled pipeline error: {ErrorCode} - {ErrorMessage}")]
+    public static partial void InstanceFaultedDueToPipelineError(
+        this ILogger logger,
+        Guid instanceId,
+        string? errorCode,
+        string? errorMessage);
+
+    /// <summary>
+    /// Logs when an instance has been successfully persisted as faulted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10131,
+        Level = LogLevel.Information,
+        Message = "Instance {InstanceId} marked as faulted successfully. Client will receive Status = 'F'")]
+    public static partial void InstanceFaultedSuccessfully(
+        this ILogger logger,
+        Guid instanceId);
+
     #endregion
 
     #region Task Execution
@@ -907,6 +931,18 @@ public static partial class WorkflowLogs
         Message = "SubFlow output mapping started for parent instance {ParentInstanceId}")]
     public static partial void SubFlowOutputMappingStarted(
         this ILogger logger,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when SubFlow output mapping script execution fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40080,
+        Level = LogLevel.Error,
+        Message = "SubFlow output mapping failed for parent instance {ParentInstanceId}")]
+    public static partial void SubFlowOutputMappingFailed(
+        this ILogger logger,
+        Exception exception,
         Guid parentInstanceId);
 
     /// <summary>

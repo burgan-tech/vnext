@@ -42,4 +42,10 @@ public class InstanceCompletedCleanupEvent : IDistributedEvent
     /// When the instance was completed
     /// </summary>
     public required DateTime CompletedAt { get; init; }
+
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
 }

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -34,6 +35,7 @@ public class TransitionPipelineTests
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
+    private readonly IUnitOfWorkManager _mockUowManager;
     private readonly ITransitionValidationService _mockValidationService;
     private readonly IStateNotificationScheduler _mockStateNotificationScheduler;
     private readonly List<ITransitionStep> _mockSteps;
@@ -48,6 +50,7 @@ public class TransitionPipelineTests
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
+        _mockUowManager = Substitute.For<IUnitOfWorkManager>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
         _mockStateNotificationScheduler = Substitute.For<IStateNotificationScheduler>();
         _mockSteps = new List<ITransitionStep>();
@@ -119,6 +122,7 @@ public class TransitionPipelineTests
             _mockContextFactory,
             _mockPostCommitExecutor,
             _mockInstanceRepository,
+            _mockUowManager,
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
 using Dapr.Client;
@@ -69,6 +70,11 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 traceContext.WorkflowKey ?? "unknown",
                 traceContext.WorkflowVersion ?? "latest",
                 traceContext.InstanceId));
+
+            // Forward root instance ID from Activity baggage (set by TransitionExecutor for subflow instances)
+            var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
+            if (!string.IsNullOrEmpty(rootIdBaggage))
+                httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RootInstanceId, rootIdBaggage);
 
             var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
                 httpRequest, invocationCts.Token);

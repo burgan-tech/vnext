@@ -70,6 +70,12 @@ public class InstanceSubStateChangedEvent : IDistributedEvent
     /// </summary>
     public required DateTime ChangedAt { get; init; }
 
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
+
     public override string ToString()
     {
         return $"{nameof(InstanceSubStateChangedEvent)}: ParentInstanceId={ParentInstanceId} SubInstanceId={SubInstanceId} Domain={Domain} Flow={Flow} PreviousState={PreviousState} NewState={NewState}";

@@ -38,13 +38,17 @@ public sealed class InstanceCanceledEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.InstanceCanceledEventReceived(eventData.InstanceId, eventData.Flow);
 

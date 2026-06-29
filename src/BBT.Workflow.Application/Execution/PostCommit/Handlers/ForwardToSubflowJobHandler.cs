@@ -21,12 +21,17 @@ public sealed class ForwardToSubflowJobHandler(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var rootId = context.Instance?.GetRootInstanceId();
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.InstanceId] = context.InstanceId,
             [TelemetryConstants.TagNames.ParentInstanceId] = job.ParentInstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = job.SubflowInstanceId
-        }))
+        };
+        if (rootId.HasValue && rootId.Value != context.InstanceId)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = rootId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.SubFlowForwardStarted(job.TransitionKey, job.SubflowInstanceId, job.ParentInstanceId);
 

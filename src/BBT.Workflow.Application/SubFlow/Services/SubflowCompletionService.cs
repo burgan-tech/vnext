@@ -79,6 +79,17 @@ public sealed class SubflowCompletionService(
                         return;
                     }
 
+                    // Idempotency: if parent is already in a terminal state the subflow completion
+                    // has already been processed (or the parent was terminated via another path).
+                    // No pipeline resume is needed — just return cleanly.
+                    if (parentInstance.Status.Equals(InstanceStatus.Completed) ||
+                        parentInstance.Status.Equals(InstanceStatus.Faulted))
+                    {
+                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
                     var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
                     if (correlation == null)
                     {
@@ -124,13 +135,32 @@ public sealed class SubflowCompletionService(
 
                     parentWorkflow = parentWorkflowResult.Value!;
 
-                    await outputMappingService.ApplyAsync(
+                    var mappingResult = await outputMappingService.ApplyAsync(
                         parentInstance,
                         parentWorkflow,
                         correlation.ParentState,
                         completedInput.InstanceData,
                         cancellationToken);
-                    
+
+                    if (!mappingResult.IsSuccess)
+                    {
+                        // Output mapping failed — fault the parent instead of resuming the pipeline.
+                        // Retrying would never succeed; faulting propagates the error to A via InstanceSubFaultedEvent.
+                        var incident = InstanceIncidentFactory.Create(
+                            state: parentInstance.GetCurrentState,
+                            transition: string.Empty,
+                            taskKey: null,
+                            message: mappingResult.Error.Message ?? "SubFlow output mapping failed",
+                            errorCode: mappingResult.Error.Code ?? WorkflowErrorCodes.SubflowOutputMappingFailed,
+                            errorLayer: "SubFlow",
+                            stackTrace: mappingResult.Error.Detail);
+                        parentInstance.AddIncident(incident);
+                        parentInstance.Fault(completedInput.Domain);
+                        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
                     await correlationUow.CommitAsync(cancellationToken);
                 }
                 
@@ -195,8 +225,13 @@ public sealed class SubflowCompletionService(
             
             if (!result.IsSuccess)
             {
-                // Check if this is an auto-transition condition not met
-                if (result.Error.Code != WorkflowErrorCodes.AutoTransitionConditionNotMet)
+                // AutoTransitionConditionNotMet: normal — no matching auto-transition, instance stays Active.
+                // InstanceCompleted: race condition — parent was completed between Phase 1 commit and
+                // Phase 2 execution (e.g. timeout, cancel, or duplicate delivery). Both are non-fatal.
+                var isSoftError = result.Error.Code == WorkflowErrorCodes.AutoTransitionConditionNotMet
+                               || result.Error.Code == WorkflowErrorCodes.InstanceCompleted;
+
+                if (!isSoftError)
                 {
                     logger.TransitionRuleFailed(
                         "subflow",
@@ -204,13 +239,15 @@ public sealed class SubflowCompletionService(
                         result.Error.Message ?? "Unknown error");
                 }
 
-                throw new SubflowCompletionException(
-                    parentWorkflow.Domain,
-                    parentWorkflow.Key,
-                    parentInstance.Id.ToString(),
-                    result.Error.Code,
-                    result.Error.Message ?? "Unknown error"
-                );
+                if (!isSoftError)
+                {
+                    throw new SubflowCompletionException(
+                        parentWorkflow.Domain,
+                        parentWorkflow.Key,
+                        parentInstance.Id.ToString(),
+                        result.Error.Code,
+                        result.Error.Message ?? "Unknown error");
+                }
             }
         }
         catch (Exception ex)
