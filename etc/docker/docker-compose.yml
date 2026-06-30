@@ -269,6 +269,35 @@ services:
     networks:
       - bbt-development
 
+  # Metabase — OPT-IN business-analytics engine the runtime provides for any
+  # domain that wants dashboards. It is NOT started by a plain `docker compose up`;
+  # it only runs when its profile is enabled:
+  #     docker compose --profile metabase up -d metabase
+  # The runtime owns the container only. Dashboards, schema selection, cards and
+  # questions are DOMAIN-specific and live in each domain repo (e.g. vnext-example's
+  # etc/docker/config/metabase/provision.sh) — vNext deliberately knows none of that.
+  metabase:
+    profiles: ["metabase"]
+    container_name: vnext-metabase
+    image: metabase/metabase:latest
+    ports:
+      - "3030:3000"
+    environment:
+      MB_DB_TYPE: h2
+      JAVA_TIMEZONE: UTC
+      MB_SITE_NAME: "vNext Analytics"
+    volumes:
+      - metabase:/metabase-data
+    networks:
+      - vnext-development
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health | grep -q '\"status\":\"ok\"' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
   # OpenObserve for observability
   openobserve:
     container_name: vnext-openobserve
@@ -306,9 +335,14 @@ services:
 networks:
   bbt-development:
     external: true
+  # Network owned by the vnext-runtime compose; Metabase joins it to read the
+  # live vnext-postgres (vNext_Vnext_example DB). Must exist (make up-infra).
+  vnext-development:
+    external: true
 
 volumes:
   redis:
   postgres:
   openobserve:
+  metabase:
   npm-cache: {}
