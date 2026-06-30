@@ -609,6 +609,19 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId);
 
+    /// <summary>
+    /// Logs when the workflow-level output script fails during sync response enrichment.
+    /// Execution continues and falls back to raw instance attributes.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10132,
+        Level = LogLevel.Error,
+        Message = "Workflow '{WorkflowKey}' output script failed. Falling back to raw instance attributes.")]
+    public static partial void WorkflowOutputScriptFailed(
+        this ILogger logger,
+        string workflowKey,
+        Exception exception);
+
     #endregion
 
     #region Task Execution

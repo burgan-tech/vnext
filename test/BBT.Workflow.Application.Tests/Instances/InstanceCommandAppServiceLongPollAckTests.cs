@@ -95,6 +95,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             cancellationService: _cancellationService,
             longPollAckResumeService: _resumeService,
             instanceCommandGateway: _gateway,
+            workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             currentUser: Substitute.For<ICurrentUser>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
