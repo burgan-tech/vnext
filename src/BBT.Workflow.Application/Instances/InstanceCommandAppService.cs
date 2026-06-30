@@ -60,6 +60,7 @@ public sealed class InstanceCommandAppService(
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
     IInstanceCommandGateway instanceCommandGateway,
+    IWorkflowOutputMappingService workflowOutputMappingService,
     ICurrentUser currentUser,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
@@ -708,6 +709,10 @@ public sealed class InstanceCommandAppService(
                 .WithTransition(string.Empty)
                 .WithBody(latestData?.Data ?? new JsonData("{}"))
                 .BuildAsync(cancellationToken);
+
+            var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
+            if (outputResult.IsSuccess && outputResult.Value.HasValue)
+                attributes = outputResult.Value;
 
             var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
                 extensionRequested,
