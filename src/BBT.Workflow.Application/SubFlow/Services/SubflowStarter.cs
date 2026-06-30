@@ -45,7 +45,7 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult = null;
         if (subFlowConfig.Mapping != null)
         {
-            var mappingResult = await HandleInputMappingAsync(subFlowConfig, context, cancellationToken);
+            var mappingResult = await HandleInputMappingAsync(subFlowConfig, workflow, context, cancellationToken);
             if (!mappingResult.IsSuccess)
             {
                 return Result.Fail(mappingResult.Error);
@@ -230,11 +230,13 @@ public sealed class SubflowStarter(
     /// Handles input mapping for SubFlow/SubProcess by compiling and executing the mapping script.
     /// </summary>
     /// <param name="subFlowConfig">The SubFlow configuration containing mapping information.</param>
+    /// <param name="workflow">The parent workflow definition, used to supply flow-level script settings.</param>
     /// <param name="context">The script context for mapping execution.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>Result containing the mapping response or error.</returns>
     private async Task<Result<ScriptResponse?>> HandleInputMappingAsync(
         Definitions.SubFlow subFlowConfig,
+        Definitions.Workflow workflow,
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
@@ -250,6 +252,7 @@ public sealed class SubflowStarter(
             {
                 var subFlowMapping = await scriptEngine.CompileToInstanceAsync<ISubFlowMapping>(
                     subFlowConfig.Mapping,
+                    flowScripts: workflow.Scripts,
                     cancellationToken: ct);
                 return await subFlowMapping.InputHandler(context);
             }
@@ -258,6 +261,7 @@ public sealed class SubflowStarter(
             {
                 var subProcessMapping = await scriptEngine.CompileToInstanceAsync<ISubProcessMapping>(
                     subFlowConfig.Mapping,
+                    flowScripts: workflow.Scripts,
                     cancellationToken: ct);
                 return await subProcessMapping.InputHandler(context);
             }
