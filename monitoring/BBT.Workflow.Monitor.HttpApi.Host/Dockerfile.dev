@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+# Development image with SDK for hot reload
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine
+
+# Install debugger for development
+RUN apk add --no-cache curl bash unzip && \
+    curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l /vsdbg
+
+# PostSharp targeting pack: NETStandard.Library.Ref 2.1.0
+RUN dotnet restore --packages /root/.nuget/packages "NETStandard.Library.Ref" --version 2.1.0 2>/dev/null || true && \
+    mkdir -p /var/tmp/postsharp/NuGetFallback && \
+    cp -r /root/.nuget/packages/netstandard.library.ref /var/tmp/postsharp/NuGetFallback/ 2>/dev/null || true
+
+ENV SKIP_POSTSHARP=true
+
+WORKDIR /app
+
+EXPOSE 5000
+
+# Shell form: runtime'da SKIP_POSTSHARP environment variable çözümlenir
+CMD bash -c "dotnet watch run --project monitoring/BBT.Workflow.Monitor.HttpApi.Host/BBT.Workflow.Monitor.HttpApi.Host.csproj --urls http://+:5000 /p:SkipPostSharp=$SKIP_POSTSHARP"

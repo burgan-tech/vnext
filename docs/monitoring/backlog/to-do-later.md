@@ -1,0 +1,1 @@
+Raw SQL sorgularını düzeltmelisin. Duration ve performance kısımlarında genellikle raw sql kullanımı var. Raw sql kullanılmamalı.

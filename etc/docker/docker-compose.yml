@@ -169,6 +169,35 @@ services:
       - redis
       - vault
 
+  vnext-monitoring-dapr:
+    image: "daprio/daprd"
+    container_name: vnext-monitoring-dapr
+    command: [
+      "./daprd",
+      "--app-id", "vnext-monitoring",
+      "--app-port", "4203",
+      "--resources-path", "./components",
+      "--dapr-grpc-port", "42131",
+      "--dapr-http-port", "42130",
+      "--scheduler-host-address", "dapr-scheduler:50007",
+      "--placement-host-address", "dapr-placement:50005",
+      "--app-channel-address", "host.orb.local"
+    ]
+    volumes:
+      - "../../etc/workers/monitoring/dapr/components:/components"
+    ports:
+      - "42130:42130"
+      - "42131:42131"
+    networks:
+      - bbt-development
+    extra_hosts:
+      - "host.orb.local:host-gateway"
+    depends_on:
+      - dapr-placement
+      - dapr-scheduler
+      - redis
+      - vault
+
   dapr-placement:
     image: "daprio/dapr"
     container_name: dapr-placement

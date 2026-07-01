@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <Import Project="..\..\common.props" />
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <RootNamespace>BBT.Workflow.Monitor.Application.Tests</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkPackageVersion)" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\monitoring\BBT.Workflow.Monitor.Application\BBT.Workflow.Monitor.Application.csproj" />
+        <ProjectReference Include="..\BBT.Workflow.TestBase\BBT.Workflow.TestBase.csproj" />
+    </ItemGroup>
+
+</Project>

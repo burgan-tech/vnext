@@ -1,0 +1,372 @@
+services:
+    vnext-app:
+        container_name: vnext-app
+        build:
+            context: ../..
+            dockerfile: orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile.dev
+        env_file:
+            - .env.orchestration.dev
+        ports:
+            - '4201:5000'
+        volumes:
+            - ../..:/app
+            - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/obj/
+            - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/bin/
+            - /app/src/BBT.Workflow.Domain/obj/
+            - /app/src/BBT.Workflow.Domain/bin/
+            - /app/src/BBT.Workflow.Application/obj/
+            - /app/src/BBT.Workflow.Application/bin/
+            - /app/src/BBT.Workflow.Infrastructure/obj/
+            - /app/src/BBT.Workflow.Infrastructure/bin/
+            - /app/src/BBT.Workflow.HttpApi.Shared/obj/
+            - /app/src/BBT.Workflow.HttpApi.Shared/bin/
+        working_dir: /app
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'wget',
+                    '--no-verbose',
+                    '--tries=1',
+                    '--spider',
+                    'http://localhost:5000/health',
+                ]
+            interval: 15s
+            retries: 8
+            start_period: 90s
+            timeout: 10s
+        networks:
+            - bbt-development
+        depends_on:
+            - dapr-placement
+            - dapr-scheduler
+            - postgres
+
+    vnext-execution-app:
+        container_name: vnext-execution-app
+        build:
+            context: ../..
+            dockerfile: execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile.dev
+        env_file:
+            - .env.execution.dev
+        ports:
+            - '4202:5000'
+        volumes:
+            - ../..:/app
+            - /app/execution/BBT.Workflow.Execution.HttpApi.Host/obj/
+            - /app/execution/BBT.Workflow.Execution.HttpApi.Host/bin/
+            - /app/src/BBT.Workflow.Domain/obj/
+            - /app/src/BBT.Workflow.Domain/bin/
+            - /app/src/BBT.Workflow.Application/obj/
+            - /app/src/BBT.Workflow.Application/bin/
+            - /app/src/BBT.Workflow.Infrastructure/obj/
+            - /app/src/BBT.Workflow.Infrastructure/bin/
+            - /app/src/BBT.Workflow.HttpApi.Shared/obj/
+            - /app/src/BBT.Workflow.HttpApi.Shared/bin/
+        working_dir: /app
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'wget',
+                    '--no-verbose',
+                    '--tries=1',
+                    '--spider',
+                    'http://localhost:5000/health',
+                ]
+            interval: 15s
+            retries: 8
+            start_period: 90s
+            timeout: 10s
+        networks:
+            - bbt-development
+        depends_on:
+            - dapr-placement
+            - dapr-scheduler
+            - postgres
+
+    init:
+        build:
+            context: ../../
+            dockerfile: init/VNext.Init.Host/Dockerfile
+        container_name: init
+        env_file:
+            - env.dev
+        environment:
+            - PACKAGE_API_PORT=3000
+        ports:
+            - '3005:3000'
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost:3000/health']
+            interval: 10s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+        volumes:
+            - npm-cache:/app/.npm-cache
+        networks:
+            - bbt-development
+        depends_on:
+            - vnext-app
+            - redis
+            - postgres
+        restart: 'no'
+
+    vnext-orchestration-dapr:
+        image: 'daprio/daprd'
+        container_name: vnext-orchestration-dapr
+        command:
+            [
+                './daprd',
+                '--app-id',
+                'vnext-app',
+                '--app-port',
+                '5000',
+                '--resources-path',
+                './components',
+                '--dapr-grpc-port',
+                '42111',
+                '--dapr-http-port',
+                '42110',
+                '--scheduler-host-address',
+                'dapr-scheduler:50007',
+                '--placement-host-address',
+                'dapr-placement:50005',
+            ]
+        volumes:
+            - '../../etc/orchestration/dapr/components:/components'
+        network_mode: 'service:vnext-app'
+        depends_on:
+            - vnext-app
+            - dapr-placement
+            - dapr-scheduler
+            - redis
+
+    vnext-execution-dapr:
+        image: 'daprio/daprd'
+        container_name: vnext-execution-dapr
+        command:
+            [
+                './daprd',
+                '--app-id',
+                'vnext-execution-app',
+                '--app-port',
+                '5000',
+                '--resources-path',
+                './components',
+                '--dapr-grpc-port',
+                '43111',
+                '--dapr-http-port',
+                '43110',
+                '--scheduler-host-address',
+                'dapr-scheduler:50007',
+                '--placement-host-address',
+                'dapr-placement:50005',
+            ]
+        volumes:
+            - '../../etc/execution/dapr/components:/components'
+        network_mode: 'service:vnext-execution-app'
+        depends_on:
+            - vnext-execution-app
+            - dapr-placement
+            - dapr-scheduler
+            - redis
+
+    vnext-monitoring-app:
+        container_name: vnext-monitoring-app
+        build:
+            context: ../..
+            dockerfile: monitoring/BBT.Workflow.Monitor.HttpApi.Host/Dockerfile.dev
+        env_file:
+            - .env.monitoring.dev
+        ports:
+            - '4203:5000'
+        volumes:
+            - ../..:/app
+            - /app/monitoring/BBT.Workflow.Monitor.HttpApi.Host/obj/
+            - /app/monitoring/BBT.Workflow.Monitor.HttpApi.Host/bin/
+            - /app/monitoring/BBT.Workflow.Monitor.Application/obj/
+            - /app/monitoring/BBT.Workflow.Monitor.Application/bin/
+            - /app/src/BBT.Workflow.Domain/obj/
+            - /app/src/BBT.Workflow.Domain/bin/
+            - /app/src/BBT.Workflow.Application/obj/
+            - /app/src/BBT.Workflow.Application/bin/
+            - /app/src/BBT.Workflow.Infrastructure/obj/
+            - /app/src/BBT.Workflow.Infrastructure/bin/
+            - /app/src/BBT.Workflow.HttpApi.Shared/obj/
+            - /app/src/BBT.Workflow.HttpApi.Shared/bin/
+        working_dir: /app
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'wget',
+                    '--no-verbose',
+                    '--tries=1',
+                    '--spider',
+                    'http://localhost:5000/health',
+                ]
+            interval: 15s
+            retries: 8
+            start_period: 90s
+            timeout: 10s
+        networks:
+            - bbt-development
+        depends_on:
+            - dapr-placement
+            - dapr-scheduler
+            - postgres
+
+    vnext-monitoring-dapr:
+        image: 'daprio/daprd'
+        container_name: vnext-monitoring-dapr
+        command:
+            [
+                './daprd',
+                '--app-id',
+                'vnext-monitoring',
+                '--app-port',
+                '5000',
+                '--resources-path',
+                './components',
+                '--dapr-grpc-port',
+                '42131',
+                '--dapr-http-port',
+                '42130',
+                '--scheduler-host-address',
+                'dapr-scheduler:50007',
+                '--placement-host-address',
+                'dapr-placement:50005',
+            ]
+        volumes:
+            - '../../etc/monitoring/dapr/components:/components'
+        network_mode: 'service:vnext-monitoring-app'
+        depends_on:
+            - vnext-monitoring-app
+            - dapr-placement
+            - dapr-scheduler
+            - redis
+
+    vnext-db-migrator-dapr:
+        image: 'daprio/daprd'
+        container_name: vnext-db-migrator-dapr
+        command:
+            [
+                './daprd',
+                '--app-id',
+                'vnext-db-migrator',
+                '--resources-path',
+                './components',
+                '--dapr-grpc-port',
+                '44211',
+                '--dapr-http-port',
+                '44210',
+                '--scheduler-host-address',
+                'dapr-scheduler:50007',
+                '--placement-host-address',
+                'dapr-placement:50005',
+            ]
+        volumes:
+            - '../../etc/workers/db-migrator/dapr/components:/components'
+        ports:
+            - '44210:44210'
+            - '44211:44211'
+        networks:
+            - bbt-development
+        depends_on:
+            - dapr-placement
+            - dapr-scheduler
+            - redis
+
+    vnext-db-migrator:
+        container_name: vnext-db-migrator
+        build:
+            context: ../..
+            dockerfile: workers/BBT.Workflow.DbMigrator/Dockerfile.dev
+        environment:
+            ConnectionStrings__Default: 'Host=postgres;Port=5432;Database=Aether_WorkflowDb;Username=postgres;Password=postgres;'
+            DAPR_HTTP_PORT: '44210'
+            DAPR_GRPC_PORT: '44211'
+            DAPR_LOCK_STORE_NAME: 'vnext-lock'
+            ASPNETCORE_ENVIRONMENT: 'Development'
+        volumes:
+            - ../..:/app
+            - /app/workers/BBT.Workflow.DbMigrator/obj/
+            - /app/workers/BBT.Workflow.DbMigrator/bin/
+            - /app/src/BBT.Workflow.Domain/obj/
+            - /app/src/BBT.Workflow.Domain/bin/
+            - /app/src/BBT.Workflow.Infrastructure/obj/
+            - /app/src/BBT.Workflow.Infrastructure/bin/
+            - /app/src/BBT.Workflow.HttpApi.Shared/obj/
+            - /app/src/BBT.Workflow.HttpApi.Shared/bin/
+        working_dir: /app
+        network_mode: 'service:vnext-db-migrator-dapr'
+        depends_on:
+            - vnext-db-migrator-dapr
+            - postgres
+            - redis
+        restart: 'no'
+
+    dapr-placement:
+        image: 'daprio/dapr'
+        container_name: dapr-placement
+        command: ['./placement', '--port', '50005']
+        ports:
+            - '50005:50005'
+        networks:
+            - bbt-development
+
+    dapr-scheduler:
+        image: 'daprio/scheduler'
+        container_name: dapr-scheduler
+        user: '0:0'
+        command: ['./scheduler', '--port', '50007', '--etcd-data-dir', '/data']
+        ports:
+            - '50007:50007'
+        volumes:
+            - type: tmpfs
+              target: /data
+              tmpfs:
+                  size: '64m'
+                  mode: 1777
+        networks:
+            - bbt-development
+
+    redis:
+        container_name: vnext-redis
+        image: redis:latest
+        restart: always
+        ports:
+            - '6379:6379'
+        command: redis-server --save 20 1 --loglevel warning
+        volumes:
+            - redis:/data
+        networks:
+            - bbt-development
+
+    postgres:
+        container_name: vnext-postgres
+        image: postgres:latest
+        environment:
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+            PGDATA: /data/postgres
+        volumes:
+            - postgres:/data/postgres
+        ports:
+            - '5432:5432'
+        restart: unless-stopped
+        networks:
+            - bbt-development
+
+networks:
+    bbt-development:
+        external: true
+
+volumes:
+    redis:
+    postgres:
+    vnext-app:
+    vnext-execution-app:
+    vnext-monitoring-app:
+    npm-cache: {}

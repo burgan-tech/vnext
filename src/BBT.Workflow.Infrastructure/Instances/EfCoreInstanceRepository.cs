@@ -192,6 +192,29 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<Instance?> FindByIdentifierSlimAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .AsNoTracking()
+            .AsSplitQuery();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query
+                .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+            if (response != null)
+                return response;
+        }
+
+        return await query
+            .FirstOrDefaultAsync(i => i.Key == identifier, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
@@ -1007,6 +1030,72 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<List<ActiveInstanceDataSummary>> GetActiveDataSummariesPagedAsync(
+        int skip, int take, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var raw = await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .OrderBy(i => i.Id)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new
+                {
+                    i.Key,
+                    i.FlowVersion,
+                    i.Tags,
+                    i.CreatedAt,
+                    i.ModifiedAt,
+                    DataJson = d.Data.Json,
+                    d.Version,
+                    d.IsLatest
+                })
+            .AsNoTracking()
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        return raw.Select(r => new ActiveInstanceDataSummary(
+            r.Key,
+            r.FlowVersion,
+            r.Tags,
+            r.CreatedAt,
+            r.ModifiedAt,
+            JsonSerializer.Deserialize<JsonElement>(r.DataJson, JsonSerializerConstants.JsonOptions),
+            r.Version,
+            r.IsLatest))
+            .ToList();
+    }
+
+    public async Task<List<ComponentVersionSummary>> GetVersionsPagedAsync(
+        string key, int skip, int take, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var raw = await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new
+                {
+                    d.Version,
+                    d.IsLatest,
+                    i.FlowVersion,
+                    PublishedAt = d.EnteredAt
+                })
+            .OrderByDescending(x => x.IsLatest)
+            .ThenByDescending(x => x.PublishedAt)
+            .Skip(skip)
+            .Take(take)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        return raw.Select(r => new ComponentVersionSummary(r.Version, r.IsLatest, r.FlowVersion, r.PublishedAt))
+                  .ToList();
+    }
+
     public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
         DateTime since, int skip, int take, CancellationToken cancellationToken = default)
     {
@@ -1220,4 +1309,101 @@ public sealed class EfCoreInstanceRepository(
     {
         return identifier.Replace("\"", "", StringComparison.Ordinal);
     }
+
+    /// <inheritdoc />
+    public async Task<long> CountAsync(
+        string? filter,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        return await query.LongCountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceStatusCounts> GetStatusCountsAsync(
+        string? filter,
+        CancellationToken cancellationToken = default)
+    {
+        // Single round-trip: COUNT(*) FILTER (WHERE "Status" = …) per status, over the filtered set.
+        // Reuses GetFilteredQueryAsync so the optional GraphQL/legacy filter (e.g. createdAt range)
+        // is applied identically to CountAsync. GroupBy(_ => 1) collapses to a whole-set aggregate;
+        // the i.Status == InstanceStatus.X comparison is the same value-converted predicate CountByStatusAsync uses.
+        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        var counts = await query
+            .GroupBy(_ => 1)
+            .Select(g => new InstanceStatusCounts(
+                g.LongCount(i => i.Status == InstanceStatus.Active),
+                g.LongCount(i => i.Status == InstanceStatus.Busy),
+                g.LongCount(i => i.Status == InstanceStatus.Completed),
+                g.LongCount(i => i.Status == InstanceStatus.Faulted),
+                g.LongCount(i => i.Status == InstanceStatus.Passive)))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return counts ?? new InstanceStatusCounts(0, 0, 0, 0, 0);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> CountByStatusAsync(
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet.AsNoTracking();
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+        if (!string.IsNullOrWhiteSpace(flowVersion))
+            query = query.Where(i => i.FlowVersion == flowVersion);
+        return await query.LongCountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> CountByStateAsync(
+        string stateKey,
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet.AsNoTracking().Where(i => i.CurrentState == stateKey);
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+        if (!string.IsNullOrWhiteSpace(flowVersion))
+            query = query.Where(i => i.FlowVersion == flowVersion);
+        return await query.LongCountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default)
+    {
+        var schema = currentSchema.Name ?? "public";
+        var context = await GetDbContextAsync();
+        var result = await context.Database
+            .SqlQueryRaw<InstanceDurationRaw>(
+                $"SELECT COALESCE(AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"AvgMs\", " +
+                $"COALESCE(MIN(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MinMs\", " +
+                $"COALESCE(MAX(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MaxMs\", " +
+                $"COUNT(*) AS \"CompletedCount\" " +
+                $"FROM \"{schema}\".\"Instances\" WHERE \"CompletedAt\" IS NOT NULL AND \"Duration\" IS NOT NULL")
+            .FirstOrDefaultAsync(cancellationToken);
+        return result is not null
+            ? new InstanceDurationStat(result.AvgMs, result.MinMs, result.MaxMs, result.CompletedCount)
+            : new InstanceDurationStat(0, 0, 0, 0);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var grouped = await dbSet.AsNoTracking()
+            .Where(i => i.Status == InstanceStatus.Faulted)
+            .GroupBy(i => i.CurrentState)
+            .Select(g => new { State = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+        return grouped.Select(x => new StateCountStat(x.State ?? string.Empty, x.Count)).ToList();
+    }
 }
+
+/// <summary>SQL projection record for instance duration aggregation (monitor-only, additive).</summary>
+internal sealed record InstanceDurationRaw(double AvgMs, double MinMs, double MaxMs, long CompletedCount);
