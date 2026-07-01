@@ -90,7 +90,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -370,7 +370,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     /// <summary>
