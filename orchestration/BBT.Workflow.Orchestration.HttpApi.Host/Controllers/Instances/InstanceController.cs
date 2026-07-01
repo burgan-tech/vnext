@@ -65,7 +65,7 @@ public sealed class InstanceController(
         {
             request = body is null
                 ? new CreateInstanceDto()
-                : JsonSerializer.Deserialize<CreateInstanceDto>(body.Value) ?? new CreateInstanceDto();
+                : JsonSerializer.Deserialize<CreateInstanceDto>(body.Value, JsonSerializerOptions.Web) ?? new CreateInstanceDto();
         }
         else
         {
@@ -347,7 +347,7 @@ public sealed class InstanceController(
         }
         else if (PayloadModeDetector.IsStandard(headers, body))
         {
-            data = JsonSerializer.Deserialize<TransitionDataInput>(body.Value);
+            data = JsonSerializer.Deserialize<TransitionDataInput>(body.Value, JsonSerializerOptions.Web);
         }
         else
         {
