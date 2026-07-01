@@ -33,12 +33,36 @@ public sealed record JobName
     private const char Delimiter = '.';
     private const char EncodedMarker = '~';
 
+    /// <summary>
+    /// Separates the source-state key from the transition key inside the composite segment used by
+    /// <c>tx</c>/<c>sx</c> jobs. The ASCII unit-separator (U+001F) never appears in a state or
+    /// transition key and is not URL-safe, so the composite is always Base64Url-encoded on the wire.
+    /// </summary>
+    private const char CompositeSeparator = '';
+
     private JobName(JobType type, Guid instanceId, string? segment, string value)
     {
         Type = type;
         InstanceId = instanceId;
         Segment = segment;
         Value = value;
+
+        // Decode the composite segment into its source-state / transition-key parts. Names written
+        // before source-state scoping (and non-composite segments like long-poll-ack) carry no
+        // separator, so SourceState stays null and the whole segment is the transition key.
+        if (segment is not null)
+        {
+            var separatorIndex = segment.IndexOf(CompositeSeparator);
+            if (separatorIndex >= 0)
+            {
+                SourceState = segment[..separatorIndex];
+                TransitionKey = segment[(separatorIndex + 1)..];
+            }
+            else
+            {
+                TransitionKey = segment;
+            }
+        }
     }
 
     /// <summary>The job kind decoded from the name.</summary>
@@ -48,21 +72,42 @@ public sealed record JobName
     public Guid InstanceId { get; }
 
     /// <summary>
-    /// The decoded final segment: the transition key for transition jobs, the well-known job key
-    /// for long-poll-ack, or <c>null</c> for timeout jobs.
+    /// The decoded final segment: the composite <c>{sourceState}{transitionKey}</c> for
+    /// source-state-scoped transition jobs, the transition key or well-known job key otherwise, or
+    /// <c>null</c> for timeout jobs. Prefer <see cref="SourceState"/> / <see cref="TransitionKey"/>
+    /// for structured access.
     /// </summary>
     public string? Segment { get; }
+
+    /// <summary>
+    /// The source-state key the transition fires from, decoded from the composite segment. <c>null</c>
+    /// for jobs without source-state scoping (timeout, long-poll-ack, state-notify, and legacy names).
+    /// Disambiguates two transitions that share a name across different states in one instance.
+    /// </summary>
+    public string? SourceState { get; }
+
+    /// <summary>
+    /// The transition key (or well-known job key) this job targets, decoded from the segment.
+    /// <c>null</c> for timeout jobs.
+    /// </summary>
+    public string? TransitionKey { get; }
 
     /// <summary>The encoded wire string persisted as the Dapr job name and on the instance-job row.</summary>
     public string Value { get; }
 
-    /// <summary>Builds the name of an async transition continuation job.</summary>
-    public static JobName ForAsyncTransition(Guid instanceId, string transitionKey)
-        => Build(JobType.AsyncTransition, instanceId, transitionKey);
+    /// <summary>
+    /// Builds the name of an async transition continuation job, scoped by the source state so that
+    /// two transitions sharing a name across different states never collide into one Dapr job.
+    /// </summary>
+    public static JobName ForAsyncTransition(Guid instanceId, string sourceState, string transitionKey)
+        => Build(JobType.AsyncTransition, instanceId, ComposeSegment(sourceState, transitionKey));
 
-    /// <summary>Builds the name of a timer-based scheduled transition job.</summary>
-    public static JobName ForScheduledTransition(Guid instanceId, string transitionKey)
-        => Build(JobType.ScheduledTransition, instanceId, transitionKey);
+    /// <summary>
+    /// Builds the name of a timer-based scheduled transition job, scoped by the source state (see
+    /// <see cref="ForAsyncTransition"/> for the collision rationale).
+    /// </summary>
+    public static JobName ForScheduledTransition(Guid instanceId, string sourceState, string transitionKey)
+        => Build(JobType.ScheduledTransition, instanceId, ComposeSegment(sourceState, transitionKey));
 
     /// <summary>Builds the name of a workflow timeout job.</summary>
     public static JobName ForTimeout(Guid instanceId)
@@ -126,6 +171,24 @@ public sealed record JobName
 
     /// <inheritdoc />
     public override string ToString() => Value;
+
+    /// <summary>
+    /// Composes the <c>{sourceState}{transitionKey}</c> segment. When no source state is available
+    /// (e.g. legacy call paths) it degrades to the bare transition key so the name stays parseable.
+    /// </summary>
+    private static string ComposeSegment(string sourceState, string transitionKey)
+    {
+        if (transitionKey.IndexOf(CompositeSeparator) >= 0 ||
+            (sourceState is not null && sourceState.IndexOf(CompositeSeparator) >= 0))
+        {
+            throw new ArgumentException(
+                "State and transition keys must not contain the composite separator (U+001F).");
+        }
+
+        return string.IsNullOrEmpty(sourceState)
+            ? transitionKey
+            : sourceState + CompositeSeparator + transitionKey;
+    }
 
     private static JobName Build(JobType type, Guid instanceId, string? segment)
     {

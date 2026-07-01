@@ -41,7 +41,10 @@ public sealed class EnqueueContinuationStrategy(
         if (next is null)
             return Result<WorkflowExecutionContext?>.Ok(null);
 
-        var jobName = JobName.ForAsyncTransition(current.InstanceId, next.TransitionKey);
+        // Scope by the state the auto-transition fires from (the state just entered) so two
+        // same-named continuations across different states do not dedup into one Dapr job.
+        var sourceStateKey = current.Target?.Key ?? current.Current?.Key ?? string.Empty;
+        var jobName = JobName.ForAsyncTransition(current.InstanceId, sourceStateKey, next.TransitionKey);
         var jobNameValue = jobName.Value;
 
         // Single caller-generated id, reused for the durable InstanceJob.JobId AND the underlying

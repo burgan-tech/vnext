@@ -6,7 +6,7 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Unit tests for the structured <see cref="JobName"/> value object: builder/parser round-trips,
-/// segment encoding collision cases, job-type distinctness, and legacy-name rejection.
+/// segment encoding collision cases, source-state scoping, job-type distinctness, and legacy-name rejection.
 /// </summary>
 public class JobNameTests
 {
@@ -15,20 +15,19 @@ public class JobNameTests
     [Fact]
     public void ForAsyncTransition_ShouldRoundTrip()
     {
-        var jobName = JobName.ForAsyncTransition(Instance, "approve");
-
-        Assert.Equal("vnext.job.v1.tx.550e8400e29b41d4a716446655440000.approve", jobName.Value);
+        var jobName = JobName.ForAsyncTransition(Instance, "state-a", "approve");
 
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
         Assert.Equal(JobType.AsyncTransition, parsed.Type);
         Assert.Equal(Instance, parsed.InstanceId);
-        Assert.Equal("approve", parsed.Segment);
+        Assert.Equal("state-a", parsed.SourceState);
+        Assert.Equal("approve", parsed.TransitionKey);
     }
 
     [Fact]
     public void ForScheduledTransition_ShouldUseDistinctTypeCode()
     {
-        var jobName = JobName.ForScheduledTransition(Instance, "approve");
+        var jobName = JobName.ForScheduledTransition(Instance, "state-a", "approve");
 
         Assert.StartsWith("vnext.job.v1.sx.", jobName.Value);
         Assert.Equal(JobType.ScheduledTransition, JobName.Parse(jobName.Value).Type);
@@ -37,15 +36,39 @@ public class JobNameTests
     [Fact]
     public void Async_And_Scheduled_ForSameInstanceAndKey_ShouldDiffer()
     {
-        var async = JobName.ForAsyncTransition(Instance, "approve");
-        var scheduled = JobName.ForScheduledTransition(Instance, "approve");
+        var async = JobName.ForAsyncTransition(Instance, "state-a", "approve");
+        var scheduled = JobName.ForScheduledTransition(Instance, "state-a", "approve");
 
         Assert.NotEqual(async.Value, scheduled.Value);
         Assert.NotEqual(JobName.Parse(async.Value).Type, JobName.Parse(scheduled.Value).Type);
     }
 
     [Fact]
-    public void ForTimeout_ShouldHaveNoSegment()
+    public void SameTransitionKey_DifferentSourceState_ShouldProduceDifferentNames()
+    {
+        // The bug fix: two states each defining a "within" transition must NOT collide into one job.
+        var fromA = JobName.ForAsyncTransition(Instance, "state-a", "within");
+        var fromB = JobName.ForAsyncTransition(Instance, "state-b", "within");
+
+        Assert.NotEqual(fromA.Value, fromB.Value);
+        Assert.Equal("state-a", JobName.Parse(fromA.Value).SourceState);
+        Assert.Equal("state-b", JobName.Parse(fromB.Value).SourceState);
+        Assert.Equal("within", JobName.Parse(fromA.Value).TransitionKey);
+        Assert.Equal("within", JobName.Parse(fromB.Value).TransitionKey);
+    }
+
+    [Fact]
+    public void SameSourceState_SameKey_ShouldBeIdentical()
+    {
+        // Idempotency: a retry / outbox re-publish of the same logical hop must dedup to one name.
+        var first = JobName.ForAsyncTransition(Instance, "state-a", "within");
+        var second = JobName.ForAsyncTransition(Instance, "state-a", "within");
+
+        Assert.Equal(first.Value, second.Value);
+    }
+
+    [Fact]
+    public void ForTimeout_ShouldHaveNoSegment_AndNullSourceState()
     {
         var jobName = JobName.ForTimeout(Instance);
 
@@ -54,16 +77,30 @@ public class JobNameTests
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
         Assert.Equal(JobType.Timeout, parsed.Type);
         Assert.Null(parsed.Segment);
+        Assert.Null(parsed.SourceState);
+        Assert.Null(parsed.TransitionKey);
     }
 
     [Fact]
-    public void ForLongPollAck_ShouldCarryWellKnownKey()
+    public void ForLongPollAck_ShouldCarryWellKnownKey_AndNullSourceState()
     {
         var jobName = JobName.ForLongPollAck(Instance);
 
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
         Assert.Equal(JobType.LongPollAck, parsed.Type);
-        Assert.Equal(LongPollAckConstants.JobKey, parsed.Segment);
+        Assert.Equal(LongPollAckConstants.JobKey, parsed.TransitionKey);
+        Assert.Null(parsed.SourceState);
+    }
+
+    [Fact]
+    public void LegacyV1PlainSegment_ShouldParse_AsNullSourceState()
+    {
+        // A pre-rollout tx name (no source-state composite) must still parse cleanly.
+        var parsed = JobName.Parse("vnext.job.v1.tx.550e8400e29b41d4a716446655440000.approve");
+
+        Assert.Null(parsed.SourceState);
+        Assert.Equal("approve", parsed.TransitionKey);
+        Assert.Equal("approve", parsed.Segment);
     }
 
     [Theory]
@@ -77,21 +114,22 @@ public class JobNameTests
     [InlineData("emoji-🚀-key")]
     [InlineData("-leading")]
     [InlineData("trailing-")]
-    public void Segment_ShouldRoundTripForArbitraryKeys(string key)
+    public void SourceStateAndKey_ShouldRoundTripForArbitraryKeys(string key)
     {
-        var jobName = JobName.ForAsyncTransition(Instance, key);
+        var jobName = JobName.ForAsyncTransition(Instance, key, key);
 
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
-        Assert.Equal(key, parsed.Segment);
+        Assert.Equal(key, parsed.SourceState);
+        Assert.Equal(key, parsed.TransitionKey);
         Assert.Equal(JobType.AsyncTransition, parsed.Type);
         Assert.Equal(Instance, parsed.InstanceId);
     }
 
     [Fact]
-    public void Build_ShouldStayWithinMaxLength_ForMaxKey()
+    public void Build_ShouldStayWithinMaxLength_ForMaxSourceStateAndKey()
     {
-        var key = new string('x', 100); // WorkflowConstants.MaxKeyLength
-        var jobName = JobName.ForScheduledTransition(Instance, key);
+        var key = new string('x', 100);  // WorkflowConstants.MaxKeyLength
+        var jobName = JobName.ForScheduledTransition(Instance, key, key);
 
         Assert.True(jobName.Value.Length <= InstanceJobConstants.MaxJobNameLength);
     }

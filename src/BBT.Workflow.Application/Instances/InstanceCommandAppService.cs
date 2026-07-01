@@ -215,7 +215,7 @@ public sealed class InstanceCommandAppService(
         // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
         // operation safe even if cancellation is missed.
         await cancellationService.ProcessStateTransitionsCancellationAsync(
-            instance.Id, [LongPollAckConstants.JobKey], cancellationToken);
+            instance.Id, sourceState: null, [LongPollAckConstants.JobKey], cancellationToken);
 
         return await longPollAckResumeService.ResumeAsync(
             workflow.Domain, workflow.Key, workflow.Version, instance.Id, cancellationToken);
