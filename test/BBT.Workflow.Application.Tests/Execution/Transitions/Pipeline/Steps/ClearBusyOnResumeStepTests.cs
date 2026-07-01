@@ -78,6 +78,70 @@ public class ClearBusyOnResumeStepTests
         ((ScriptContext)context.Cache["ScriptContext"]!).Instance!.CurrentState.ShouldBe("state2");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_OnLongPollAckResume_WhenAwaiting_ShouldClearTokenAndContinue()
+    {
+        // Arrange: instance paused on state2 with an armed acknowledge token.
+        var instanceId = Guid.NewGuid();
+        var workflow = CreateWorkflow();
+        var instance = Instance.Create(instanceId, WorkflowKey, "1.0.0");
+        instance.ChangeState(workflow.GetState("state2").Value!);
+        instance.ArmLongPollAck(Guid.NewGuid());
+        instance.IsAwaitingLongPollAck.ShouldBeTrue();
+
+        var context = CreateContext(instanceId, workflow, instance);
+        context.Directives.MarkAsLongPollAckResume();
+
+        // Act
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        // Assert: token cleared, pipeline continues into the epilogue.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.StopPipeline.ShouldBeFalse();
+        instance.IsAwaitingLongPollAck.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OnLongPollAckResume_WhenNotAwaiting_ShouldStop()
+    {
+        // Arrange: a redundant resume (acknowledge already consumed the token).
+        var instanceId = Guid.NewGuid();
+        var workflow = CreateWorkflow();
+        var instance = Instance.Create(instanceId, WorkflowKey, "1.0.0");
+        instance.ChangeState(workflow.GetState("state2").Value!);
+        instance.IsAwaitingLongPollAck.ShouldBeFalse();
+
+        var context = CreateContext(instanceId, workflow, instance);
+        context.Directives.MarkAsLongPollAckResume();
+
+        // Act
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        // Assert: stops as a safe no-op; epilogue is not re-run.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.StopPipeline.ShouldBeTrue();
+    }
+
+    private static TransitionExecutionContext CreateContext(
+        Guid instanceId, Definitions.Workflow workflow, Instance instance)
+        => new()
+        {
+            InstanceId = instanceId,
+            Domain = Domain,
+            WorkflowKey = WorkflowKey,
+            TransitionKey = "resume",
+            Trigger = TriggerType.Manual,
+            Actor = ExecutionActor.System,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ExecutionChainId = Guid.NewGuid().ToString("N"),
+            RequestedAt = DateTimeOffset.UtcNow,
+            Workflow = workflow,
+            Current = workflow.GetState("state2").Value!,
+            Instance = instance,
+            TraceId = Guid.NewGuid().ToString("N"),
+            SpanId = Guid.NewGuid().ToString("N")[..16]
+        };
+
     private static Definitions.Workflow CreateWorkflow()
     {
         var json = """

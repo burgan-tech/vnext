@@ -441,7 +441,7 @@ public sealed class MonitorInstanceQueryService(
         {
             // Correlations are read in the PARENT's schema (assumption — verify at runtime).
             List<InstanceCorrelation> correlations;
-            IDisposable? parentScope = string.IsNullOrWhiteSpace(parent.Schema) ? null : currentSchema.Use(parent.Schema!);
+            IDisposable? parentScope = string.IsNullOrWhiteSpace(parent.Schema) ? null : currentSchema.Change(parent.Schema!);
             try
             {
                 correlations = await correlationRepository.GetByParentAsync(parent.InstanceId, cancellationToken);
@@ -458,7 +458,7 @@ public sealed class MonitorInstanceQueryService(
                 var childSchema = string.IsNullOrWhiteSpace(c.SubFlowName) ? parent.Schema : c.SubFlowName;
 
                 Instance? child;
-                IDisposable? childScope = string.IsNullOrWhiteSpace(childSchema) ? null : currentSchema.Use(childSchema!);
+                IDisposable? childScope = string.IsNullOrWhiteSpace(childSchema) ? null : currentSchema.Change(childSchema!);
                 try
                 {
                     child = await instanceRepository.FindByIdentifierSlimAsync(

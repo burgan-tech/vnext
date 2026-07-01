@@ -149,6 +149,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public int? ResumePointStepOrder { get; private set; }
 
     /// <summary>
+    /// Long-poll acknowledge token. Set when the pipeline pauses on entering a state whose
+    /// <c>interaction.longPoll.terminate</c> is true; the State (long-poll) function surfaces the
+    /// termination signal while this is non-null, and the pipeline resumes when the client
+    /// acknowledges (or the fallback schedule fires). The token guards against double-resume:
+    /// acknowledge and fallback compare-and-clear it so only one wins. Null when no long-poll
+    /// acknowledge is pending.
+    /// </summary>
+    public Guid? LongPollAckToken { get; private set; }
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -356,13 +366,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Duration = CompletedAt - CreatedAt;
 
         // Publish cleanup event to cancel all scheduled jobs
+        var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceCompletedCleanupEvent
         {
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
             Version =  FlowVersion,
-            CompletedAt = CompletedAt.Value
+            CompletedAt = CompletedAt.Value,
+            RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
         // Publish completion event for SubItems (SubFlow or SubProcess)
@@ -382,7 +394,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     CompletedState = GetCurrentState,
                     InstanceData = latestData?.Data.JsonElement,
                     CompletedAt = CompletedAt.Value,
-                    Duration = Duration
+                    Duration = Duration,
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null
                 });
             }
         }
@@ -401,13 +414,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
+        var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceFaultedCleanupEvent
         {
             InstanceId = Id,
             Domain = domain,
             Flow = Flow,
             Version = FlowVersion,
-            FaultedAt = CompletedAt.Value
+            FaultedAt = CompletedAt.Value,
+            RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
         // Downward: notify active SubFlow children to fault themselves
@@ -421,7 +436,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Domain = correlation.SubFlowDomain,
                 Flow = correlation.SubFlowName,
                 Version = correlation.SubFlowVersion,
-                FaultedAt = CompletedAt.Value
+                FaultedAt = CompletedAt.Value,
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
 
@@ -449,13 +465,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     IncidentMessage = activeIncident?.Message,
                     IncidentErrorCode = activeIncident?.ErrorCode,
                     IncidentErrorLayer = activeIncident?.ErrorLayer,
+                    IncidentStackTrace = activeIncident?.StackTrace,
                     IncidentStatusCode = activeIncident?.StatusCode,
                     IncidentTraceId = activeIncident?.TraceId,
                     IncidentTaskKey = activeIncident?.Task,
                     IncidentTransition = activeIncident?.Transition,
                     IncidentState = activeIncident?.State,
                     IncidentBoundaryAction = activeIncident?.BoundaryAction,
-                    IncidentBoundaryLevel = activeIncident?.BoundaryLevel
+                    IncidentBoundaryLevel = activeIncident?.BoundaryLevel,
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null
                 });
             }
         }
@@ -509,6 +527,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Duration = CompletedAt - CreatedAt;
 
         // Publish cancellation event - event handler will handle cleanup (jobs, correlations)
+        var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceCanceledEvent
         {
             InstanceId = Id,
@@ -517,7 +536,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             Version =   FlowVersion,
             CanceledState = GetCurrentState,
             CanceledAt = CompletedAt.Value,
-            Duration = Duration
+            Duration = Duration,
+            RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
         foreach (var correlation in ActiveCorrelations)
@@ -530,7 +550,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Domain = correlation.SubFlowDomain,
                 Flow = correlation.SubFlowName,
                 CompletedAt = correlation.CompletedAt!.Value,
-                Version = correlation.SubFlowVersion
+                Version = correlation.SubFlowVersion,
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
     }
@@ -581,6 +602,21 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Clears the durable resume point (called at transition finalize so it never leaks into the next transition).
     /// </summary>
     public void ClearResumePoint() => ResumePointStepOrder = null;
+
+    /// <summary>
+    /// Arms the long-poll acknowledge marker with the supplied token (pipeline paused on state entry).
+    /// </summary>
+    public void ArmLongPollAck(Guid token) => LongPollAckToken = token;
+
+    /// <summary>
+    /// Clears the long-poll acknowledge marker (acknowledge received or fallback resumed).
+    /// </summary>
+    public void ClearLongPollAck() => LongPollAckToken = null;
+
+    /// <summary>
+    /// True while a long-poll acknowledge is pending (the pipeline is paused on state entry).
+    /// </summary>
+    public bool IsAwaitingLongPollAck => LongPollAckToken.HasValue;
 
     /// <summary>
     /// Returns whether the supplied token matches the instance's current chain ownership token.
@@ -777,6 +813,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         var contractInfo = ExtraProperties.ToSubFlowContractInfo();
         if (contractInfo.Id != Guid.Empty)
         {
+            var rootId = this.GetRootInstanceId();
             AddDistributedEvent(new InstanceSubStateChangedEvent
             {
                 ParentInstanceId = contractInfo.Id,
@@ -788,7 +825,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 PreviousState = previousState,
                 NewStateType = (int)(EffectiveStateType ?? StateType.Intermediate),
                 NewStateSubType = (int)(EffectiveStateSubType ?? StateSubType.None),
-                ChangedAt = DateTime.UtcNow
+                ChangedAt = DateTime.UtcNow,
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
     }

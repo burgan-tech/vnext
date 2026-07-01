@@ -38,13 +38,17 @@ public sealed class InstanceCompletedCleanupEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.InstanceCompletedCleanupHookProcessing(eventData.InstanceId, eventData.Flow);
 
@@ -85,12 +89,13 @@ public sealed class InstanceCompletedCleanupEventHook(
             var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
             var cancellationService = sp.GetRequiredService<IInstanceCancellationService>();
 
-            using (currentSchema.Use(eventData.Flow))
+            using (currentSchema.Change(eventData.Flow))
             {
-                await using var uow = await unitOfWorkManager.BeginAsync(new UnitOfWorkOptions
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
                 {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
-                }, ct);
+                    Scope = UnitOfWorkScopeOption.RequiresNew,
+                    IsTransactional = true
+                });
 
                 await cancellationService.ProcessCancellationAsync(eventData.InstanceId, ct);
                 await uow.CommitAsync(ct);

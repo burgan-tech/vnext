@@ -77,6 +77,12 @@ public static class InstancesModelCreatingExtensions
             // Durable resume point for crash-resume (S8).
             b.Property(p => p.ResumePointStepOrder);
 
+            // Long-poll acknowledge marker (declarative long-poll termination on state entry).
+            b.Property(p => p.LongPollAckToken);
+            b.HasIndex(p => p.LongPollAckToken)
+                .HasDatabaseName("IX_Instances_LongPollAckToken")
+                .HasFilter("\"LongPollAckToken\" IS NOT NULL");
+
             b.Property(p => p.Incidents)
                 .HasColumnType("jsonb")
                 .HasConversion(
@@ -421,6 +427,13 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.JobName)
                 .IsRequired()
                 .HasMaxLength(InstanceJobConstants.MaxJobNameLength);
+
+            b.Property(p => p.JobType)
+                .IsRequired()
+                .HasConversion<int>();
+
+            b.Property(p => p.TransitionKey)
+                .HasMaxLength(InstanceConstants.MaxKeyLength);
 
             b.Property(p => p.JobId)
                 .IsRequired();

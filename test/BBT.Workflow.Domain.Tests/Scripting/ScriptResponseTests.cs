@@ -17,9 +17,23 @@ public class ScriptResponseTests
         Assert.Null(response.Key);
         Assert.Null(response.Data);
         Assert.Null(response.Headers);
+        Assert.Null(response.StatusCode);
         Assert.Null(response.RouteValues);
         Assert.NotNull(response.Tags);
         Assert.Empty(response.Tags);
+    }
+
+    [Fact]
+    public void StatusCode_ShouldBeSettable()
+    {
+        // Arrange
+        var response = new ScriptResponse();
+
+        // Act
+        response.StatusCode = 400;
+
+        // Assert
+        Assert.Equal(400, response.StatusCode);
     }
 
     [Fact]

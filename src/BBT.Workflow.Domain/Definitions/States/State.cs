@@ -35,7 +35,8 @@ public sealed class State : IHasKey
         List<LanguageLabel>? labels,
         List<OnExecuteTask>? onEntries,
         List<OnExecuteTask>? onExits,
-        List<RoleGrant>? queryRoles = null)
+        List<RoleGrant>? queryRoles = null,
+        StateInteraction? interaction = null)
         : this(key, stateType, subType)
     {
         VersionStrategy = versionStrategy;
@@ -43,6 +44,7 @@ public sealed class State : IHasKey
         this.onEntries = onEntries ?? [];
         this.onExits = onExits ?? [];
         this.queryRoles = queryRoles ?? [];
+        this.interaction = interaction;
         // aliases field is populated directly by System.Text.Json via [JsonInclude] (see `transitions` pattern)
         // view property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
@@ -85,6 +87,12 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("alias")]
     private List<StateAlias> aliases = new();
 
+    [JsonInclude] [JsonPropertyName("interaction")]
+    private StateInteraction? interaction;
+
+    [JsonInclude] [JsonPropertyName("notifications")]
+    private List<StateNotification> notifications = new();
+
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
@@ -117,6 +125,49 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<StateAlias> Aliases => aliases.AsReadOnly();
+
+    /// <summary>
+    /// Generic client-workflow-manager interaction directives for this state
+    /// (long-poll termination today; extensible to further facets).
+    /// </summary>
+    [JsonIgnore]
+    public StateInteraction? Interaction => interaction;
+
+    /// <summary>
+    /// State-level notification entries. After the transition pipeline settles (state/status
+    /// finalized), each applicable entry is dispatched as a durable background notification.
+    /// Empty when the state declares no notifications.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<StateNotification> Notifications => notifications.AsReadOnly();
+
+    /// <summary>
+    /// True when the state declares at least one <see cref="StateNotificationType.State"/> notification
+    /// (the only kind processed today). Used by the pipeline to decide whether to schedule the
+    /// settle-time state-notify job.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasStateNotifications => notifications.Any(n => n.Type == StateNotificationType.State);
+
+    /// <summary>
+    /// True when entering this state must terminate the client's active long-poll request
+    /// (pausing the pipeline until acknowledge or fallback timeout).
+    /// </summary>
+    [JsonIgnore]
+    public bool TerminatesLongPollOnEntry => interaction?.LongPoll?.Terminate == true;
+
+    /// <summary>
+    /// Role grants controlling which callers receive the long-poll termination signal.
+    /// Empty/null means default-allow.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<RoleGrant>? LongPollAckRoles => interaction?.LongPoll?.Roles;
+
+    /// <summary>
+    /// Acknowledge fallback window in seconds for long-poll termination (default 60).
+    /// </summary>
+    [JsonIgnore]
+    public int LongPollFallbackTimeoutSeconds => interaction?.LongPoll?.FallbackTimeoutSeconds ?? 60;
 
     /// <summary>
     /// Languages

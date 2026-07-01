@@ -94,7 +94,7 @@ public sealed class NotificationTaskExecutorTests
     {
         var builder = Substitute.For<IStateChannelMessageBuilder>();
         builder.BuildAsync(
-                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<ScriptContext>(),
                 Arg.Any<IStateNotificationMapping?>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
@@ -195,7 +195,7 @@ public sealed class NotificationTaskExecutorTests
         var daprClient = new Mock<DaprClient>();
         var stateBuilder = Substitute.For<IStateChannelMessageBuilder>();
         stateBuilder.BuildAsync(
-                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<ScriptContext>(),
                 Arg.Any<IStateNotificationMapping?>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
@@ -211,7 +211,7 @@ public sealed class NotificationTaskExecutorTests
 
         result.IsSuccess.ShouldBeTrue();
         await stateBuilder.Received(1).BuildAsync(
-            Arg.Any<TaskExecutorContext>(),
+            Arg.Any<ScriptContext>(),
             Arg.Any<IStateNotificationMapping?>(),
             Arg.Any<CancellationToken>());
 
@@ -368,7 +368,7 @@ public sealed class NotificationTaskExecutorTests
 
         var stateBuilder = Substitute.For<IStateChannelMessageBuilder>();
         stateBuilder.BuildAsync(
-                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<ScriptContext>(),
                 Arg.Any<IStateNotificationMapping?>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
@@ -390,7 +390,7 @@ public sealed class NotificationTaskExecutorTests
 
         result.IsSuccess.ShouldBeTrue();
         await stateBuilder.Received(1).BuildAsync(
-            Arg.Any<TaskExecutorContext>(),
+            Arg.Any<ScriptContext>(),
             stateMapping,
             Arg.Any<CancellationToken>());
     }
@@ -404,7 +404,7 @@ public sealed class NotificationTaskExecutorTests
 
         var stateBuilder = Substitute.For<IStateChannelMessageBuilder>();
         stateBuilder.BuildAsync(
-                Arg.Any<TaskExecutorContext>(),
+                Arg.Any<ScriptContext>(),
                 Arg.Any<IStateNotificationMapping?>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result<NotificationMessage>.Ok(new NotificationMessage
@@ -421,7 +421,7 @@ public sealed class NotificationTaskExecutorTests
 
         result.IsSuccess.ShouldBeTrue();
         await stateBuilder.Received(1).BuildAsync(
-            Arg.Any<TaskExecutorContext>(),
+            Arg.Any<ScriptContext>(),
             null,
             Arg.Any<CancellationToken>());
     }

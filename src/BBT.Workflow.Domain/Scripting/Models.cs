@@ -49,6 +49,14 @@ public sealed class ScriptResponse
     public dynamic? Headers { get; set; }
 
     /// <summary>
+    /// Optional HTTP status code to apply to the function response.
+    /// Allows multi-task output handlers to override the default 200 status (e.g. 400/404/410).
+    /// When null, the engine falls back to single-task metadata or the default status code.
+    /// </summary>
+    /// <value>An HTTP status code, or null to use the default behavior.</value>
+    public int? StatusCode { get; set; }
+
+    /// <summary>
     /// Route values or routing parameters associated with the response.
     /// Can be used for workflow routing decisions, URL generation, or parameter passing between workflow components.
     /// </summary>
@@ -297,6 +305,14 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// and other request-specific data through the URL query string.
     /// </remarks>
     public dynamic? QueryParameters { get; private set; }
+
+    /// <summary>
+    /// The original, unmodified request body exactly as received (a literal string, NOT camelCased or
+    /// re-serialized like <see cref="Body"/>). Intended for signature verification (JWS / mTLS) where the
+    /// payload must match the bytes that were signed. Null when no raw body is available for the current
+    /// execution (e.g. internal executions with neither an HTTP request nor a job scope).
+    /// </summary>
+    public string? RawBody { get; private set; }
 
     /// <summary>
     /// The active workflow instance that is currently being processed or executed.
@@ -606,6 +622,15 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetQueryParameters(object? queryParameters)
         {
             _context.QueryParameters = queryParameters;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the original raw request body (literal string, no re-serialization) for signature verification.
+        /// </summary>
+        public Builder SetRawBody(string? rawBody)
+        {
+            _context.RawBody = rawBody;
             return this;
         }
 

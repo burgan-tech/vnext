@@ -5,7 +5,6 @@ using BBT.Aether.Threading;
 using BBT.Workflow.Data;
 using Dapr.Jobs.Extensions;
 using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,7 +55,7 @@ public class InfrastructureEntryPoint : ModuleEntryPointBase
     private void ConfigureInMemorySqlite(IServiceCollection services)
     {
         _sqliteConnection = CreateDatabaseAndGetConnection(services);
-        services.AddAetherDbContext<WorkflowDbContext>(options => { options.UseSqlite(_sqliteConnection); });
+        services.AddAetherDbContext<WorkflowDbContext>(new SqliteAetherProvider(_sqliteConnection), "Data Source=:memory:");
     }
 
     private static SqliteConnection CreateDatabaseAndGetConnection(IServiceCollection services)

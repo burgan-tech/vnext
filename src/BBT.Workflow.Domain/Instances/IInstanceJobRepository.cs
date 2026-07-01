@@ -52,4 +52,10 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>A list of active <see cref="InstanceJob"/> records for the specified domain.</returns>
     Task<List<InstanceJob>> GetActiveByDomainAsync(string domain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the subset of <paramref name="instanceIds"/> that have at least one active job.
+    /// Used by the chain reaper to avoid N+1 queries when checking a batch of stuck instances.
+    /// </summary>
+    Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default);
 }

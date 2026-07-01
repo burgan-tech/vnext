@@ -19,5 +19,7 @@ public class DomainConsts
         public const string TimeoutOverride = "subflow.timeout_override";
         public const string TransitionRoleOverrides = "subflow.transition_role_overrides";
         public const string StateRoleOverrides = "subflow.state_role_overrides";
+        /// <summary>Root (ancestor) flow instance ID — always carries the original A-flow ID down the entire chain.</summary>
+        public const string RootInstanceId = "root.instance.id";
     }
 }

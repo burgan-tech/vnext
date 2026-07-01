@@ -54,9 +54,8 @@ public sealed class SubflowFaultService(
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
 
-                await using (var uow = await uowManager.BeginAsync(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                    cancellationToken))
+                await using (var uow = uowManager.Begin(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
                 {
                     parentInstance = await instanceRepository.FindAsync(
                         input.InstanceId, true, cancellationToken);
@@ -106,13 +105,6 @@ public sealed class SubflowFaultService(
 
                     parentWorkflow = parentWorkflowResult.Value!;
 
-                    await outputMappingService.ApplyAsync(
-                        parentInstance,
-                        parentWorkflow,
-                        correlation.ParentState,
-                        input.InstanceData,
-                        cancellationToken);
-
                     var executionError = BuildExecutionError(input);
                     var currentState = parentWorkflow.GetState(parentInstance.GetCurrentState).Value;
                     var resolution = errorBoundaryResolver.Resolve(
@@ -127,6 +119,9 @@ public sealed class SubflowFaultService(
                         retryExecutor: null,
                         cancellationToken);
 
+                    // Record the incident on the parent BEFORE running output mapping so the
+                    // subflow fault (including stack trace) is visible to the output-mapping
+                    // script via ScriptContext.Incident, enabling error-driven routing.
                     var incident = RecordIncident(
                         parentInstance,
                         input,
@@ -140,6 +135,23 @@ public sealed class SubflowFaultService(
                     else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
                     {
                         parentInstance.Fault(input.Domain);
+                    }
+
+                    var mappingResult = await outputMappingService.ApplyAsync(
+                        parentInstance,
+                        parentWorkflow,
+                        correlation.ParentState,
+                        input.InstanceData,
+                        cancellationToken);
+
+                    // Output mapping failure is non-blocking here: the instance is already
+                    // marked Faulted/transitioned above. Just log and proceed so the fault
+                    // is committed and propagated upward via InstanceSubFaultedEvent.
+                    if (!mappingResult.IsSuccess)
+                    {
+                        logger.SubFlowOutputMappingFailed(
+                            new Exception(mappingResult.Error.Message),
+                            parentInstance.Id);
                     }
 
                     await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
@@ -225,7 +237,7 @@ public sealed class SubflowFaultService(
             errorCode: $"SubFlow:Faulted:{input.IncidentErrorCode ?? "Unknown"}",
             errorLayer: "SubFlow",
             statusCode: input.IncidentStatusCode,
-            stackTrace: null,
+            stackTrace: input.IncidentStackTrace,
             boundaryAction: boundaryAction.ToString(),
             boundaryLevel: boundaryLevel?.ToString(),
             traceId: input.IncidentTraceId);
@@ -339,9 +351,8 @@ public sealed class SubflowFaultService(
     {
         try
         {
-            await using var revertUow = await uowManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                cancellationToken);
+            await using var revertUow =  uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             var correlation = parentInstance.RevertCorrelation(subInstanceId);
             if (correlation != null)

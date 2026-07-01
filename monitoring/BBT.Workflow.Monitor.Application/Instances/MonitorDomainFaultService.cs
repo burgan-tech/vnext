@@ -111,7 +111,7 @@ public sealed class MonitorDomainFaultService(
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
         var queryService = scope.ServiceProvider.GetRequiredService<IMonitorInstanceQueryService>();
 
-        using (currentSchema.Use(workflowKey))
+        using (currentSchema.Change(workflowKey))
         {
             var page = 1;
             while (true)

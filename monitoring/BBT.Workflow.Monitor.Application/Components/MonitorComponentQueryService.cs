@@ -480,7 +480,7 @@ public sealed class MonitorComponentQueryService(
 
         var allItems = new List<(T Entity, string? FlowVersion, List<string>? Tags, DateTime CreatedAt, DateTime? ModifiedAt)>();
 
-        using (currentSchema.Use(componentType))
+        using (currentSchema.Change(componentType))
         {
             const int pageSize = 100;
             int skip = 0;
@@ -540,7 +540,7 @@ public sealed class MonitorComponentQueryService(
         var instanceRepo  = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
 
-        using (currentSchema.Use(componentType))
+        using (currentSchema.Change(componentType))
         {
             var instance = await instanceRepo.FindByIdentifierSlimAsync(key, cancellationToken);
             return (instance?.FlowVersion, instance?.Tags, instance?.CreatedAt, instance?.ModifiedAt);
@@ -625,7 +625,7 @@ public sealed class MonitorComponentQueryService(
         var instanceRepo  = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
 
-        using (currentSchema.Use(componentType))
+        using (currentSchema.Change(componentType))
         {
             var raw = await instanceRepo.GetVersionsPagedAsync(
                 input.Key, skip, input.PageSize + 1, cancellationToken);

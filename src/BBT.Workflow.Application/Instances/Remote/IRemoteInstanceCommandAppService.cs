@@ -46,4 +46,12 @@ public interface IRemoteInstanceCommandAppService
     Task<Result> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Acknowledges a long-poll termination signal on a remote instance, descending its SubFlow chain.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/longpoll/ack
+    /// </summary>
+    Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default);
 }

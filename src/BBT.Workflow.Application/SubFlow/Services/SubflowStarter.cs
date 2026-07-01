@@ -45,7 +45,7 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult = null;
         if (subFlowConfig.Mapping != null)
         {
-            var mappingResult = await HandleInputMappingAsync(subFlowConfig, context, cancellationToken);
+            var mappingResult = await HandleInputMappingAsync(subFlowConfig, workflow, context, cancellationToken);
             if (!mappingResult.IsSuccess)
             {
                 return Result.Fail(mappingResult.Error);
@@ -89,12 +89,15 @@ public sealed class SubflowStarter(
     {
         using var activity =
             SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
+        // Propagate root instance ID: use parent's stored root, or parent itself if parent is the root
+        var rootInstanceId = parentInstance.GetRootInstanceId();
         SubFlowActivityHelper.EnrichWithStart(
             activity,
             parentInstance.Id,
             subFlowReference.Domain,
             subFlowReference.Key,
-            correlation.SubFlowInstanceId);
+            correlation.SubFlowInstanceId,
+            rootInstanceId);
         activity?.SetTag("vnext.subflow.type", subFlowTypeCode == "S" ? "subflow" : "subprocess");
         activity?.SetTag("vnext.subflow.parent.state", stateKey);
         activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
@@ -106,7 +109,8 @@ public sealed class SubflowStarter(
                    [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
                    [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
                    [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
-                   [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId
+                   [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId,
+                   [TelemetryConstants.TagNames.RootInstanceId] = rootInstanceId,
                }))
         {
             // Prepare instance creation input
@@ -122,7 +126,8 @@ public sealed class SubflowStarter(
                 [
                     $"parent.key:{parentInstance.Key}",
                     $"parent.domain:{workflow.Domain}",
-                    $"parent.flow:{workflow.Key}"
+                    $"parent.flow:{workflow.Key}",
+                    $"root.instance:{rootInstanceId}"
                 ],
                 ExtraProperties = new ExtraPropertyDictionary
                 {
@@ -133,7 +138,8 @@ public sealed class SubflowStarter(
                     [DomainConsts.MetaDataKeys.Version] = workflow.Version,
                     [DomainConsts.MetaDataKeys.State] = stateKey,
                     [DomainConsts.MetaDataKeys.Transition] = transitionKey,
-                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode
+                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode,
+                    [DomainConsts.MetaDataKeys.RootInstanceId] = rootInstanceId
                 }
             };
 
@@ -182,6 +188,7 @@ public sealed class SubflowStarter(
             }
 
             headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
+            headers[TelemetryConstants.HeaderNames.RootInstanceId] = rootInstanceId.ToString();
 
             var subFlowStartInput = new StartInstanceInput(
                 subFlowReference.Domain,
@@ -223,11 +230,13 @@ public sealed class SubflowStarter(
     /// Handles input mapping for SubFlow/SubProcess by compiling and executing the mapping script.
     /// </summary>
     /// <param name="subFlowConfig">The SubFlow configuration containing mapping information.</param>
+    /// <param name="workflow">The parent workflow definition, used to supply flow-level script settings.</param>
     /// <param name="context">The script context for mapping execution.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>Result containing the mapping response or error.</returns>
     private async Task<Result<ScriptResponse?>> HandleInputMappingAsync(
         Definitions.SubFlow subFlowConfig,
+        Definitions.Workflow workflow,
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
@@ -238,25 +247,29 @@ public sealed class SubflowStarter(
 
         return await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            // Compile the mapping script to the appropriate interface
-            var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-                subFlowConfig.Mapping,
-                cancellationToken: ct);
-
             // Cast to the appropriate mapping interface and execute InputHandler
-            if (subFlowConfig.Type.Code == "S" && mappingInstance is ISubFlowMapping subFlowMapping)
+            if (subFlowConfig.Type.Code == "S")
             {
+                var subFlowMapping = await scriptEngine.CompileToInstanceAsync<ISubFlowMapping>(
+                    subFlowConfig.Mapping,
+                    flowScripts: workflow.Scripts,
+                    cancellationToken: ct);
                 return await subFlowMapping.InputHandler(context);
             }
 
-            if (subFlowConfig.Type.Code == "P" && mappingInstance is ISubProcessMapping subProcessMapping)
+            if (subFlowConfig.Type.Code == "P")
             {
+                var subProcessMapping = await scriptEngine.CompileToInstanceAsync<ISubProcessMapping>(
+                    subFlowConfig.Mapping,
+                    flowScripts: workflow.Scripts,
+                    cancellationToken: ct);
                 return await subProcessMapping.InputHandler(context);
             }
 
             // If we reach here, casting failed
             throw new InvalidOperationException(
                 $"Failed to cast mapping instance to {mappingInterfaceType.Name} for SubFlow type '{subFlowConfig.Type.Code}'");
-        }, cancellationToken, ex => WorkflowErrors.SubFlowInputMappingFailed(subFlowConfig.Process.Key, ex.Message));
+        }, cancellationToken, ex => WorkflowErrors.SubFlowInputMappingFailed(
+            subFlowConfig.Process.Key, ex.Message, ex.StackTrace));
     }
 }

@@ -21,9 +21,15 @@ public sealed class HttpTaskBinding
     public string? Headers { get; init; }
     
     /// <summary>
-    /// Request body as JSON string.
+    /// Request body as a string. JSON for json content types; raw text (e.g. form-urlencoded) otherwise.
     /// </summary>
     public string? Body { get; init; }
+
+    /// <summary>
+    /// Explicit media type for the request body. When set, overrides any "Content-Type" header.
+    /// When null, the "Content-Type" header is used, falling back to "application/json".
+    /// </summary>
+    public string? ContentType { get; init; }
     
     /// <summary>
     /// Request timeout in seconds.

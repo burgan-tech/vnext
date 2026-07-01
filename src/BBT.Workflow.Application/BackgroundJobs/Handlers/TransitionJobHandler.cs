@@ -8,6 +8,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -33,7 +34,7 @@ public sealed class TransitionJobHandler(
     {
         // Restore trace context from the original request for distributed tracing correlation
         using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TransitionJob.Execute", args);
-        using (currentSchema.Use(args.Workflow))
+        using (currentSchema.Change(args.Workflow))
         {
             using (logger.BeginScope(new Dictionary<string, object>
                    {
@@ -57,7 +58,11 @@ public sealed class TransitionJobHandler(
                 bool needsRecovery = false;
 
                 try
-                {
+                {   
+                    // Expose the original raw request body to mappings built inside this job (no live
+                    // HttpContext here) so background signature verification (JWS/mTLS) can run.
+                    using var rawBodyScope = RawBodyExecutionScope.Set(args.RawBody);
+
                     BackgroundJobActivityHelper.EnrichActivity(activity, args);
                     BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
@@ -86,11 +91,9 @@ public sealed class TransitionJobHandler(
                     context.ChainToken = args.ChainToken;
 
                     // Transition-per-job: this job runs exactly ONE transition; its auto-chain
-                    // continuation is enqueued as the next job via the outbox instead of running
-                    // in-process. Requires outbox continuations to be enabled.
-                    context.EnqueueContinuations =
-                        executionOptions.Value.TransitionPerJob &&
-                        executionOptions.Value.UseOutboxContinuations;
+                    // continuation is enqueued as the next job via ITransitionEnqueueGateway
+                    // instead of running in-process.
+                    context.EnqueueContinuations = executionOptions.Value.TransitionPerJob;
 
                     // Use the background-specific method that handles pre-reserved instances
                     var result = await workflowExecutionService.ExecuteTransitionAsync(context, linkedCts.Token);

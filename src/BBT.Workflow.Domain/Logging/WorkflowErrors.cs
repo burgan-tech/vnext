@@ -362,11 +362,28 @@ public static class WorkflowErrors
     /// </summary>
     /// <param name="subFlowKey">The key of the SubFlow.</param>
     /// <param name="reason">The reason for the mapping failure.</param>
-    public static Error SubFlowInputMappingFailed(string subFlowKey, string reason)
+    /// <param name="stackTrace">
+    /// Optional exception stack trace carried in <see cref="Error.Detail"/> so the
+    /// post-commit fault path can record it on the instance incident. The SubFlow key
+    /// is already part of the message, so no diagnostic context is lost.
+    /// </param>
+    public static Error SubFlowInputMappingFailed(string subFlowKey, string reason, string? stackTrace = null)
         => Error.Failure(
             WorkflowErrorCodes.SubflowStartFailed,
             $"SubFlow '{subFlowKey}' input mapping failed: {reason}",
-            detail: subFlowKey);
+            detail: stackTrace ?? subFlowKey);
+
+    /// <summary>
+    /// SubFlow output mapping script execution failed.
+    /// </summary>
+    /// <param name="parentInstanceId">The ID of the parent instance whose output mapping failed.</param>
+    /// <param name="reason">The exception message from the failed OutputHandler.</param>
+    /// <param name="stackTrace">Full exception stack trace stored in <see cref="Error.Detail"/>.</param>
+    public static Error SubFlowOutputMappingFailed(Guid parentInstanceId, string reason, string? stackTrace = null)
+        => Error.Failure(
+            WorkflowErrorCodes.SubflowOutputMappingFailed,
+            $"SubFlow output mapping failed for parent instance '{parentInstanceId}': {reason}",
+            detail: stackTrace);
 
     /// <summary>
     /// Correlation not found for SubFlow start.
@@ -463,6 +480,14 @@ public static class WorkflowErrors
         => Error.Forbidden(
             WorkflowErrorCodes.AuthorizationRoleDenied,
             $"Access to state '{stateKey}' is not permitted for the current roles.");
+
+    /// <summary>
+    /// The current roles are not permitted to acknowledge long-poll termination for the instance. Maps to HTTP 403.
+    /// </summary>
+    public static Error LongPollAckAccessDenied(Guid instanceId)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Long-poll acknowledge for instance '{instanceId}' is not permitted for the current roles.");
 
     /// <summary>
     /// The current roles are not permitted to invoke the custom function (function-level roles). Maps to HTTP 403.

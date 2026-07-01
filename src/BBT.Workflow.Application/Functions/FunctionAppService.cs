@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
@@ -43,7 +44,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Functions))
         {
             return await componentCacheStore
                 .GetFunctionAsync(domain, key, version, cancellationToken)
@@ -64,11 +65,18 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(flow))
+        using (currentSchema.Change(flow))
         {
             var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
             if (instance == null)
                 return Result<FunctionResponseOutput>.Fail(WorkflowErrors.InstanceNotFound(instanceKey));
+
+            var rootId = instance.GetRootInstanceId();
+            if (rootId != instance.Id)
+            {
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            }
 
             return await componentCacheStore
                 .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
@@ -83,7 +91,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Functions))
         {
             var result = await instanceRepository.GetActiveDataListAsync(cancellationToken);
             return Result<List<InstanceAndDataModel>>.Ok(result);
@@ -238,7 +246,9 @@ public sealed class FunctionAppService(
                     return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
                         function,
                         scriptContext,
-                        scriptResponse.Data));
+                        scriptResponse.Data,
+                        (object?)scriptResponse.Headers,
+                        scriptResponse.StatusCode));
 
                 return Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput
                 {
@@ -359,15 +369,19 @@ public sealed class FunctionAppService(
     internal static FunctionResponseOutput CreateRawResponse(
         Function function,
         ScriptContext scriptContext,
-        object? data)
+        object? data,
+        object? outputHeaders = null,
+        int? outputStatusCode = null)
     {
-        var (statusCode, headers) = ExtractSingleTaskHttpMetadata(function, scriptContext);
+        var (singleStatusCode, singleHeaders) = ExtractSingleTaskHttpMetadata(function, scriptContext);
 
+        // Output script may set its own headers/status (multi-task scenario); when it does,
+        // prefer them. Otherwise fall back to single-task metadata (existing behavior preserved).
         return new FunctionResponseOutput
         {
             Data = data,
-            StatusCode = statusCode,
-            Headers = headers
+            StatusCode = outputStatusCode ?? singleStatusCode,
+            Headers = NormalizeHeaders(outputHeaders) ?? singleHeaders
         };
     }
 
@@ -453,24 +467,40 @@ public sealed class FunctionAppService(
         if (response is IDictionary<string, object?> dictionary &&
             TryGetDictionaryValue(dictionary, "headers", out var value))
         {
-            try
-            {
-                return value switch
-                {
-                    Dictionary<string, string> typedHeaders => typedHeaders,
-                    IDictionary<string, object?> objectHeaders => objectHeaders
-                        .Where(header => header.Value != null)
-                        .ToDictionary(header => header.Key, header => Convert.ToString(header.Value, CultureInfo.InvariantCulture) ?? string.Empty),
-                    _ => JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(value))
-                };
-            }
-            catch
-            {
-                return null;
-            }
+            return NormalizeHeaders(value);
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Normalizes a loosely-typed headers object (e.g. <see cref="ScriptResponse.Headers"/> which is
+    /// <c>dynamic</c>) into a <see cref="Dictionary{TKey,TValue}"/> of string headers.
+    /// Accepts <see cref="Dictionary{TKey,TValue}"/>, <see cref="IDictionary{TKey,TValue}"/> of objects,
+    /// or any JSON-serializable object. Returns null when there are no usable headers.
+    /// </summary>
+    private static Dictionary<string, string>? NormalizeHeaders(object? value)
+    {
+        if (value is null)
+            return null;
+
+        try
+        {
+            var headers = value switch
+            {
+                Dictionary<string, string> typedHeaders => typedHeaders,
+                IDictionary<string, object?> objectHeaders => objectHeaders
+                    .Where(header => header.Value != null)
+                    .ToDictionary(header => header.Key, header => Convert.ToString(header.Value, CultureInfo.InvariantCulture) ?? string.Empty),
+                _ => JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(value))
+            };
+
+            return headers is { Count: > 0 } ? headers : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool TryGetDictionaryValue(

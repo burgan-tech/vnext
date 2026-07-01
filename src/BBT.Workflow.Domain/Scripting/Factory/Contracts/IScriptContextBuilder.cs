@@ -54,6 +54,12 @@ public interface IScriptContextBuilder
     /// Sets the request body data for the ScriptContext.
     /// </summary>
     IScriptContextBuilder WithBody(object? body);
+
+    /// <summary>
+    /// Sets the original raw request body (literal string, no re-serialization) for signature verification.
+    /// When not set, the builder auto-populates it from the request/job-scoped raw body provider.
+    /// </summary>
+    IScriptContextBuilder WithRawBody(string? rawBody);
     
     /// <summary>
     /// Sets the request headers for the ScriptContext.

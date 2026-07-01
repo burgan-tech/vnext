@@ -103,7 +103,7 @@ public sealed class MonitorJobQueryService(
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
         var repo          = scope.ServiceProvider.GetRequiredService<IInstanceJobRepository>();
 
-        using (currentSchema.Use(schemaKey))
+        using (currentSchema.Change(schemaKey))
             return await repo.GetActiveByFlowAsync(schemaKey, createdAtGte, createdAtLte, ct);
     }
 

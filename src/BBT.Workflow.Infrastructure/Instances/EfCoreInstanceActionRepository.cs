@@ -6,7 +6,7 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>EF Core read-only implementation of <see cref="IInstanceActionRepository"/>.</summary>
 public sealed class EfCoreInstanceActionRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider)
     : EfCoreRepository<WorkflowDbContext, InstanceAction, Guid>(dbContext, serviceProvider),
         IInstanceActionRepository

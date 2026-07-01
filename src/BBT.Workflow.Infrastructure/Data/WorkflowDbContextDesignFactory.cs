@@ -1,3 +1,4 @@
+using BBT.Aether.MultiSchema;
 using BBT.Workflow.Schemas;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
@@ -22,6 +23,7 @@ public sealed class WorkflowDbContextDesignFactory : IDesignTimeDbContextFactory
 
         // Design-time uses a null schema so migration DDL has no schema prefix.
         // MultiSchemaNpgsqlMigrationsSqlGenerator strips the "public" prefix during migration apply.
-        return new WorkflowDbContext(optionsBuilder.Options, new StaticCurrentSchema("public"));
+        var currentSchema = new StaticCurrentSchema("public");
+        return new WorkflowDbContext(optionsBuilder.Options, currentSchema);
     }
 }

@@ -38,7 +38,7 @@ public sealed class FlowTimeoutJobHandler(
     public async Task HandleAsync(WorkflowTimeoutPayload args, CancellationToken cancellationToken)
     {
         using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TimeoutJob.Execute", args);
-        using (currentSchema.Use(args.FlowName))
+        using (currentSchema.Change(args.FlowName))
         {
             using (logger.BeginScope(new Dictionary<string, object>
                    {
@@ -80,6 +80,17 @@ public sealed class FlowTimeoutJobHandler(
                     {
                         activity?.SetStatus(ActivityStatusCode.Ok);
                         return;
+                    }
+
+                    var rootId = instance.GetRootInstanceId();
+                    using var rootScope = rootId != args.InstanceId
+                        ? logger.BeginScope(new Dictionary<string, object>
+                          { [TelemetryConstants.TagNames.RootInstanceId] = rootId })
+                        : null;
+                    if (rootId != args.InstanceId)
+                    {
+                        activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                        activity?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
                     }
 
                     if (workflow.Timeout is null)

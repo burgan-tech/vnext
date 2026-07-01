@@ -64,6 +64,12 @@ public class InstanceSubCompletedEvent : IDistributedEvent
     /// </summary>
     public TimeSpan? Duration { get; init; }
 
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
+
     public override string ToString()
     {
         return $"{nameof(InstanceSubCompletedEvent)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} SubInstanceId={SubInstanceId} CompletedState={CompletedState}";

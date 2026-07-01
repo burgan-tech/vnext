@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
+using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Execution.LongPoll;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Aether.Application.Services;
 using BBT.Aether.BackgroundJob;
@@ -53,6 +56,12 @@ public sealed class InstanceCommandAppService(
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     ITimerEvaluator timerEvaluator,
+    ITransitionAuthorizationManager transitionAuthorizationManager,
+    IInstanceCancellationService cancellationService,
+    ILongPollAckResumeService longPollAckResumeService,
+    IInstanceCommandGateway instanceCommandGateway,
+    IWorkflowOutputMappingService workflowOutputMappingService,
+    ICurrentUser currentUser,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -149,6 +158,79 @@ public sealed class InstanceCommandAppService(
         });
     }
 
+    /// <inheritdoc />
+    public async Task<Result> AcknowledgeLongPollAsync(
+        AcknowledgeLongPollInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        var instanceResult = await instanceRepository.GetActiveAsync(input.Instance, cancellationToken);
+        if (!instanceResult.IsSuccess)
+            return Result.Fail(instanceResult.Error);
+
+        var instance = instanceResult.Value!;
+
+        // Not the awaiting instance — descend the active SubFlow chain (local or cross-domain via the
+        // gateway) to the instance that actually paused. The State function follows the same SubFlow
+        // chain downward, so the awaiting instance is the deepest active subflow child.
+        if (!instance.IsAwaitingLongPollAck)
+        {
+            var sub = instance.Subflow;
+            if (sub is not null)
+            {
+                return await instanceCommandGateway.AcknowledgeLongPollAsync(new AcknowledgeLongPollInput
+                {
+                    Domain = sub.SubFlowDomain,
+                    Workflow = sub.SubFlowName,
+                    Instance = sub.SubFlowInstanceId.ToString(),
+                    Version = sub.SubFlowVersion,
+                    Role = input.Role,
+                    Headers = input.Headers
+                }, cancellationToken);
+            }
+
+            // Idempotent: nothing awaiting anywhere in the chain (already resumed or fallback fired).
+            return Result.Ok();
+        }
+
+        var workflowResult = await LoadWorkflowAsync(input.Domain, input.Workflow, input.Version, cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result.Fail(workflowResult.Error);
+
+        var workflow = workflowResult.Value!;
+
+        // Role check against the entered state's interaction.longPoll.roles (default-allow when none).
+        var state = workflow.FindState(instance.GetCurrentState);
+        var ackRoles = state?.LongPollAckRoles;
+        if (ackRoles is { Count: > 0 })
+        {
+            var callerRoles = BuildCallerRoles(input.Role);
+            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
+                callerRoles, ackRoles, instance, cancellationToken: cancellationToken);
+            if (!allowed)
+                return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
+        }
+
+        // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
+        // operation safe even if cancellation is missed.
+        await cancellationService.ProcessStateTransitionsCancellationAsync(
+            instance.Id, [LongPollAckConstants.JobKey], cancellationToken);
+
+        return await longPollAckResumeService.ResumeAsync(
+            workflow.Domain, workflow.Key, workflow.Version, instance.Id, cancellationToken);
+    }
+
+    private IReadOnlyCollection<string> BuildCallerRoles(string? explicitRole)
+    {
+        var roles = new List<string>();
+        if (!string.IsNullOrWhiteSpace(explicitRole))
+            roles.Add(explicitRole.Trim());
+        if (currentUser.Roles is { Length: > 0 })
+            roles.AddRange(currentUser.Roles);
+        return roles;
+    }
+
     /// <summary>
     /// Step 2: Loads the workflow definition from cache and sets it in WorkflowContext.
     /// Note: TransitionRunner will also set it in its isolated scope.
@@ -188,7 +270,8 @@ public sealed class InstanceCommandAppService(
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
-        await using var uow = await UnitOfWorkManager.BeginRequiresNew(cancellationToken);
+        await using var uow = UnitOfWorkManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
         var result = await CreateAndPrepareInstanceAsync(
                 workflow,
                 input.Instance.Id ?? guidGenerator.Create(),
@@ -336,11 +419,11 @@ public sealed class InstanceCommandAppService(
 
         try
         {
-            var jobName = $"timeout-{instance.Id}";
+            var jobName = JobName.ForTimeout(instance.Id);
             var activity = Activity.Current;
             var payload = new WorkflowTimeoutPayload
             {
-                JobName = jobName,
+                JobName = jobName.Value,
                 Domain = workflow.Domain,
                 InstanceId = instance.Id,
                 FlowName = workflow.Key,
@@ -371,7 +454,7 @@ public sealed class InstanceCommandAppService(
             // Enqueue the timeout job
             var jobId = await backgroundJobService.EnqueueAsync(
                 FlowTimeoutJobHandler.HandlerName,
-                jobName,
+                jobName.Value,
                 payload,
                 schedule,
                 metadata,
@@ -626,6 +709,10 @@ public sealed class InstanceCommandAppService(
                 .WithTransition(string.Empty)
                 .WithBody(latestData?.Data ?? new JsonData("{}"))
                 .BuildAsync(cancellationToken);
+
+            var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
+            if (outputResult.IsSuccess && outputResult.Value.HasValue)
+                attributes = outputResult.Value;
 
             var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
                 extensionRequested,

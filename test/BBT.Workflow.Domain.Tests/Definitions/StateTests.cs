@@ -575,6 +575,183 @@ public class StateTests
         Assert.Empty(state!.Aliases);
     }
 
+    [Fact]
+    public void Deserialize_ShouldPopulateInteractionLongPoll_WithRolesAndTimeout()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "interaction": {
+                "longPoll": {
+                    "terminate": true,
+                    "fallbackTimeoutSeconds": 90,
+                    "roles": [ { "role": "backoffice.operator", "grant": "allow" } ]
+                }
+            }
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.True(state!.TerminatesLongPollOnEntry);
+        Assert.Equal(90, state.LongPollFallbackTimeoutSeconds);
+        Assert.NotNull(state.LongPollAckRoles);
+        Assert.Single(state.LongPollAckRoles!);
+        Assert.Equal("backoffice.operator", state.LongPollAckRoles!.First().Role);
+        Assert.True(state.LongPollAckRoles!.First().IsAllow);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldDefaultLongPoll_WhenTerminateOnlySpecified()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "interaction": { "longPoll": { "terminate": true } }
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.True(state!.TerminatesLongPollOnEntry);
+        Assert.Equal(60, state.LongPollFallbackTimeoutSeconds); // default
+        Assert.NotNull(state.LongPollAckRoles);
+        Assert.Empty(state.LongPollAckRoles!);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldNotTerminateLongPoll_WhenInteractionOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch"
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Null(state!.Interaction);
+        Assert.False(state.TerminatesLongPollOnEntry);
+        Assert.Equal(60, state.LongPollFallbackTimeoutSeconds);
+        Assert.Null(state.LongPollAckRoles);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldPopulateNotifications_WithTypeRuleAndMapping()
+    {
+        // Arrange — uses the canonical options so the ScriptCodeJsonConverter is applied.
+        const string json = """
+        {
+            "key": "approved",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "notifications": [
+                {
+                    "type": "state",
+                    "rule": { "code": "cnVsZQ==", "encoding": "Base64" },
+                    "mapping": { "code": "Y29kZQ==", "encoding": "Base64" }
+                },
+                {
+                    "type": "command",
+                    "rule": null,
+                    "mapping": { "code": "" }
+                }
+            ]
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Equal(2, state!.Notifications.Count);
+        Assert.True(state.HasStateNotifications);
+
+        var first = state.Notifications.First();
+        Assert.Equal(StateNotificationType.State, first.Type);
+        Assert.True(first.HasRule);
+        Assert.Equal("cnVsZQ==", first.Rule!.Code);
+        Assert.True(first.HasMapping);
+        Assert.Equal("Y29kZQ==", first.Mapping!.Code);
+
+        var second = state.Notifications.Last();
+        Assert.Equal(StateNotificationType.Command, second.Type);
+        Assert.False(second.HasRule);
+        Assert.False(second.HasMapping);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldDefaultTypeToState_WhenTypeOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "approved",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "notifications": [
+                { "mapping": { "code": "Y29kZQ==", "encoding": "Base64" } }
+            ]
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Single(state!.Notifications);
+        Assert.Equal(StateNotificationType.State, state.Notifications.First().Type);
+        Assert.Null(state.Notifications.First().Rule);
+        Assert.True(state.HasStateNotifications);
+    }
+
+    [Fact]
+    public void Deserialize_ShouldHaveEmptyNotifications_WhenOmitted()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "approved",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch"
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.Empty(state!.Notifications);
+        Assert.False(state.HasStateNotifications);
+    }
+
     private static System.Text.Json.JsonSerializerOptions EnumNamingSerializerOptions => new()
     {
         PropertyNameCaseInsensitive = true,

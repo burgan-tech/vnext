@@ -8,7 +8,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Timer;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Tasks.Coordinator;
@@ -129,12 +128,12 @@ public sealed class ScheduleTransitionsStep(
         Transition scheduledTransition,
         TimerSchedule timerSchedule)
     {
-        var jobName = $"trans-{context.InstanceId}-{scheduledTransition.Key}";
+        var jobName = JobName.ForScheduledTransition(context.InstanceId, scheduledTransition.Key);
         var activity = Activity.Current;
-        
+
         var payload = new TransitionTimerPayload
         {
-            JobName = jobName,
+            JobName = jobName.Value,
             Domain = context.Domain,
             FlowName = context.WorkflowKey,
             Version = context.Workflow.Version,
@@ -168,10 +167,11 @@ public sealed class ScheduleTransitionsStep(
     {
         var jobId = await backgroundJobService.EnqueueAsync(
             TransitionTimerJobHandler.HandlerName,
-            info.JobName,
+            info.JobName.Value,
             info.Payload,
             info.ScheduleExpression,
             metadata: info.Metadata,
+            directly: true,
             cancellationToken: cancellationToken);
 
         await jobRepository.InsertAsync(
@@ -193,7 +193,7 @@ public sealed class ScheduleTransitionsStep(
     /// </summary>
     private sealed record TransitionSchedulingInfo(
         TransitionExecutionContext Context,
-        string JobName,
+        JobName JobName,
         TransitionTimerPayload Payload,
         string ScheduleExpression,
         Dictionary<string, object> Metadata);

@@ -1,5 +1,6 @@
-using BBT.Aether.Events;
+using System.Diagnostics;
 using BBT.Aether.Results;
+using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
@@ -9,15 +10,24 @@ namespace BBT.Workflow.Execution.Continuations;
 /// <summary>
 /// Realizes the auto-chain continuation as a SEPARATE background job (transition-per-job).
 /// Instead of running the next transition in-process, it persists a durable job intent
-/// (<see cref="InstanceJob"/>) and publishes a <see cref="TransitionContinuationRequested"/>
-/// event through the transactional outbox — both within the AMBIENT transition unit of work,
-/// so "this transition committed" and "next transition enqueued" are atomic. Returns Ok(null)
-/// to end the in-process loop; the Inbox handler enqueues the actual Dapr job for the next hop.
+/// (<see cref="InstanceJob"/>) within the AMBIENT transition unit of work — so "this transition
+/// committed" and "next transition tracked" are atomic — and then delegates the enqueue
+/// decision to <see cref="ITransitionEnqueueGateway"/>.
+/// <para>
+/// How the next hop is enqueued is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
+/// </para>
+/// <list type="bullet">
+/// <item>ON (default): the Dapr job is enqueued DIRECTLY (no outbox/inbox poll hop). If the direct
+/// enqueue fails, the gateway falls back to publishing a <see cref="TransitionContinuationRequested"/>
+/// event through the transactional outbox so durability is preserved.</item>
+/// <item>OFF: a <see cref="TransitionContinuationRequested"/> event is always published through the
+/// transactional outbox; the Inbox handler then performs the real Dapr enqueue.</item>
+/// </list>
+/// Returns Ok(null) to end the in-process loop; a separate job resumes the chain.
 /// </summary>
-/// <remarks>Draft (S5) — not compiled; verify ambient-UoW outbox semantics in CI.</remarks>
 public sealed class EnqueueContinuationStrategy(
-    IDistributedEventBus eventBus,
-    IInstanceJobRepository jobRepository) : IContinuationStrategy
+    IInstanceJobRepository jobRepository,
+    ITransitionEnqueueGateway enqueueGateway) : IContinuationStrategy
 {
     /// <inheritdoc />
     public ContinuationMode Mode => ContinuationMode.Enqueue;
@@ -31,29 +41,56 @@ public sealed class EnqueueContinuationStrategy(
         if (next is null)
             return Result<WorkflowExecutionContext?>.Ok(null);
 
-        var jobName = $"trans-{current.InstanceId}-{next.TransitionKey}";
+        var jobName = JobName.ForAsyncTransition(current.InstanceId, next.TransitionKey);
+        var jobNameValue = jobName.Value;
+
+        // Single caller-generated id, reused for the durable InstanceJob.JobId AND the underlying
+        // BackgroundJobInfo.Id (direct + outbox paths). Keeps the two in sync so cancellation-by-id
+        // works — no placeholder.
+        var jobId = Guid.NewGuid();
 
         // Durable intent for the active-job guard / reaper — atomic with the transition commit
         // because we run inside the pipeline's ambient UoW (TransitionRunner).
         await jobRepository.InsertAsync(
             InstanceJob.Create(
-                Guid.NewGuid(),
+                jobId,
                 jobName,
-                Guid.NewGuid(),
+                jobId,
                 current.Domain,
                 current.WorkflowKey,
                 current.InstanceId),
             true,
             cancellationToken);
 
-        var continuation = new TransitionContinuationRequested
+        var activity = Activity.Current;
+
+        var directPayload = new TransitionJobPayload
+        {
+            JobName = jobNameValue,
+            InstanceId = current.InstanceId,
+            TransitionKey = next.TransitionKey,
+            Domain = current.Domain,
+            Workflow = current.WorkflowKey,
+            Version = current.Workflow.Version,
+            Data = null, // chained auto-transitions carry no new request payload
+            Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+            RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+            ExecutionActor = ExecutionActor.System,
+            CallerSync = false,
+            TraceParent = activity?.Id,
+            TraceState = activity?.TraceStateString,
+            ChainToken = current.ChainToken // propagate chain ownership (S6)
+        };
+
+        var outboxEvent = new TransitionContinuationRequested
         {
             InstanceId = current.InstanceId,
             Domain = current.Domain,
             Flow = current.WorkflowKey,
             Version = current.Workflow.Version,
             TransitionKey = next.TransitionKey,
-            JobName = jobName,
+            JobName = jobNameValue,
+            JobId = jobId,
             Data = null, // chained auto-transitions carry no new request payload
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
@@ -62,7 +99,7 @@ public sealed class EnqueueContinuationStrategy(
             ChainDepth = current.ChainDepth + 1
         };
 
-        await eventBus.PublishAsync(continuation, subject: null, useOutbox: true, cancellationToken);
+        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);
 
         // No in-process next context — a separate job resumes the chain.
         return Result<WorkflowExecutionContext?>.Ok(null);

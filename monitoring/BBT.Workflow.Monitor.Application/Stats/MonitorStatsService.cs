@@ -204,7 +204,7 @@ public sealed class MonitorStatsService(
         var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
         var repo = scope.ServiceProvider.GetRequiredService<IInstanceRepository>();
 
-        using (currentSchema.Use(schemaKey))
+        using (currentSchema.Change(schemaKey))
             return await repo.GetStatusCountsAsync(effectiveFilter, ct);
     }
 

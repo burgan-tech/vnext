@@ -27,6 +27,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 5. Read [Task Executors and Invokers](runtime/task-executors-and-invokers.md) before adding a task type.
 6. Read [API and Service Contracts](contracts/api-and-service-contracts.md) before changing HTTP or Dapr-facing contracts.
 7. Read [JSON Validation](contracts/json-validation.md) before changing schema validation errors.
+8. Read [Long-Poll Termination on State Entry](domain/long-poll-termination.md) before changing State-function long-poll behavior or the pipeline pause/resume path.
 
 ## Documentation Rules
 

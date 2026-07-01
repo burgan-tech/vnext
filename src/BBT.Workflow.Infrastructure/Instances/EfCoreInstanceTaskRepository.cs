@@ -13,7 +13,7 @@ namespace BBT.Workflow.Instances;
 /// EF Core implementation of IInstanceTaskRepository.
 /// </summary>
 public class EfCoreInstanceTaskRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
     IDataSinkManager dataSinkManager)
     : EfCoreRepository<WorkflowDbContext, InstanceTask, Guid>(dbContext, serviceProvider),

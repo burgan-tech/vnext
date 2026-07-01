@@ -83,6 +83,14 @@ public static class LifecycleOrder
     /// </summary>
     public const int SubFlow = 70;
 
+    /// <summary>
+    /// Order for handling declarative long-poll termination on state entry.
+    /// Runs after OnEntry/SubFlow and before the epilogue (Schedule/Auto): when the entered
+    /// state's <c>interaction.longPoll.terminate</c> is true, the pipeline pauses here (skips the
+    /// epilogue to Finalize, instance stays Busy) and resumes on acknowledge or fallback timeout.
+    /// </summary>
+    public const int LongPollTermination = 75;
+
     public const int ClearBusyOnResumeStep = Schedule - 1;
     
     /// <summary>

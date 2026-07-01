@@ -90,6 +90,11 @@ public class InstanceSubFaultedEvent : IDistributedEvent
     public string? IncidentErrorLayer { get; init; }
 
     /// <summary>
+    /// Exception stack trace from the SubFlow's active incident, when available.
+    /// </summary>
+    public string? IncidentStackTrace { get; init; }
+
+    /// <summary>
     /// HTTP status code from the SubFlow's active incident, when available.
     /// </summary>
     public int? IncidentStatusCode { get; init; }
@@ -123,6 +128,12 @@ public class InstanceSubFaultedEvent : IDistributedEvent
     /// Boundary level that matched in the SubFlow (if any)
     /// </summary>
     public string? IncidentBoundaryLevel { get; init; }
+
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
 
     public override string ToString()
     {

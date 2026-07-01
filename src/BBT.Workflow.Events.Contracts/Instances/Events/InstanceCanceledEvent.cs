@@ -52,5 +52,11 @@ public class InstanceCanceledEvent : IDistributedEvent
     /// Duration of the instance execution before cancellation
     /// </summary>
     public TimeSpan? Duration { get; init; }
+
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
 }
 

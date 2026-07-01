@@ -29,14 +29,18 @@ public sealed class InstanceSubFaultedEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.SubFlowFaultReceived(eventData.SubInstanceId, eventData.InstanceId, eventData.Domain, eventData.Flow);
 
@@ -99,6 +103,7 @@ public sealed class InstanceSubFaultedEventHook(
             IncidentMessage = eventData.IncidentMessage,
             IncidentErrorCode = eventData.IncidentErrorCode,
             IncidentErrorLayer = eventData.IncidentErrorLayer,
+            IncidentStackTrace = eventData.IncidentStackTrace,
             IncidentStatusCode = eventData.IncidentStatusCode,
             IncidentTraceId = eventData.IncidentTraceId,
             IncidentTaskKey = eventData.IncidentTaskKey,

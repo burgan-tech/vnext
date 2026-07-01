@@ -149,12 +149,11 @@ public sealed class InstanceRetryAppService(
             var subflowCorrelation = instance.Subflow!;
 
             // Unfault parent first
-            await using (var uow = await UnitOfWorkManager.BeginRequiresNew(cancellationToken))
-            {
-                instance.Unfault();
-                await instanceRepository.UpdateAsync(instance, true, cancellationToken);
-                await uow.CommitAsync(cancellationToken);
-            }
+            await using var uow = UnitOfWorkManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+            instance.Unfault();
+            await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+            await uow.CommitAsync(cancellationToken);
 
             logger.InstanceUnfaulted(instance.Id);
 
@@ -219,7 +218,8 @@ public sealed class InstanceRetryAppService(
             (Instance Instance, WorkflowDefinition Workflow, InstanceTransition Transition) data,
             CancellationToken cancellationToken)
     {
-        await using var uow = await UnitOfWorkManager.BeginRequiresNew(cancellationToken);
+        await using var uow = UnitOfWorkManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
         var unfaulted = data.Instance.Unfault();
         if (!unfaulted)

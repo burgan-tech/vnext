@@ -5,15 +5,16 @@ namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Builds the <see cref="NotificationMessage"/> for the platform-managed <c>state</c> channel.
-/// Data is produced from the State Function; metadata can be enriched via an optional
-/// <see cref="IStateNotificationMapping"/> script.
+/// The data payload is a lightweight pointer (<c>domain</c>, <c>flow</c>, <c>id</c>, <c>version</c>)
+/// — consumers re-fetch the full state via the State Function. Metadata can be enriched via an
+/// optional <see cref="IStateNotificationMapping"/> script.
 /// </summary>
 public interface IStateChannelMessageBuilder
 {
     /// <summary>
-    /// Produces the state notification message.
+    /// Produces the state notification message from the supplied script context.
     /// </summary>
-    /// <param name="context">Task executor context with script context and instance data.</param>
+    /// <param name="scriptContext">Script context carrying the workflow and instance.</param>
     /// <param name="stateMapping">
     /// Optional user-provided enrichment script. When supplied, its
     /// <see cref="IStateNotificationMapping.EnrichAsync"/> result is merged into
@@ -21,7 +22,7 @@ public interface IStateChannelMessageBuilder
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<Result<NotificationMessage>> BuildAsync(
-        TaskExecutorContext context,
+        ScriptContext scriptContext,
         IStateNotificationMapping? stateMapping,
         CancellationToken cancellationToken);
 }

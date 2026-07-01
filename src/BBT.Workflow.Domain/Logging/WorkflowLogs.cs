@@ -116,6 +116,39 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when the direct Dapr enqueue of a chained continuation fails and the strategy
+    /// falls back to publishing the continuation through the transactional outbox.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10127,
+        Level = LogLevel.Warning,
+        Message = "Direct Dapr enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}); falling back to outbox: {Reason}")]
+    public static partial void TransitionContinuationFellBackToOutbox(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string jobName,
+        string reason);
+
+    /// <summary>
+    /// Logs when an instance cannot be found during busy marking — operation is skipped silently.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10128,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} not found for busy marker — skipping")]
+    public static partial void InstanceNotFoundForBusyMarker(this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// Logs when an instance is successfully marked Busy in an isolated RequiresNew UoW.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10129,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} marked Busy via isolated UoW")]
+    public static partial void InstanceMarkedBusy(this ILogger logger, Guid instanceId);
+
+    /// <summary>
     /// Logs when a foreign transition is rejected by the chain-token gate because the instance
     /// is Busy with an active auto-chain owned by a different token.
     /// </summary>
@@ -152,6 +185,17 @@ public static partial class WorkflowLogs
         this ILogger logger,
         int faulted,
         int skippedActive);
+
+    /// <summary>
+    /// Logs when the per-flow sweep timeout elapses before the reaper finishes a schema.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10127,
+        Level = LogLevel.Warning,
+        Message = "Chain reaper sweep timed out for flow schema {FlowKey}; schema skipped this cycle")]
+    public static partial void ChainReaperFlowSweepTimedOut(
+        this ILogger logger,
+        string flowKey);
 
     /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
@@ -541,6 +585,43 @@ public static partial class WorkflowLogs
         int excludedCount,
         string transitionKey);
 
+    /// <summary>
+    /// Logs when an instance is about to be marked faulted due to an unhandled pipeline error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10130,
+        Level = LogLevel.Warning,
+        Message = "Marking instance {InstanceId} as faulted due to unhandled pipeline error: {ErrorCode} - {ErrorMessage}")]
+    public static partial void InstanceFaultedDueToPipelineError(
+        this ILogger logger,
+        Guid instanceId,
+        string? errorCode,
+        string? errorMessage);
+
+    /// <summary>
+    /// Logs when an instance has been successfully persisted as faulted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10131,
+        Level = LogLevel.Information,
+        Message = "Instance {InstanceId} marked as faulted successfully. Client will receive Status = 'F'")]
+    public static partial void InstanceFaultedSuccessfully(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when the workflow-level output script fails during sync response enrichment.
+    /// Execution continues and falls back to raw instance attributes.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10132,
+        Level = LogLevel.Error,
+        Message = "Workflow '{WorkflowKey}' output script failed. Falling back to raw instance attributes.")]
+    public static partial void WorkflowOutputScriptFailed(
+        this ILogger logger,
+        string workflowKey,
+        Exception exception);
+
     #endregion
 
     #region Task Execution
@@ -863,6 +944,18 @@ public static partial class WorkflowLogs
         Message = "SubFlow output mapping started for parent instance {ParentInstanceId}")]
     public static partial void SubFlowOutputMappingStarted(
         this ILogger logger,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when SubFlow output mapping script execution fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40080,
+        Level = LogLevel.Error,
+        Message = "SubFlow output mapping failed for parent instance {ParentInstanceId}")]
+    public static partial void SubFlowOutputMappingFailed(
+        this ILogger logger,
+        Exception exception,
         Guid parentInstanceId);
 
     /// <summary>
@@ -2095,7 +2188,58 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string errorCode,
         string? boundaryAction);
-  
+
+    #endregion
+
+    #region Long-Poll Termination
+
+    /// <summary>
+    /// Logs when the pipeline pauses on state entry for declarative long-poll termination.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20300,
+        Level = LogLevel.Information,
+        Message = "Long-poll termination armed on instance {InstanceId} at state {State}; fallback in {FallbackSeconds}s")]
+    public static partial void LongPollTerminationArmed(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        int fallbackSeconds);
+
+    /// <summary>
+    /// Logs when a paused pipeline resumes after a long-poll acknowledge (or fallback timeout).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20301,
+        Level = LogLevel.Information,
+        Message = "Long-poll acknowledge resumed pipeline for instance {InstanceId}")]
+    public static partial void LongPollAckResumed(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a long-poll acknowledge resume is skipped because the instance is no longer awaiting acknowledge.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20302,
+        Level = LogLevel.Debug,
+        Message = "Long-poll acknowledge resume skipped (not awaiting) for instance {InstanceId}")]
+    public static partial void LongPollAckResumeSkipped(
+        this ILogger logger,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a long-poll acknowledge resume fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20303,
+        Level = LogLevel.Error,
+        Message = "Long-poll acknowledge resume failed for instance {InstanceId}: {Reason}")]
+    public static partial void LongPollAckResumeFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string reason);
+
     #endregion
 
     #region Multi-Channel Notification
@@ -2155,6 +2299,56 @@ public static partial class WorkflowLogs
         int dispatchedCount,
         int skippedCount,
         int failedCount);
+
+    /// <summary>
+    /// Logs when a state-level notification job is scheduled after the pipeline settles.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10094,
+        Level = LogLevel.Information,
+        Message = "State notification scheduled. InstanceId={InstanceId}, State={StateKey}")]
+    public static partial void StateNotificationScheduled(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
+
+    /// <summary>
+    /// Logs when a state-level notification is successfully dispatched to the state Dapr binding.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10095,
+        Level = LogLevel.Information,
+        Message = "State notification dispatched. InstanceId={InstanceId}, BindingName={BindingName}")]
+    public static partial void StateNotificationDispatched(
+        this ILogger logger,
+        Guid instanceId,
+        string bindingName);
+
+    /// <summary>
+    /// Logs when a state-notify job runs but no notification entry is dispatched
+    /// (no state entries on the state, or none matched its rule).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10096,
+        Level = LogLevel.Debug,
+        Message = "State notification skipped. InstanceId={InstanceId}, State={StateKey}, Reason={Reason}")]
+    public static partial void StateNotificationSkipped(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey,
+        string reason);
+
+    /// <summary>
+    /// Logs when a state-level notification dispatch fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10097,
+        Level = LogLevel.Warning,
+        Message = "State notification failed. InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void StateNotificationFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string errorMessage);
 
     #endregion
   
