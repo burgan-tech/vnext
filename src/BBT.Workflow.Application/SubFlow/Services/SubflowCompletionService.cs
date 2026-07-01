@@ -128,7 +128,21 @@ public sealed class SubflowCompletionService(
                     {
                         logger.LogWarning("Failed to get parent workflow {Flow} for SubFlow completion: {ErrorCode}",
                             completedInput.Flow, parentWorkflowResult.Error.Code);
-                        // Commit correlation completion even if workflow load fails; skip pipeline resume
+
+                        // Parent definition unavailable — resuming can never succeed, and a silent return
+                        // would strand the parent (and every ancestor) forever. Fault the parent so the
+                        // error propagates upward via InstanceSubFaultedEvent instead of leaving it stuck.
+                        var loadIncident = InstanceIncidentFactory.Create(
+                            state: parentInstance.GetCurrentState,
+                            transition: string.Empty,
+                            taskKey: null,
+                            message: $"Parent workflow '{completedInput.Flow}' could not be loaded for SubFlow completion",
+                            errorCode: parentWorkflowResult.Error.Code ?? WorkflowErrorCodes.NotFoundWorkflow,
+                            errorLayer: "SubFlow",
+                            stackTrace: parentWorkflowResult.Error.Detail);
+                        parentInstance.AddIncident(loadIncident);
+                        parentInstance.Fault(completedInput.Domain);
+                        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
                     }
