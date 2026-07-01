@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 using BBT.Workflow.Execution.LongPoll;
 using Xunit;
 
@@ -6,22 +7,30 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Unit tests for the structured <see cref="JobName"/> value object: builder/parser round-trips,
-/// segment encoding collision cases, source-state scoping, job-type distinctness, and legacy-name rejection.
+/// source-state scoping, the Dapr-safe character alphabet, key validation, and legacy single-field
+/// read-compatibility.
 /// </summary>
 public class JobNameTests
 {
     private static readonly Guid Instance = Guid.Parse("550e8400-e29b-41d4-a716-446655440000");
+    private const string InstanceN = "550e8400e29b41d4a716446655440000";
+
+    // Dapr's Jobs API only accepts names in this alphabet (the name becomes the /job/{name} route).
+    private static readonly Regex DaprSafe = new("^[A-Za-z0-9_.-]+$", RegexOptions.Compiled);
 
     [Fact]
-    public void ForAsyncTransition_ShouldRoundTrip()
+    public void ForAsyncTransition_ShouldProduceReadableName_AndRoundTrip()
     {
-        var jobName = JobName.ForAsyncTransition(Instance, "state-a", "approve");
+        var jobName = JobName.ForAsyncTransition(Instance, "wait-ivr", "go-to-transfer-ivr");
+
+        // Readable, dot-delimited, no marker/encoding characters.
+        Assert.Equal($"vnext.job.v1.tx.{InstanceN}.wait-ivr.go-to-transfer-ivr", jobName.Value);
 
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
         Assert.Equal(JobType.AsyncTransition, parsed.Type);
         Assert.Equal(Instance, parsed.InstanceId);
-        Assert.Equal("state-a", parsed.SourceState);
-        Assert.Equal("approve", parsed.TransitionKey);
+        Assert.Equal("wait-ivr", parsed.SourceState);
+        Assert.Equal("go-to-transfer-ivr", parsed.TransitionKey);
     }
 
     [Fact]
@@ -68,11 +77,21 @@ public class JobNameTests
     }
 
     [Fact]
-    public void ForTimeout_ShouldHaveNoSegment_AndNullSourceState()
+    public void EmptySourceState_ShouldDegradeToSingleKeyName()
+    {
+        var jobName = JobName.ForAsyncTransition(Instance, "", "approve");
+
+        Assert.Equal($"vnext.job.v1.tx.{InstanceN}.approve", jobName.Value);
+        Assert.Null(JobName.Parse(jobName.Value).SourceState);
+        Assert.Equal("approve", JobName.Parse(jobName.Value).TransitionKey);
+    }
+
+    [Fact]
+    public void ForTimeout_ShouldHaveNoKey_AndNullSourceState()
     {
         var jobName = JobName.ForTimeout(Instance);
 
-        Assert.Equal("vnext.job.v1.to.550e8400e29b41d4a716446655440000", jobName.Value);
+        Assert.Equal($"vnext.job.v1.to.{InstanceN}", jobName.Value);
 
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
         Assert.Equal(JobType.Timeout, parsed.Type);
@@ -93,10 +112,10 @@ public class JobNameTests
     }
 
     [Fact]
-    public void LegacyV1PlainSegment_ShouldParse_AsNullSourceState()
+    public void LegacySingleFieldName_ShouldParse_AsNullSourceState()
     {
-        // A pre-rollout tx name (no source-state composite) must still parse cleanly.
-        var parsed = JobName.Parse("vnext.job.v1.tx.550e8400e29b41d4a716446655440000.approve");
+        // A pre-rollout tx name (no source-state field) must still parse cleanly.
+        var parsed = JobName.Parse($"vnext.job.v1.tx.{InstanceN}.approve");
 
         Assert.Null(parsed.SourceState);
         Assert.Equal("approve", parsed.TransitionKey);
@@ -105,24 +124,40 @@ public class JobNameTests
 
     [Theory]
     [InlineData("approve")]
-    [InlineData("go-back")]               // hyphen — the original suffix-match bug case
-    [InlineData("step_1")]
-    [InlineData("a.b.c")]                 // dots — would collide with the delimiter if not encoded
-    [InlineData("with:colon")]
-    [InlineData("with space")]
-    [InlineData("son-aşama")]             // non-ascii
-    [InlineData("emoji-🚀-key")]
-    [InlineData("-leading")]
-    [InlineData("trailing-")]
-    public void SourceStateAndKey_ShouldRoundTripForArbitraryKeys(string key)
+    [InlineData("go-back")]      // hyphen — the original suffix-match bug case
+    [InlineData("go-to-transfer-ivr")]
+    [InlineData("step_1")]       // underscore
+    [InlineData("State-A_1")]
+    public void SafeKeys_ShouldRoundTripPlain(string key)
     {
         var jobName = JobName.ForAsyncTransition(Instance, key, key);
+
+        Assert.Matches(DaprSafe, jobName.Value);
+        Assert.DoesNotContain("~", jobName.Value);
 
         Assert.True(JobName.TryParse(jobName.Value, out var parsed));
         Assert.Equal(key, parsed.SourceState);
         Assert.Equal(key, parsed.TransitionKey);
         Assert.Equal(JobType.AsyncTransition, parsed.Type);
         Assert.Equal(Instance, parsed.InstanceId);
+    }
+
+    [Theory]
+    [InlineData("a.b.c")]        // dots collide with the delimiter
+    [InlineData("with space")]
+    [InlineData("son-aşama")]    // non-ascii
+    [InlineData("emoji-🚀-key")]
+    [InlineData("with:colon")]
+    public void NonDaprSafeKey_ShouldThrow(string key)
+    {
+        Assert.Throws<ArgumentException>(() => JobName.ForAsyncTransition(Instance, "state-a", key));
+        Assert.Throws<ArgumentException>(() => JobName.ForAsyncTransition(Instance, key, "approve"));
+    }
+
+    [Fact]
+    public void EmptyTransitionKey_ShouldThrow()
+    {
+        Assert.Throws<ArgumentException>(() => JobName.ForAsyncTransition(Instance, "state-a", ""));
     }
 
     [Fact]
@@ -136,14 +171,13 @@ public class JobNameTests
 
     [Theory]
     [InlineData("trans-550e8400-e29b-41d4-a716-446655440000-approve")]
-    [InlineData("timeout-550e8400-e29b-41d4-a716-446655440000")]
-    [InlineData("lpack-550e8400-e29b-41d4-a716-446655440000-longpoll-ack")]
     [InlineData("")]
     [InlineData(null)]
-    [InlineData("vnext.job.v1.zz.550e8400e29b41d4a716446655440000")]   // unknown type code
-    [InlineData("vnext.job.v1.tx.not-a-guid.approve")]                 // bad instance id
+    [InlineData("vnext.job.v1.zz.550e8400e29b41d4a716446655440000")]        // unknown type code
+    [InlineData("vnext.job.v1.tx.not-a-guid.approve")]                      // bad instance id
+    [InlineData("vnext.job.v1.to.550e8400e29b41d4a716446655440000.extra")]  // timeout must have no key
     [InlineData("garbage")]
-    public void TryParse_ShouldRejectLegacyAndInvalidNames(string? value)
+    public void TryParse_ShouldRejectForeignAndInvalidNames(string? value)
     {
         Assert.False(JobName.TryParse(value, out _));
     }
