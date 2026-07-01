@@ -1,0 +1,331 @@
+using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
+using BBT.Aether.AspNetCore.Controllers;
+using BBT.Workflow.Monitor.Common.DTOs;
+using BBT.Workflow.Monitor.Components;
+using BBT.Workflow.Monitor.Components.Filters;
+using BBT.Workflow.Monitor.Components.DTOs;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
+
+namespace BBT.Workflow.Monitor.Controllers;
+
+/// <summary>
+/// Read-only monitoring endpoints for workflow component definitions.
+/// A single parameterised endpoint serves all component types (flows, tasks, schemas, etc.)
+/// so the client specifies which type it needs via the <c>type</c> query parameter.
+/// </summary>
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/monitor")]
+[ServiceFilter(typeof(ResponseHeaderFilter))]
+public sealed class MonitorComponentController(IMonitorComponentQueryService queryService)
+    : AetherControllerBase
+{
+    /// <summary>
+    /// Returns a paged lightweight summary of published components for the given type and domain.
+    /// When <paramref name="key"/> is omitted, returns a standard paged list with <c>pagination</c> and <c>items</c>.
+    /// When <paramref name="key"/> is provided, returns a single flat detail object (<see cref="MonitorComponentDetailResponse"/>)
+    /// that includes all published versions — no <c>items</c> wrapper, paging ignored.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="type">
+    /// Component type. Supported values:
+    /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>, <c>sys-mappings</c>.
+    /// </param>
+    /// <param name="key">Optional single component key. When provided, returns detail or 404. Filters and paging are ignored.</param>
+    /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
+    /// <param name="page">1-based page number (list mode only). Default: 1.</param>
+    /// <param name="pageSize">Items per page (list mode only). Range: 1–100. Default: 20.</param>
+    /// <param name="createdAtGte">Lower bound for first-publish timestamp (inclusive, ISO 8601 UTC).</param>
+    /// <param name="createdAtLte">Upper bound for first-publish timestamp (inclusive, ISO 8601 UTC).</param>
+    /// <param name="modifiedAtGte">Lower bound for last-update timestamp (inclusive, ISO 8601 UTC).</param>
+    /// <param name="modifiedAtLte">Upper bound for last-update timestamp (inclusive, ISO 8601 UTC).</param>
+    /// <param name="tagsContains">Tag list-contains filter (case-insensitive). Matches if the tag list contains this value.</param>
+    /// <param name="flowVersionEq">Flow-stream format version exact-match (e.g. "1.0.0").</param>
+    /// <param name="flowVersionContains">Flow-stream format version contains filter (case-insensitive, e.g. "1.0").</param>
+    /// <param name="definitionType">Definition type discriminator exact-match. Valid for sys-flows, sys-tasks, sys-schemas, sys-views, sys-extensions.</param>
+    /// <param name="display">Display identifier exact-match (e.g. "form"). Valid for sys-views only.</param>
+    /// <param name="renderer">Renderer identifier exact-match (e.g. "default"). Valid for sys-views only.</param>
+    /// <param name="scope">Scope exact-match (e.g. "global"). Valid for sys-functions and sys-extensions.</param>
+    /// <param name="nameEq">Name exact-match filter (case-insensitive). Valid for sys-mappings only.</param>
+    /// <param name="nameContains">Name contains filter (case-insensitive). Valid for sys-mappings only.</param>
+    /// <param name="keyEq">Component key exact-match filter (case-insensitive). Available for all component types.</param>
+    /// <param name="keyContains">Component key contains filter (case-insensitive). Available for all component types.</param>
+    /// <param name="versionEq">Component semantic version exact-match filter (case-insensitive, e.g. "1.0.0"). Available for all component types.</param>
+    /// <param name="versionContains">Component semantic version contains filter (case-insensitive, e.g. "1.0"). Available for all component types.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Paged summary list or single component detail returned successfully</response>
+    /// <response code="400">Unknown component type, unsupported filter for type, or invalid pagination parameters</response>
+    /// <response code="404">Specific <paramref name="key"/> not found</response>
+    [HttpGet("{domain}/components")]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorComponentSummaryItem>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(MonitorComponentDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComponentSummaryAsync(
+        [FromRoute] string domain,
+        [FromQuery][Required] string type,
+        [FromQuery] string? key = null,
+        [FromQuery] string? version = null,
+        [FromQuery][Range(1, 1000)] int page = 1,
+        [FromQuery][Range(1, 100)] int pageSize = 20,
+        [FromQuery(Name = "createdAt[gte]")] DateTime? createdAtGte = null,
+        [FromQuery(Name = "createdAt[lte]")] DateTime? createdAtLte = null,
+        [FromQuery(Name = "modifiedAt[gte]")] DateTime? modifiedAtGte = null,
+        [FromQuery(Name = "modifiedAt[lte]")] DateTime? modifiedAtLte = null,
+        [FromQuery(Name = "tags[contains]")] string? tagsContains = null,
+        [FromQuery(Name = "flowVersion[eq]")] string? flowVersionEq = null,
+        [FromQuery(Name = "flowVersion[contains]")] string? flowVersionContains = null,
+        [FromQuery] string? definitionType = null,
+        [FromQuery] string? display = null,
+        [FromQuery] string? renderer = null,
+        [FromQuery] string? scope = null,
+        [FromQuery(Name = "name[eq]")] string? nameEq = null,
+        [FromQuery(Name = "name[contains]")] string? nameContains = null,
+        [FromQuery(Name = "key[eq]")]           string? keyEq           = null,
+        [FromQuery(Name = "key[contains]")]     string? keyContains     = null,
+        [FromQuery(Name = "version[eq]")]       string? versionEq       = null,
+        [FromQuery(Name = "version[contains]")] string? versionContains = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = type.Trim(),
+            Key           = string.IsNullOrWhiteSpace(key)     ? null : key.Trim(),
+            Version       = string.IsNullOrWhiteSpace(version) ? null : version.Trim(),
+            Page          = page,
+            PageSize      = pageSize,
+        };
+
+        if (input.Key is not null)
+        {
+            var detail = await queryService.GetComponentDetailAsync(input, cancellationToken);
+            return FromResult(detail);
+        }
+
+        var conflicts = new List<string>();
+        if (flowVersionEq is not null && flowVersionContains is not null) conflicts.Add("flowVersion");
+        if (nameEq is not null && nameContains is not null)               conflicts.Add("name");
+        if (keyEq is not null && keyContains is not null)                 conflicts.Add("key");
+        if (versionEq is not null && versionContains is not null)        conflicts.Add("version");
+        if (conflicts.Count > 0)
+        {
+            var conflictErrors = conflicts.ToDictionary(
+                f => f,
+                f => new[] { $"Cannot use both '[eq]' and '[contains]' operators for '{f}'." });
+            return BadRequest(new ValidationProblemDetails { Errors = conflictErrors });
+        }
+
+        var filter = new MonitorComponentFilterInput
+        {
+            CreatedAtGte        = createdAtGte,
+            CreatedAtLte        = createdAtLte,
+            ModifiedAtGte       = modifiedAtGte,
+            ModifiedAtLte       = modifiedAtLte,
+            TagsContains        = string.IsNullOrWhiteSpace(tagsContains)        ? null : tagsContains.Trim(),
+            FlowVersionEq       = string.IsNullOrWhiteSpace(flowVersionEq)       ? null : flowVersionEq.Trim(),
+            FlowVersionContains = string.IsNullOrWhiteSpace(flowVersionContains) ? null : flowVersionContains.Trim(),
+            DefinitionType      = string.IsNullOrWhiteSpace(definitionType)      ? null : definitionType.Trim(),
+            Display             = string.IsNullOrWhiteSpace(display)             ? null : display.Trim(),
+            Renderer            = string.IsNullOrWhiteSpace(renderer)            ? null : renderer.Trim(),
+            Scope               = string.IsNullOrWhiteSpace(scope)               ? null : scope.Trim(),
+            NameEq              = string.IsNullOrWhiteSpace(nameEq)              ? null : nameEq.Trim(),
+            NameContains        = string.IsNullOrWhiteSpace(nameContains)        ? null : nameContains.Trim(),
+            KeyEq               = string.IsNullOrWhiteSpace(keyEq)               ? null : keyEq.Trim(),
+            KeyContains         = string.IsNullOrWhiteSpace(keyContains)         ? null : keyContains.Trim(),
+            VersionEq           = string.IsNullOrWhiteSpace(versionEq)           ? null : versionEq.Trim(),
+            VersionContains     = string.IsNullOrWhiteSpace(versionContains)     ? null : versionContains.Trim(),
+        };
+
+        var disallowed = ComponentFilterDescriptor.FindDisallowed(input.ComponentType, filter);
+        if (disallowed.Count > 0)
+        {
+            var errors = disallowed.ToDictionary(
+                f => f,
+                f => new[] { $"'{f}' is not supported for type '{input.ComponentType}'." });
+            return BadRequest(new ValidationProblemDetails { Errors = errors });
+        }
+
+        input.Filter = filter;
+
+        var result = await queryService.GetComponentSummaryAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Lists or fetches published component definitions (flows, tasks, schemas, views, functions, extensions).
+    /// When <paramref name="key"/> is supplied, returns the single definition object directly — passing
+    /// <c>page</c> or <c>pageSize</c> alongside <paramref name="key"/> returns 400.
+    /// When <paramref name="key"/> is omitted, returns a paged list with <c>pagination</c> and <c>items</c>.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="type">
+    /// Component type. Supported values:
+    /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>.
+    /// </param>
+    /// <param name="key">Optional single component key; returns the raw definition or 404. Paging is ignored.</param>
+    /// <param name="version">Optional version filter. When omitted, the latest version is returned.</param>
+    /// <param name="page">1-based page number (list mode only). Default: 1.</param>
+    /// <param name="pageSize">Items per page (list mode only). Range: 1–100. Default: 20.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Single definition object (when key is provided) or paged list returned successfully</response>
+    /// <response code="400">Unknown component type, pagination params with key, or invalid parameters</response>
+    /// <response code="404">Specific <paramref name="key"/> not found</response>
+    [HttpGet("{domain}/components/definition")]
+    [ProducesResponseType(typeof(JsonElement), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(MonitorPagedResponse<JsonElement>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComponentsAsync(
+        [FromRoute] string domain,
+        [FromQuery] [Required] string type,
+        [FromQuery] string? key = null,
+        [FromQuery] string? version = null,
+        [FromQuery] [Range(1, 1000)] int page = 1,
+        [FromQuery] [Range(1, 100)] int pageSize = 20,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var input = new MonitorGetComponentsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = type.Trim(),
+            Key           = string.IsNullOrWhiteSpace(key)     ? null : key.Trim(),
+            Version       = string.IsNullOrWhiteSpace(version) ? null : version.Trim(),
+            Page          = page,
+            PageSize      = pageSize,
+        };
+
+        if (input.Key is not null)
+        {
+            var disallowed = new[] { "page", "pageSize" }
+                .Where(p => HttpContext.Request.Query.ContainsKey(p))
+                .ToList();
+            if (disallowed.Count > 0)
+            {
+                var errors = disallowed.ToDictionary(
+                    p => p,
+                    p => new[] { $"'{p}' is not allowed when 'key' is provided." });
+                return BadRequest(new ValidationProblemDetails { Errors = errors });
+            }
+
+            var single = await queryService.GetSingleComponentAsync(input, cancellationToken);
+            return FromResult(single);
+        }
+
+        var result = await queryService.GetComponentsAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Returns per-type component counts (flows, tasks, schemas, views, functions, extensions) for the domain.
+    /// Useful for a quick inventory overview — "how many components of each type exist in this domain?"
+    /// Snapshot cache is used first; falls back to runtime DB load if the snapshot is empty.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Component counts returned successfully</response>
+    [HttpGet("{domain}/stats/components")]
+    [ProducesResponseType(typeof(MonitorComponentStatsResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetComponentStatsAsync(
+        [FromRoute] string domain,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentStatsInput { Domain = domain.Trim() };
+        var result = await queryService.GetComponentStatsAsync(input, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Returns all component dependencies of a workflow definition
+    /// (tasks, schemas, views, functions, extensions, sub-flows) with their reference site.
+    /// </summary>
+    /// <response code="200">Dependency graph returned.</response>
+    /// <response code="404">Workflow definition not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/dependencies")]
+    [ProducesResponseType(typeof(MonitorDependencyResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkflowDependenciesAsync(
+        [FromRoute] string domain, [FromRoute] string workflow,
+        [FromQuery] string? version = null, CancellationToken cancellationToken = default)
+        => FromResult(await queryService.GetWorkflowDependenciesAsync(domain, workflow, version, cancellationToken));
+
+    /// <summary>
+    /// Returns a paged list of all published versions for the given component key and type.
+    /// Each item includes the version string, publish timestamp, <c>isLatest</c> flag, and flow stream version.
+    /// Results are ordered latest-first (<c>isLatest</c> first, then by <c>publishedAt</c> descending).
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="type">
+    /// Component type. Required. Supported values:
+    /// <c>sys-flows</c>, <c>sys-tasks</c>, <c>sys-schemas</c>,
+    /// <c>sys-extensions</c>, <c>sys-functions</c>, <c>sys-views</c>, <c>sys-mappings</c>.
+    /// </param>
+    /// <param name="key">Component key. Required.</param>
+    /// <param name="page">1-based page number. Default: 1.</param>
+    /// <param name="pageSize">Items per page (1–100). Default: 20.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Paged version list returned successfully.</response>
+    /// <response code="400">Missing or invalid <paramref name="type"/> or <paramref name="key"/>.</response>
+    /// <response code="404">Component not found.</response>
+    [HttpGet("{domain}/components/versions")]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorComponentVersionItem>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComponentVersionsAsync(
+        [FromRoute] string domain,
+        [FromQuery][Required] string type,
+        [FromQuery][Required] string key,
+        [FromQuery][Range(1, 1000)] int page     = 1,
+        [FromQuery][Range(1, 100)]  int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentVersionsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = type.Trim(),
+            Key           = key.Trim(),
+            Page          = page,
+            PageSize      = pageSize
+        };
+        return FromResult(await queryService.GetComponentVersionsAsync(input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Returns a paged list of all published versions for the given workflow definition.
+    /// Equivalent to <c>GET {domain}/components/versions?type=sys-flows&amp;key={workflow}</c>.
+    /// Each item includes the version string, publish timestamp, <c>isLatest</c> flag, and flow stream version.
+    /// Results are ordered latest-first.
+    /// </summary>
+    /// <param name="domain">The tenant/domain key.</param>
+    /// <param name="workflow">Workflow definition key.</param>
+    /// <param name="page">1-based page number. Default: 1.</param>
+    /// <param name="pageSize">Items per page (1–100). Default: 20.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Paged version list returned successfully.</response>
+    /// <response code="404">Workflow definition not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/versions")]
+    [ProducesResponseType(typeof(MonitorPagedResponse<MonitorComponentVersionItem>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkflowVersionsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromQuery][Range(1, 1000)] int page     = 1,
+        [FromQuery][Range(1, 100)]  int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new MonitorGetComponentVersionsInput
+        {
+            Domain        = domain.Trim(),
+            ComponentType = MonitorComponentTypes.Flows,
+            Key           = workflow.Trim(),
+            Page          = page,
+            PageSize      = pageSize
+        };
+        return FromResult(await queryService.GetComponentVersionsAsync(input, cancellationToken));
+    }
+}

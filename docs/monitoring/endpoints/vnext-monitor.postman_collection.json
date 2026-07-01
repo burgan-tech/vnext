@@ -1,0 +1,3280 @@
+{
+  "info": {
+    "name": "vNext Monitor API (port 4203, read-only)",
+    "description": "vNext Monitor API — salt-okunur dashboard/gözlemleme API'si.\n\nKoleksiyon **kullanıcı senaryoları** etrafında düzenlenmiştir: bir kullanıcının/operatörün gerçekte yaptığı işler (dashboard açılışı, süreç izleme, hata teşhisi, veri analizi, alt-süreç takibi, tanım keşfi, gelişmiş arama, operasyon, negatif testler). Tüm yeni Faz 1 endpoint'leri + mevcut endpoint'ler kapsanır.\n\nDeğişkenler: baseUrl, apiVersion, domain, workflow, instance, instanceGuid, subFlowInstance, transitionId, componentKey, componentVersion, fromVersion, toVersion.\n\nNOTLAR:\n- filter bir JSON nesnesidir (field op 'value' DEĞİL).\n- groupBy yalnızca JSON data path (attributes.*) üzerinde çalışır; status/currentState gibi instance kolonlarında ÇALIŞMAZ — bunun yerine stats/instances ve stats/states endpoint'lerini kullan.\n- Filtrelenebilir instance kolonları: key, flow, currentState, state, status, stateType, stateSubType, createdAt, modifiedAt, completedAt, isTransient. (createdBy filtrelenemez.)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4203"
+    },
+    {
+      "key": "apiVersion",
+      "value": "1.0"
+    },
+    {
+      "key": "domain",
+      "value": "core"
+    },
+    {
+      "key": "workflow",
+      "value": "lifecycle-transitions-test-workflow"
+    },
+    {
+      "key": "instance",
+      "value": "8e298c72-457c-4cd2-b3f2-e94fd5bf5a41"
+    },
+    {
+      "key": "instanceGuid",
+      "value": "27fd8a04-b4e5-447f-b838-395b3ef8322d"
+    },
+    {
+      "key": "subFlowInstance",
+      "value": "sub-instance-key"
+    },
+    {
+      "key": "transitionId",
+      "value": "b739cc23-45d2-4371-af6a-3c29b83eac13"
+    },
+    {
+      "key": "taskId",
+      "value": "660e8400-e29b-41d4-a716-446655440111"
+    },
+    {
+      "key": "componentKey",
+      "value": "lifecycle-transitions-test-workflow"
+    },
+    {
+      "key": "componentVersion",
+      "value": "1.5.0"
+    },
+    {
+      "key": "fromVersion",
+      "value": "1.0.0"
+    },
+    {
+      "key": "toVersion",
+      "value": "2.0.0"
+    },
+    {
+      "key": "dataVersion",
+      "value": "1.1.0"
+    },
+    {
+      "key": "transitionKey",
+      "value": "approve"
+    }
+  ],
+  "item": [
+    {
+      "name": "1 — Dashboard Açılışı (Genel Bakış)",
+      "description": "Bir kullanıcı dashboard'u açtığında ilk gördükleri: domain ve workflow düzeyinde özet sağlık tabloları, canlı dağılım, aktif liste.",
+      "item": [
+        {
+          "name": "1-A  Domain instance sayaçları (son 7 gün — default)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "stats",
+                "instances"
+              ]
+            },
+            "description": "Domain'deki tüm workflow'lar için Active/Busy/Completed/Faulted/Passive + Total. Filtre verilmezse varsayılan olarak SON 7 GÜNDE başlatılan (createdAt) instance'lar sayılır; çok büyük tablolar varsayılan olarak sınırsız taranmaz. Dönen `appliedFilter` alanı fiilen uygulanan filtreyi gösterir."
+          }
+        },
+        {
+          "name": "1-A2 Domain instance sayaçları — son 30 gün (tarih aralığı)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances?filter={\"createdAt\":{\"ge\":\"2026-05-18T00:00:00Z\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "stats",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"ge\":\"2026-05-18T00:00:00Z\"}}",
+                  "description": "createdAt >= tarih: bu tarihten sonra başlatılan instance'ları sayar (örn. son 30 gün)."
+                }
+              ]
+            },
+            "description": "Kullanıcı kendi tarih aralığını verir (son 30 gün, son 3 ay vb.). createdAt verildiği için varsayılan 7 günlük pencere uygulanmaz."
+          }
+        },
+        {
+          "name": "1-A3 Domain instance sayaçları — belirli tarih aralığı (between)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/instances?filter={\"createdAt\":{\"between\":[\"2026-03-01T00:00:00Z\",\"2026-06-01T00:00:00Z\"]}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "stats",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"between\":[\"2026-03-01T00:00:00Z\",\"2026-06-01T00:00:00Z\"]}}",
+                  "description": "İki tarih arasında başlatılan instance'ları sayar."
+                }
+              ]
+            },
+            "description": "Belirli bir başlangıç–bitiş aralığı için domain genelinde sayaçlar."
+          }
+        },
+        {
+          "name": "1-B  Workflow instance sayaçları",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "instances"
+              ]
+            },
+            "description": "A4 — tek bir workflow için status bazlı sayaçlar (dashboard ana widget)."
+          }
+        },
+        {
+          "name": "1-B2 Workflow instance sayaçları — belirli workflow versiyonu",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Workflow",
+                "value": "{{workflow}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?version=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "version",
+                  "value": "1.0.0",
+                  "description": "Workflow versiyonu"
+                }
+              ]
+            },
+            "description": "version parametresi ile yalnızca o workflow versiyonuyla başlatılan instance'ların sayıları döner."
+          },
+          "response": []
+        },
+        {
+          "name": "1-B3 Workflow instance sayaçları — GraphQL filter ile tarih aralığı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?filter={\"createdAt\":{\"ge\":\"2026-05-18T00:00:00Z\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"ge\":\"2026-05-18T00:00:00Z\"}}",
+                  "description": "GraphQL filter — tarih aralığı"
+                }
+              ]
+            },
+            "description": "filter parametresi ile yalnızca belirtilen tarih aralığındaki instance'ların durum dağılımı döner. filter ve version birlikte kullanılamaz (400 döner)."
+          },
+          "response": []
+        },
+        {
+          "name": "1-B4 Workflow instance sayaçları — GraphQL filter ile state kısıtı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?filter={\"currentState\":{\"eq\":\"approve\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"currentState\":{\"eq\":\"approve\"}}",
+                  "description": "GraphQL filter — state kısıtı"
+                }
+              ]
+            },
+            "description": "Belirli bir state'teki instance'ların durum dağılımını döner. Workflow'da hangi status'te kaç instance takılı kaldığını görmek için kullanılır."
+          },
+          "response": []
+        },
+        {
+          "name": "1-C  Canlı state dağılımı (süreç nerede yığılıyor)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/states",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "states"
+              ]
+            },
+            "description": "A5 — her state için Total/Active/Busy/Faulted. UI bu sayıları kendi grafiğine bindirir."
+          }
+        },
+        {
+          "name": "1-C2 Canlı state dağılımı — belirli workflow versiyonu",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Workflow",
+                "value": "{{workflow}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/states?version=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "states"
+              ],
+              "query": [
+                {
+                  "key": "version",
+                  "value": "1.0.0",
+                  "description": "Workflow versiyonu"
+                }
+              ]
+            },
+            "description": "version parametresi ile yalnızca o workflow versiyonuyla başlatılan instance'lar baz alınarak state dağılımı döner."
+          },
+          "response": []
+        },
+        {
+          "name": "1-D  Aktif instance listesi (ilk sayfa)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — Instance İzleme (Bir süreci takip et)",
+      "description": "Kullanıcı tek bir çalışan instance'ı uçtan uca inceler: kim olduğu, şu an ne yapabileceği, verisi, geçiş zaman çizelgesi, task detayları.",
+      "item": [
+        {
+          "name": "2-A  Instance detay — meta + aktif correlations (business key ile)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2-B  Instance detay — GUID ile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instanceGuid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instanceGuid}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2-C  Anlık durum + yapılabilir geçişler (state)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/state",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "state"
+              ]
+            },
+            "description": "A1 — currentState, status, availableTransitions, activeCorrelations."
+          }
+        },
+        {
+          "name": "2-D  Güncel veri + versiyon geçmişi (data)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "data"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2-E  Zaman çizelgesi — tüm geçiş akışı (timeline)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "timeline"
+              ]
+            },
+            "description": "Varsayılan: instance'ın tüm geçişlerini kronolojik sırayla döndürür. Her response'da `instance` bloğu (currentState, effectiveState, status) bulunur; graph overlay için anlık konumu gösterir."
+          }
+        },
+        {
+          "name": "2-F  Zaman çizelgesi + task'lar gömülü (includeTasks=true)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?includeTasks=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "includeTasks",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Her geçişin task'ları aynı response'a gömülür (darboğaz analizi). `instance` bloğu (currentState, effectiveState, status) her modda döner."
+          }
+        },
+        {
+          "name": "2-G  Tek bir transition'ın detayı (transitionId ile)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?transitionId={{transitionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "transitionId",
+                  "value": "{{transitionId}}"
+                }
+              ]
+            },
+            "description": "Belirli bir geçişe odaklanıp yalnızca onun detayını döndürür. `instance` bloğu (currentState, effectiveState, status) her modda döner."
+          }
+        },
+        {
+          "name": "2-H  Tek transition + task'ları gömülü (transitionId + includeTasks)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?transitionId={{transitionId}}&includeTasks=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "transitionId",
+                  "value": "{{transitionId}}"
+                },
+                {
+                  "key": "includeTasks",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Bir geçişe tıklandığında o geçişin task kayıtlarını birlikte getirir. `instance` bloğu (currentState, effectiveState, status) her modda döner."
+          }
+        },
+        {
+          "name": "2-I  Tek bir task kaydı (taskId ile)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?taskId={{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "taskId",
+                  "value": "{{taskId}}"
+                }
+              ]
+            },
+            "description": "Tek bir task'ın istek/yanıt/sonuç detayını döndürür. `instance` bloğu (currentState, effectiveState, status) her modda döner."
+          }
+        },
+        {
+          "name": "2-J  Görünüm (view) — mevcut state'in görünümü",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/view",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "view"
+              ]
+            },
+            "description": "Instance'ın bulunduğu state'e tanımlı görünümü döner. Kandidat görünümler de listelenir."
+          }
+        },
+        {
+          "name": "2-K  Görünüm — transition'a göre (transitionKey)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/view?transitionKey={{transitionKey}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "view"
+              ],
+              "query": [
+                {
+                  "key": "transitionKey",
+                  "value": "{{transitionKey}}"
+                }
+              ]
+            },
+            "description": "Belirli bir transition'a ait görünümü döner."
+          }
+        },
+        {
+          "name": "2-L  Veri — belirli versiyon (data?version=)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data?version={{dataVersion}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "data"
+              ],
+              "query": [
+                {
+                  "key": "version",
+                  "value": "{{dataVersion}}"
+                }
+              ]
+            },
+            "description": "Instance'ın belirli bir veri versiyonunu döner."
+          }
+        },
+        {
+          "name": "2-M  Instance task listesi — tüm task'ler (transition bağlamıyla)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "tasks"
+              ]
+            },
+            "description": "Instance'ın tarihsel olarak çalıştırdığı tüm task'leri döndürür. Her task, ait olduğu transition'ın definition key'i ve from/to state bilgisiyle zenginleştirilmiştir. Hangi task takıldı, kaç ms sürdü? gibi genel analizlerde kullanılır."
+          }
+        },
+        {
+          "name": "2-N  Instance task detayı — tanım, tetikleyici slot, girdi/çıktı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/tasks/{{taskEntityId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "tasks",
+                "{{taskEntityId}}"
+              ]
+            },
+            "description": "Tek bir task çalıştırmasının tam detayını döndürür. Task listesindeki alanların yanı sıra: task tanımı (tip, versiyon, config), tetiklendiği lifecycle slotu (OnExecute / OnExit / OnEntry), ve girdi/çıktı payload'larını içerir. Task neden başarısız oldu, ne gönderdi, ne aldı?"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 — Hata Teşhisi (Operatör)",
+      "description": "Operatörün ilk sorusu: hangi süreçler hatalı, neden ve nerede düştüler, hangileri SLA'yı aşıyor.",
+      "item": [
+        {
+          "name": "3-A  Faulted instance listesi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"status\":{\"eq\":\"Faulted\"}}&sort={\"field\":\"modifiedAt\",\"direction\":\"desc\"}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"status\":{\"eq\":\"Faulted\"}}"
+                },
+                {
+                  "key": "sort",
+                  "value": "{\"field\":\"modifiedAt\",\"direction\":\"desc\"}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3-B  Faulted — son 24 saatte oluşanlar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"and\":[{\"status\":{\"eq\":\"Faulted\"}},{\"createdAt\":{\"gt\":\"2026-06-08T00:00:00Z\"}}]}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"and\":[{\"status\":{\"eq\":\"Faulted\"}},{\"createdAt\":{\"gt\":\"2026-06-08T00:00:00Z\"}}]}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3-C  Instance fault detayı (kök neden)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/faults",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "faults"
+              ]
+            },
+            "description": "B2 — tamamlanamayan transition + içindeki başarısız task'lar."
+          }
+        },
+        {
+          "name": "Instance incidents — error boundary geçmişi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/incidents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "incidents"
+              ]
+            },
+            "description": "Instance'ın error boundary incident geçmişini listeler. Her incident; hangi state/transition/task'ta hata oluştuğunu, error boundary'nin aldığı aksiyonu (Abort/Retry/Rollback), çözülüp çözülmediğini ve distributed trace ID'sini içerir. Maksimum 5 kayıt tutulur, en yeni önce sıralanır."
+          },
+          "response": []
+        },
+        {
+          "name": "3-D  SLA aşımı — uzun süredir Active kalanlar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=50&filter={\"and\":[{\"status\":{\"eq\":\"Active\"}},{\"createdAt\":{\"lt\":\"2026-06-08T00:00:00Z\"}}]}&sort={\"field\":\"createdAt\",\"direction\":\"asc\"}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"and\":[{\"status\":{\"eq\":\"Active\"}},{\"createdAt\":{\"lt\":\"2026-06-08T00:00:00Z\"}}]}"
+                },
+                {
+                  "key": "sort",
+                  "value": "{\"field\":\"createdAt\",\"direction\":\"asc\"}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Domain genelinde faulted instance'lar (zaman aralığı)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={\"createdAt\":{\"gt\":\"2026-06-01T00:00:00Z\",\"lt\":\"2026-06-27T00:00:00Z\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "instances",
+                "faulted"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"gt\":\"2026-06-01T00:00:00Z\",\"lt\":\"2026-06-27T00:00:00Z\"}}"
+                }
+              ]
+            },
+            "description": "Bir domaindeki TÜM workflow'ları tarayıp verilen zaman aralığında hata (Faulted) durumuna düşmüş instance'ları tek listede döner. Zaman aralığı (createdAt alt+üst sınır) zorunludur; istenirse iş verisine göre ek filtre eklenebilir."
+          }
+        },
+        {
+          "name": "Faulted (zaman aralığı eksik → 400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/instances/faulted?filter={\"attributes\":{\"amount\":{\"gt\":1000}}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "instances",
+                "faulted"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"attributes\":{\"amount\":{\"gt\":1000}}}"
+                }
+              ]
+            },
+            "description": "Zaman aralığı verilmediğinde isteğin 400 döndüğünü gösterir."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 — Veri Analizi (Instance datalları)",
+      "description": "Kullanıcı instance verisini ve zaman içindeki değişimini inceler, JSON data içinde arama yapar.",
+      "item": [
+        {
+          "name": "4-A  Güncel veri + versiyon geçmişi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "data"
+              ]
+            }
+          }
+        },
+        {
+          "name": "4-B  İki versiyon arası fark (data diff)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data/diff?from={{fromVersion}}&to={{toVersion}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "data",
+                "diff"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{fromVersion}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{toVersion}}"
+                }
+              ]
+            },
+            "description": "D2 — added/removed/changed alanlar."
+          }
+        },
+        {
+          "name": "4-C  JSON data içinde arama (attributes)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"attributes\":{\"category\":{\"eq\":\"finance\"}}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"attributes\":{\"category\":{\"eq\":\"finance\"}}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "4-D  İç içe JSON path filtresi (attributes.payment.amount)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"attributes\":{\"payment\":{\"amount\":{\"ge\":1000}}}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"attributes\":{\"payment\":{\"amount\":{\"ge\":1000}}}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 — Alt-Süreç / SubFlow Takibi",
+      "description": "Çok seviyeli süreçler: bir instance hangi alt-süreçleri tetikledi, ağacın tamamı, alt-instance'ların durumu.",
+      "item": [
+        {
+          "name": "5-A  Ana instance — aktif correlations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "5-B  Tam hiyerarşi ağacı (hierarchy)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/hierarchy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "hierarchy"
+              ]
+            },
+            "description": "A2 — parent→child→grandchild, cross-schema, tamamlanmışlar dahil."
+          }
+        },
+        {
+          "name": "5-C  Alt-süreç instance detayı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{subFlowInstance}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{subFlowInstance}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "5-E  Alt-süreç parent instance'ı (parent)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/parent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "parent"
+              ]
+            },
+            "description": "Alt sürecin (subflow/subprocess) bağlı olduğu parent instance'ı döndürür. Root instance için `parent` alanı null."
+          },
+          "response": []
+        },
+        {
+          "name": "5-D  Alt-süreç geçiş akışı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{subFlowInstance}}/timeline",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{subFlowInstance}}",
+                "timeline"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 — Workflow & Component Keşfi",
+      "description": "Kullanıcının vNext'e kaydettiği tanımları keşfetmesi: workflow (state+transition dahil), task, schema, view, function, extension — versiyonlu.",
+      "item": [
+        {
+          "name": "6-A  Tüm workflow tanımları (sys-flows)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6-B  Tek workflow tanımı — en son versiyon (key)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows&key={{componentKey}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key",
+                  "value": "{{componentKey}}"
+                }
+              ]
+            },
+            "description": "key verildiğinde en son versiyon döner. Yanıt items dizisine sarılmaz — doğrudan definition nesnesi gelir."
+          }
+        },
+        {
+          "name": "6-C  Tek workflow tanımı — belirli versiyon",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows&key={{componentKey}}&version={{componentVersion}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key",
+                  "value": "{{componentKey}}"
+                },
+                {
+                  "key": "version",
+                  "value": "{{componentVersion}}"
+                }
+              ]
+            },
+            "description": "key + version verildiğinde tam olarak o versiyon döner. Yanıt items dizisine sarılmaz — doğrudan definition nesnesi gelir."
+          }
+        },
+        {
+          "name": "6-D  Task tanımları (sys-tasks)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-tasks"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6-E  Schema tanımları (sys-schemas)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-schemas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-schemas"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6-F  View tanımları (sys-views)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-views",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-views"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6-G  Function tanımları (sys-functions)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-functions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-functions"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6-H  Extension tanımları (sys-extensions)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-extensions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-extensions"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6-L  Component özet listesi — sys-flows (1. sayfa, 20 kayıt)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                }
+              ]
+            },
+            "description": "Belirtilen tipte yayınlanmış component'lerin sayfalı özet listesi (varsayılan: 1. sayfa, 20 kayıt). Yanıtta `totalCount`, `page`, `pageSize`, `totalPages` alanları bulunur. Tam tanım yok; key, version, labels ve type alanları döner."
+          }
+        },
+        {
+          "name": "6-L4 Component özet listesi — 2. sayfa",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&page=2&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "page",
+                  "value": "2"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "?page= ve ?pageSize= ile sayfa atlama. pageSize=1–100 aralığında, page=1–1000 aralığında. key verildiğinde paging yok sayılır (tek kayıt modu)."
+          }
+        },
+        {
+          "name": "6-L2 Component tek detay — key ile (flat, flow + versions)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Workflow",
+                "value": "{{workflow}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key={{workflow}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows",
+                  "description": "Component tipi"
+                },
+                {
+                  "key": "key",
+                  "value": "{{workflow}}",
+                  "description": "Component key"
+                }
+              ]
+            },
+            "description": "key verildiğinde items wrapper olmadan tek bir nesne döner: key, version, domain, flow, labels, type, comment, versions (tüm yayınlanmış versiyonlar descending)."
+          },
+          "response": []
+        },
+        {
+          "name": "6-L3 Component tek detay — key + belirli versiyon",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Workflow",
+                "value": "{{workflow}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key={{workflow}}&version=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows",
+                  "description": "Component tipi"
+                },
+                {
+                  "key": "key",
+                  "value": "{{workflow}}",
+                  "description": "Component key"
+                },
+                {
+                  "key": "version",
+                  "value": "1.0.0",
+                  "description": "Belirli versiyon"
+                }
+              ]
+            },
+            "description": "key ve version verildiğinde o versiyona ait detay döner. versions listesi hâlâ tüm yayınlanmış versiyonları içerir."
+          },
+          "response": []
+        },
+        {
+          "name": "6-M  Component özet listesi — sys-tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-tasks"
+                }
+              ]
+            },
+            "description": "sys-tasks özet listesi. ?type= ile diğer tipler: sys-schemas, sys-views, sys-functions, sys-extensions. ?key= ve ?version= parametreleri tüm tipler için desteklenir."
+          }
+        },
+        {
+          "name": "6-J  Workflow bağımlılıkları (dependencies)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/dependencies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "dependencies"
+              ]
+            },
+            "description": "Bir workflow'un kullandığı tüm bileşenleri (task, schema, view, function, extension, subflow) ve hangi adımda referans edildiğini döndürür. Etki analizi ve bileşen envanteri için."
+          },
+          "response": []
+        },
+        {
+          "name": "6-K  Workflow bağımlılıkları — belirli versiyon",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/dependencies?version=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "dependencies"
+              ],
+              "query": [
+                {
+                  "key": "version",
+                  "value": "1.0.0"
+                }
+              ]
+            },
+            "description": "Belirli bir tanım versiyonunun bağımlılıkları."
+          },
+          "response": []
+        },
+        {
+          "name": "6-I  Domain component sayım özeti (stats/components)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/stats/components",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "stats",
+                "components"
+              ]
+            },
+            "description": "Domain genelinde yayınlanmış her bileşen tipinden kaç adet olduğunu tek çağrıda döndürür: flows, tasks, schemas, views, functions, extensions ve bunların toplamı (total).\n\nNe zaman kullanılır: Domain'in bileşen envanterine hızlıca göz atmak, dashboard'da \"kaç workflow/task kaydedilmiş?\" sorusunu yanıtlamak için."
+          },
+          "response": []
+        },
+        {
+          "name": "6-N  Domain-scope function tanımları",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/functions/scope",
+              "host": [
+                "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/functions/scope"
+              ]
+            },
+            "description": "Domain genelinde tanımlanmış, herhangi bir workflow'a kayıt gerektirmeksizin çağrılabilen (Domain-scope) function tanımlarını listeler."
+          },
+          "response": []
+        },
+        {
+          "name": "6-O  Instance workflow'una kayıtlı function tanımları",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/functions/scope",
+              "host": [
+                "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/functions/scope"
+              ]
+            },
+            "description": "Instance'ın çalıştığı workflow versiyonuna kayıtlı tüm function tanımlarını döner. Instance'ın FlowVersion'ı kullanılır."
+          },
+          "response": []
+        },
+        {
+          "name": "6-P  Workflow versiyon listesi (component-centric)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/versions?type=sys-flows&key={{workflow}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "versions"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key",
+                  "value": "{{workflow}}"
+                }
+              ]
+            },
+            "description": "Bir workflow tanımının yayınlanmış tüm versiyonlarını sayfalı listeler. type ve key zorunlu; herhangi bir component tipi için kullanılabilir (sys-flows, sys-tasks, vb.). Her versiyon için: version string'i, isLatest bayrağı, flowVersion ve yayınlanma tarihi döner."
+          },
+          "response": []
+        },
+        {
+          "name": "6-Q  Workflow versiyon listesi (workflow-centric alias)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/versions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "versions"
+              ]
+            },
+            "description": "Workflow tanımının versiyon listesi için kısa yol. type=sys-flows&key={workflow} ile aynı sonucu döner; doğrudan workflow key'i route'tan alır. Hangi versiyonun aktif olduğunu (isLatest) ve yayınlanma tarihlerini görmek için kullanılır."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7 — Gelişmiş Filtreleme & Arama",
+      "description": "GraphQL filter altyapısının yetenekleri. filter bir JSON nesnesidir. groupBy yalnızca attributes.* (JSON data path) üzerinde çalışır; instance kolonu sayımları için 1-A/1-B/1-C kullan.",
+      "item": [
+        {
+          "name": "7-A  Status filtresi (Completed)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"status\":{\"eq\":\"Completed\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"status\":{\"eq\":\"Completed\"}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "7-B  Belirli state'teki instance'lar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"currentState\":{\"eq\":\"WaitingApproval\"}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"currentState\":{\"eq\":\"WaitingApproval\"}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "7-C  Tarih aralığı (between)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=50&filter={\"createdAt\":{\"between\":[\"2026-06-02T00:00:00Z\",\"2026-06-09T23:59:59Z\"]}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"between\":[\"2026-06-02T00:00:00Z\",\"2026-06-09T23:59:59Z\"]}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "7-D  Çoklu status (in)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=25&filter={\"status\":{\"in\":[\"Active\",\"Busy\"]}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "25"
+                },
+                {
+                  "key": "filter",
+                  "value": "{\"status\":{\"in\":[\"Active\",\"Busy\"]}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "7-E  Gruplama + sayma (JSON data path — attributes.category)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances?page=1&pageSize=1&groupBy={\"field\":\"attributes.category\"}&aggregations={\"count\":true}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "1"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "{\"field\":\"attributes.category\"}"
+                },
+                {
+                  "key": "aggregations",
+                  "value": "{\"count\":true}"
+                }
+              ]
+            },
+            "description": "NOT: groupBy yalnızca attributes.* üzerinde çalışır; status/currentState için 1-B/1-C kullan."
+          }
+        },
+        {
+          "name": "7-F  Component renderer filtresi (sys-views)",
+          "description": "Belirli bir renderer kullanan view bileşenlerini listeler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-views&renderer=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-views"
+                },
+                {
+                  "key": "renderer",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-G  Component scope filtresi (sys-functions)",
+          "description": "Global scope'taki function tanımlarını döner.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-functions&scope=global",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-functions"
+                },
+                {
+                  "key": "scope",
+                  "value": "global"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-H  Component tarih aralığı filtresi (sys-flows)",
+          "description": "2026 başından itibaren yayınlanan workflow tanımlarını listeler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&createdAt[gte]=2026-01-01T00:00:00Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-01-01T00:00:00Z"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-I  Component desteklenmeyen filtre → 400",
+          "description": "Desteklenmeyen filtre kullanımı — sys-flows'a view-specific filtre gönderilir; 400 döner.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&renderer=default",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "renderer",
+                  "value": "default"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-J  Component tags filtresi — tags[contains] (sys-flows)",
+          "description": "Tag listesi belirli bir değeri içeren workflow bileşenlerini listeler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&tags[contains]=finance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "tags[contains]",
+                  "value": "finance"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-K  Component key filtresi — key[eq] (tam eşleşme, liste modu)",
+          "description": "Tam key eşleşmesiyle liste modu: items + pagination döner. Düz ?key= ile karıştırma — o mod pagination'sız tek öğe döndürür.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key[eq]=order-flow",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key[eq]",
+                  "value": "order-flow"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-L  Component key filtresi — key[contains] (kısmi arama)",
+          "description": "Bileşen key'i bu değeri içeriyorsa eşleşir. 'order' içeren tüm sys-flows bileşenlerini listeler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key[contains]=order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key[contains]",
+                  "value": "order"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-M  Component flowVersion filtresi — flowVersion[eq] (tam versiyon)",
+          "description": "Belirli bir format versiyonuna tam eşleşme ile filtreler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&flowVersion[eq]=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "flowVersion[eq]",
+                  "value": "1.0.0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-N  Component flowVersion filtresi — flowVersion[contains] (kısmi versiyon)",
+          "description": "Versiyon stringi bu değeri içeriyorsa eşleşir. Örn. '1.0' içeren tüm versiyonları getirir.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&flowVersion[contains]=1.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "flowVersion[contains]",
+                  "value": "1.0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-O  Component name filtresi — name[eq] (sys-mappings, tam eşleşme)",
+          "description": "sys-mappings bileşenlerini mapping adına tam eşleşme ile filtreler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-mappings&name[eq]=order-mapping",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-mappings"
+                },
+                {
+                  "key": "name[eq]",
+                  "value": "order-mapping"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-P  Component name filtresi — name[contains] (sys-mappings, kısmi arama)",
+          "description": "sys-mappings bileşenlerini mapping adına kısmi eşleşme ile filtreler.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-mappings&name[contains]=order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-mappings"
+                },
+                {
+                  "key": "name[contains]",
+                  "value": "order"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7-Q  Component version filtresi — version[eq] (tam sürüm)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&version[eq]=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "version[eq]",
+                  "value": "1.0.0"
+                }
+              ]
+            },
+            "description": "Yayınlanmış sürümü tam olarak eşleşen bileşenleri listeler. Örneğin yalnızca v1.0.0 bileşenlerini görmek için kullanılır."
+          }
+        },
+        {
+          "name": "7-R  Component version filtresi — version[contains] (kısmi sürüm)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&version[contains]=1.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "version[contains]",
+                  "value": "1.0"
+                }
+              ]
+            },
+            "description": "Sürüm numarası belirli bir kalıpla eşleşen bileşenleri listeler. Örneğin \"1.0\" ile tüm 1.0.x sürümlerini bulmak için kullanılır."
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 — Sağlık & Operasyon",
+      "description": "Monitor API'nin ve bağlı altyapının sağlığı; K8s probe'ları; Prometheus scrape. (Bu endpoint'lerde API sürüm segmenti YOK.)",
+      "item": [
+        {
+          "name": "8-A  Detaylı health raporu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/monitor/health/detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "monitor",
+                "health",
+                "detail"
+              ]
+            },
+            "description": "Redis + Orchestrator + PostgreSQL sağlık kontrolü."
+          }
+        },
+        {
+          "name": "8-B  Health (özet)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8-C  Ready (K8s readiness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ready"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8-D  Live (K8s liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/live",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "live"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8-E  Version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/version",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "version"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8-G  Workflow scheduled job'ları — aralık olmadan ({workflow}/jobs)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "jobs"
+              ]
+            },
+            "description": "Bir workflow altındaki aktif scheduled job ve timer'ları listeler. Sonuçlar sayfalıdır: varsayılan sayfa boyutu 20'dir (pageSize: 1–100, page: 1–1000). createdAt aralığı opsiyoneldir; verilmezse tüm aktif job'lar döner. Yanıt standart envelope içinde döner: { \"pagination\": { \"page\", \"pageSize\", \"hasNext\" }, \"items\": [...] }."
+          },
+          "response": []
+        },
+        {
+          "name": "8-G2  Workflow scheduled job'ları — createdAt aralığı + sayfalama ({workflow}/jobs)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "createdAt aralığı ve sayfalama parametreleri birlikte kullanılır. page (varsayılan 1) ve pageSize (varsayılan 20, maks 100) ile hangi sayfanın döneceği belirlenir. Her iki createdAt sınırı birlikte verilmelidir; biri eksikse 400 döner. Yanıt: { \"pagination\": { \"page\", \"pageSize\", \"hasNext\" }, \"items\": [...] }."
+          },
+          "response": []
+        },
+        {
+          "name": "8-H  Domain geneli job listesi — createdAt aralığı ZORUNLU ({domain}/jobs)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                }
+              ]
+            },
+            "description": "Domain genelinde aktif job'ları listeler. Bu endpoint için createdAt[gte] ve createdAt[lte] parametrelerinin ikisi birden zorunludur; eksik bırakılırsa 400 döner. Dahil aralık, ISO 8601 UTC biçiminde girilir. Bu endpoint sayfalamayı DESTEKLEMEZ — page veya pageSize parametresi verilirse 400 (jobs.paginationNotSupported) döner. Yanıt envelope'u: { \"items\": [...] } (pagination alanı yoktur)."
+          },
+          "response": []
+        },
+        {
+          "name": "8-I  Çalışma zamanı yapılandırması (config)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "config"
+              ]
+            },
+            "description": "Monitor API'nin çalışma zamanı yapılandırması: uygulama adı, Redis modu, telemetri toggle'ları. Secret ve connection string asla dönmez."
+          },
+          "response": []
+        },
+        {
+          "name": "8-F  Metrics (Prometheus scrape)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 — Negatif / Edge Senaryolar",
+      "description": "Beklenen hata yanıtlarının doğrulanması: 404 (bulunamadı), 400 (geçersiz girdi).",
+      "item": [
+        {
+          "name": "9-A  Var olmayan instance — 404 (state)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/non-existent-instance-xyz/state",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "non-existent-instance-xyz",
+                "state"
+              ]
+            }
+          }
+        },
+        {
+          "name": "9-B  Var olmayan component key — 404 (definition)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-flows&key=non-existent-flow-xyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key",
+                  "value": "non-existent-flow-xyz"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "9-C  Geçersiz component tipi — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components/definition?type=sys-invalid-type",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components",
+                "definition"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-invalid-type"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "9-D  Boş transitionId — 400 (timeline)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/timeline?transitionId=00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "transitionId",
+                  "value": "00000000-0000-0000-0000-000000000000"
+                }
+              ]
+            },
+            "description": "transitionId verilirse boş GUID olamaz — 400 beklenir."
+          }
+        },
+        {
+          "name": "9-E  Data diff — var olmayan versiyon — 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/data/diff?from=0.0.0&to=9.9.9",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "data",
+                "diff"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "0.0.0"
+                },
+                {
+                  "key": "to",
+                  "value": "9.9.9"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Components — hem [eq] hem [contains] (400)",
+          "description": "Aynı alan için hem [eq] hem [contains] operatörü verildiğinde API 400 döner.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&key[eq]=order-flow&key[contains]=order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "key[eq]",
+                  "value": "order-flow"
+                },
+                {
+                  "key": "key[contains]",
+                  "value": "order"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "9-X  400 — version [eq]+[contains] çakışması",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/components?type=sys-flows&version[eq]=1.0.0&version[contains]=1.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "components"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "sys-flows"
+                },
+                {
+                  "key": "version[eq]",
+                  "value": "1.0.0"
+                },
+                {
+                  "key": "version[contains]",
+                  "value": "1.0"
+                }
+              ]
+            },
+            "description": "Aynı alan için hem [eq] hem [contains] operatörü verildiğinde API 400 döner."
+          }
+        },
+        {
+          "name": "9-Y  400 — stats/instances filter + version aynı anda",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/instances?filter={\"createdAt\":{\"ge\":\"2026-05-18T00:00:00Z\"}}&version=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "instances"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "{\"createdAt\":{\"ge\":\"2026-05-18T00:00:00Z\"}}"
+                },
+                {
+                  "key": "version",
+                  "value": "1.0.0"
+                }
+              ]
+            },
+            "description": "filter ve version aynı anda kullanılamaz — 400 ValidationProblemDetails döner."
+          }
+        },
+        {
+          "name": "9-Z  400 — domain job listesi eksik createdAt sınırı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                }
+              ]
+            },
+            "description": "Domain geneli job listesinde createdAt[gte] verilip createdAt[lte] eksik bırakıldığında API 400 döner. Her iki sınır da birlikte sağlanmalıdır."
+          }
+        },
+        {
+          "name": "9-AA  400 — domain job listesine page parametresi verildi (pagination desteklenmiyor)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/jobs?createdAt[gte]=2026-06-01T00:00:00Z&createdAt[lte]=2026-06-27T23:59:59Z&page=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "createdAt[gte]",
+                  "value": "2026-06-01T00:00:00Z"
+                },
+                {
+                  "key": "createdAt[lte]",
+                  "value": "2026-06-27T23:59:59Z"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Domain geneli job listesi sayfalamayı desteklemez. page veya pageSize parametresi verilirse API 400 (jobs.paginationNotSupported) döner. Sayfalama yalnızca workflow bazlı endpoint'te ({workflow}/jobs) kullanılabilir."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "10 — Yetkilendirme",
+      "item": [
+        {
+          "name": "10-A  Workflow yetki matrisi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "permissions"
+              ]
+            },
+            "description": "Workflow tanımındaki tüm yetki matrisini döner: queryRoles, her state'in rolleri, her transition'ın rolleri, function rolleri. Tüm roller hakkında genel bakış için kullanılır."
+          }
+        },
+        {
+          "name": "10-B  Workflow matrisi — belirli role göre filtreli",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions?role=morph-idm.maker",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "permissions"
+              ],
+              "query": [
+                {
+                  "key": "role",
+                  "value": "morph-idm.maker"
+                }
+              ]
+            },
+            "description": "?role= parametresiyle yalnızca o role ait girdiler döner (query rolleri, state rolleri, transition rolleri, function rolleri). Verilen rolün workflow genelinde hangi yetkiye sahip olduğunu görmek için kullanılır."
+          }
+        },
+        {
+          "name": "10-C  Instance mevcut durumu üzerinden izin görünümü",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "permissions"
+              ]
+            },
+            "description": "Instance'ın bulunduğu mevcut state'e göre görüntülenmesi gereken rol bilgilerini döner: workflow-level queryRoles, o state'e ait queryRoles, o state'ten geçilebilecek transition'ların rolleri ve workflow function'larının rolleri."
+          }
+        },
+        {
+          "name": "10-D  Instance izin görünümü — role göre filtreli",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/permissions?role=morph-idm.maker",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "permissions"
+              ],
+              "query": [
+                {
+                  "key": "role",
+                  "value": "morph-idm.maker"
+                }
+              ]
+            },
+            "description": "?role= ile yalnızca o role ait girdiler döner: queryRoles, state.queryRoles, transitions ve functions içinden sadece o role sahip satırlar listelenir."
+          }
+        },
+        {
+          "name": "10-E  Instance izin görünümü — belirli flow versiyonuna göre",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/instances/{{instance}}/permissions?version=1.0.0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "instances",
+                "{{instance}}",
+                "permissions"
+              ],
+              "query": [
+                {
+                  "key": "version",
+                  "value": "1.0.0"
+                }
+              ]
+            },
+            "description": "?version= ile belirli bir flow versiyonuna ait izin bilgileri döner. Instance'ın çalıştığı versiyondan farklı bir versiyon karşılaştırmak veya güncel flow tanımının izinlerini görmek için kullanılır."
+          }
+        },
+        {
+          "name": "10-F  Yalnızca transition rolleri (alt görünüm)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions/transitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "permissions",
+                "transitions"
+              ]
+            },
+            "description": "Matrisin sadece transition bölümü — 'hangi geçişi kim tetikleyebilir?'"
+          }
+        },
+        {
+          "name": "10-G  Yalnızca function rolleri (alt görünüm)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/permissions/functions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "permissions",
+                "functions"
+              ]
+            },
+            "description": "Matrisin sadece function bölümü — function rol gereksinimlerini görmek için."
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 — İstatistikler & Performans",
+      "item": [
+        {
+          "name": "11-A  Hata istatistikleri (faulted breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/faults",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "faults"
+              ]
+            },
+            "description": "Faulted instance sayısı, state/task bazlı dağılım ve son 1 saat/24 saat/7 gün trendi. Hangi state veya task en çok hata üretiyor?"
+          }
+        },
+        {
+          "name": "11-B  Task çalıştırma istatistikleri",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "tasks"
+              ]
+            },
+            "description": "Her task'ın çalıştırılma sayısı, başarı oranı ve hata oranı. Hangi adımların hata ürettiğini veya tutarsız çalıştığını görmek için."
+          }
+        },
+        {
+          "name": "11-C  Instance tamamlanma süresi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/duration",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "duration"
+              ]
+            },
+            "description": "Tamamlanan instance'ların ortalama/min/max süresi ve tamamlanma sayısı. SLA takibi ve performans karşılaştırması için."
+          }
+        },
+        {
+          "name": "11-D  Geçiş istatistikleri + akış yoğunluğu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/monitor/{{domain}}/workflows/{{workflow}}/stats/transitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v{{apiVersion}}",
+                "monitor",
+                "{{domain}}",
+                "workflows",
+                "{{workflow}}",
+                "stats",
+                "transitions"
+              ]
+            },
+            "description": "Her transition'ın tetiklenme sayısı, tamamlanma oranı ve tetikleyici tipi (manuel/otomatik/zamanlanmış/olay). Ayrıca state çiftleri arası akış yoğunluğu (flow density)."
+          }
+        }
+      ]
+    }
+  ]
+}

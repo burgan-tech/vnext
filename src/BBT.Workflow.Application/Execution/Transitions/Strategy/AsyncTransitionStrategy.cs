@@ -101,8 +101,10 @@ public sealed class AsyncTransitionStrategy(
         Activity? activity,
         CancellationToken cancellationToken)
     {
+        // Source-state key scopes the job name (see JobName). Must match the value used when the job
+        // is persisted in EnqueueAndSaveJobAsync so the AnyActiveByJobNameAsync guard below lines up.
         var jobName = JobName.ForAsyncTransition(
-            Guid.Parse(context.InstanceId), context.TransitionKey).Value;
+            Guid.Parse(context.InstanceId), ctx.Current?.Key ?? string.Empty, context.TransitionKey).Value;
         EnrichTelemetry(activity, ctx, jobName);
 
         Result<TransitionExecutionContext> lockScopeResult =
@@ -169,7 +171,8 @@ public sealed class AsyncTransitionStrategy(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var jobName = JobName.ForAsyncTransition(transContext.InstanceId, transContext.TransitionKey);
+        var jobName = JobName.ForAsyncTransition(
+            transContext.InstanceId, transContext.Current?.Key ?? string.Empty, transContext.TransitionKey);
         var jobId = Guid.NewGuid();
 
         var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity);

@@ -23,11 +23,17 @@ public interface IInstanceCancellationService
     /// Only cancels jobs that match the provided transition keys.
     /// </summary>
     /// <param name="instanceId">The ID of the instance.</param>
+    /// <param name="sourceState">
+    /// The source-state key that owns the jobs to cancel (scopes the match so a same-named transition
+    /// on another state's timer is not cancelled). Pass <c>null</c> for jobs without source-state
+    /// scoping (e.g. the long-poll-ack fallback).
+    /// </param>
     /// <param name="transitionKeys">List of transition keys whose jobs should be canceled.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A result indicating success or failure of the cancellation processing.</returns>
     Task<Result> ProcessStateTransitionsCancellationAsync(
         Guid instanceId,
+        string? sourceState,
         IReadOnlyList<string> transitionKeys,
         CancellationToken cancellationToken = default);
 }

@@ -65,7 +65,7 @@ public sealed class InstanceController(
         {
             request = body is null
                 ? new CreateInstanceDto()
-                : JsonSerializer.Deserialize<CreateInstanceDto>(body.Value) ?? new CreateInstanceDto();
+                : JsonSerializer.Deserialize<CreateInstanceDto>(body.Value, JsonSerializerOptions.Web) ?? new CreateInstanceDto();
         }
         else
         {
@@ -90,7 +90,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -347,7 +347,7 @@ public sealed class InstanceController(
         }
         else if (PayloadModeDetector.IsStandard(headers, body))
         {
-            data = JsonSerializer.Deserialize<TransitionDataInput>(body.Value);
+            data = JsonSerializer.Deserialize<TransitionDataInput>(body.Value, JsonSerializerOptions.Web);
         }
         else
         {
@@ -370,7 +370,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     /// <summary>
