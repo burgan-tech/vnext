@@ -29,6 +29,12 @@
       "status": "stable",
       "description": "Declarative state-level notifications. A state may declare a notifications[] array; each entry has a type (default 'state' — only 'state' is processed today, 'command' is reserved), an optional rule (compiled to IConditionMapping), and a mapping (compiled to IStateNotificationMapping, same contract as the NotificationTask state channel). After the transition pipeline settles and the instance state/status is finalized and committed, the engine schedules a durable one-shot background job (handler 'state.notify') that rebuilds a ScriptContext from the carried request context (Headers, RouteValues, Body), evaluates each entry's rule (absent rule => always processed; present rule => only entries whose rule returns true), and dispatches the applicable entries through the platform-managed state Dapr binding (vnext-notification-state) off the request thread, so the client response is never blocked. Fires once per settle (not on intermediate auto-chain hops). The state-channel payload is the slim pointer { domain, flow, id, version } — consumers re-fetch full state via the State function. Independent of and backward-compatible with the existing NotificationTask state channel.",
       "schemaPath": "state.notifications[]"
+    },
+    "stateStoreTask": {
+      "since": "0.0.64",
+      "status": "stable",
+      "description": "Built-in StateStoreTask (TaskType=17, discriminator 'statestore') that reads and writes a Dapr state store component (default 'vnext-state') from the workflow/function pipeline. Runs through the Execution API like the other Dapr tasks: the StateStoreTaskExecutor performs input/output mapping and delegates a TaskEnvelope to the StateStoreTaskInvoker, which uses DaprClient. Supported commands: getCache (GetStateAndETagAsync; a cache miss returns success with metadata found=false and null data, so the error boundary is not tripped), writeCache (SaveStateAsync / TrySaveStateAsync when an ETag is supplied, with optional ttlInSeconds TTL, and StateOptions concurrency FirstWrite/LastWrite + consistency Eventual/Strong), and invalidateCache (single key via DeleteStateAsync, key list via DeleteBulkStateAsync, or tag/pattern via the Dapr state Query API which requires a query-capable state store). The Execution Dapr sidecar defines its own 'vnext-state' component so the invoker can resolve it.",
+      "schemaPath": "task.type=17"
     }
   }
 }
