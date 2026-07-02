@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>BBT.Workflow</RootNamespace>
+    <!-- SWA devre dışı: REST API host'unda static web assets kullanılmıyor; Docker bind-mount path sorununu önler -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="Logs\**" />

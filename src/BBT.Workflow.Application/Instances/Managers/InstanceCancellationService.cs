@@ -76,6 +76,7 @@ public sealed class InstanceCancellationService(
     /// <inheritdoc />
     public async Task<Result> ProcessStateTransitionsCancellationAsync(
         Guid instanceId,
+        string? sourceState,
         IReadOnlyList<string> transitionKeys,
         CancellationToken cancellationToken = default)
     {
@@ -102,7 +103,12 @@ public sealed class InstanceCancellationService(
             var allJobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
 
             var jobsToCancel = allJobs
-                .Where(job => (job.TransitionKey != null && transitionKeys.Contains(job.TransitionKey))
+                .Where(job =>
+                    // Source-state-scoped match: only cancel jobs owned by the state being left, so a
+                    // same-named transition on another state's timer is not cancelled by mistake.
+                    (job.SourceState == sourceState
+                        && job.TransitionKey != null
+                        && transitionKeys.Contains(job.TransitionKey))
                     // Transitional fallback for pre-rollout rows (no structured columns):
                     // old "-{key}" suffix match. Removable once no legacy rows remain.
                     || (job.JobType == JobType.Unknown

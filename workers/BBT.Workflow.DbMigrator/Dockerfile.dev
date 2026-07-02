@@ -5,7 +5,14 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine
 RUN apk add --no-cache curl bash unzip && \
     curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l /vsdbg
 
+# PostSharp targeting pack: NETStandard.Library.Ref 2.1.0
+RUN dotnet restore --packages /root/.nuget/packages "NETStandard.Library.Ref" --version 2.1.0 2>/dev/null || true && \
+    mkdir -p /var/tmp/postsharp/NuGetFallback && \
+    cp -r /root/.nuget/packages/netstandard.library.ref /var/tmp/postsharp/NuGetFallback/ 2>/dev/null || true
+
+ENV SKIP_POSTSHARP=true
+
 WORKDIR /app
 
 # Source code is mounted via volume; run once (no watch loop - job exits after migration)
-CMD ["dotnet", "run", "--project", "workers/BBT.Workflow.DbMigrator/BBT.Workflow.DbMigrator.csproj"]
+CMD bash -c "dotnet run --project workers/BBT.Workflow.DbMigrator/BBT.Workflow.DbMigrator.csproj /p:SkipPostSharp=$SKIP_POSTSHARP"

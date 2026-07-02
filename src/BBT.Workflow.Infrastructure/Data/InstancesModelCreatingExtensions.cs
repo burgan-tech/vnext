@@ -432,6 +432,9 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasConversion<int>();
 
+            b.Property(p => p.SourceState)
+                .HasMaxLength(StateConstants.MaxKeyLength);
+
             b.Property(p => p.TransitionKey)
                 .HasMaxLength(InstanceConstants.MaxKeyLength);
 

@@ -121,6 +121,53 @@ services:
       - redis
       - vault
 
+  vnext-monitoring-app:
+    container_name: vnext-monitoring-app
+    build:
+      context: ../..
+      dockerfile: monitoring/BBT.Workflow.Monitor.HttpApi.Host/Dockerfile
+      args:
+        ENVIRONMENT: stage
+    env_file:
+      - .env.monitoring.stage
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health" ]
+      interval: 10s
+      retries: 5
+      start_period: 35s
+      timeout: 30s
+    ports:
+      - "4203:5000"
+    networks:
+      - bbt-development
+    depends_on:
+      - dapr-placement
+      - dapr-scheduler
+      - postgres
+
+  vnext-monitoring-dapr:
+    image: "daprio/daprd"
+    container_name: vnext-monitoring-dapr
+    command: [
+      "./daprd",
+      "--app-id", "vnext-monitoring",
+      "--app-port", "5000",
+      "--resources-path", "./components",
+      "--dapr-grpc-port", "42131",
+      "--dapr-http-port", "42130",
+      "--scheduler-host-address", "dapr-scheduler:50007",
+      "--placement-host-address", "dapr-placement:50005"
+    ]
+    volumes:
+      - "../../etc/monitoring/dapr/components:/components"
+    network_mode: "service:vnext-monitoring-app"
+    depends_on:
+      - vnext-monitoring-app
+      - dapr-placement
+      - dapr-scheduler
+      - redis
+      - vault
+
   vnext-db-migrator-dapr:
     image: "daprio/daprd"
     container_name: vnext-db-migrator-dapr
@@ -307,4 +354,5 @@ volumes:
   redis:
   postgres:
   openobserve:
+  vnext-monitoring-app:
   npm-cache: {}

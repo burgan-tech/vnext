@@ -526,6 +526,10 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ModifiedAt");
 
+                    b.Property<string>("SourceState")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("TransitionKey")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
