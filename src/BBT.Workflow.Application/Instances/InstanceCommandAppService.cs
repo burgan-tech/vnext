@@ -683,13 +683,27 @@ public sealed class InstanceCommandAppService(
         where TOutput : class
     {
         // Use pipeline instance if available (already committed, avoids redundant DB read).
-        // Falls back to DB read when PipelineInstance is not set (e.g. idempotent existing-instance path).
+        // A Busy snapshot may be stale — a sync subflow completion resumes and finalizes the
+        // parent in its own scope — so re-read as no-tracking (this scope may already track the
+        // row with pre-resume values) to reflect the settled state. Also falls back to the DB
+        // read when PipelineInstance is not set (e.g. idempotent existing-instance path).
         var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
-        var instance = pipelineInstance
-            ?? await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
+        var instance = pipelineInstance is not null && !pipelineInstance.Status.Equals(InstanceStatus.Busy)
+            ? pipelineInstance
+            : await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), cancellationToken)
+              ?? pipelineInstance;
 
         if (instance is null)
             return Result<TOutput>.Ok(output);
+
+        // The pipeline reported Busy but the chain has settled to a terminal status meanwhile
+        // (subflow resume finalized the parent in another scope) — surface the settled status.
+        if (output is InstanceOutputBase outputBase
+            && outputBase.Status?.Equals(InstanceStatus.Busy) == true
+            && instance.IsCompleted)
+        {
+            outputBase.Status = instance.Status;
+        }
 
         var latestData = instance.LatestData;
         var rawAttributes = latestData?.Data.JsonElement;

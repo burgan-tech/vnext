@@ -23,14 +23,16 @@ namespace BBT.Workflow.Application.Tests.Execution.PostCommit.Handlers;
 public class ForwardToSubflowJobHandlerTests
 {
     private readonly ISubflowForwardingService _mockForwardingService;
+    private readonly IInstanceRepository _mockInstanceRepository;
     private readonly ILogger<ForwardToSubflowJobHandler> _mockLogger;
     private readonly ForwardToSubflowJobHandler _handler;
 
     public ForwardToSubflowJobHandlerTests()
     {
         _mockForwardingService = Substitute.For<ISubflowForwardingService>();
+        _mockInstanceRepository = Substitute.For<IInstanceRepository>();
         _mockLogger = Substitute.For<ILogger<ForwardToSubflowJobHandler>>();
-        _handler = new ForwardToSubflowJobHandler(_mockForwardingService, _mockLogger);
+        _handler = new ForwardToSubflowJobHandler(_mockForwardingService, _mockInstanceRepository, _mockLogger);
     }
 
     [Fact]
@@ -61,13 +63,47 @@ public class ForwardToSubflowJobHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_WhenSubflowCompleted_ShouldUseParentInstanceStatus()
+    public async Task HandleAsync_WhenSubflowCompleted_ShouldUseFreshParentStatus()
+    {
+        // Arrange — the tracked context.Instance is stale (Busy); the subflow's completion
+        // resumed and finalized the parent in another scope, so the fresh read returns Completed.
+        var job = CreateForwardToSubflowJob();
+        var context = CreateContext();
+        context.Instance.Busy();
+
+        var freshParent = Instance.Create(context.InstanceId, "sys_flows", "1.0.0", "test-key");
+        freshParent.Complete("test-domain");
+        _mockInstanceRepository
+            .FindByIdentifierSlimAsync(context.InstanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns(freshParent);
+
+        var forwardResult = Result<TransitionOutput>.Ok(new TransitionOutput
+        {
+            Id = job.SubflowInstanceId,
+            Status = InstanceStatus.Completed // Subflow completed
+        });
+
+        _mockForwardingService
+            .ForwardTransitionAsync(job.SubflowInstanceId, job.TransitionKey, Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>(), Arg.Any<Guid?>())
+            .Returns(forwardResult);
+
+        // Act
+        var result = await _handler.HandleAsync(job, context, CancellationToken.None);
+
+        // Assert — settled parent status from the fresh read, not the stale Busy snapshot
+        result.IsSuccess.ShouldBeTrue();
+        context.ClientResponse.ShouldNotBeNull();
+        context.ClientResponse!.Status.ShouldBe(InstanceStatus.Completed);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenSubflowCompletedAndFreshReadReturnsNothing_ShouldFallBackToSnapshotStatus()
     {
         // Arrange
         var job = CreateForwardToSubflowJob();
         var context = CreateContext();
-        // Note: Instance.Status defaults to Active after creation
-        
+        // Note: Instance.Status defaults to Active after creation; repository substitute returns null
+
         var forwardResult = Result<TransitionOutput>.Ok(new TransitionOutput
         {
             Id = job.SubflowInstanceId,
