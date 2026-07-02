@@ -82,7 +82,7 @@ public sealed class StateStoreTask : WorkflowTask
     public void SetStoreName(string storeName) => StoreName = storeName;
     public void SetCacheKey(string cacheKey) => CacheKey = cacheKey;
     public void SetCacheKeys(IReadOnlyList<string>? cacheKeys) => CacheKeys = cacheKeys;
-    public void SetValue(dynamic value) => Value = JsonSerializer.SerializeToElement(value);
+    public void SetValue(dynamic value) => Value = value is null ? default : JsonSerializer.SerializeToElement(value);
     public void SetTtlInSeconds(int? ttlInSeconds) => TtlInSeconds = ttlInSeconds;
     public void SetMetadata(Dictionary<string, string?> metadata)
     {
@@ -109,7 +109,7 @@ public sealed class StateStoreTask : WorkflowTask
         base.Configure(config);
 
         if (config.TryGetProperty("command", out var command))
-            Command = command.GetString() ?? throw new ArgumentNullException(nameof(command));
+            Command = command.GetString() ?? throw new ArgumentException("The 'command' property must be a non-null string.", nameof(config));
 
         if (config.TryGetProperty("storeName", out var storeName))
         {
@@ -170,7 +170,7 @@ public sealed class StateStoreTask : WorkflowTask
         cloned.Command = Command;
         cloned.StoreName = StoreName;
         cloned.CacheKey = CacheKey;
-        cloned.CacheKeys = CacheKeys;
+        cloned.CacheKeys = CacheKeys?.ToList();
         cloned.Query = Query;
         cloned.Value = Value;
         cloned.TtlInSeconds = TtlInSeconds;

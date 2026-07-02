@@ -91,10 +91,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             }
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-                data: new
-                {
-                    result.Value
-                },
+                data: result.Value,
                 statusCode: 200,
                 taskType: TaskType.ToString()));
         }

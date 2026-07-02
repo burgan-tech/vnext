@@ -257,7 +257,10 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
                     metadata,
                     cancellationToken);
 
-                matchedKeys = queryResponse.Results?.Select(r => r.Key).ToList() ?? new List<string>();
+                matchedKeys = queryResponse?.Results?
+                    .Select(r => r.Key)
+                    .Where(k => k != null && k.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    .ToList() ?? new List<string>();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
