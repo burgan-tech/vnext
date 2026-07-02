@@ -23,7 +23,8 @@ public enum TaskType
     GetInstanceData = 13,
     SubProcess = 14,
     GetInstances = 15,
-    Soap = 16
+    Soap = 16,
+    StateStore = 17
 }
 
 /// <summary>
