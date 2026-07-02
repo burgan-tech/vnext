@@ -6,8 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// State Store Task Definition.
 /// Accesses a Dapr state store component (default <c>vnext-state</c>) to cache data within
-/// the workflow pipeline. Supported commands: <c>get</c>, <c>set</c>, <c>delete</c>.
-/// Executes locally inside Orchestration (no Execution service round-trip).
+/// the workflow pipeline. Supported commands: <c>getCache</c>, <c>writeCache</c>, <c>invalidateCache</c>.
 /// </summary>
 public sealed class StateStoreTask : WorkflowTask
 {
@@ -28,7 +27,7 @@ public sealed class StateStoreTask : WorkflowTask
     }
 
     /// <summary>
-    /// Command to execute: <c>get</c>, <c>set</c> or <c>delete</c>.
+    /// Command to execute: <c>getCache</c>, <c>writeCache</c> or <c>invalidateCache</c>.
     /// </summary>
     public string Command { get; private set; } = string.Empty;
 
@@ -38,27 +37,27 @@ public sealed class StateStoreTask : WorkflowTask
     public string StoreName { get; private set; } = DefaultStoreName;
 
     /// <summary>
-    /// Cache key targeted by <c>get</c>, <c>set</c> and single-key <c>delete</c>.
+    /// Cache key targeted by <c>getCache</c>, <c>writeCache</c> and single-key <c>invalidateCache</c>.
     /// </summary>
     public string CacheKey { get; private set; } = string.Empty;
 
     /// <summary>
-    /// Optional list of keys for bulk <c>delete</c>.
+    /// Optional list of keys for bulk <c>invalidateCache</c>.
     /// </summary>
     public IReadOnlyList<string>? CacheKeys { get; private set; }
 
     /// <summary>
-    /// Optional Dapr state Query API filter (JSON) for tag/pattern based <c>delete</c>.
+    /// Optional Dapr state Query API filter (JSON) for tag/pattern based <c>invalidateCache</c>.
     /// </summary>
     public JsonElement Query { get; private set; }
 
     /// <summary>
-    /// Value written by <c>set</c>.
+    /// Value written by <c>writeCache</c>.
     /// </summary>
     public JsonElement Value { get; private set; }
 
     /// <summary>
-    /// Optional time-to-live in seconds applied on <c>set</c> (Dapr <c>ttlInSeconds</c> metadata).
+    /// Optional time-to-live in seconds applied on <c>writeCache</c> (Dapr <c>ttlInSeconds</c> metadata).
     /// </summary>
     public int? TtlInSeconds { get; private set; }
 

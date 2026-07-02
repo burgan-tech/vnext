@@ -33,7 +33,7 @@ external calls from strongly typed bindings.
 | --- | --- | --- |
 | HTTP/SOAP | `HttpTaskExecutor`, `SoapTaskExecutor` | `HttpTaskInvoker`, `SoapTaskInvoker` |
 | Dapr | `DaprServiceTaskExecutor`, `DaprPubSubTaskExecutor`, `DaprBindingTaskExecutor` | Matching Dapr invokers |
-| State store | `StateStoreTaskExecutor` — executes locally in Orchestration via `DaprClient` ([details](state-store-task.md)) | None (no Execution round-trip; latency-sensitive) |
+| State store | `StateStoreTaskExecutor` | `StateStoreTaskInvoker` — Dapr state store cache access ([details](state-store-task.md)) |
 | Trigger | `StartTriggerTaskExecutor`, `DirectTriggerTaskExecutor`, `SubProcessTaskExecutor` | Remote trigger invokers |
 | Data query | `GetInstancesTaskExecutor`, `GetInstanceDataTaskExecutor` | Remote data invokers |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |

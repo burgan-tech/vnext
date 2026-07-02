@@ -86,9 +86,6 @@ public static class TaskServiceCollectionExtensions
         // Human task executor (no remote - state change only)
         services.AddTaskExecutor<HumanTaskExecutor>();
 
-        // State store task executor (no remote - direct Dapr state store access for low latency)
-        services.AddTaskExecutor<StateStoreTaskExecutor>();
-
         // HTTP, SOAP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<SoapTaskExecutor>();
@@ -96,6 +93,7 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
+        services.AddTaskExecutor<StateStoreTaskExecutor>();
 
         // Notification task executor (multi-channel direct Dapr binding dispatch)
         services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
