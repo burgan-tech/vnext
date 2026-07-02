@@ -73,6 +73,52 @@ public sealed class SubflowCompletionServiceTests
             Times.Never);
     }
 
+    [Theory]
+    [InlineData(true, ExecMode.Sync)]
+    [InlineData(false, ExecMode.Async)]
+    public async Task CompletionAsync_ResumesParentPipelineWithCallerModeFromInput(bool sync, ExecMode expectedCallerMode)
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parentInstance.Id, subInstanceId, sync);
+        var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+
+        _instanceRepository
+            .Setup(x => x.FindAsync(parentInstance.Id, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(
+                parentInstance,
+                parentWorkflow,
+                It.IsAny<string>(),
+                It.IsAny<JsonElement?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().CompletionAsync(input, CancellationToken.None);
+
+        _workflowExecutionService.Verify(
+            x => x.ExecuteTransitionAsync(
+                It.Is<WorkflowExecutionContext>(ctx =>
+                    ctx.Mode == ExecMode.Resume &&
+                    ctx.CallerMode == expectedCallerMode &&
+                    ctx.Execution!.IsSubFlowResume),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     private SubflowCompletionService CreateService()
         => new(
             _uowManager.Object,
@@ -101,7 +147,7 @@ public sealed class SubflowCompletionServiceTests
         return parentInstance;
     }
 
-    private static FlowCompletedInput CreateInput(Guid parentInstanceId, Guid subInstanceId)
+    private static FlowCompletedInput CreateInput(Guid parentInstanceId, Guid subInstanceId, bool sync = false)
         => new()
         {
             InstanceId = parentInstanceId,
@@ -111,7 +157,8 @@ public sealed class SubflowCompletionServiceTests
             SubInstanceId = subInstanceId,
             CompletedState = "child-done",
             InstanceData = CreateJsonElement("""{"result":"ok"}"""),
-            CompletedAt = DateTime.UtcNow
+            CompletedAt = DateTime.UtcNow,
+            Sync = sync
         };
 
     private static JsonElement CreateJsonElement(string json)

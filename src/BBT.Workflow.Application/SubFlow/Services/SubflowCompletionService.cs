@@ -141,7 +141,7 @@ public sealed class SubflowCompletionService(
                             errorLayer: "SubFlow",
                             stackTrace: parentWorkflowResult.Error.Detail);
                         parentInstance.AddIncident(loadIncident);
-                        parentInstance.Fault(completedInput.Domain);
+                        parentInstance.Fault(completedInput.Domain, completedInput.Sync);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -169,7 +169,7 @@ public sealed class SubflowCompletionService(
                             errorLayer: "SubFlow",
                             stackTrace: mappingResult.Error.Detail);
                         parentInstance.AddIncident(incident);
-                        parentInstance.Fault(completedInput.Domain);
+                        parentInstance.Fault(completedInput.Domain, completedInput.Sync);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -183,6 +183,7 @@ public sealed class SubflowCompletionService(
                     parentInstance,
                     parentWorkflow!,
                     completedInput.SubInstanceId,
+                    completedInput.Sync,
                     cancellationToken);
 
                 SubFlowActivityHelper.SetSuccess(activity);
@@ -209,6 +210,7 @@ public sealed class SubflowCompletionService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -222,7 +224,9 @@ public sealed class SubflowCompletionService(
                 TransitionKey = "", // For logging purposes only
                 TriggerType = TriggerType.Manual,
                 Mode = ExecMode.Resume, // Use Resume mode for SubFlow completion
-                CallerMode = ExecMode.Async,
+                // Preserve the completing chain's caller mode so the resumed parent chain
+                // keeps starting/forwarding subflows synchronously when the caller was sync=true.
+                CallerMode = sync ? ExecMode.Sync : ExecMode.Async,
                 Headers = new Dictionary<string, string?>(),
                 Actor = ExecutionActor.System,
                 RequestedAt = DateTimeOffset.UtcNow,

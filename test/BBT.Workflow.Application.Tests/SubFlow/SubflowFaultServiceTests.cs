@@ -166,6 +166,38 @@ public sealed class SubflowFaultServiceTests
         incidentVisibleToMapping.ShouldBeTrue();
     }
 
+    [Theory]
+    [InlineData(true, ExecMode.Sync)]
+    [InlineData(false, ExecMode.Async)]
+    public async Task FaultAsync_WithNotifyBoundary_ShouldPropagateCallerModeFromInput(bool sync, ExecMode expectedCallerMode)
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder()
+                .OnError(ErrorAction.Notify, transition: "error-fallback")
+                .Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}"""), sync);
+
+        SetupParent(parentInstance, parentWorkflow);
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().FaultAsync(input, CancellationToken.None);
+
+        _workflowExecutionService.Verify(
+            x => x.ExecuteTransitionAsync(
+                It.Is<WorkflowExecutionContext>(ctx =>
+                    ctx.TransitionKey == "error-fallback" &&
+                    ctx.CallerMode == expectedCallerMode),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     private SubflowFaultService CreateService()
     {
         var resolver = new ErrorBoundaryResolver(Mock.Of<ILogger<ErrorBoundaryResolver>>());
@@ -225,10 +257,12 @@ public sealed class SubflowFaultServiceTests
     private static SubFlowFaultedInput CreateInput(
         Guid parentInstanceId,
         Guid subInstanceId,
-        JsonElement childData)
+        JsonElement childData,
+        bool sync = false)
     {
         return new SubFlowFaultedInput
         {
+            Sync = sync,
             InstanceId = parentInstanceId,
             Domain = "bank",
             Flow = "parent-flow",
