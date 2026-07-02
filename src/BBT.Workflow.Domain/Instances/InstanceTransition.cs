@@ -34,6 +34,32 @@ public sealed class InstanceTransition : Entity<Guid>, ICreationAuditedObject
     public string TransitionId { get; private set; }
     public string FromState { get; private set; }
     public string? ToState { get; private set; }
+
+    /// <summary>
+    /// Effective state exposed to the external world at the moment the transition completed.
+    /// Captured from the instance; may differ from <see cref="ToState"/> when a subflow is active.
+    /// Null for failed/incomplete transitions.
+    /// </summary>
+    public string? EffectiveState { get; private set; }
+
+    /// <summary>
+    /// Type of the effective state at completion time (Initial, Intermediate, Finish, SubFlow, Wizard).
+    /// Null for failed/incomplete transitions.
+    /// </summary>
+    public StateType? EffectiveStateType { get; private set; }
+
+    /// <summary>
+    /// Sub type of the effective state at completion time (Success, Error, Human, Timeout, etc.).
+    /// Null for failed/incomplete transitions.
+    /// </summary>
+    public StateSubType? EffectiveStateSubType { get; private set; }
+
+    /// <summary>
+    /// Free-form stage label of the instance at the moment the transition completed.
+    /// Null for failed/incomplete transitions or when no stage was set.
+    /// </summary>
+    public string? Stage { get; private set; }
+
     public DateTime StartedAt { get; private set; }
     public DateTime? FinishedAt { get; private set; }
     public TimeSpan? Duration { get; private set; }
@@ -78,9 +104,18 @@ public sealed class InstanceTransition : Entity<Guid>, ICreationAuditedObject
         Body = body;
     }
 
-    public void Completed(string toState)
+    public void Completed(
+        string toState,
+        string? effectiveState = null,
+        StateType? effectiveStateType = null,
+        StateSubType? effectiveStateSubType = null,
+        string? stage = null)
     {
         ToState = toState;
+        EffectiveState = effectiveState;
+        EffectiveStateType = effectiveStateType;
+        EffectiveStateSubType = effectiveStateSubType;
+        Stage = stage;
         FinishedAt = DateTime.UtcNow;
         Duration = FinishedAt - StartedAt;
     }

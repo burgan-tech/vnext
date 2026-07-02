@@ -101,7 +101,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         };
 
         _instanceRepository
-            .FindByIdentifierAsReadOnlyAsync(input.Instance, Arg.Any<CancellationToken>())
+            .FindByIdentifierWithFullHistoryAsync(input.Instance, Arg.Any<CancellationToken>())
             .Returns((Instance?)null);
 
         var result = await _service.GetInstanceHistoryAsync(input, CancellationToken.None);
@@ -124,7 +124,12 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
             triggerType: TriggerType.Manual,
             body: new JsonData("{\"amount\":100}"),
             header: new JsonData("{\"x-request-id\":\"abc\"}"));
-        t1.Completed("approved");
+        t1.Completed(
+            "approved",
+            effectiveState: "approved",
+            effectiveStateType: StateType.Intermediate,
+            effectiveStateSubType: StateSubType.Success,
+            stage: "review");
 
         var t2 = InstanceTransition.Create(
             id: Guid.NewGuid(),
@@ -136,7 +141,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
             header: new JsonData("{}"));
 
         _instanceRepository
-            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .FindByIdentifierWithFullHistoryAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
 
         _instanceTransitionRepository
@@ -161,6 +166,10 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         first.TransitionId.ShouldBe("approve");
         first.FromState.ShouldBe("draft");
         first.ToState.ShouldBe("approved");
+        first.EffectiveState.ShouldBe("approved");
+        first.EffectiveStateType.ShouldBe(StateType.Intermediate);
+        first.EffectiveStateSubType.ShouldBe(StateSubType.Success);
+        first.Stage.ShouldBe("review");
         first.TriggerType.ShouldBe(TriggerType.Manual);
         first.FinishedAt.ShouldNotBeNull();
         first.DurationSeconds.ShouldNotBeNull();
@@ -169,6 +178,10 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         second.TransitionId.ShouldBe("complete");
         second.FromState.ShouldBe("approved");
         second.ToState.ShouldBeNull();
+        second.EffectiveState.ShouldBeNull();
+        second.EffectiveStateType.ShouldBeNull();
+        second.EffectiveStateSubType.ShouldBeNull();
+        second.Stage.ShouldBeNull();
         second.FinishedAt.ShouldBeNull();
         second.DurationSeconds.ShouldBeNull();
     }
@@ -179,7 +192,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
 
         _instanceRepository
-            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .FindByIdentifierWithFullHistoryAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
 
         _instanceTransitionRepository
