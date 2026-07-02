@@ -27,7 +27,14 @@ public sealed class ReservedTransitionResolver : IReservedTransitionResolver
     /// <inheritdoc />
     public string GetOwnLockKey(TransitionExecutionContext context)
     {
-        if (context.Directives.IsSubFlowResume)       return context.LockKey + ":resume";
+        if (context.Directives.IsSubFlowResume)
+        {
+            // Per-sub-instance key: a nested sync resume must not collide with the outer
+            // resume chain that is still holding the shared key for this parent.
+            return context.Directives.SubFlowResumeInstanceId is { } subId
+                ? $"{context.LockKey}:resume:{subId:N}"
+                : context.LockKey + ":resume";
+        }
         if (context.Directives.IsLongPollAckResume)   return context.LockKey + ":lpack";
         if (context.IsCancelTransition())           return context.LockKey + ":cancel";
         if (context.IsExitTransition())             return context.LockKey + ":exit";
