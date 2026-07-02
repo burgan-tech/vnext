@@ -11,11 +11,11 @@ namespace BBT.Workflow.Tasks.Mapping;
 public sealed class TaskBindingMapperStateStoreTaskTests
 {
     [Fact]
-    public void CreateEnvelope_MapsWriteCacheTask()
+    public void CreateEnvelope_MapsSetTask()
     {
         var config = """
             {
-              "command": "writeCache",
+              "command": "set",
               "storeName": "vnext-state",
               "key": "customer:42:profile",
               "value": { "name": "Ada", "count": 1 },
@@ -34,7 +34,7 @@ public sealed class TaskBindingMapperStateStoreTaskTests
 
         var binding = result.Value!.Binding.Deserialize<StateStoreBinding>();
         binding.ShouldNotBeNull();
-        binding!.Command.ShouldBe("writeCache");
+        binding!.Command.ShouldBe("set");
         binding.StoreName.ShouldBe("vnext-state");
         binding.Key.ShouldBe("customer:42:profile");
         binding.TtlInSeconds.ShouldBe(300);
@@ -51,7 +51,7 @@ public sealed class TaskBindingMapperStateStoreTaskTests
     {
         var config = """
             {
-              "command": "getCache",
+              "command": "get",
               "key": "customer:42:profile"
             }
             """;
@@ -60,18 +60,18 @@ public sealed class TaskBindingMapperStateStoreTaskTests
 
         var binding = MapToBinding(task);
 
-        binding.Command.ShouldBe("getCache");
+        binding.Command.ShouldBe("get");
         binding.StoreName.ShouldBe(StateStoreTask.DefaultStoreName);
         binding.Key.ShouldBe("customer:42:profile");
         binding.Value.ShouldBeNull();
     }
 
     [Fact]
-    public void CreateEnvelope_MapsInvalidateCacheKeyList()
+    public void CreateEnvelope_MapsDeleteKeyList()
     {
         var config = """
             {
-              "command": "invalidateCache",
+              "command": "delete",
               "keys": [ "customer:1", "customer:2" ]
             }
             """;
@@ -80,7 +80,7 @@ public sealed class TaskBindingMapperStateStoreTaskTests
 
         var binding = MapToBinding(task);
 
-        binding.Command.ShouldBe("invalidateCache");
+        binding.Command.ShouldBe("delete");
         binding.Keys.ShouldNotBeNull();
         binding.Keys!.ShouldBe(["customer:1", "customer:2"]);
     }

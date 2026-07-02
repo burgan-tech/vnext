@@ -37,7 +37,7 @@ public interface ITaskMetrics
     /// Records a Dapr state store operation.
     /// </summary>
     /// <param name="storeName">The name of the state store component.</param>
-    /// <param name="command">The command executed (getCache, writeCache, invalidateCache).</param>
+    /// <param name="command">The command executed (get, set, delete).</param>
     /// <param name="status">The status of the operation (success, failure, cancelled).</param>
     void RecordStateStoreOperation(string storeName, string command, string status);
 }

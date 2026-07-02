@@ -9,14 +9,14 @@ namespace BBT.Workflow.Execution.Invokers;
 
 /// <summary>
 /// Pure Dapr state store task invoker - stateless execution with strongly-typed binding.
-/// Supports the getCache, writeCache and invalidateCache commands against a Dapr state store.
+/// Supports the get, set and delete commands against a Dapr state store.
 /// </summary>
 public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 {
     // Command constants (case-insensitive match against binding.Command).
-    private const string GetCache = "getCache";
-    private const string WriteCache = "writeCache";
-    private const string InvalidateCache = "invalidateCache";
+    private const string GetCommand = "get";
+    private const string SetCommand = "set";
+    private const string DeleteCommand = "delete";
 
     private readonly DaprClient _daprClient;
     private readonly ITaskMetrics _metrics;
@@ -70,9 +70,9 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         {
             TaskInvocationResult result = command.ToLowerInvariant() switch
             {
-                "getcache" => await GetCacheAsync(binding, stopwatch, cancellationToken),
-                "writecache" => await WriteCacheAsync(binding, stopwatch, cancellationToken),
-                "invalidatecache" => await InvalidateCacheAsync(binding, stopwatch, cancellationToken),
+                GetCommand => await GetAsync(binding, stopwatch, cancellationToken),
+                SetCommand => await SetAsync(binding, stopwatch, cancellationToken),
+                DeleteCommand => await DeleteAsync(binding, stopwatch, cancellationToken),
                 _ => UnsupportedCommand(binding, stopwatch)
             };
 
@@ -114,14 +114,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         }
     }
 
-    private async Task<TaskInvocationResult> GetCacheAsync(
+    private async Task<TaskInvocationResult> GetAsync(
         StateStoreBinding binding,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(binding.Key))
         {
-            return MissingFieldFailure(binding, stopwatch, "getCache requires 'key'");
+            return MissingFieldFailure(binding, stopwatch, "get requires 'key'");
         }
 
         var consistency = ParseConsistency(binding.Consistency);
@@ -150,19 +150,19 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             }));
     }
 
-    private async Task<TaskInvocationResult> WriteCacheAsync(
+    private async Task<TaskInvocationResult> SetAsync(
         StateStoreBinding binding,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(binding.Key))
         {
-            return MissingFieldFailure(binding, stopwatch, "writeCache requires 'key'");
+            return MissingFieldFailure(binding, stopwatch, "set requires 'key'");
         }
 
         if (string.IsNullOrWhiteSpace(binding.Value))
         {
-            return MissingFieldFailure(binding, stopwatch, "writeCache requires 'value'");
+            return MissingFieldFailure(binding, stopwatch, "set requires 'value'");
         }
 
         var value = JsonSerializer.Deserialize<JsonElement>(binding.Value);
@@ -201,14 +201,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             metadata: BaseMetadata(binding, extra: new() { ["Saved"] = saved }));
     }
 
-    private async Task<TaskInvocationResult> InvalidateCacheAsync(
+    private async Task<TaskInvocationResult> DeleteAsync(
         StateStoreBinding binding,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
         var metadata = BuildMetadata(binding, includeTtl: false);
 
-        // 1. Tag/pattern based invalidation via the Dapr state Query API.
+        // 1. Tag/pattern based deletion via the Dapr state Query API.
         if (!string.IsNullOrWhiteSpace(binding.Query))
         {
             List<string> matchedKeys;
@@ -226,7 +226,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             {
                 stopwatch.Stop();
                 return TaskInvocationResult.Failure(
-                    error: $"Query-based invalidation is not supported by state store '{binding.StoreName}': {ex.Message}",
+                    error: $"Query-based deletion is not supported by state store '{binding.StoreName}': {ex.Message}",
                     executionDurationMs: stopwatch.ElapsedMilliseconds,
                     taskType: TaskType,
                     metadata: BaseMetadata(binding, extra: new()
@@ -237,18 +237,18 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
             var deletedByQuery = await DeleteKeysAsync(binding, matchedKeys, cancellationToken);
             stopwatch.Stop();
-            return InvalidateSuccess(binding, stopwatch, deletedByQuery);
+            return DeleteSuccess(binding, stopwatch, deletedByQuery);
         }
 
-        // 2. Bulk key list invalidation.
+        // 2. Bulk key list deletion.
         if (binding.Keys is { Count: > 0 })
         {
             var deleted = await DeleteKeysAsync(binding, binding.Keys, cancellationToken);
             stopwatch.Stop();
-            return InvalidateSuccess(binding, stopwatch, deleted);
+            return DeleteSuccess(binding, stopwatch, deleted);
         }
 
-        // 3. Single key invalidation.
+        // 3. Single key deletion.
         if (!string.IsNullOrWhiteSpace(binding.Key))
         {
             var stateOptions = BuildStateOptions(binding);
@@ -259,11 +259,11 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
                 metadata,
                 cancellationToken);
             stopwatch.Stop();
-            return InvalidateSuccess(binding, stopwatch, 1);
+            return DeleteSuccess(binding, stopwatch, 1);
         }
 
         return MissingFieldFailure(binding, stopwatch,
-            "invalidateCache requires one of 'key', 'keys' or 'query'");
+            "delete requires one of 'key', 'keys' or 'query'");
     }
 
     private async Task<int> DeleteKeysAsync(
@@ -290,7 +290,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         return items.Count;
     }
 
-    private TaskInvocationResult InvalidateSuccess(
+    private TaskInvocationResult DeleteSuccess(
         StateStoreBinding binding,
         Stopwatch stopwatch,
         int deletedCount) =>
@@ -305,7 +305,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         stopwatch.Stop();
         return TaskInvocationResult.Failure(
             error: $"Unsupported state store command: '{binding.Command}'. " +
-                   $"Expected one of: {GetCache}, {WriteCache}, {InvalidateCache}.",
+                   $"Expected one of: {GetCommand}, {SetCommand}, {DeleteCommand}.",
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
             metadata: BaseMetadata(binding));

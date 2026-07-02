@@ -7,7 +7,7 @@ namespace BBT.Workflow.Execution.Bindings;
 public sealed class StateStoreBinding
 {
     /// <summary>
-    /// Command to execute: <c>getCache</c>, <c>writeCache</c> or <c>invalidateCache</c>.
+    /// Command to execute: <c>get</c>, <c>set</c> or <c>delete</c>.
     /// </summary>
     public required string Command { get; init; }
 
@@ -17,27 +17,27 @@ public sealed class StateStoreBinding
     public required string StoreName { get; init; }
 
     /// <summary>
-    /// Cache key for get / write / single-key invalidate.
+    /// Cache key for get / set / single-key delete.
     /// </summary>
     public string? Key { get; init; }
 
     /// <summary>
-    /// Optional list of keys for bulk invalidate.
+    /// Optional list of keys for bulk delete.
     /// </summary>
     public List<string>? Keys { get; init; }
 
     /// <summary>
-    /// Optional Dapr state Query API filter (raw JSON) for tag/pattern based invalidate.
+    /// Optional Dapr state Query API filter (raw JSON) for tag/pattern based delete.
     /// </summary>
     public string? Query { get; init; }
 
     /// <summary>
-    /// Value to write (raw JSON string) for <c>writeCache</c>.
+    /// Value to write (raw JSON string) for <c>set</c>.
     /// </summary>
     public string? Value { get; init; }
 
     /// <summary>
-    /// Optional time-to-live in seconds applied on write (Dapr <c>ttlInSeconds</c> metadata).
+    /// Optional time-to-live in seconds applied on set (Dapr <c>ttlInSeconds</c> metadata).
     /// </summary>
     public int? TtlInSeconds { get; init; }
 

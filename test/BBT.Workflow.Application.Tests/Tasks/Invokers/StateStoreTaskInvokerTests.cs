@@ -32,12 +32,12 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_GetCacheWithoutKey_ReturnsFailure()
+    public async Task InvokeAsync_GetWithoutKey_ReturnsFailure()
     {
         var invoker = CreateInvoker(out _);
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "getCache",
+            Command = "get",
             StoreName = Store
         }));
 
@@ -46,12 +46,12 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_WriteCacheWithoutValue_ReturnsFailure()
+    public async Task InvokeAsync_SetWithoutValue_ReturnsFailure()
     {
         var invoker = CreateInvoker(out _);
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "writeCache",
+            Command = "set",
             StoreName = Store,
             Key = "k1"
         }));
@@ -61,7 +61,7 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_GetCacheMiss_ReturnsSuccessWithFoundFalse()
+    public async Task InvokeAsync_GetMiss_ReturnsSuccessWithFoundFalse()
     {
         var invoker = CreateInvoker(out var daprClient);
         daprClient
@@ -74,7 +74,7 @@ public sealed class StateStoreTaskInvokerTests
 
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "getCache",
+            Command = "get",
             StoreName = Store,
             Key = "missing"
         }));
@@ -85,7 +85,7 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_GetCacheHit_ReturnsSuccessWithData()
+    public async Task InvokeAsync_GetHit_ReturnsSuccessWithData()
     {
         var value = JsonSerializer.SerializeToElement(new { name = "Ada" });
         var invoker = CreateInvoker(out var daprClient);
@@ -99,7 +99,7 @@ public sealed class StateStoreTaskInvokerTests
 
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "getCache",
+            Command = "get",
             StoreName = Store,
             Key = "customer:42"
         }));
@@ -110,7 +110,7 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_WriteCache_SavesWithTtlMetadata()
+    public async Task InvokeAsync_Set_SavesWithTtlMetadata()
     {
         var invoker = CreateInvoker(out var daprClient);
         daprClient
@@ -123,7 +123,7 @@ public sealed class StateStoreTaskInvokerTests
 
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "writeCache",
+            Command = "set",
             StoreName = Store,
             Key = "k1",
             Value = "{\"name\":\"Ada\"}",
@@ -139,7 +139,7 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_InvalidateSingleKey_DeletesKey()
+    public async Task InvokeAsync_DeleteSingleKey_DeletesKey()
     {
         var invoker = CreateInvoker(out var daprClient);
         daprClient
@@ -152,7 +152,7 @@ public sealed class StateStoreTaskInvokerTests
 
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "invalidateCache",
+            Command = "delete",
             StoreName = Store,
             Key = "k1"
         }));
@@ -167,7 +167,7 @@ public sealed class StateStoreTaskInvokerTests
     }
 
     [Fact]
-    public async Task InvokeAsync_InvalidateKeyList_DeletesBulk()
+    public async Task InvokeAsync_DeleteKeyList_DeletesBulk()
     {
         var invoker = CreateInvoker(out var daprClient);
         daprClient
@@ -179,7 +179,7 @@ public sealed class StateStoreTaskInvokerTests
 
         var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
         {
-            Command = "invalidateCache",
+            Command = "delete",
             StoreName = Store,
             Keys = ["a", "b"]
         }));
