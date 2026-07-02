@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -67,7 +68,7 @@ public sealed class StateStoreTaskInvokerTests
         var invoker = CreateInvoker(out var daprClient);
         daprClient
             .Setup(c => c.GetStateAndETagAsync<JsonElement>(
-                Store, "missing",
+                Store, "custom:missing",
                 It.IsAny<ConsistencyMode?>(),
                 It.IsAny<IReadOnlyDictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()))
@@ -92,7 +93,7 @@ public sealed class StateStoreTaskInvokerTests
         var invoker = CreateInvoker(out var daprClient);
         daprClient
             .Setup(c => c.GetStateAndETagAsync<JsonElement>(
-                Store, "customer:42",
+                Store, "custom:customer:42",
                 It.IsAny<ConsistencyMode?>(),
                 It.IsAny<IReadOnlyDictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()))
@@ -116,7 +117,7 @@ public sealed class StateStoreTaskInvokerTests
         var invoker = CreateInvoker(out var daprClient);
         daprClient
             .Setup(c => c.SaveStateAsync(
-                Store, "k1", It.IsAny<JsonElement>(),
+                Store, "custom:k1", It.IsAny<JsonElement>(),
                 It.IsAny<StateOptions?>(),
                 It.IsAny<IReadOnlyDictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()))
@@ -133,7 +134,7 @@ public sealed class StateStoreTaskInvokerTests
 
         result.IsSuccess.ShouldBeTrue();
         daprClient.Verify(c => c.SaveStateAsync(
-            Store, "k1", It.IsAny<JsonElement>(),
+            Store, "custom:k1", It.IsAny<JsonElement>(),
             It.IsAny<StateOptions?>(),
             It.Is<IReadOnlyDictionary<string, string>>(m => m != null && m["ttlInSeconds"] == "300"),
             It.IsAny<CancellationToken>()), Times.Once);
@@ -145,7 +146,7 @@ public sealed class StateStoreTaskInvokerTests
         var invoker = CreateInvoker(out var daprClient);
         daprClient
             .Setup(c => c.DeleteStateAsync(
-                Store, "k1",
+                Store, "custom:k1",
                 It.IsAny<StateOptions?>(),
                 It.IsAny<IReadOnlyDictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()))
@@ -160,8 +161,9 @@ public sealed class StateStoreTaskInvokerTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Metadata!["DeletedCount"].ShouldBe(1);
+        result.Metadata!["Key"].ShouldBe("custom:k1");
         daprClient.Verify(c => c.DeleteStateAsync(
-            Store, "k1",
+            Store, "custom:k1",
             It.IsAny<StateOptions?>(),
             It.IsAny<IReadOnlyDictionary<string, string>?>(),
             It.IsAny<CancellationToken>()), Times.Once);
@@ -189,7 +191,8 @@ public sealed class StateStoreTaskInvokerTests
         result.Metadata!["DeletedCount"].ShouldBe(2);
         daprClient.Verify(c => c.DeleteBulkStateAsync(
             Store,
-            It.Is<IReadOnlyList<BulkDeleteStateItem>>(items => items.Count == 2),
+            It.Is<IReadOnlyList<BulkDeleteStateItem>>(items =>
+                items.Count == 2 && items.All(i => i.Key.StartsWith("custom:"))),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -199,7 +202,7 @@ public sealed class StateStoreTaskInvokerTests
         var invoker = CreateInvoker(out var daprClient, configuredStoreName: "env-store");
         daprClient
             .Setup(c => c.GetStateAndETagAsync<JsonElement>(
-                "env-store", "k1",
+                "env-store", "custom:k1",
                 It.IsAny<ConsistencyMode?>(),
                 It.IsAny<IReadOnlyDictionary<string, string>?>(),
                 It.IsAny<CancellationToken>()))
@@ -214,7 +217,7 @@ public sealed class StateStoreTaskInvokerTests
         result.IsSuccess.ShouldBeTrue();
         result.Metadata!["StoreName"].ShouldBe("env-store");
         daprClient.Verify(c => c.GetStateAndETagAsync<JsonElement>(
-            "env-store", "k1",
+            "env-store", "custom:k1",
             It.IsAny<ConsistencyMode?>(),
             It.IsAny<IReadOnlyDictionary<string, string>?>(),
             It.IsAny<CancellationToken>()), Times.Once);

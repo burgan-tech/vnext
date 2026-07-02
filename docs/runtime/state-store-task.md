@@ -25,8 +25,8 @@ where `StateStoreTaskInvoker` performs the state store call through `DaprClient`
 | --- | --- | --- |
 | `command` | all | `get` \| `set` \| `delete`. |
 | `storeName` | all | Optional Dapr state store component. When omitted, the executing runtime's `DAPR_STATE_STORE_NAME` configuration value is used, so each runtime targets its own component. |
-| `key` | get / set / single delete | Cache key. |
-| `keys` | delete | List of keys for bulk delete. |
+| `key` | get / set / single delete | Cache key. Stored under the fixed `custom:` prefix (see Key naming convention). |
+| `keys` | delete | List of keys for bulk delete. Each entry gets the `custom:` prefix. |
 | `query` | delete | Dapr state Query API filter (JSON) for tag/pattern delete. Requires a query-capable state store. |
 | `value` | set | Value to store (JSON). |
 | `ttlInSeconds` | set | Optional TTL (Dapr `ttlInSeconds` metadata). |
@@ -34,6 +34,21 @@ where `StateStoreTaskInvoker` performs the state store call through `DaprClient`
 | `concurrency` | set | `FirstWrite` \| `LastWrite`. |
 | `consistency` | get / set | `Eventual` \| `Strong`. |
 | `metadata` | all | Optional component-specific metadata. |
+
+## Key naming convention
+
+The state store is shared with the engine's own cache consumers (`CacheSet` entries like
+`{Component}:{domain}:{key}:latest`, the post-commit idempotency store's
+`postcommit:idempotency:{key}`, …). To prevent collisions and establish a naming convention,
+every task-supplied key is stored under the fixed **`custom:`** prefix:
+
+- Task config `key: "customer:42"` → store key `custom:customer:42`
+- Combined with the Redis component's `keyPrefix: "vnext"`, the physical Redis key becomes
+  `vnext||custom:customer:42`.
+
+The prefix is applied by the invoker on `get`, `set` and `delete` (single key and `keys[]`).
+Keys matched by a `query` are returned by the store already prefixed and are deleted as-is.
+Result metadata (`Key`) reports the prefixed store key.
 
 ## Semantics
 

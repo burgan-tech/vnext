@@ -14,6 +14,10 @@ namespace BBT.Workflow.Execution.Invokers;
 /// When the binding does not specify a store name, the runtime's
 /// <c>DAPR_STATE_STORE_NAME</c> configuration value is used so each runtime
 /// targets its own state store component.
+/// All task-supplied keys are stored under the fixed <c>custom:</c> prefix to
+/// namespace task-written entries away from engine-owned cache keys sharing the
+/// same store (query-matched keys come back from the store already prefixed and
+/// are used as-is).
 /// </summary>
 public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 {
@@ -23,6 +27,12 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
     private const string DeleteCommand = "delete";
 
     private const string StateStoreNameConfigKey = "DAPR_STATE_STORE_NAME";
+
+    /// <summary>
+    /// Fixed namespace prefix applied to every task-supplied key, preventing
+    /// collisions with engine-owned cache keys in the shared state store.
+    /// </summary>
+    private const string KeyPrefix = "custom:";
 
     private readonly DaprClient _daprClient;
     private readonly string? _defaultStoreName;
@@ -154,7 +164,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
         var (value, etag) = await _daprClient.GetStateAndETagAsync<JsonElement>(
             storeName,
-            binding.Key,
+            PrefixKey(binding.Key),
             consistency,
             metadata,
             cancellationToken);
@@ -200,7 +210,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         {
             saved = await _daprClient.TrySaveStateAsync(
                 storeName,
-                binding.Key,
+                PrefixKey(binding.Key),
                 value,
                 binding.ETag,
                 stateOptions,
@@ -211,7 +221,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         {
             await _daprClient.SaveStateAsync(
                 storeName,
-                binding.Key,
+                PrefixKey(binding.Key),
                 value,
                 stateOptions,
                 metadata,
@@ -221,7 +231,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         stopwatch.Stop();
 
         return TaskInvocationResult.Success(
-            data: new { Saved = saved, Key = binding.Key },
+            data: new { Saved = saved, Key = PrefixKey(binding.Key) },
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
             metadata: BaseMetadata(binding, storeName, extra: new() { ["Saved"] = saved }));
@@ -267,10 +277,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             return DeleteSuccess(binding, storeName, stopwatch, deletedByQuery);
         }
 
-        // 2. Bulk key list deletion.
+        // 2. Bulk key list deletion (task-supplied keys are namespaced).
         if (binding.Keys is { Count: > 0 })
         {
-            var deleted = await DeleteKeysAsync(storeName, binding.Keys, cancellationToken);
+            var prefixedKeys = binding.Keys
+                .Where(k => !string.IsNullOrWhiteSpace(k))
+                .Select(PrefixKey)
+                .ToList();
+            var deleted = await DeleteKeysAsync(storeName, prefixedKeys, cancellationToken);
             stopwatch.Stop();
             return DeleteSuccess(binding, storeName, stopwatch, deleted);
         }
@@ -281,7 +295,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             var stateOptions = BuildStateOptions(binding);
             await _daprClient.DeleteStateAsync(
                 storeName,
-                binding.Key,
+                PrefixKey(binding.Key),
                 stateOptions,
                 metadata,
                 cancellationToken);
@@ -392,6 +406,11 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         };
     }
 
+    /// <summary>
+    /// Applies the fixed <see cref="KeyPrefix"/> namespace to a task-supplied key.
+    /// </summary>
+    private static string PrefixKey(string key) => KeyPrefix + key;
+
     private static ConsistencyMode? ParseConsistency(string? consistency) =>
         consistency?.ToLowerInvariant() switch
         {
@@ -421,7 +440,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
         if (!string.IsNullOrWhiteSpace(binding.Key))
         {
-            metadata["Key"] = binding.Key;
+            metadata["Key"] = PrefixKey(binding.Key);
         }
 
         if (extra is not null)
