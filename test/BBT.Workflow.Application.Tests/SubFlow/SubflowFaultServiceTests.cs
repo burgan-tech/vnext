@@ -198,6 +198,34 @@ public sealed class SubflowFaultServiceTests
             Times.Once);
     }
 
+    [Fact]
+    public async Task FaultAsync_WithIgnoreBoundary_ResumesParentPipelineWithSubFlowResumeInstanceId()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder()
+                .OnError(ErrorAction.Ignore)
+                .Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}"""));
+
+        WorkflowExecutionContext? captured = null;
+        SetupParent(parentInstance, parentWorkflow);
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => captured = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().FaultAsync(input, CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured.Execution!.IsSubFlowResume.ShouldBeTrue();
+        captured.Execution.SubFlowResumeInstanceId.ShouldBe(subInstanceId);
+    }
+
     private SubflowFaultService CreateService()
     {
         var resolver = new ErrorBoundaryResolver(Mock.Of<ILogger<ErrorBoundaryResolver>>());

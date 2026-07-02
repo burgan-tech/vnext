@@ -119,6 +119,44 @@ public sealed class SubflowCompletionServiceTests
             Times.Once);
     }
 
+    [Fact]
+    public async Task CompletionAsync_ResumesParentPipelineWithSubFlowResumeInstanceId()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parentInstance.Id, subInstanceId);
+        var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+
+        _instanceRepository
+            .Setup(x => x.FindAsync(parentInstance.Id, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(parentInstance, parentWorkflow, It.IsAny<string>(),
+                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        WorkflowExecutionContext? captured = null;
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => captured = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().CompletionAsync(input, CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured.Execution!.IsSubFlowResume.ShouldBeTrue();
+        captured.Execution.SubFlowResumeInstanceId.ShouldBe(subInstanceId);
+    }
+
     private SubflowCompletionService CreateService()
         => new(
             _uowManager.Object,

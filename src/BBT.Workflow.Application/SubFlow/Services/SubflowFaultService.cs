@@ -301,6 +301,7 @@ public sealed class SubflowFaultService(
             input.Mode = ExecMode.Resume;
             input.Execution!.ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep;
             input.Execution.IsSubFlowResume = true;
+            input.Execution.SubFlowResumeInstanceId = subInstanceId;
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
             if (!result.IsSuccess && result.Error.Code != WorkflowErrorCodes.AutoTransitionConditionNotMet)

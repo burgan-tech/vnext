@@ -235,7 +235,8 @@ public sealed class SubflowCompletionService(
                     ExecutionChainId = Guid.NewGuid().ToString("N"),
                     ChainDepth = 0,
                     ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep,
-                    IsSubFlowResume = true
+                    IsSubFlowResume = true,
+                    SubFlowResumeInstanceId = subInstanceId
                 }
             };
 
