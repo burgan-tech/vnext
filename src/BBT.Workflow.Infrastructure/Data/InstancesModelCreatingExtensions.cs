@@ -305,6 +305,18 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.ToState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
+            b.Property(p => p.EffectiveState)
+                .HasMaxLength(StateConstants.MaxKeyLength);
+
+            b.Property(p => p.EffectiveStateType)
+                .HasConversion<int?>();
+
+            b.Property(p => p.EffectiveStateSubType)
+                .HasConversion<int?>();
+
+            b.Property(p => p.Stage)
+                .HasMaxLength(InstanceConstants.MaxStageLength);
+
             b.Property(p => p.TriggerType)
                 .IsRequired()
                 .HasConversion<int>()
