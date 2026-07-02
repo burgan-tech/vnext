@@ -63,11 +63,11 @@ Result metadata (`Key`) reports the prefixed store key.
 ## Component requirement
 
 The invoker runs in the **Execution** service. When `storeName` is omitted, the store is resolved
-from the Execution runtime's `DAPR_STATE_STORE_NAME` configuration value (e.g.
-`vnext-execution-state` in the shipped dev/stage environments), so no component name is
-hard-coded. An explicit `storeName` must be exposed by the Execution sidecar — the repo ships
-`etc/execution/dapr/components/vnext-state.yaml` (Redis, `keyPrefix: vnext`) so `vnext-state`
-also resolves there, matching the orchestration-side component.
+from the Execution runtime's `DAPR_STATE_STORE_NAME` configuration value (`vnext-state` in the
+shipped environments), so no component name is hard-coded. An explicit `storeName` must be
+exposed by the Execution sidecar — the shipped `etc/execution/dapr/components/state.yaml`
+defines the `vnext-state` component (Redis, `keyPrefix: vnext`), matching the
+orchestration-side component.
 
 ## Example task definition
 
@@ -91,4 +91,4 @@ also resolves there, matching the orchestration-side component.
 - `src/BBT.Workflow.Application/Tasks/Executors/Dapr/StateStoreTaskExecutor.cs`
 - `src/BBT.Workflow.Application/Tasks/Mapping/TaskBindingMapper.cs`
 - `src/BBT.Workflow.Execution/Invokers/StateStoreTaskInvoker.cs`
-- `etc/execution/dapr/components/vnext-state.yaml`
+- `etc/execution/dapr/components/state.yaml`
