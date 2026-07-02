@@ -93,6 +93,33 @@ public class ReservedTransitionResolverTests
     }
 
     [Fact]
+    public void GetOwnLockKey_WithSubFlowResumeAndSubInstanceId_ShouldIncludeSubInstanceId()
+    {
+        var subInstanceId = Guid.NewGuid();
+        var ctx = CreateContext(transitionKey: "resume");
+        ctx.Directives.MarkAsSubFlowResume(subInstanceId);
+        _resolver.GetOwnLockKey(ctx).ShouldBe($"{ctx.LockKey}:resume:{subInstanceId:N}");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_WithSubFlowResumeWithoutSubInstanceId_ShouldFallBackToLegacyResumeKey()
+    {
+        var ctx = CreateContext(transitionKey: "resume");
+        ctx.Directives.MarkAsSubFlowResume();
+        _resolver.GetOwnLockKey(ctx).ShouldBe(ctx.LockKey + ":resume");
+    }
+
+    [Fact]
+    public void GetOwnLockKey_TwoDifferentSubInstances_ShouldProduceDifferentKeys()
+    {
+        var ctx1 = CreateContext(transitionKey: "resume");
+        var ctx2 = CreateContext(transitionKey: "resume");
+        ctx1.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+        ctx2.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+        _resolver.GetOwnLockKey(ctx1).ShouldNotBe(_resolver.GetOwnLockKey(ctx2));
+    }
+
+    [Fact]
     public void GetOwnLockKey_WithCancelTransition_ShouldUseCancelLabel()
     {
         var ctx = CreateContext(cancelKey: "cancel", transitionKey: "cancel");

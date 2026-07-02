@@ -11,6 +11,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -196,6 +197,85 @@ public sealed class SubflowFaultServiceTests
                     ctx.CallerMode == expectedCallerMode),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WithIgnoreBoundary_ResumesParentPipelineWithSubFlowResumeInstanceId()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder()
+                .OnError(ErrorAction.Ignore)
+                .Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}"""));
+
+        WorkflowExecutionContext? captured = null;
+        SetupParent(parentInstance, parentWorkflow);
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => captured = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().FaultAsync(input, CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured.Execution!.IsSubFlowResume.ShouldBeTrue();
+        captured.Execution.SubFlowResumeInstanceId.ShouldBe(subInstanceId);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenIgnoreBoundaryResumeFails_RevertsCorrelationViaUnfilteredLoad()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder()
+                .OnError(ErrorAction.Ignore)
+                .Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}"""));
+
+        SetupParent(parentInstance, parentWorkflow);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance i, bool _, CancellationToken _) => i);
+
+        // Resume fails hard (lock conflict) -> revert path must run.
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(parentInstance.Id)));
+
+        // The revert reload returns a fresh entity WITH the completed correlation
+        // (what FindWithAllCorrelationsAsync guarantees and FindAsync does not).
+        var reloaded = CloneParentWithCompletedCorrelation(parentInstance, subInstanceId);
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(reloaded);
+
+        await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().FaultAsync(input, CancellationToken.None));
+
+        _instanceRepository.Verify(
+            x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
+        reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(reloaded, true, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    private static Instance CloneParentWithCompletedCorrelation(Instance source, Guid subInstanceId)
+    {
+        var clone = Instance.Create(source.Id, "parent-flow", "1.0.0", "parent-key");
+        clone.ChangeState(StateFactory.CreateDefault("waiting-child", StateType.SubFlow));
+        clone.SetEffectiveState("child-active");
+        clone.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), clone.Id, "waiting-child", subInstanceId,
+            SubFlowType.SubFlow.Code, "bank", "child-flow", "1.0.0"));
+        clone.CompleteCorrelation(subInstanceId);
+        return clone;
     }
 
     private SubflowFaultService CreateService()
