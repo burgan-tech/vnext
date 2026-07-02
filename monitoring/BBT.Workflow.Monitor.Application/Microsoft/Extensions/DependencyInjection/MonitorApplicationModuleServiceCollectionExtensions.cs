@@ -1,0 +1,40 @@
+using BBT.Workflow.Monitor.Authorization;
+using BBT.Workflow.Monitor.Components;
+using BBT.Workflow.Monitor.Config;
+using BBT.Workflow.Monitor.Functions;
+using BBT.Workflow.Monitor.Instances;
+using BBT.Workflow.Monitor.Jobs;
+using BBT.Workflow.Monitor.Stats;
+using BBT.Workflow.Runtime;
+
+namespace Microsoft.Extensions.DependencyInjection;
+
+/// <summary>
+/// Extension methods for registering Monitor application-layer services.
+/// </summary>
+public static class MonitorApplicationModuleServiceCollectionExtensions
+{
+    /// <summary>
+    /// Adds monitor-specific application services (instance query, component query).
+    /// Also registers <see cref="IRuntimeService"/> so component cache backends and Monitor full-list
+    /// resolution can load definitions from PostgreSQL when the in-memory snapshot is cold.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddMonitorApplicationModule(this IServiceCollection services)
+    {
+        services.AddAetherApplication();
+
+        services.AddScoped<IRuntimeService, RuntimeService>();
+        services.AddScoped<IMonitorInstanceQueryService, MonitorInstanceQueryService>();
+        services.AddScoped<IMonitorDomainFaultService, MonitorDomainFaultService>();
+        services.AddScoped<IMonitorComponentQueryService, MonitorComponentQueryService>();
+        services.AddScoped<IMonitorStatsService, MonitorStatsService>();
+        services.AddScoped<IMonitorAuthorizationQueryService, MonitorAuthorizationQueryService>();
+        services.AddScoped<IMonitorJobQueryService, MonitorJobQueryService>();
+        services.AddScoped<IMonitorConfigService, MonitorConfigService>();
+        services.AddScoped<IMonitorFunctionQueryService, MonitorFunctionQueryService>();
+
+        return services;
+    }
+}

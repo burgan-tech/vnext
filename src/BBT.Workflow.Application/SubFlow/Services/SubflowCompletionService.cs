@@ -128,7 +128,21 @@ public sealed class SubflowCompletionService(
                     {
                         logger.LogWarning("Failed to get parent workflow {Flow} for SubFlow completion: {ErrorCode}",
                             completedInput.Flow, parentWorkflowResult.Error.Code);
-                        // Commit correlation completion even if workflow load fails; skip pipeline resume
+
+                        // Parent definition unavailable — resuming can never succeed, and a silent return
+                        // would strand the parent (and every ancestor) forever. Fault the parent so the
+                        // error propagates upward via InstanceSubFaultedEvent instead of leaving it stuck.
+                        var loadIncident = InstanceIncidentFactory.Create(
+                            state: parentInstance.GetCurrentState,
+                            transition: string.Empty,
+                            taskKey: null,
+                            message: $"Parent workflow '{completedInput.Flow}' could not be loaded for SubFlow completion",
+                            errorCode: parentWorkflowResult.Error.Code ?? WorkflowErrorCodes.NotFoundWorkflow,
+                            errorLayer: "SubFlow",
+                            stackTrace: parentWorkflowResult.Error.Detail);
+                        parentInstance.AddIncident(loadIncident);
+                        parentInstance.Fault(completedInput.Domain, completedInput.Sync);
+                        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
                     }
@@ -155,7 +169,7 @@ public sealed class SubflowCompletionService(
                             errorLayer: "SubFlow",
                             stackTrace: mappingResult.Error.Detail);
                         parentInstance.AddIncident(incident);
-                        parentInstance.Fault(completedInput.Domain);
+                        parentInstance.Fault(completedInput.Domain, completedInput.Sync);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -169,6 +183,7 @@ public sealed class SubflowCompletionService(
                     parentInstance,
                     parentWorkflow!,
                     completedInput.SubInstanceId,
+                    completedInput.Sync,
                     cancellationToken);
 
                 SubFlowActivityHelper.SetSuccess(activity);
@@ -195,6 +210,7 @@ public sealed class SubflowCompletionService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -208,7 +224,9 @@ public sealed class SubflowCompletionService(
                 TransitionKey = "", // For logging purposes only
                 TriggerType = TriggerType.Manual,
                 Mode = ExecMode.Resume, // Use Resume mode for SubFlow completion
-                CallerMode = ExecMode.Async,
+                // Preserve the completing chain's caller mode so the resumed parent chain
+                // keeps starting/forwarding subflows synchronously when the caller was sync=true.
+                CallerMode = sync ? ExecMode.Sync : ExecMode.Async,
                 Headers = new Dictionary<string, string?>(),
                 Actor = ExecutionActor.System,
                 RequestedAt = DateTimeOffset.UtcNow,
@@ -217,7 +235,8 @@ public sealed class SubflowCompletionService(
                     ExecutionChainId = Guid.NewGuid().ToString("N"),
                     ChainDepth = 0,
                     ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep,
-                    IsSubFlowResume = true
+                    IsSubFlowResume = true,
+                    SubFlowResumeInstanceId = subInstanceId
                 }
             };
 
@@ -325,13 +344,17 @@ public sealed class SubflowCompletionService(
     {
         // S9 isolation rule: do NOT mutate the detached Phase-1 entity inside this new UoW —
         // reload by id so we operate on an entity tracked by the current scope's DbContext.
-        // Avoids change-tracker bleed and lost/duplicate domain events across the scope boundary.
-        var tracked = await instanceRepository.FindAsync(parentInstanceId, true, cancellationToken)
+        // MUST load with ALL correlations: the default detail load filters completed
+        // correlations out, which silently skipped the revert and left the parent stuck Busy.
+        var tracked = await instanceRepository.FindWithAllCorrelationsAsync(parentInstanceId, cancellationToken)
                       ?? parentInstance;
 
         var correlation = tracked.RevertCorrelation(subInstanceId);
         if (correlation == null)
+        {
+            logger.SubFlowCorrelationRevertTargetMissing(subInstanceId, parentInstanceId);
             return;
+        }
 
         logger.SubFlowCorrelationReverted(subInstanceId, parentInstanceId);
 

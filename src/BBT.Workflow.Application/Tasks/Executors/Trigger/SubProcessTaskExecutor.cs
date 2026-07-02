@@ -151,8 +151,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             return TaskInvocationResult.Success(
                 data: new
                 {
-                    result.Value!.Id,
-                    result.Value.Status,
+                    result.Value,
                     SubFlowInstanceId = subFlowInstanceId,
                     CorrelationId = correlationId
                 },

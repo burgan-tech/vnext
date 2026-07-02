@@ -29,6 +29,12 @@ namespace BBT.Workflow.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ArmingToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ArmingUntil")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("CreatedAt");
@@ -130,6 +136,10 @@ namespace BBT.Workflow.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ArmingUntil")
+                        .HasDatabaseName("IX_BackgroundJobs_ArmingUntil")
+                        .HasFilter("\"ArmingToken\" IS NOT NULL");
+
                     b.HasIndex("JobName")
                         .HasDatabaseName("IX_BackgroundJobs_JobName");
 
@@ -145,7 +155,7 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("Status", "RunningSince")
                         .HasDatabaseName("IX_BackgroundJobs_Running");
 
-                    b.ToTable("BackgroundJobs", (string)null);
+                    b.ToTable("BackgroundJobs", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.Instance", b =>
@@ -526,6 +536,10 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ModifiedAt");
 
+                    b.Property<string>("SourceState")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("TransitionKey")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
@@ -611,6 +625,16 @@ namespace BBT.Workflow.Migrations
                     b.Property<TimeSpan?>("Duration")
                         .HasColumnType("interval");
 
+                    b.Property<string>("EffectiveState")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int?>("EffectiveStateSubType")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("EffectiveStateType")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -621,6 +645,10 @@ namespace BBT.Workflow.Migrations
 
                     b.Property<Guid>("InstanceId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("Stage")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
 
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");

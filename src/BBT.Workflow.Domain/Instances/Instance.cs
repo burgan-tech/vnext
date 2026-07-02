@@ -225,6 +225,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     internal IReadOnlyCollection<InstanceIncident> Incidents => _incidents.AsReadOnly();
 
     /// <summary>
+    /// Returns the incident list for read-only monitoring queries.
+    /// Exposed as a method (not a property) so Aether's TrackRelatedEntities reflection scan
+    /// does not discover the incidents collection as a navigation candidate.
+    /// </summary>
+    public IReadOnlyList<InstanceIncident> GetIncidentsForMonitor() => _incidents.AsReadOnly();
+
+    /// <summary>
     /// Indicates whether the instance has at least one unresolved incident.
     /// Backed by a stored generated column with partial B-tree index for efficient querying.
     /// </summary>
@@ -351,7 +358,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Sets the instance status to Completed and records the completion time.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
-    public void Complete(string domain)
+    /// <param name="sync">Whether the completing pipeline chain runs with a synchronous caller (sync=true).</param>
+    public void Complete(string domain, bool sync = false)
     {
         Status = InstanceStatus.Completed;
         ChainToken = null;
@@ -388,7 +396,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     InstanceData = latestData?.Data.JsonElement,
                     CompletedAt = CompletedAt.Value,
                     Duration = Duration,
-                    RootInstanceId = rootId != Id ? rootId : (Guid?)null
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                    Sync = sync
                 });
             }
         }
@@ -400,7 +409,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Correlations are intentionally kept open (not completed) so retry can cascade through them.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
-    public void Fault(string domain)
+    /// <param name="sync">Whether the faulting pipeline chain runs with a synchronous caller (sync=true).</param>
+    public void Fault(string domain, bool sync = false)
     {
         Status = InstanceStatus.Faulted;
         ChainToken = null;
@@ -466,7 +476,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     IncidentState = activeIncident?.State,
                     IncidentBoundaryAction = activeIncident?.BoundaryAction,
                     IncidentBoundaryLevel = activeIncident?.BoundaryLevel,
-                    RootInstanceId = rootId != Id ? rootId : (Guid?)null
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                    Sync = sync
                 });
             }
         }

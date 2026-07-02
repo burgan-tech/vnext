@@ -110,7 +110,8 @@ public sealed class InstanceSubFaultedEventHook(
             IncidentTransition = eventData.IncidentTransition,
             IncidentState = eventData.IncidentState,
             IncidentBoundaryAction = eventData.IncidentBoundaryAction,
-            IncidentBoundaryLevel = eventData.IncidentBoundaryLevel
+            IncidentBoundaryLevel = eventData.IncidentBoundaryLevel,
+            Sync = eventData.Sync
         };
     }
 }

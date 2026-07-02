@@ -609,6 +609,19 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId);
 
+    /// <summary>
+    /// Logs when the workflow-level output script fails during sync response enrichment.
+    /// Execution continues and falls back to raw instance attributes.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10132,
+        Level = LogLevel.Error,
+        Message = "Workflow '{WorkflowKey}' output script failed. Falling back to raw instance attributes.")]
+    public static partial void WorkflowOutputScriptFailed(
+        this ILogger logger,
+        string workflowKey,
+        Exception exception);
+
     #endregion
 
     #region Task Execution
@@ -840,6 +853,19 @@ public static partial class WorkflowLogs
         Level = LogLevel.Warning,
         Message = "SubFlow correlation reverted for SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
     public static partial void SubFlowCorrelationReverted(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a correlation revert finds no matching completed correlation —
+    /// the parent may be permanently stuck Busy and requires manual intervention.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40119,
+        Level = LogLevel.Error,
+        Message = "SubFlow correlation revert found no completed correlation for SubInstance {SubInstanceId}, Parent {ParentInstanceId} — parent may be stuck Busy")]
+    public static partial void SubFlowCorrelationRevertTargetMissing(
         this ILogger logger,
         Guid subInstanceId,
         Guid parentInstanceId);

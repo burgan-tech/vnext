@@ -22,7 +22,8 @@ public class InstanceJob : Entity<Guid>, IHasCreatedAt, IHasModifyTime
         ArgumentNullException.ThrowIfNull(jobName);
         JobName = Check.NotNullOrWhiteSpace(jobName.Value, nameof(JobName), InstanceJobConstants.MaxJobNameLength);
         JobType = jobName.Type;
-        TransitionKey = jobName.Segment;
+        SourceState = jobName.SourceState;
+        TransitionKey = jobName.TransitionKey;
         JobId = jobId;
         Domain = Check.NotNullOrWhiteSpace(domain, nameof(Domain), WorkflowConstants.MaxDomainLength);
         FlowName = Check.NotNullOrWhiteSpace(flowName, nameof(FlowName), WorkflowConstants.MaxFlowLength);
@@ -35,6 +36,13 @@ public class InstanceJob : Entity<Guid>, IHasCreatedAt, IHasModifyTime
 
     /// <summary>The job kind, projected from the structured <see cref="Instances.JobName"/> for queryable resolution.</summary>
     public JobType JobType { get; private set; }
+
+    /// <summary>
+    /// The source-state key the transition fires from, projected from the job name for queryable,
+    /// state-scoped cancellation. <c>null</c> for jobs without source-state scoping (timeout,
+    /// long-poll-ack, state-notify) and for legacy rows.
+    /// </summary>
+    public string? SourceState { get; private set; }
 
     /// <summary>
     /// The transition key (or well-known job key) this job targets, projected from the job name.

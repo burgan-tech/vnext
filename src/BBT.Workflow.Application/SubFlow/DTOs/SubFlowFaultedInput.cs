@@ -117,4 +117,10 @@ public record SubFlowFaultedInput
     /// Boundary level that matched in the SubFlow (if any)
     /// </summary>
     public string? IncidentBoundaryLevel { get; init; }
+
+    /// <summary>
+    /// Whether the faulting pipeline chain was executed with a synchronous caller
+    /// (sync=true). The parent error-boundary resume keeps the chain synchronous when set.
+    /// </summary>
+    public bool Sync { get; init; }
 }

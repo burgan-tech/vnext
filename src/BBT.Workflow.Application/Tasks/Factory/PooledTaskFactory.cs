@@ -184,6 +184,10 @@ public static class PoolableTaskRegistry
             DaprPubSubTask.CreateEmpty,
             (source, target) => ((DaprPubSubTask)target).CopyFromInternal((DaprPubSubTask)source));
 
+        RegisterPoolableTask<StateStoreTask>(
+            StateStoreTask.CreateEmpty,
+            (source, target) => ((StateStoreTask)target).CopyFromInternal((StateStoreTask)source));
+
         RegisterPoolableTask<DaprHttpEndpointTask>(
             DaprHttpEndpointTask.CreateEmpty,
             (source, target) => ((DaprHttpEndpointTask)target).CopyFromInternal((DaprHttpEndpointTask)source));

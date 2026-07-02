@@ -280,6 +280,18 @@ public sealed class InstanceTransitionDto
     /// <summary>State the instance moved to. Null when the transition is still in progress.</summary>
     public string? ToState { get; set; }
 
+    /// <summary>Effective (externally visible) state at completion time; may differ from ToState when a subflow is active. Null when the transition is still in progress or failed.</summary>
+    public string? EffectiveState { get; set; }
+
+    /// <summary>Type of the effective state at completion time (Initial, Intermediate, Finish, SubFlow, Wizard). Null when the transition is still in progress or failed.</summary>
+    public StateType? EffectiveStateType { get; set; }
+
+    /// <summary>Sub type of the effective state at completion time (Success, Error, Human, Timeout, etc.). Null when the transition is still in progress or failed.</summary>
+    public StateSubType? EffectiveStateSubType { get; set; }
+
+    /// <summary>Free-form stage label of the instance at completion time. Null when not set or the transition is still in progress.</summary>
+    public string? Stage { get; set; }
+
     /// <summary>UTC timestamp when the transition started.</summary>
     public DateTime StartedAt { get; set; }
 

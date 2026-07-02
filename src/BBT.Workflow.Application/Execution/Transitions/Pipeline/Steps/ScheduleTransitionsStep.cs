@@ -128,7 +128,9 @@ public sealed class ScheduleTransitionsStep(
         Transition scheduledTransition,
         TimerSchedule timerSchedule)
     {
-        var jobName = JobName.ForScheduledTransition(context.InstanceId, scheduledTransition.Key);
+        // Scope by the owning state (the state just entered, whose timer this is). The same state is
+        // context.Current when CancelScheduledJobsStep later cancels it, so the source-state key lines up.
+        var jobName = JobName.ForScheduledTransition(context.InstanceId, context.Target!.Key, scheduledTransition.Key);
         var activity = Activity.Current;
 
         var payload = new TransitionTimerPayload

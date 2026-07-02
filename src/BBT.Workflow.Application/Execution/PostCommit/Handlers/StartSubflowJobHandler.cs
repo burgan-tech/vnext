@@ -84,6 +84,23 @@ public sealed class StartSubflowJobHandler(
                     await instanceRepository.UpdateAsync(instance, true, cancellationToken);
                 }
 
+                // A sync subflow completes inside StartAsync and resumes/finalizes the parent
+                // in its own scope, so the entity tracked in this scope still reads Busy.
+                // Re-read as no-tracking so the sync response reflects the settled status.
+                if (context.CallerMode == ExecMode.Sync)
+                {
+                    var refreshed = await instanceRepository.FindByIdentifierSlimAsync(
+                        context.InstanceId.ToString(), cancellationToken);
+                    if (refreshed is not null)
+                    {
+                        context.ClientResponse = new ClientResponse
+                        {
+                            Id = context.InstanceId,
+                            Status = refreshed.Status
+                        };
+                    }
+                }
+
                 logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
             }
 

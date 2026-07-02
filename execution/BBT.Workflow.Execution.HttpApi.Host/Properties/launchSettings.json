@@ -16,12 +16,12 @@
         "DAPR_PLACEMENT_HOST": "localhost:50005",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
         "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-        "OTEL_SERVICE_NAME": "vnext-execution-app",
-        "DAPR_SECRET_STORE_NAME": "vnext-execution-secret",
-        "DAPR_STATE_STORE_NAME": "vnext-execution-state",
-        "DAPR_PUBSUB_STORE_NAME": "vnext-execution-pubsub",
+        "OTEL_SERVICE_NAME": "vnext-app",
+        "DAPR_SECRET_STORE_NAME": "vnext-secret",
+        "DAPR_STATE_STORE_NAME": "vnext-state",
+        "DAPR_PUBSUB_STORE_NAME": "vnext-pubsub",
         "DAPR_PUBSUB_BROADCAST_STORE_NAME": "vnext-pubsub-broadcast",
-        "DAPR_LOCK_STORE_NAME": "vnext-execution-lock"
+        "DAPR_LOCK_STORE_NAME": "vnext-lock"
       }
     },
     "https": {
@@ -38,12 +38,12 @@
         "DAPR_PLACEMENT_HOST": "localhost:50005",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
         "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-        "OTEL_SERVICE_NAME": "vnext-execution-app",
-        "DAPR_SECRET_STORE_NAME": "vnext-execution-secret",
-        "DAPR_STATE_STORE_NAME": "vnext-execution-state",
-        "DAPR_PUBSUB_STORE_NAME": "vnext-execution-pubsub",
+        "OTEL_SERVICE_NAME": "vnext-app",
+        "DAPR_SECRET_STORE_NAME": "vnext-secret",
+        "DAPR_STATE_STORE_NAME": "vnext-state",
+        "DAPR_PUBSUB_STORE_NAME": "vnext-pubsub",
         "DAPR_PUBSUB_BROADCAST_STORE_NAME": "vnext-pubsub-broadcast",
-        "DAPR_LOCK_STORE_NAME": "vnext-execution-lock"
+        "DAPR_LOCK_STORE_NAME": "vnext-lock"
       }
     }
   }

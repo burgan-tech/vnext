@@ -13,6 +13,8 @@ public static class TaskTypes
     public const string DaprHttpEndpoint = "daprhttpendpoint";
     public const string DaprPubSub = "daprpubsub";
 
+    public const string StateStore = "statestore";
+
     public const string Soap = "soap";
 
     // Trigger tasks (for cross-domain execution)

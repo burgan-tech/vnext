@@ -290,7 +290,7 @@ public class TransitionPipeline
             instance.AddIncident(incident);
         }
 
-        instance.Fault(context.Domain);
+        instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         await faultUow.CommitAsync(cancellationToken);
 
@@ -326,7 +326,7 @@ public class TransitionPipeline
             context.Instance.AddIncident(incident);
         }
 
-        context.Instance.Fault(context.Domain);
+        context.Instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
         context.ExtractAndDeferInstanceEvents();
         await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 

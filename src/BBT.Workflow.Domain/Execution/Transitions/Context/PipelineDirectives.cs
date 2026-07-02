@@ -53,6 +53,14 @@ public sealed class PipelineDirectives
     public bool IsSubFlowResume { get; private set; }
 
     /// <summary>
+    /// Gets the completing SubFlow instance id for a subflow-resume execution.
+    /// Used to build a per-sub-instance resume lock key so a nested sync resume
+    /// (triggered inside an outer resume chain's post-commit) does not collide
+    /// with the outer chain's resume lock. Null falls back to the legacy shared key.
+    /// </summary>
+    public Guid? SubFlowResumeInstanceId { get; private set; }
+
+    /// <summary>
     /// Gets a value indicating whether this execution is resuming from a long-poll acknowledge
     /// (declarative long-poll termination on state entry — client acknowledged or fallback fired).
     /// </summary>
@@ -130,7 +138,12 @@ public sealed class PipelineDirectives
     /// <summary>
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
-    public void MarkAsSubFlowResume() => IsSubFlowResume = true;
+    /// <param name="subInstanceId">The completing SubFlow instance id; scopes the resume lock per sub-instance.</param>
+    public void MarkAsSubFlowResume(Guid? subInstanceId = null)
+    {
+        IsSubFlowResume = true;
+        SubFlowResumeInstanceId = subInstanceId;
+    }
 
     /// <summary>
     /// Marks this execution as a long-poll acknowledge resume scenario.

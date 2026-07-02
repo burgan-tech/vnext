@@ -135,6 +135,12 @@ public class InstanceSubFaultedEvent : IDistributedEvent
     /// </summary>
     public Guid? RootInstanceId { get; init; }
 
+    /// <summary>
+    /// Whether the faulting pipeline chain was executed with a synchronous caller
+    /// (sync=true). Carried to the parent so its error-boundary resume keeps the chain synchronous.
+    /// </summary>
+    public bool Sync { get; init; }
+
     public override string ToString()
     {
         return $"{nameof(InstanceSubFaultedEvent)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} SubInstanceId={SubInstanceId} FaultedState={FaultedState}";
