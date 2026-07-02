@@ -115,6 +115,18 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds an instance including ALL child correlations (completed and active) as a tracked entity.
+    /// Required by correlation revert: the default detail load filters out completed correlations,
+    /// which would make reverting a just-completed correlation a silent no-op.
+    /// </summary>
+    /// <param name="instanceId">The instance identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The instance with all correlations, or null when not found.</returns>
+    Task<Instance?> FindWithAllCorrelationsAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns active instances with Human state subtype.
     /// Includes DataList for JSON data extraction.
     /// </summary>

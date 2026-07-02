@@ -858,6 +858,19 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
+    /// Logs when a correlation revert finds no matching completed correlation —
+    /// the parent may be permanently stuck Busy and requires manual intervention.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40119,
+        Level = LogLevel.Error,
+        Message = "SubFlow correlation revert found no completed correlation for SubInstance {SubInstanceId}, Parent {ParentInstanceId} — parent may be stuck Busy")]
+    public static partial void SubFlowCorrelationRevertTargetMissing(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
     /// Logs when a SubFlow state change event is received.
     /// </summary>
     [LoggerMessage(
