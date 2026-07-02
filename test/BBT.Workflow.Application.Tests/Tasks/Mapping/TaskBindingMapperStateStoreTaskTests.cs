@@ -47,7 +47,7 @@ public sealed class TaskBindingMapperStateStoreTaskTests
     }
 
     [Fact]
-    public void CreateEnvelope_DefaultsStoreName_WhenOmitted()
+    public void CreateEnvelope_OmitsStoreName_WhenNotSpecified()
     {
         var config = """
             {
@@ -61,7 +61,8 @@ public sealed class TaskBindingMapperStateStoreTaskTests
         var binding = MapToBinding(task);
 
         binding.Command.ShouldBe("get");
-        binding.StoreName.ShouldBe(StateStoreTask.DefaultStoreName);
+        // Store name resolution is deferred to the invoker (runtime DAPR_STATE_STORE_NAME).
+        binding.StoreName.ShouldBeNull();
         binding.Key.ShouldBe("customer:42:profile");
         binding.Value.ShouldBeNull();
     }

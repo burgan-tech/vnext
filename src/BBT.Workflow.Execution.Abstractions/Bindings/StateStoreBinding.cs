@@ -12,9 +12,10 @@ public sealed class StateStoreBinding
     public required string Command { get; init; }
 
     /// <summary>
-    /// The Dapr state store component name.
+    /// Optional Dapr state store component name. When null or empty, the executing runtime's
+    /// <c>DAPR_STATE_STORE_NAME</c> configuration value is used.
     /// </summary>
-    public required string StoreName { get; init; }
+    public string? StoreName { get; init; }
 
     /// <summary>
     /// Cache key for get / set / single-key delete.

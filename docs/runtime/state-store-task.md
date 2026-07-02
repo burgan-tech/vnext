@@ -24,7 +24,7 @@ where `StateStoreTaskInvoker` performs the state store call through `DaprClient`
 | Field | Applies to | Notes |
 | --- | --- | --- |
 | `command` | all | `get` \| `set` \| `delete`. |
-| `storeName` | all | Dapr state store component; defaults to `vnext-state`. |
+| `storeName` | all | Optional Dapr state store component. When omitted, the executing runtime's `DAPR_STATE_STORE_NAME` configuration value is used, so each runtime targets its own component. |
 | `key` | get / set / single delete | Cache key. |
 | `keys` | delete | List of keys for bulk delete. |
 | `query` | delete | Dapr state Query API filter (JSON) for tag/pattern delete. Requires a query-capable state store. |
@@ -47,9 +47,12 @@ where `StateStoreTaskInvoker` performs the state store call through `DaprClient`
 
 ## Component requirement
 
-The invoker runs in the **Execution** service, whose Dapr sidecar must expose the target state
-store. The repo ships `etc/execution/dapr/components/vnext-state.yaml` (Redis, `keyPrefix: vnext`)
-so `vnext-state` resolves there, matching the orchestration-side component.
+The invoker runs in the **Execution** service. When `storeName` is omitted, the store is resolved
+from the Execution runtime's `DAPR_STATE_STORE_NAME` configuration value (e.g.
+`vnext-execution-state` in the shipped dev/stage environments), so no component name is
+hard-coded. An explicit `storeName` must be exposed by the Execution sidecar — the repo ships
+`etc/execution/dapr/components/vnext-state.yaml` (Redis, `keyPrefix: vnext`) so `vnext-state`
+also resolves there, matching the orchestration-side component.
 
 ## Example task definition
 

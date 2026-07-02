@@ -10,11 +10,6 @@ namespace BBT.Workflow.Definitions;
 /// </summary>
 public sealed class StateStoreTask : WorkflowTask
 {
-    /// <summary>
-    /// Default Dapr state store component name used when the task does not specify one.
-    /// </summary>
-    public const string DefaultStoreName = "vnext-state";
-
     private StateStoreTask()
     {
     }
@@ -32,9 +27,10 @@ public sealed class StateStoreTask : WorkflowTask
     public string Command { get; private set; } = string.Empty;
 
     /// <summary>
-    /// Dapr state store component name. Defaults to <see cref="DefaultStoreName"/>.
+    /// Optional Dapr state store component name. When empty, the executing runtime's
+    /// <c>DAPR_STATE_STORE_NAME</c> configuration value is used.
     /// </summary>
-    public string StoreName { get; private set; } = DefaultStoreName;
+    public string StoreName { get; private set; } = string.Empty;
 
     /// <summary>
     /// Cache key targeted by <c>get</c>, <c>set</c> and single-key <c>delete</c>.
@@ -117,7 +113,7 @@ public sealed class StateStoreTask : WorkflowTask
         if (config.TryGetProperty("storeName", out var storeName))
         {
             var value = storeName.GetString();
-            StoreName = string.IsNullOrWhiteSpace(value) ? DefaultStoreName : value;
+            StoreName = string.IsNullOrWhiteSpace(value) ? string.Empty : value;
         }
 
         if (config.TryGetProperty("key", out var key))
@@ -212,7 +208,7 @@ public sealed class StateStoreTask : WorkflowTask
     {
         base.Reset();
         Command = string.Empty;
-        StoreName = DefaultStoreName;
+        StoreName = string.Empty;
         CacheKey = string.Empty;
         CacheKeys = null;
         Query = default;

@@ -6,6 +6,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Invokers;
 using Dapr.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Shouldly;
@@ -192,11 +193,68 @@ public sealed class StateStoreTaskInvokerTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    private static StateStoreTaskInvoker CreateInvoker(out Mock<DaprClient> daprClient)
+    [Fact]
+    public async Task InvokeAsync_WithoutStoreName_UsesConfiguredDefault()
+    {
+        var invoker = CreateInvoker(out var daprClient, configuredStoreName: "env-store");
+        daprClient
+            .Setup(c => c.GetStateAndETagAsync<JsonElement>(
+                "env-store", "k1",
+                It.IsAny<ConsistencyMode?>(),
+                It.IsAny<IReadOnlyDictionary<string, string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((default(JsonElement), string.Empty));
+
+        var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
+        {
+            Command = "get",
+            Key = "k1"
+        }));
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Metadata!["StoreName"].ShouldBe("env-store");
+        daprClient.Verify(c => c.GetStateAndETagAsync<JsonElement>(
+            "env-store", "k1",
+            It.IsAny<ConsistencyMode?>(),
+            It.IsAny<IReadOnlyDictionary<string, string>?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutStoreNameOrConfiguration_ReturnsFailure()
+    {
+        var invoker = CreateInvoker(out _, configuredStoreName: null);
+
+        var result = await invoker.InvokeAsync(Descriptor(new StateStoreBinding
+        {
+            Command = "get",
+            Key = "k1"
+        }));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.ErrorMessage.ShouldContain("State store name is not configured");
+        result.ErrorMessage.ShouldContain("DAPR_STATE_STORE_NAME");
+    }
+
+    private static StateStoreTaskInvoker CreateInvoker(
+        out Mock<DaprClient> daprClient,
+        string? configuredStoreName = Store)
     {
         daprClient = new Mock<DaprClient>();
+
+        var values = new Dictionary<string, string?>();
+        if (configuredStoreName is not null)
+        {
+            values["DAPR_STATE_STORE_NAME"] = configuredStoreName;
+        }
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
         return new StateStoreTaskInvoker(
             daprClient.Object,
+            configuration,
             NullLogger<StateStoreTaskInvoker>.Instance);
     }
 

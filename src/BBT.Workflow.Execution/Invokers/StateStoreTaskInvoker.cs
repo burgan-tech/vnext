@@ -3,6 +3,7 @@ using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
 using Dapr.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
@@ -10,6 +11,9 @@ namespace BBT.Workflow.Execution.Invokers;
 /// <summary>
 /// Pure Dapr state store task invoker - stateless execution with strongly-typed binding.
 /// Supports the get, set and delete commands against a Dapr state store.
+/// When the binding does not specify a store name, the runtime's
+/// <c>DAPR_STATE_STORE_NAME</c> configuration value is used so each runtime
+/// targets its own state store component.
 /// </summary>
 public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 {
@@ -18,16 +22,21 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
     private const string SetCommand = "set";
     private const string DeleteCommand = "delete";
 
+    private const string StateStoreNameConfigKey = "DAPR_STATE_STORE_NAME";
+
     private readonly DaprClient _daprClient;
+    private readonly string? _defaultStoreName;
     private readonly ITaskMetrics _metrics;
     private readonly ILogger<StateStoreTaskInvoker> _logger;
 
     public StateStoreTaskInvoker(
         DaprClient daprClient,
+        IConfiguration configuration,
         ILogger<StateStoreTaskInvoker> logger,
         ITaskMetrics? metrics = null)
     {
         _daprClient = daprClient;
+        _defaultStoreName = configuration[StateStoreNameConfigKey];
         _logger = logger;
         _metrics = metrics ?? NullTaskMetrics.Instance;
     }
@@ -66,18 +75,33 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         var stopwatch = Stopwatch.StartNew();
         var command = binding.Command ?? string.Empty;
 
+        var storeName = !string.IsNullOrWhiteSpace(binding.StoreName)
+            ? binding.StoreName
+            : _defaultStoreName;
+
+        if (string.IsNullOrWhiteSpace(storeName))
+        {
+            stopwatch.Stop();
+            return TaskInvocationResult.Failure(
+                error: "State store name is not configured: set 'storeName' in the task config " +
+                       $"or the {StateStoreNameConfigKey} configuration value",
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: TaskType,
+                metadata: BaseMetadata(binding, storeName: string.Empty));
+        }
+
         try
         {
             TaskInvocationResult result = command.ToLowerInvariant() switch
             {
-                GetCommand => await GetAsync(binding, stopwatch, cancellationToken),
-                SetCommand => await SetAsync(binding, stopwatch, cancellationToken),
-                DeleteCommand => await DeleteAsync(binding, stopwatch, cancellationToken),
-                _ => UnsupportedCommand(binding, stopwatch)
+                GetCommand => await GetAsync(binding, storeName, stopwatch, cancellationToken),
+                SetCommand => await SetAsync(binding, storeName, stopwatch, cancellationToken),
+                DeleteCommand => await DeleteAsync(binding, storeName, stopwatch, cancellationToken),
+                _ => UnsupportedCommand(binding, storeName, stopwatch)
             };
 
             _metrics.RecordStateStoreOperation(
-                binding.StoreName,
+                storeName,
                 command,
                 result.IsSuccess ? "success" : "failure");
 
@@ -86,28 +110,28 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
-            _metrics.RecordStateStoreOperation(binding.StoreName, command, "cancelled");
+            _metrics.RecordStateStoreOperation(storeName, command, "cancelled");
             _logger.LogWarning("State store operation was cancelled: {StoreName}/{Command}",
-                binding.StoreName, command);
+                storeName, command);
 
             return TaskInvocationResult.Failure(
                 error: "State store operation was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
-                metadata: BaseMetadata(binding, extra: new() { ["Cancelled"] = true }));
+                metadata: BaseMetadata(binding, storeName, extra: new() { ["Cancelled"] = true }));
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _metrics.RecordStateStoreOperation(binding.StoreName, command, "failure");
+            _metrics.RecordStateStoreOperation(storeName, command, "failure");
             _logger.LogError(ex, "State store operation failed: {StoreName}/{Command}",
-                binding.StoreName, command);
+                storeName, command);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
-                metadata: BaseMetadata(binding, extra: new()
+                metadata: BaseMetadata(binding, storeName, extra: new()
                 {
                     ["ExceptionType"] = ex.GetType().Name
                 }));
@@ -116,19 +140,20 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
     private async Task<TaskInvocationResult> GetAsync(
         StateStoreBinding binding,
+        string storeName,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(binding.Key))
         {
-            return MissingFieldFailure(binding, stopwatch, "get requires 'key'");
+            return MissingFieldFailure(binding, storeName, stopwatch, "get requires 'key'");
         }
 
         var consistency = ParseConsistency(binding.Consistency);
         var metadata = BuildMetadata(binding, includeTtl: false);
 
         var (value, etag) = await _daprClient.GetStateAndETagAsync<JsonElement>(
-            binding.StoreName,
+            storeName,
             binding.Key,
             consistency,
             metadata,
@@ -143,7 +168,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             body: found ? value.GetRawText() : null,
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
-            metadata: BaseMetadata(binding, extra: new()
+            metadata: BaseMetadata(binding, storeName, extra: new()
             {
                 ["Found"] = found,
                 ["ETag"] = etag ?? string.Empty
@@ -152,17 +177,18 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
     private async Task<TaskInvocationResult> SetAsync(
         StateStoreBinding binding,
+        string storeName,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(binding.Key))
         {
-            return MissingFieldFailure(binding, stopwatch, "set requires 'key'");
+            return MissingFieldFailure(binding, storeName, stopwatch, "set requires 'key'");
         }
 
         if (string.IsNullOrWhiteSpace(binding.Value))
         {
-            return MissingFieldFailure(binding, stopwatch, "set requires 'value'");
+            return MissingFieldFailure(binding, storeName, stopwatch, "set requires 'value'");
         }
 
         var value = JsonSerializer.Deserialize<JsonElement>(binding.Value);
@@ -173,7 +199,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         if (!string.IsNullOrEmpty(binding.ETag))
         {
             saved = await _daprClient.TrySaveStateAsync(
-                binding.StoreName,
+                storeName,
                 binding.Key,
                 value,
                 binding.ETag,
@@ -184,7 +210,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         else
         {
             await _daprClient.SaveStateAsync(
-                binding.StoreName,
+                storeName,
                 binding.Key,
                 value,
                 stateOptions,
@@ -198,11 +224,12 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             data: new { Saved = saved, Key = binding.Key },
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
-            metadata: BaseMetadata(binding, extra: new() { ["Saved"] = saved }));
+            metadata: BaseMetadata(binding, storeName, extra: new() { ["Saved"] = saved }));
     }
 
     private async Task<TaskInvocationResult> DeleteAsync(
         StateStoreBinding binding,
+        string storeName,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
@@ -215,37 +242,37 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             try
             {
                 var queryResponse = await _daprClient.QueryStateAsync<JsonElement>(
-                    binding.StoreName,
+                    storeName,
                     binding.Query,
                     metadata,
                     cancellationToken);
 
                 matchedKeys = queryResponse.Results?.Select(r => r.Key).ToList() ?? new List<string>();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 stopwatch.Stop();
                 return TaskInvocationResult.Failure(
-                    error: $"Query-based deletion is not supported by state store '{binding.StoreName}': {ex.Message}",
+                    error: $"Query-based deletion is not supported by state store '{storeName}': {ex.Message}",
                     executionDurationMs: stopwatch.ElapsedMilliseconds,
                     taskType: TaskType,
-                    metadata: BaseMetadata(binding, extra: new()
+                    metadata: BaseMetadata(binding, storeName, extra: new()
                     {
                         ["ExceptionType"] = ex.GetType().Name
                     }));
             }
 
-            var deletedByQuery = await DeleteKeysAsync(binding, matchedKeys, cancellationToken);
+            var deletedByQuery = await DeleteKeysAsync(storeName, matchedKeys, cancellationToken);
             stopwatch.Stop();
-            return DeleteSuccess(binding, stopwatch, deletedByQuery);
+            return DeleteSuccess(binding, storeName, stopwatch, deletedByQuery);
         }
 
         // 2. Bulk key list deletion.
         if (binding.Keys is { Count: > 0 })
         {
-            var deleted = await DeleteKeysAsync(binding, binding.Keys, cancellationToken);
+            var deleted = await DeleteKeysAsync(storeName, binding.Keys, cancellationToken);
             stopwatch.Stop();
-            return DeleteSuccess(binding, stopwatch, deleted);
+            return DeleteSuccess(binding, storeName, stopwatch, deleted);
         }
 
         // 3. Single key deletion.
@@ -253,21 +280,21 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         {
             var stateOptions = BuildStateOptions(binding);
             await _daprClient.DeleteStateAsync(
-                binding.StoreName,
+                storeName,
                 binding.Key,
                 stateOptions,
                 metadata,
                 cancellationToken);
             stopwatch.Stop();
-            return DeleteSuccess(binding, stopwatch, 1);
+            return DeleteSuccess(binding, storeName, stopwatch, 1);
         }
 
-        return MissingFieldFailure(binding, stopwatch,
+        return MissingFieldFailure(binding, storeName, stopwatch,
             "delete requires one of 'key', 'keys' or 'query'");
     }
 
     private async Task<int> DeleteKeysAsync(
-        StateStoreBinding binding,
+        string storeName,
         IReadOnlyList<string> keys,
         CancellationToken cancellationToken)
     {
@@ -286,21 +313,25 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             return 0;
         }
 
-        await _daprClient.DeleteBulkStateAsync(binding.StoreName, items, cancellationToken);
+        await _daprClient.DeleteBulkStateAsync(storeName, items, cancellationToken);
         return items.Count;
     }
 
     private TaskInvocationResult DeleteSuccess(
         StateStoreBinding binding,
+        string storeName,
         Stopwatch stopwatch,
         int deletedCount) =>
         TaskInvocationResult.Success(
             data: new { DeletedCount = deletedCount },
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
-            metadata: BaseMetadata(binding, extra: new() { ["DeletedCount"] = deletedCount }));
+            metadata: BaseMetadata(binding, storeName, extra: new() { ["DeletedCount"] = deletedCount }));
 
-    private TaskInvocationResult UnsupportedCommand(StateStoreBinding binding, Stopwatch stopwatch)
+    private TaskInvocationResult UnsupportedCommand(
+        StateStoreBinding binding,
+        string storeName,
+        Stopwatch stopwatch)
     {
         stopwatch.Stop();
         return TaskInvocationResult.Failure(
@@ -308,11 +339,12 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
                    $"Expected one of: {GetCommand}, {SetCommand}, {DeleteCommand}.",
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
-            metadata: BaseMetadata(binding));
+            metadata: BaseMetadata(binding, storeName));
     }
 
     private TaskInvocationResult MissingFieldFailure(
         StateStoreBinding binding,
+        string storeName,
         Stopwatch stopwatch,
         string message)
     {
@@ -321,7 +353,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             error: message,
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
-            metadata: BaseMetadata(binding));
+            metadata: BaseMetadata(binding, storeName));
     }
 
     /// <summary>
@@ -378,11 +410,12 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
     private static Dictionary<string, object> BaseMetadata(
         StateStoreBinding binding,
+        string storeName,
         Dictionary<string, object>? extra = null)
     {
         var metadata = new Dictionary<string, object>
         {
-            ["StoreName"] = binding.StoreName,
+            ["StoreName"] = storeName,
             ["Command"] = binding.Command ?? string.Empty
         };
 

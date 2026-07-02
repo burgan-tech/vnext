@@ -312,9 +312,7 @@ public static class TaskBindingMapper
     private static StateStoreBinding MapStateStoreTask(StateStoreTask task) => new()
     {
         Command = task.Command,
-        StoreName = string.IsNullOrWhiteSpace(task.StoreName)
-            ? StateStoreTask.DefaultStoreName
-            : task.StoreName,
+        StoreName = string.IsNullOrWhiteSpace(task.StoreName) ? null : task.StoreName,
         Key = string.IsNullOrWhiteSpace(task.CacheKey) ? null : task.CacheKey,
         Keys = task.CacheKeys?.ToList(),
         Query = task.Query.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
