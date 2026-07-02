@@ -112,8 +112,8 @@ public sealed class StateStoreTask : WorkflowTask
 
         if (config.TryGetProperty("storeName", out var storeName))
         {
-            var value = storeName.GetString();
-            StoreName = string.IsNullOrWhiteSpace(value) ? string.Empty : value;
+            var vStoreName = storeName.GetString();
+            StoreName = string.IsNullOrWhiteSpace(vStoreName) ? string.Empty : vStoreName;
         }
 
         if (config.TryGetProperty("key", out var key))
