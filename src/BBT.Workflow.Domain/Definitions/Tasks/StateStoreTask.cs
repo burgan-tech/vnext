@@ -5,7 +5,8 @@ namespace BBT.Workflow.Definitions;
 
 /// <summary>
 /// State Store Task Definition.
-/// Accesses a Dapr state store component (default <c>vnext-state</c>) to cache data within
+/// Accesses a Dapr state store component (resolved from the executing runtime's
+/// <c>DAPR_STATE_STORE_NAME</c> configuration when not specified) to cache data within
 /// the workflow pipeline. Supported commands: <c>get</c>, <c>set</c>, <c>delete</c>.
 /// </summary>
 public sealed class StateStoreTask : WorkflowTask
