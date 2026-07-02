@@ -106,7 +106,8 @@ public sealed class InstanceSubCompletedEventHook(
             Duration = eventData.Duration,
             SubInstanceId = eventData.SubInstanceId,
             InstanceData = eventData.InstanceData,
-            Version = eventData.Version
+            Version = eventData.Version,
+            Sync = eventData.Sync
         };
     }
 }

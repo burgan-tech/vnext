@@ -66,7 +66,11 @@ internal sealed class InstanceSubCompletedEventHandler(
                 CompletedState = eventData.CompletedState,
                 InstanceData = eventData.InstanceData,
                 CompletedAt = eventData.CompletedAt,
-                Duration = eventData.Duration
+                Duration = eventData.Duration,
+                // At-least-once async retry path: the sync caller (if any) was already answered
+                // by the synchronous hook. Force async here so a retried resume never blocks the
+                // worker with an inline sync chain; idempotent guards make duplicates no-ops.
+                Sync = false
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";

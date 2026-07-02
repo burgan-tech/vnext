@@ -97,7 +97,7 @@ public sealed class SubflowFaultService(
                     if (!parentWorkflowResult.IsSuccess)
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
-                        parentInstance.Fault(input.Domain);
+                        parentInstance.Fault(input.Domain, input.Sync);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
                         return;
@@ -134,7 +134,7 @@ public sealed class SubflowFaultService(
                     }
                     else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
                     {
-                        parentInstance.Fault(input.Domain);
+                        parentInstance.Fault(input.Domain, input.Sync);
                     }
 
                     var mappingResult = await outputMappingService.ApplyAsync(
@@ -165,6 +165,7 @@ public sealed class SubflowFaultService(
                         parentWorkflow!,
                         actionResult.TransitionKey,
                         input.SubInstanceId,
+                        input.Sync,
                         cancellationToken);
                 }
                 else if (actionResult?.ShouldContinue == true)
@@ -173,6 +174,7 @@ public sealed class SubflowFaultService(
                         parentInstance,
                         parentWorkflow!,
                         input.SubInstanceId,
+                        input.Sync,
                         cancellationToken);
                 }
 
@@ -251,6 +253,7 @@ public sealed class SubflowFaultService(
         Definitions.Workflow parentWorkflow,
         string transitionKey,
         Guid subInstanceId,
+        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -259,7 +262,8 @@ public sealed class SubflowFaultService(
                 parentInstance,
                 parentWorkflow,
                 transitionKey,
-                isErrorBoundaryTransition: true);
+                isErrorBoundaryTransition: true,
+                sync);
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
             if (!result.IsSuccess)
@@ -283,6 +287,7 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -291,7 +296,8 @@ public sealed class SubflowFaultService(
                 parentInstance,
                 parentWorkflow,
                 transitionKey: string.Empty,
-                isErrorBoundaryTransition: false);
+                isErrorBoundaryTransition: false,
+                sync);
             input.Mode = ExecMode.Resume;
             input.Execution!.ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep;
             input.Execution.IsSubFlowResume = true;
@@ -318,7 +324,8 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         string transitionKey,
-        bool isErrorBoundaryTransition)
+        bool isErrorBoundaryTransition,
+        bool sync)
     {
         return new WorkflowExecutionContext
         {
@@ -329,7 +336,9 @@ public sealed class SubflowFaultService(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Automatic,
             Mode = ExecMode.Sync,
-            CallerMode = ExecMode.Async,
+            // Preserve the faulting chain's caller mode so the parent's error-boundary
+            // resume keeps starting/forwarding subflows synchronously when the caller was sync=true.
+            CallerMode = sync ? ExecMode.Sync : ExecMode.Async,
             Headers = new Dictionary<string, string?>(),
             Actor = ExecutionActor.System,
             RequestedAt = DateTimeOffset.UtcNow,
