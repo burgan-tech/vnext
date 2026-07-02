@@ -361,13 +361,23 @@ public sealed class SubflowFaultService(
     {
         try
         {
-            await using var revertUow =  uowManager.Begin(
+            await using var revertUow = uowManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-            var correlation = parentInstance.RevertCorrelation(subInstanceId);
-            if (correlation != null)
+            // S9 isolation rule: reload with ALL correlations (completed included) so the
+            // revert operates on a tracked entity and cannot silently no-op.
+            var tracked = await instanceRepository.FindWithAllCorrelationsAsync(parentInstanceId, cancellationToken)
+                          ?? parentInstance;
+
+            var correlation = tracked.RevertCorrelation(subInstanceId);
+            if (correlation == null)
             {
-                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                logger.SubFlowCorrelationRevertTargetMissing(subInstanceId, parentInstanceId);
+            }
+            else
+            {
+                logger.SubFlowCorrelationReverted(subInstanceId, parentInstanceId);
+                await instanceRepository.UpdateAsync(tracked, true, cancellationToken);
             }
 
             await revertUow.CommitAsync(cancellationToken);
