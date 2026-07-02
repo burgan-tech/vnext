@@ -52,7 +52,6 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, DaprBindingTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprHttpEndpointTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprPubSubTaskInvoker>();
-        services.AddSingleton<ITaskInvoker, StateStoreTaskInvoker>();
         
         // Register trigger task remote invokers (for cross-domain execution)
         services.AddSingleton<ITaskInvoker, StartTriggerRemoteInvoker>();

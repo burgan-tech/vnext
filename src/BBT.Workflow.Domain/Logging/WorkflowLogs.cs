@@ -697,6 +697,33 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when a state store task operation fails.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10133,
+        Level = LogLevel.Error,
+        Message = "State store operation failed. TaskKey={TaskKey}, StoreName={StoreName}, Command={Command}, Error={ErrorMessage}")]
+    public static partial void StateStoreOperationFailed(
+        this ILogger logger,
+        string taskKey,
+        string storeName,
+        string command,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a state store task operation is cancelled.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10134,
+        Level = LogLevel.Warning,
+        Message = "State store operation was cancelled. TaskKey={TaskKey}, StoreName={StoreName}, Command={Command}")]
+    public static partial void StateStoreOperationCancelled(
+        this ILogger logger,
+        string taskKey,
+        string storeName,
+        string command);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

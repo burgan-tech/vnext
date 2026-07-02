@@ -32,14 +32,6 @@ public interface ITaskMetrics
     /// <param name="bindingKind">The kind of notification binding (Http, Mqtt, SignalR, etc.).</param>
     /// <param name="status">The status of the invocation (success, failure, cancelled).</param>
     void RecordNotificationInvocation(string bindingName, string bindingKind, string status);
-
-    /// <summary>
-    /// Records a Dapr state store operation.
-    /// </summary>
-    /// <param name="storeName">The name of the state store component.</param>
-    /// <param name="command">The command executed (getCache, writeCache, invalidateCache).</param>
-    /// <param name="status">The status of the operation (success, failure, cancelled).</param>
-    void RecordStateStoreOperation(string storeName, string command, string status);
 }
 
 /// <summary>
@@ -55,6 +47,5 @@ public sealed class NullTaskMetrics : ITaskMetrics
     public void RecordDaprBindingInvocation(string bindingName, string operation, string status) { }
     public void RecordDaprPubSubPublish(string pubSubName, string topic, string status) { }
     public void RecordNotificationInvocation(string bindingName, string bindingKind, string status) { }
-    public void RecordStateStoreOperation(string storeName, string command, string status) { }
 }
 
