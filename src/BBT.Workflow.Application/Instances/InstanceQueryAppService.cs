@@ -14,6 +14,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 using BBT.Workflow.Shared;
+using System.Text;
 using System.Text.Json;
 using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions.GraphQL;
@@ -786,6 +787,26 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Conditional fast path: the change token is derived from a single indexed projection
+        // query (state/status/audit + latest data ETag + open correlations) combined with the
+        // caller identity, so an unchanged poll is answered 304 WITHOUT the aggregate load,
+        // authorization pass, DTO build or canonical-JSON hash. The same token is the ETag of
+        // 200 responses, so the next poll compares against it. Every representation input maps
+        // to a token signal (a state/status/data/correlation change or a caller identity/role
+        // change alters the token), which makes a false 304 structurally impossible; a token
+        // change that leaves the representation identical merely costs one extra 200.
+        // Note: access revocation via role change alters the token (identity is hashed in);
+        // only header-driven queryRole denial can be masked by a 304 until the next state
+        // change, matching the platform's eventual-visibility stance.
+        var stateSignal = await instanceRepository.GetStateSignalAsync(input.Instance, cancellationToken);
+        string? changeToken = null;
+        if (stateSignal is not null)
+        {
+            changeToken = ComposeStateChangeToken(stateSignal, input);
+            if (!string.IsNullOrEmpty(input.IfNoneMatch) && changeToken.MatchesIfNoneMatch(input.IfNoneMatch))
+                return ConditionalResult<GetInstanceStateOutput>.NotModified();
+        }
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
@@ -802,17 +823,49 @@ public sealed class InstanceQueryAppService(
                         return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
 
                     var output = buildResult.Value!;
-                    var entityEtag = data.instance.LatestData?.ETag ?? string.Empty;
-                    output.EntityEtag = entityEtag;
-                    var representationEtag = representationEtagService.Generate(output);
+                    output.EntityEtag = data.instance.LatestData?.ETag ?? string.Empty;
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
-                        return ConditionalResult<GetInstanceStateOutput>.NotModified();
-
-                    output.ETag = representationEtag;
+                    // Change-token ETag (see fast path above); DTO-hash fallback only when the
+                    // signal probe raced a not-yet-visible instance.
+                    output.ETag = changeToken ?? representationEtagService.Generate(output);
                     return ConditionalResult<GetInstanceStateOutput>.Success(output);
                 },
                 onFailure: error => ConditionalResult<GetInstanceStateOutput>.Fail(error));
+    }
+
+    /// <summary>
+    /// Composes the state-function change token: deterministic concatenation of the change
+    /// signals plus the caller identity (user, actor, resolved roles), hashed to an ETag.
+    /// </summary>
+    private string ComposeStateChangeToken(InstanceStateSignal signal, GetInstanceStateInput input)
+    {
+        var seed = new StringBuilder(256)
+            .Append(signal.InstanceId).Append('|')
+            .Append(signal.CurrentState).Append('|')
+            .Append(signal.CurrentStateSubType).Append('|')
+            .Append(signal.Status).Append('|')
+            .Append(signal.ModifiedAt?.Ticks).Append('|')
+            .Append(signal.LatestDataEtag).Append('|');
+
+        foreach (var correlation in signal.OpenCorrelations.OrderBy(c => c.Id))
+        {
+            seed.Append(correlation.Id).Append(':')
+                .Append(correlation.SubFlowCurrentState).Append(':')
+                .Append(correlation.SubFlowStateChangedAt?.Ticks).Append(';');
+        }
+
+        seed.Append('|').Append(currentUser.UserName)
+            .Append('|').Append(currentUser.ActorUserName).Append('|');
+
+        if (input.Roles is not null)
+        {
+            foreach (var role in input.Roles.OrderBy(r => r, StringComparer.Ordinal))
+            {
+                seed.Append(role).Append(',');
+            }
+        }
+
+        return representationEtagService.GenerateFromSeed(seed.ToString());
     }
 
     /// <summary>
