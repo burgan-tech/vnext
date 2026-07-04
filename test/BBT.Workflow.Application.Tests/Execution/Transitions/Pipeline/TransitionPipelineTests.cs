@@ -126,6 +126,7 @@ public class TransitionPipelineTests
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
+            Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }
 

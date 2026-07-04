@@ -45,6 +45,36 @@ public sealed class WorkflowExecutionOptions
     public bool EnableChainReaper { get; set; }
 
     /// <summary>
+    /// Lease duration in seconds for the transition chain lock (L1). The lease must cover the
+    /// whole auto-chain budget because the Dapr lock building block has no working TTL
+    /// extension (its Redis component uses SET NX, which rejects re-acquire attempts even
+    /// from the same owner). When 0 (default), the effective lease is derived as
+    /// <see cref="TransitionJobTimeoutSeconds"/> + 30 so the lock always outlives the job
+    /// execution budget and the timeout-recovery path.
+    /// </summary>
+    public int TransitionLockLeaseSeconds { get; set; }
+
+    /// <summary>
+    /// Enables per-hop lock lease extension between chained transitions. Only enable this with
+    /// a lock provider that supports atomic TTL extension (e.g. the Redis provider); the Dapr
+    /// lock provider always fails extension, which would stop every chain after its first hop.
+    /// When enabled, a failed extension stops the chain instead of continuing without a held
+    /// lease. Default: false — the budget-aligned lease
+    /// (<see cref="TransitionLockLeaseSeconds"/>) carries the chain instead.
+    /// </summary>
+    public bool EnableLockLeaseExtension { get; set; }
+
+    /// <summary>
+    /// Resolves the effective L1 lock lease: the configured
+    /// <see cref="TransitionLockLeaseSeconds"/> when positive, otherwise
+    /// <see cref="TransitionJobTimeoutSeconds"/> + 30.
+    /// </summary>
+    public int GetEffectiveLockLeaseSeconds() =>
+        TransitionLockLeaseSeconds > 0
+            ? TransitionLockLeaseSeconds
+            : TransitionJobTimeoutSeconds + 30;
+
+    /// <summary>
     /// Maximum number of flow schemas swept concurrently by the chain reaper.
     /// Higher values reduce sweep wall-clock time at the cost of more concurrent DB connections.
     /// Default: 4.

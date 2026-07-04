@@ -1246,6 +1246,19 @@ public static partial class WorkflowLogs
         string instanceId);
 
     /// <summary>
+    /// Logs when the chain lock lease could not be extended between chained transitions;
+    /// the chain stops instead of continuing without a held lease.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40052,
+        Level = LogLevel.Warning,
+        Message = "Failed to extend chain lock lease for instance {InstanceId} before chained transition {TransitionKey}; stopping chain")]
+    public static partial void TransitionLockExtendFailed(
+        this ILogger logger,
+        string instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when start transition validation fails.
     /// </summary>
     [LoggerMessage(

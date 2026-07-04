@@ -1,6 +1,7 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.PostCommit;
@@ -31,6 +32,7 @@ public class TransitionPipeline
     private readonly ITransitionValidationService _validationService;
     private readonly IPipelineProfileResolver _profileResolver;
     private readonly IStateNotificationScheduler _stateNotificationScheduler;
+    private readonly WorkflowExecutionOptions _executionOptions;
     private readonly ILogger<TransitionPipeline> _logger;
 
     /// <summary>
@@ -55,6 +57,7 @@ public class TransitionPipeline
         ITransitionValidationService validationService,
         IPipelineProfileResolver profileResolver,
         IStateNotificationScheduler stateNotificationScheduler,
+        Microsoft.Extensions.Options.IOptions<WorkflowExecutionOptions> executionOptions,
         ILogger<TransitionPipeline> logger)
     {
         _executor = executor;
@@ -69,6 +72,7 @@ public class TransitionPipeline
         _validationService = validationService;
         _profileResolver = profileResolver;
         _stateNotificationScheduler = stateNotificationScheduler;
+        _executionOptions = executionOptions.Value;
         _logger = logger;
     }
 
@@ -136,7 +140,9 @@ public class TransitionPipeline
 
     /// <summary>
     /// Runs the full transition chain (first + auto-chained) under a single lock scope.
-    /// The lock is extended between chain iterations to prevent TTL expiry.
+    /// The lease is sized to cover the whole chain budget; between-hop TTL extension is
+    /// opt-in (<see cref="WorkflowExecutionOptions.EnableLockLeaseExtension"/>) and only
+    /// valid with providers that support atomic extension.
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> RunChainAsync(
         TransitionExecutionContext initialContext,
@@ -217,10 +223,22 @@ public class TransitionPipeline
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
-            // Extend lock TTL before starting the next chained transition
-            if (lockScope is not null)
+            // Refresh the lock TTL before starting the next chained transition — only when the
+            // provider supports atomic extension (opt-in). The default Dapr lock provider cannot
+            // extend a held lock, so the lease is sized upfront to cover the full chain budget
+            // (WorkflowExecutionOptions.GetEffectiveLockLeaseSeconds) instead. When extension IS
+            // enabled, a failed extension means exclusivity may already be lost — stop the chain
+            // rather than continue without a held lease; job re-delivery / the chain reaper
+            // recover the instance.
+            if (lockScope is not null && _executionOptions.EnableLockLeaseExtension)
             {
-                await lockScope.ExtendAsync(cancellationToken);
+                var extended = await lockScope.ExtendAsync(cancellationToken);
+                if (!extended)
+                {
+                    _logger.TransitionLockExtendFailed(context.InstanceId.ToString(), context.TransitionKey);
+                    return Result<TransitionExecutionContext>.Fail(
+                        WorkflowErrors.InstanceLockConflict(context.InstanceId));
+                }
             }
 
             // Rebuild and validate the next chained transition context (single source of truth).
