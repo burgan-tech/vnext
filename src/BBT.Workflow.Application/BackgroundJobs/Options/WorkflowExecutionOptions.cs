@@ -49,6 +49,16 @@ public sealed class WorkflowExecutionOptions
     public bool EnableChainReaper { get; set; } = true;
 
     /// <summary>
+    /// When enabled, aggregate instance loads include only the IsLatest data row instead of the
+    /// full version history — the full-merge model makes the latest row self-sufficient for
+    /// pipeline merges, script context and polling, turning O(history) IO per load into O(1).
+    /// History-dependent operations must use the repository full-history APIs; the aggregate
+    /// fails fast otherwise. Default: false (canary rollout — enable per environment, compare
+    /// baseline metrics, then flip the default).
+    /// </summary>
+    public bool LatestOnlyInstanceLoading { get; set; }
+
+    /// <summary>
     /// Lease duration in seconds for the transition chain lock (L1). The lease must cover the
     /// whole auto-chain budget because the Dapr lock building block has no working TTL
     /// extension (its Redis component uses SET NX, which rejects re-acquire attempts even
