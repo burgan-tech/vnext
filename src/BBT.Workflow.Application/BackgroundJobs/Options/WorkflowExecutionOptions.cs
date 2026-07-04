@@ -40,9 +40,13 @@ public sealed class WorkflowExecutionOptions
     public bool StrictChainTokenGate { get; set; }
 
     /// <summary>
-    /// Enables the stuck-Busy chain reaper (S7) sweep. Default: false.
+    /// Enables the stuck-Busy chain reaper (S7) sweep. Default: true — without it, a crash on
+    /// the sync execution path (no durable job row) leaves the instance Busy forever and the
+    /// Retry endpoint (Faulted-only) is unreachable. Staleness is measured from the chain
+    /// heartbeat, which the step executor refreshes on every committed step, so legitimately
+    /// long-running chains are not falsely reaped.
     /// </summary>
-    public bool EnableChainReaper { get; set; }
+    public bool EnableChainReaper { get; set; } = true;
 
     /// <summary>
     /// Lease duration in seconds for the transition chain lock (L1). The lease must cover the

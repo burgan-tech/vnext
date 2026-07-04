@@ -110,6 +110,13 @@ public class TransitionPipeline
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
 
+            // A durable S8 checkpoint always belongs to the interrupted MAIN transition.
+            // Reserved transitions (cancel/exit/update-data/timeout/long-poll ack) must never
+            // resume from a foreign checkpoint — clear it in-memory so the executor builds
+            // their plan from the top. Subflow / long-poll resumes are unaffected: they set an
+            // explicit ResumeFrom directive, which takes precedence over the instance checkpoint.
+            context.Instance.ClearResumePoint();
+
             // SubFlow Resume resumes an already-Busy instance; confirm the busy mark.
             // (Long-poll acknowledge resume is intentionally NOT re-marked here: the paused
             // instance is already Busy, and a redundant resume that no-ops must not strand an
