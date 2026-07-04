@@ -12,8 +12,11 @@ using BBT.Workflow.Infrastructure.Instances;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
+using BBT.Workflow.BackgroundJobs.Options;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
 namespace BBT.Workflow.Instances;
 
@@ -25,6 +28,7 @@ public sealed class EfCoreInstanceRepository(
     IDataSinkManager dataSinkManager,
      ICurrentSchema currentSchema,
     ISchemaValidator schemaValidator,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<EfCoreInstanceRepository> logger)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
@@ -42,12 +46,37 @@ public sealed class EfCoreInstanceRepository(
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
-        // Loads the full InstanceData history so that Instance.AddData can perform
-        // correct JSON merges against previous versions during execution.
-        // ChildCorrelations are still filtered to active-only.
-        return (await base.WithDetailsAsync())
-            .Include(i => i.DataList)
-            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+        // Default (legacy) load pulls the full InstanceData history. With latest-only loading
+        // enabled (WorkflowExecution:LatestOnlyInstanceLoading), only the IsLatest row is
+        // included: the full-merge model makes it self-sufficient for pipeline merges, script
+        // context and polling (it carries the complete state, the highest version and the
+        // highest HistorySequence of its own version line). History-dependent callers must use
+        // FindByIdentifierWithFullHistoryAsync / FindByIdentifierWithFullDataAsync — aggregates
+        // materialized through the identifier finders are marked partially loaded and fail fast
+        // on history reads. ChildCorrelations are always filtered to active-only.
+        var query = await base.WithDetailsAsync();
+
+        query = LatestOnlyLoading
+            ? query.Include(i => i.DataList.Where(d => d.IsLatest))
+            : query.Include(i => i.DataList);
+
+        return query.Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+    }
+
+    private bool LatestOnlyLoading => executionOptions.Value.LatestOnlyInstanceLoading;
+
+    /// <summary>
+    /// Stamps the latest-only marker on a materialized aggregate so history-dependent domain
+    /// members fail fast instead of silently answering from a partial list.
+    /// </summary>
+    private Instance? MarkIfPartiallyLoaded(Instance? instance)
+    {
+        if (instance is not null && LatestOnlyLoading)
+        {
+            instance.MarkDataPartiallyLoaded();
+        }
+
+        return instance;
     }
 
     /// <inheritdoc />
@@ -189,16 +218,16 @@ public sealed class EfCoreInstanceRepository(
                    cancellationToken);
             if (response != null)
             {
-                return response;
+                return MarkIfPartiallyLoaded(response);
             }
         }
 
         // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
         // keeps the fallback deterministic by returning the most recent instance for the key.
-        return await query
+        return MarkIfPartiallyLoaded(await query
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken));
     }
 
     /// <inheritdoc />
@@ -211,11 +240,11 @@ public sealed class EfCoreInstanceRepository(
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
         // result deterministic even if legacy data left more than one live row for a key.
-        return await query
+        return MarkIfPartiallyLoaded(await query
             .Where(i => i.Key == key
                         && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy))
             .OrderByDescending(i => i.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken));
     }
 
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
@@ -233,16 +262,16 @@ public sealed class EfCoreInstanceRepository(
                     cancellationToken);
             if (response != null)
             {
-                return response;
+                return MarkIfPartiallyLoaded(response);
             }
         }
 
         // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
         // keeps the fallback deterministic by returning the most recent instance for the key.
-        return await query
+        return MarkIfPartiallyLoaded(await query
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken));
     }
 
     /// <inheritdoc />
