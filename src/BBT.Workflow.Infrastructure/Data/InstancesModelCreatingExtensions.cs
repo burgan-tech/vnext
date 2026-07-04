@@ -99,6 +99,10 @@ public static class InstancesModelCreatingExtensions
 
             b.Ignore(p => p.HasActiveIncident);
 
+            // Runtime-only marker set by the repository after a latest-only materialization;
+            // never persisted.
+            b.Ignore(p => p.IsDataPartiallyLoaded);
+
             b.HasMany(m => m.DataList)
                 .WithOne()
                 .HasForeignKey(p => p.InstanceId)
