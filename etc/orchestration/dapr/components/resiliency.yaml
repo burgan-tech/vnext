@@ -1,0 +1,36 @@
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: vnext-orchestration-resiliency
+spec:
+  policies:
+    retries:
+      # Connection-level failures ONLY (connect refused / DNS / socket reset / sidecar
+      # unavailable). App HTTP responses — including 5xx — are deliberately NOT retried at
+      # this layer (no `matching.httpStatusCodes`): a received response means the task ran
+      # and may already have produced side effects, so the re-run decision belongs to the
+      # user-defined error boundary, never to the transport (layer contract, review B3).
+      connectionRetry:
+        policy: exponential
+        maxInterval: 5s
+        maxRetries: 3
+    circuitBreakers:
+      # Fast-fail when the Execution host is down instead of burning the 60s per-task
+      # invocation timeout N times inside the 300s job budget: 5 consecutive failures open
+      # the circuit for 30s, then a single probe request decides whether to close it.
+      invocationBreaker:
+        maxRequests: 1
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+  targets:
+    apps:
+      # Orchestration → Execution task invocation (RemoteInvokerService).
+      # No timeout policy on purpose: legitimate task calls run for tens of seconds; the
+      # app-level linked CTS (ExecutionApi:InvocationTimeoutSeconds, 60s) owns the per-call
+      # budget inside the hierarchy: Dapr retry window ⊂ 60s invocation ⊂ 300s job budget
+      # ⊂ 330s chain lock lease (validated at startup by WorkflowExecutionOptionsValidator).
+      # Cross-domain DirectTrigger targets have per-domain app-ids and cannot be enumerated
+      # here; add a target entry per known remote domain when deploying multi-domain.
+      vnext-execution-app:
+        retry: connectionRetry
+        circuitBreaker: invocationBreaker
