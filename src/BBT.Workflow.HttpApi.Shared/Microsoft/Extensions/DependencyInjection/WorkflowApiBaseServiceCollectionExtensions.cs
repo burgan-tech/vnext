@@ -242,7 +242,25 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddDistributedLock(this IServiceCollection services, IConfiguration configuration)
     {
         var lockStoreName = configuration["DAPR_LOCK_STORE_NAME"]!;
-        services.AddDaprDistributedLock(lockStoreName);
+
+        // L1 (pipeline chain lock) provider. "Postgres" uses the platform-owned lease store
+        // with atomic, gap-free extension and a monotonic fencing counter — the Dapr lock
+        // building block cannot extend a held lock (its Redis component uses SET NX, which
+        // rejects same-owner re-acquire). Default stays "Dapr"; enable per environment via
+        // WorkflowExecution:LockProvider (canary rollout). L2 script-driven resource locks
+        // remain on the Dapr building block either way.
+        var lockProvider = configuration["WorkflowExecution:LockProvider"];
+        if (string.Equals(lockProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<
+                BBT.Aether.DistributedLock.IDistributedLockService,
+                BBT.Workflow.Infrastructure.Execution.Locks.NpgsqlDistributedLockService>();
+        }
+        else
+        {
+            services.AddDaprDistributedLock(lockStoreName);
+        }
+
         services.AddResourceLock(lockStoreName);
         return services;
     }
