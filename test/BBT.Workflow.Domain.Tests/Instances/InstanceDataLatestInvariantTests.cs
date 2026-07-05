@@ -1,5 +1,8 @@
 using System;
 using System.Linq;
+using BBT.Aether.DependencyInjection;
+using BBT.Workflow.DefinitionContext;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
@@ -12,6 +15,27 @@ namespace BBT.Workflow.Instances;
 /// </summary>
 public class InstanceDataLatestInvariantTests : DomainTestBase<DomainEntryPoint>
 {
+    public InstanceDataLatestInvariantTests()
+    {
+        // The [SchemaValidation] aspect woven into Instance.AddData/AddDataWithVersion resolves
+        // its services from the ambient (AsyncLocal) provider. Give this test class a minimal,
+        // self-sufficient one — no workflow in context, so validation is skipped — instead of
+        // depending on fixture ordering across parallel test collections.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IWorkflowContext>(new NullWorkflowContext());
+        AmbientServiceProvider.Current = services.BuildServiceProvider();
+    }
+
+    private sealed class NullWorkflowContext : IWorkflowContext
+    {
+        public Definitions.Workflow? Workflow => null;
+        public bool HasWorkflow => false;
+        public void SetWorkflow(Definitions.Workflow workflow)
+        {
+        }
+    }
+
     [Fact]
     public void AddDataWithVersion_LowerVersion_ShouldNotStealLatestFlag()
     {
