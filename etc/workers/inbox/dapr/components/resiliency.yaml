@@ -1,0 +1,31 @@
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: vnext-inbox-resiliency
+spec:
+  policies:
+    retries:
+      # Connection-level failures only; app responses are never retried here. The
+      # orchestration forwarder (DaprOrchestrationForwarder) already implements the
+      # at-least-once contract at the message level: transient statuses (>= 500, 408, 429)
+      # rethrow so the inbox re-delivers, permanent 4xx are dropped. This sidecar retry
+      # merely smooths sub-second connection blips so they never surface as redeliveries.
+      connectionRetry:
+        policy: exponential
+        maxInterval: 5s
+        maxRetries: 3
+    circuitBreakers:
+      # When Orchestration is down, fail forwards fast and let the inbox's bounded
+      # redelivery + dead-letter own durability instead of stacking 60s timeouts.
+      invocationBreaker:
+        maxRequests: 1
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+  targets:
+    apps:
+      # Inbox worker → Orchestration internal forwards (subflow lifecycle, transition
+      # continuations). No timeout policy: OrchestrationApi:InvocationTimeoutSeconds (60s)
+      # owns the per-call budget.
+      vnext-app:
+        retry: connectionRetry
+        circuitBreaker: invocationBreaker
