@@ -91,6 +91,15 @@ public sealed class InstanceQuery
     private readonly List<FilterNode> _clauses = [];
     private FilterField _orderField = ParseField(DefaultOrderField);
     private bool _orderByDescending;
+    private bool _orderExplicit;
+
+    // List-query (Build) extras: groupBy fields + aggregations. Ignored by First()/Last().
+    private readonly List<string> _groupByFields = [];
+    private bool _count;
+    private string? _sum;
+    private string? _avg;
+    private string? _min;
+    private string? _max;
 
     private InstanceQuery()
     {
@@ -145,30 +154,117 @@ public sealed class InstanceQuery
         return this;
     }
 
-    /// <summary>Orders matches ascending by the given field before First/Last selection.</summary>
+    /// <summary>Orders matches ascending by the given field.</summary>
     public InstanceQuery OrderBy(string field)
     {
         _orderField = ParseField(field);
         _orderByDescending = false;
+        _orderExplicit = true;
         return this;
     }
 
-    /// <summary>Orders matches descending by the given field before First/Last selection.</summary>
+    /// <summary>Orders matches descending by the given field.</summary>
     public InstanceQuery OrderByDescending(string field)
     {
         _orderField = ParseField(field);
         _orderByDescending = true;
+        _orderExplicit = true;
         return this;
     }
 
+    /// <summary>
+    /// Groups results by one or more fields (list-query only; consumed by <see cref="Build"/>).
+    /// Fields use the wire convention: columns bare, attributes dotted with prefix
+    /// (e.g. <c>attributes.limitKey</c>).
+    /// </summary>
+    public InstanceQuery GroupBy(params string[] fields)
+    {
+        if (fields is null || fields.Length == 0)
+            throw new InvalidOperationException("GroupBy requires at least one field.");
+        foreach (var f in fields)
+        {
+            if (string.IsNullOrWhiteSpace(f))
+                throw new InvalidOperationException("GroupBy field must be non-empty.");
+            _groupByFields.Add(f.Trim());
+        }
+        return this;
+    }
+
+    /// <summary>Adds a COUNT aggregation (list-query only).</summary>
+    public InstanceQuery Count()
+    {
+        _count = true;
+        return this;
+    }
+
+    /// <summary>Adds a SUM aggregation over the given field (list-query only).</summary>
+    public InstanceQuery Sum(string field)
+    {
+        _sum = RequireAggField(field);
+        return this;
+    }
+
+    /// <summary>Adds an AVG aggregation over the given field (list-query only).</summary>
+    public InstanceQuery Avg(string field)
+    {
+        _avg = RequireAggField(field);
+        return this;
+    }
+
+    /// <summary>Adds a MIN aggregation over the given field (list-query only).</summary>
+    public InstanceQuery Min(string field)
+    {
+        _min = RequireAggField(field);
+        return this;
+    }
+
+    /// <summary>Adds a MAX aggregation over the given field (list-query only).</summary>
+    public InstanceQuery Max(string field)
+    {
+        _max = RequireAggField(field);
+        return this;
+    }
+
+    /// <summary>
+    /// Builds a list-query specification (filter + ordering + optional groupBy/aggregations) that
+    /// serializes to the wire strings the list endpoint expects. Filter may be empty (match-all).
+    /// </summary>
+    public InstanceQuerySpec Build()
+    {
+        IReadOnlyList<FilterOrder> orders = _orderExplicit
+            ? [new FilterOrder(_orderField, _orderByDescending)]
+            : [];
+
+        var aggregations = HasAggregations()
+            ? new AggregationSpec(_count, _sum, _avg, _min, _max)
+            : null;
+
+        return new InstanceQuerySpec(BuildRootOrNull(), orders, _groupByFields, aggregations);
+    }
+
     /// <summary>Builds a filter that resolves the FIRST match under the effective ordering.</summary>
-    public InstanceFilter First() => Build(InstanceSelection.First);
+    public InstanceFilter First() => BuildSingle(InstanceSelection.First);
 
     /// <summary>Builds a filter that resolves the LAST match under the effective ordering.</summary>
-    public InstanceFilter Last() => Build(InstanceSelection.Last);
+    public InstanceFilter Last() => BuildSingle(InstanceSelection.Last);
 
-    private InstanceFilter Build(InstanceSelection selection) =>
-        new(BuildRoot(), new FilterOrder(_orderField, _orderByDescending), selection);
+    private InstanceFilter BuildSingle(InstanceSelection selection)
+    {
+        if (_groupByFields.Count > 0 || HasAggregations())
+            throw new InvalidOperationException(
+                "GroupBy/aggregations are list-query features — terminate with Build(), not First()/Last().");
+        return new InstanceFilter(BuildRoot(), new FilterOrder(_orderField, _orderByDescending), selection);
+    }
+
+    private bool HasAggregations()
+        => _count || _sum is not null || _avg is not null || _min is not null || _max is not null;
+
+    private static string RequireAggField(string field)
+    {
+        if (string.IsNullOrWhiteSpace(field))
+            throw new InvalidOperationException("Aggregation field must be non-empty.");
+        return field.Trim();
+    }
 
     private FilterNode BuildRoot()
     {
@@ -178,6 +274,10 @@ public sealed class InstanceQuery
 
         return _clauses.Count == 1 ? _clauses[0] : FilterNode.All(_clauses);
     }
+
+    // Like BuildRoot but allows an empty filter (null = match-all) — valid for list/groupBy queries.
+    private FilterNode? BuildRootOrNull()
+        => _clauses.Count == 0 ? null : (_clauses.Count == 1 ? _clauses[0] : FilterNode.All(_clauses));
 
     private static FilterField ParseField(string field)
     {
