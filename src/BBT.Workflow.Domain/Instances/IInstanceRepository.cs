@@ -2,13 +2,23 @@ using BBT.Aether;
 using BBT.Aether.Domain.Repositories;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions.Schemas;
-using Microsoft.AspNetCore.Http;
+using BBT.Workflow.Filtering;
 
 namespace BBT.Workflow.Instances;
 
 public interface IInstanceRepository : IRepository<Instance, Guid>
 {
     Task<Instance?> FindByIdentifierAsync(string? identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves the single instance matching an <see cref="InstanceFilter"/> in the current schema —
+    /// the entry point of the instance filter engine. Instance columns and JSON attribute paths are
+    /// translated to a parameterized query joined to the latest instance-data row, ordered per the
+    /// filter, taking the first/last match. Returns null when nothing matches. The returned instance
+    /// carries its columns (e.g. <c>Key</c>); the data history is not eagerly loaded.
+    /// </summary>
+    Task<Instance?> FindByFilterAsync(InstanceFilter filter,
         CancellationToken cancellationToken = default);
     
     Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,

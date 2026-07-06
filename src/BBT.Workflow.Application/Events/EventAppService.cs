@@ -19,6 +19,7 @@ public sealed class EventAppService(
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     IInstanceCommandAppService instanceCommandAppService,
+    IInstanceSelectorResolver instanceSelectorResolver,
     IRuntimeInfoProvider runtimeInfoProvider,
     ILogger<EventAppService> logger) : IEventAppService
 {
@@ -96,6 +97,17 @@ public sealed class EventAppService(
         {
             logger.EventMappingFailed(input.Domain, input.Workflow, input.TransitionKey, ex.Message);
             return Result<object?>.Fail(Error.Failure("EventMappingFailed", ex.Message));
+        }
+
+        // Transition fallback correlation: when the payload carried no InstanceKey but the mapping
+        // supplied a Selector, resolve the target instance by filtering the instance store and use the
+        // matched instance's key. (Start creates a new instance, so a selector is not meaningful there.)
+        if (input.Action == EventAction.Transition
+            && string.IsNullOrWhiteSpace(mapping.InstanceKey)
+            && mapping.Selector is not null)
+        {
+            mapping.InstanceKey = await instanceSelectorResolver.ResolveKeyAsync(
+                input.Domain, input.Workflow, mapping.Selector, cancellationToken);
         }
 
         return input.Action == EventAction.Start

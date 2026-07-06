@@ -62,6 +62,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
+        services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
         services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();

@@ -1,18 +1,17 @@
 using System.Text.Json;
 using BBT.Aether;
-using BBT.Aether.Domain;
 using BBT.Aether.Domain.EntityFrameworkCore;
-using BBT.Aether.Domain.Repositories;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Filtering;
+using BBT.Workflow.Infrastructure.Instances;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using BBT.Workflow.Definitions.Schemas;
@@ -38,6 +37,37 @@ public sealed class EfCoreInstanceRepository(
         return (await base.WithDetailsAsync())
             .Include(i => i.DataList)
             .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindByFilterAsync(
+        InstanceFilter filter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+
+        var schema = currentSchema.Name ?? "public";
+        var builder = new InstanceFilterSqlBuilder();
+        var whereClause = builder.BuildWhere(filter.Root);
+
+        // First = base order; Last = base order reversed. Then take the top row.
+        var effectiveDescending = filter.Selection == InstanceSelection.First
+            ? filter.Order.Descending
+            : !filter.Order.Descending;
+        var orderClause = InstanceFilterSqlBuilder.BuildOrderBy(filter.Order.Field, effectiveDescending);
+
+        // Join each instance to its latest data row so attribute (JSONB) predicates and instance-column
+        // predicates can be evaluated together. SELECT s.* keeps the result mappable to Instance.
+        var sql =
+            $"SELECT s.* FROM \"{schema}\".\"Instances\" s " +
+            $"LEFT JOIN \"{schema}\".\"InstancesData\" d ON d.\"InstanceId\" = s.\"Id\" AND d.\"IsLatest\" = true " +
+            $"WHERE {whereClause} ORDER BY {orderClause} LIMIT 1";
+
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .FromSqlRaw(sql, builder.Parameters.ToArray())
+            .AsNoTracking()
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <inheritdoc />

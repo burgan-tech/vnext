@@ -1,3 +1,5 @@
+using BBT.Workflow.Filtering;
+
 namespace BBT.Workflow.Scripting;
 
 /// <summary>
@@ -51,4 +53,14 @@ public sealed class EventMappingResult
     /// The mapped payload. Used as the new instance's initial data (start) or the transition's input data (transition).
     /// </summary>
     public dynamic? Body { get; set; }
+
+    /// <summary>
+    /// Optional fallback correlation for <c>action=transition</c>: when <see cref="InstanceKey"/> is not
+    /// available in the payload, the runtime resolves the target instance by filtering the instance store
+    /// with this filter and uses the matched instance's key. Ignored when <see cref="InstanceKey"/> is set.
+    /// Built with the fluent <see cref="Filtering.InstanceQuery"/> (e.g. match on
+    /// <c>attributes.name</c>/<c>attributes.surname</c> and take the first/last match). Has no effect for
+    /// <c>action=start</c>.
+    /// </summary>
+    public InstanceFilter? Selector { get; set; }
 }

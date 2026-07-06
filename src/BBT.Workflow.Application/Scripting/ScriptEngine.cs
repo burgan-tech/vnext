@@ -156,6 +156,7 @@ public sealed class ScriptEngine(
         "BBT.Workflow.Scripting",
         "BBT.Workflow.Definitions",
         "BBT.Workflow.Instances",
+        "BBT.Workflow.Filtering",
         "BBT.Workflow.Runtime",
         "BBT.Workflow.Scripting.Functions",
         "BBT.Workflow.Definitions.Timer",

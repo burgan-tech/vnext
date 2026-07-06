@@ -58,7 +58,7 @@ public sealed class EventController(IEventAppService eventAppService) : AetherCo
             Workflow = workflow,
             Action = eventAction,
             TransitionKey = transitionKey,
-            Payload = payload,
+            Payload = UnwrapCloudEvent(payload),
             Sync = sync,
             Headers = HttpContext.Request.Headers
                 .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
@@ -67,4 +67,17 @@ public sealed class EventController(IEventAppService eventAppService) : AetherCo
         var result = await eventAppService.HandleAsync(input, cancellationToken);
         return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
+
+    /// <summary>
+    /// When this endpoint is fed by a Dapr pub/sub subscription, the message arrives as a structured
+    /// CloudEvent envelope (<c>{ specversion, id, source, type, data, ... }</c>) rather than the raw
+    /// domain payload. Unwrap the inner <c>data</c> so the event mapping sees the same shape it would
+    /// for a direct caller. Bodies that are not CloudEvents are passed through unchanged.
+    /// </summary>
+    private static JsonElement UnwrapCloudEvent(JsonElement payload)
+        => payload.ValueKind == JsonValueKind.Object
+           && payload.TryGetProperty("specversion", out _)
+           && payload.TryGetProperty("data", out var data)
+            ? data.Clone()
+            : payload;
 }
