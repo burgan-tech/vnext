@@ -140,9 +140,10 @@ internal sealed class InstanceFilterSqlBuilder
             _ => "::numeric"
         };
 
-        // Attribute accessor is already text (->>); a plain column needs ->text semantics only for JSON,
-        // so columns are cast directly. Both then cast to the comparison type.
-        return $"{(isAttribute ? accessor : accessor)}{cast}";
+        // Parenthesize before casting: '::' binds tighter than the JSON '->>' operator, so
+        // "Data" ->> 'age'::numeric would cast the key 'age' instead of the extracted value.
+        // (isAttribute is irrelevant to the cast; the parens are what matter.)
+        return $"({accessor}){cast}";
     }
 
     private static object? Single(FilterCondition condition)
