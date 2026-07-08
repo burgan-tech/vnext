@@ -223,8 +223,13 @@ public sealed class InstanceFilterQueryTests : IAsyncLifetime
             $"WHERE {where} ORDER BY {order} LIMIT 1";
 
         await using var ctx = CreateContext();
+        // This IS a parameterized query: every operand travels as a positional {n} placeholder
+        // (builder.Parameters -> Npgsql parameters); the interpolated parts are engine-owned
+        // identifiers only (whitelisted column names, quote-escaped JSON path segments) and the
+        // literal "public" schema of a throwaway test container. No user input exists here.
+        // nosemgrep
         var instance = await ctx.Instances
-            .FromSqlRaw(sql, builder.Parameters.ToArray())
+            .FromSqlRaw(sql, builder.Parameters.ToArray()) // nosemgrep
             .AsNoTracking()
             .FirstOrDefaultAsync();
         return instance?.Key;
