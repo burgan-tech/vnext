@@ -71,4 +71,69 @@ public class InstanceFilterSqlBuilderTests
         where.ShouldNotContain("::");
         where.ShouldContain("BETWEEN {0} AND {1}");
     }
+
+    [Fact]
+    public void Eq_StronglyTypedNumericOperand_ComparesInNumericDomain()
+    {
+        // Eq(30) must match a stored 30.0 — numeric-domain equality, raw (untexted) parameter.
+        var filter = InstanceQuery.Create()
+            .Where("attributes.age", f => f.Eq(30))
+            .First();
+
+        var builder = new InstanceFilterSqlBuilder();
+        var where = builder.BuildWhere(filter.Root);
+
+        where.ShouldContain("::numeric = {0}");
+        builder.Parameters.Single().ShouldBe(30);
+    }
+
+    [Fact]
+    public void Eq_NumericLookingString_StaysTextComparison()
+    {
+        // Regression guard: a customer-number-like string operand must NOT force a numeric cast —
+        // rows holding non-numeric text would fail the cast at runtime. Text equality as before.
+        var filter = InstanceQuery.Create()
+            .Where("attributes.customerNo", f => f.Eq("123"))
+            .First();
+
+        var builder = new InstanceFilterSqlBuilder();
+        var where = builder.BuildWhere(filter.Root);
+
+        where.ShouldNotContain("::");
+        builder.Parameters.Single().ShouldBe("123");
+    }
+
+    [Fact]
+    public void In_StronglyTypedNumbers_ComparesInNumericDomain()
+    {
+        var filter = InstanceQuery.Create()
+            .Where("attributes.age", f => f.In(30, 40))
+            .First();
+
+        var builder = new InstanceFilterSqlBuilder();
+        var where = builder.BuildWhere(filter.Root);
+
+        where.ShouldContain("::numeric IN ({0}, {1})");
+        builder.Parameters.ShouldBe(new object?[] { 30, 40 });
+    }
+
+    [Fact]
+    public void OrderBy_Attribute_UsesJsonbAccessorForNativeTypeOrdering()
+    {
+        // ORDER BY keeps the final segment as jsonb (->) so numbers sort numerically
+        // (9 < 20 < 100), not as text ("100" < "20" < "9").
+        var order = InstanceFilterSqlBuilder.BuildOrderBy(
+            new FilterField(FilterFieldKind.Attribute, "employment.salary"), descending: false);
+
+        order.ShouldBe("d.\"Data\" -> 'employment' -> 'salary' ASC");
+    }
+
+    [Fact]
+    public void OrderBy_Column_UsesNativeColumn()
+    {
+        var order = InstanceFilterSqlBuilder.BuildOrderBy(
+            new FilterField(FilterFieldKind.Column, "createdAt"), descending: true);
+
+        order.ShouldBe("s.\"CreatedAt\" DESC");
+    }
 }

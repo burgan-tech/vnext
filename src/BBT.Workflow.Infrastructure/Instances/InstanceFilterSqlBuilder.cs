@@ -41,9 +41,14 @@ internal sealed class InstanceFilterSqlBuilder
     /// <summary>Builds the WHERE clause SQL for the given filter tree.</summary>
     public string BuildWhere(FilterNode root) => BuildNode(root);
 
-    /// <summary>Builds the ORDER BY clause SQL (e.g. <c>s."CreatedAt" DESC</c>) for the given effective direction.</summary>
+    /// <summary>
+    /// Builds the ORDER BY clause SQL (e.g. <c>s."CreatedAt" DESC</c>) for the given effective direction.
+    /// Attribute paths keep the final segment as jsonb (<c>-&gt;</c> instead of <c>-&gt;&gt;</c>) so PostgreSQL
+    /// applies native jsonb type ordering — numbers sort numerically (9 &lt; 20 &lt; 100), not as text
+    /// ("100" &lt; "20" &lt; "9") — which is what First/Last selection depends on.
+    /// </summary>
     public static string BuildOrderBy(FilterField field, bool descending)
-        => $"{Accessor(field)} {(descending ? "DESC" : "ASC")}";
+        => $"{Accessor(field, textFinalSegment: false)} {(descending ? "DESC" : "ASC")}";
 
     private string BuildNode(FilterNode node)
     {
@@ -65,9 +70,21 @@ internal sealed class InstanceFilterSqlBuilder
         switch (condition.Operator)
         {
             case FilterOperator.Eq:
-                return $"{TextAccessor(accessor, isAttribute)} = {Param(AsText(Single(condition)))}";
+            {
+                var value = Single(condition);
+                var cast = StrongCast(value);
+                return cast is null
+                    ? $"{TextAccessor(accessor, isAttribute)} = {Param(AsText(value))}"
+                    : $"({accessor}){cast} = {Param(value)}";
+            }
             case FilterOperator.Ne:
-                return $"{TextAccessor(accessor, isAttribute)} <> {Param(AsText(Single(condition)))}";
+            {
+                var value = Single(condition);
+                var cast = StrongCast(value);
+                return cast is null
+                    ? $"{TextAccessor(accessor, isAttribute)} <> {Param(AsText(value))}"
+                    : $"({accessor}){cast} <> {Param(value)}";
+            }
             case FilterOperator.Like:
                 return $"{TextAccessor(accessor, isAttribute)} ILIKE {Param("%" + AsText(Single(condition)) + "%")}";
             case FilterOperator.StartsWith:
@@ -86,9 +103,19 @@ internal sealed class InstanceFilterSqlBuilder
                 RequireCount(condition, 2, "between");
                 return $"{TypedAccessor(accessor, condition, isAttribute)} BETWEEN {Param(condition.Values[0])} AND {Param(condition.Values[1])}";
             case FilterOperator.In:
-                return $"{TextAccessor(accessor, isAttribute)} IN ({ParamList(condition)})";
+            {
+                var cast = StrongCast(condition.Values.FirstOrDefault());
+                return cast is null
+                    ? $"{TextAccessor(accessor, isAttribute)} IN ({ParamList(condition)})"
+                    : $"({accessor}){cast} IN ({ParamList(condition, asText: false)})";
+            }
             case FilterOperator.NotIn:
-                return $"{TextAccessor(accessor, isAttribute)} NOT IN ({ParamList(condition)})";
+            {
+                var cast = StrongCast(condition.Values.FirstOrDefault());
+                return cast is null
+                    ? $"{TextAccessor(accessor, isAttribute)} NOT IN ({ParamList(condition)})"
+                    : $"({accessor}){cast} NOT IN ({ParamList(condition, asText: false)})";
+            }
             case FilterOperator.IsNull:
                 var isNull = Single(condition) is bool b && b;
                 return $"{TextAccessor(accessor, isAttribute)} IS {(isNull ? "NULL" : "NOT NULL")}";
@@ -97,8 +124,12 @@ internal sealed class InstanceFilterSqlBuilder
         }
     }
 
-    /// <summary>Column/JSON accessor (untyped). Columns: <c>s."Col"</c>; attributes: <c>d."Data" -&gt; 'a' -&gt;&gt; 'b'</c>.</summary>
-    private static string Accessor(FilterField field)
+    /// <summary>
+    /// Column/JSON accessor (untyped). Columns: <c>s."Col"</c>; attributes: <c>d."Data" -&gt; 'a' -&gt;&gt; 'b'</c>.
+    /// With <paramref name="textFinalSegment"/> false, the final attribute segment stays jsonb
+    /// (<c>-&gt;</c>) — used by ORDER BY for native jsonb type ordering.
+    /// </summary>
+    private static string Accessor(FilterField field, bool textFinalSegment = true)
     {
         if (field.Kind == FilterFieldKind.Column)
         {
@@ -117,7 +148,7 @@ internal sealed class InstanceFilterSqlBuilder
         var sb = new StringBuilder("d.\"Data\"");
         for (var i = 0; i < segments.Length; i++)
         {
-            var op = i == segments.Length - 1 ? " ->> " : " -> ";
+            var op = textFinalSegment && i == segments.Length - 1 ? " ->> " : " -> ";
             sb.Append(op).Append('\'').Append(EscapeSql(segments[i])).Append('\'');
         }
         return sb.ToString();
@@ -126,6 +157,19 @@ internal sealed class InstanceFilterSqlBuilder
     // For text-based comparisons an attribute accessor already yields text (->>); columns are cast to text.
     private static string TextAccessor(string accessor, bool isAttribute)
         => isAttribute ? accessor : $"{accessor}::text";
+
+    // Equality/membership comparisons run in a typed domain only when the operand is a strongly-typed
+    // .NET number or date (Eq(30) must match a stored 30.0). String operands — even numeric- or
+    // date-looking ones such as customer numbers or date-formatted codes — always compare as text, so
+    // rows holding non-conforming values can never fail a cast at runtime. Range operators differ
+    // deliberately: TypedAccessor probes strings there, because date/number range bounds arrive as
+    // ISO-formatted strings from scripts.
+    private static string? StrongCast(object? value) => value switch
+    {
+        DateTime or DateTimeOffset => "::timestamptz",
+        sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal => "::numeric",
+        _ => null
+    };
 
     // For range comparisons, cast the (text) accessor to the type implied by the operand. Operands
     // that are neither numeric nor date-like (e.g. an alphabetical range: name > 'M') get no cast —
@@ -155,11 +199,11 @@ internal sealed class InstanceFilterSqlBuilder
         return condition.Values[0];
     }
 
-    private string ParamList(FilterCondition condition)
+    private string ParamList(FilterCondition condition, bool asText = true)
     {
         if (condition.Values.Count == 0)
             throw new InvalidOperationException($"Operator '{condition.Operator}' requires at least one value.");
-        return string.Join(", ", condition.Values.Select(v => Param(AsText(v))));
+        return string.Join(", ", condition.Values.Select(v => Param(asText ? AsText(v) : v)));
     }
 
     private string Param(object? value)

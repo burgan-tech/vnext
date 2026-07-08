@@ -49,14 +49,21 @@ public sealed class EventAppService(
 
             transition = workflow.FindTransitionInContext(input.TransitionKey);
 
+            // Distinguish "no such transition" from "transition has no event definition" so the
+            // caller sees which side to fix (a transitionKey typo vs missing event config).
+            if (transition is null)
+                return Result<object?>.Fail(Error.NotFound(
+                    "TransitionNotFound",
+                    $"Transition '{input.TransitionKey}' not found in workflow '{input.Workflow}'."));
+
             // Single entry point: only a transition declared as an event transition (TriggerType.Event)
             // may be driven by an event.
-            if (transition is not null && transition.TriggerType != TriggerType.Event)
+            if (transition.TriggerType != TriggerType.Event)
                 return Result<object?>.Fail(Error.Validation(
                     "NotAnEventTransition",
                     $"Transition '{input.TransitionKey}' is not an event transition and cannot be triggered by an event."));
 
-            eventDefinition = transition?.Event;
+            eventDefinition = transition.Event;
         }
         else
         {

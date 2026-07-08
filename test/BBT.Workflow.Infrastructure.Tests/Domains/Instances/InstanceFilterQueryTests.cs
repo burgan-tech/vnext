@@ -182,6 +182,19 @@ public sealed class InstanceFilterQueryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task OrderByNumericAttribute_SortsNumericallyNotLexicographically()
+    {
+        // Salaries: 95000, 120000, 40000, 88000, 70000. Text ordering sorts "120000" FIRST
+        // (leading '1'), so an ascending Last() would wrongly pick 95000 (u-lovelace). Native
+        // jsonb ordering must pick the true maximum, 120000 (u-hopper).
+        var key = await FindKeyAsync(InstanceQuery.Create()
+            .Where("attributes.employment.salary", f => f.Gt(0))
+            .OrderBy("attributes.employment.salary").Last());
+
+        key.ShouldBe("u-hopper");
+    }
+
+    [Fact]
     public async Task NoMatch_ReturnsNull()
     {
         var key = await FindKeyAsync(InstanceQuery.Create()
