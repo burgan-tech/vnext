@@ -127,9 +127,16 @@ public sealed class FilterNode
     public static FilterNode Any(IReadOnlyList<FilterNode> children) =>
         new(FilterNodeKind.Or, null, children);
 
-    /// <summary>Creates a NOT grouping around a single child.</summary>
-    public static FilterNode Negate(FilterNode child) =>
-        new(FilterNodeKind.Not, null, [child]);
+    /// <summary>
+    /// Creates a NOT grouping around a single child. The constructor is private and this is the only
+    /// way to build a Not node, so a Not node always carries exactly one non-null child — consumers
+    /// (wire writer, SQL builder) may index <c>Children[0]</c> safely.
+    /// </summary>
+    public static FilterNode Negate(FilterNode child)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+        return new FilterNode(FilterNodeKind.Not, null, [child]);
+    }
 }
 
 /// <summary>Ordering applied before First/Last selection.</summary>
