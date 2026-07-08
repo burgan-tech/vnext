@@ -164,11 +164,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         }
 
         return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-            data: new
-            {
-                result.Value!.Id,
-                result.Value.Status
-            },
+            data: result.Value,
             statusCode: 200,
             taskType: TaskType.ToString()));
     }

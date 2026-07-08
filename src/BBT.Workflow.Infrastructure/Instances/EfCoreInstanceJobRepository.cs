@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 namespace BBT.Workflow.Instances;
 
 public sealed class EfCoreInstanceJobRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider)
     : EfCoreRepository<WorkflowDbContext, InstanceJob, Guid>(dbContext, serviceProvider),
         IInstanceJobRepository
@@ -43,4 +43,69 @@ public sealed class EfCoreInstanceJobRepository(
         CancellationToken cancellationToken = default)
         => await (await GetQueryableAsync())
             .AnyAsync(j => j.InstanceId == instanceId && j.JobName == jobName && j.IsActive == true, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<List<InstanceJob>> GetActiveByFlowAsync(
+        string flow,
+        DateTime? createdAtGte,
+        DateTime? createdAtLte,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .AsNoTracking()
+            .Where(j => j.IsActive == true && j.FlowName == flow)
+            .Where(j => createdAtGte == null || j.CreatedAt >= createdAtGte)
+            .Where(j => createdAtLte == null || j.CreatedAt <= createdAtLte)
+            .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceJob>> GetActiveByFlowPagedAsync(
+        string flow,
+        DateTime? createdAtGte,
+        DateTime? createdAtLte,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .AsNoTracking()
+            .Where(j => j.IsActive == true && j.FlowName == flow)
+            .Where(j => createdAtGte == null || j.CreatedAt >= createdAtGte)
+            .Where(j => createdAtLte == null || j.CreatedAt <= createdAtLte)
+            .OrderByDescending(j => j.CreatedAt)
+            .Skip(skip)
+            .Take(take + 1)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceJob>> GetActiveByDomainAsync(
+        string domain,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetQueryableAsync())
+            .AsNoTracking()
+            .Where(j => j.IsActive == true && j.Domain == domain)
+            .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(
+        IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default)
+    {
+        var ids = instanceIds.ToList();
+        if (ids.Count == 0)
+            return [];
+
+        var result = await (await GetQueryableAsync())
+            .Where(j => ids.Contains(j.InstanceId) && j.IsActive == true)
+            .Select(j => j.InstanceId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return [.. result];
+    }
 }

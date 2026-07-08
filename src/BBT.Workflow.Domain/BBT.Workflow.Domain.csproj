@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="BBT.Aether.Aspects" Version="$(AetherPackageVersion)" />
     <PackageReference Include="BBT.Aether.Domain" Version="$(AetherPackageVersion)" />
+    <PackageReference Include="PostSharp" Version="$(PostSharpPackageVersion)" />
     <PackageReference Include="Dapr.Jobs" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />
     <PackageReference Include="Ulid" Version="$(UlidPackageVersion)" />

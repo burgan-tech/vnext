@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
-using BBT.Workflow.Execution;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -125,6 +125,12 @@ public sealed class TransitionExecutor
         {
             props[TelemetryConstants.TagNames.ParentInstanceId] = parentId;
         }
+        // Stamp root instance ID for every subflow pipeline execution (no-op on root instances)
+        var rootId = context.Instance.GetRootInstanceId();
+        if (rootId != context.InstanceId)
+        {
+            props[TelemetryConstants.TagNames.RootInstanceId] = rootId;
+        }
         return props;
     }
 
@@ -168,6 +174,13 @@ public sealed class TransitionExecutor
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
         activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+
+        var rootId = context.Instance.GetRootInstanceId();
+        if (rootId != context.InstanceId)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            activity.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+        }
 
         activity.SetDisplayName($"transition/{context.TransitionKey}");
     }

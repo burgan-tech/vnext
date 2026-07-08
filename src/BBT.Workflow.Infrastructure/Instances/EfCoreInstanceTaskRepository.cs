@@ -13,7 +13,7 @@ namespace BBT.Workflow.Instances;
 /// EF Core implementation of IInstanceTaskRepository.
 /// </summary>
 public class EfCoreInstanceTaskRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
     IDataSinkManager dataSinkManager)
     : EfCoreRepository<WorkflowDbContext, InstanceTask, Guid>(dbContext, serviceProvider),
@@ -68,9 +68,21 @@ public class EfCoreInstanceTaskRepository(
     {
         var dbSet = await GetDbSetAsync();
         return await dbSet
+            .AsNoTracking()
             .Where(t => t.TransitionId == transitionId)
             .OrderBy(t => t.StartedAt)
             .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceTask?> GetByIdAsReadOnlyAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == id, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -110,5 +122,58 @@ public class EfCoreInstanceTaskRepository(
                         t.BusinessStatus == BusinessStatus.Success)
             .Select(t => t.TaskId)
             .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var counts = await dbSet.AsNoTracking()
+            .GroupBy(t => t.TaskId)
+            .Select(g => new
+            {
+                TaskKey = g.Key,
+                ExecutionCount = g.Count(),
+                SuccessCount = g.Count(x => x.BusinessStatus == BusinessStatus.Success),
+                FailureCount = g.Count(x => x.BusinessStatus == BusinessStatus.Failed)
+            })
+            .ToListAsync(cancellationToken);
+
+        return counts.Select(c => new TaskExecutionStat(
+            c.TaskKey,
+            c.ExecutionCount,
+            c.SuccessCount,
+            c.FailureCount)).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTaskRow>> GetByInstanceIdAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var rows = await (
+            from task in context.InstanceTasks.AsNoTracking()
+            join tr in context.InstanceTransitions.AsNoTracking()
+                on task.TransitionId equals tr.Id
+            where tr.InstanceId == instanceId
+            orderby task.StartedAt
+            select new
+            {
+                Task = task,
+                TransitionKey = tr.TransitionId,
+                tr.FromState,
+                tr.ToState,
+                tr.TriggerType
+            }
+        ).ToListAsync(cancellationToken);
+
+        return rows.Select(r => new InstanceTaskRow(
+            r.Task,
+            r.TransitionKey,
+            r.FromState,
+            r.ToState,
+            r.TriggerType
+        )).ToList();
     }
 }

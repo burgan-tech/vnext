@@ -81,7 +81,7 @@ public sealed class HandleFinishStep(
         else
         {
             logger.InstanceCompleting(context.Instance.Id);
-            context.Instance.Complete(context.Domain);
+            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync);
         }
     }
 }

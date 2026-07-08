@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Events;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
@@ -33,7 +34,7 @@ internal sealed class InstanceSubStateChangedEventHandler(
             return;
         }
 
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
@@ -41,7 +42,14 @@ internal sealed class InstanceSubStateChangedEventHandler(
             [TelemetryConstants.TagNames.InstanceId] = eventData.ParentInstanceId,
             [TelemetryConstants.TagNames.ParentInstanceId] = eventData.ParentInstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+        {
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
+                eventData.RootInstanceId.Value.ToString());
+        }
+        using (logger.BeginScope(scopeProps))
         {
             logger.SubFlowStateChangedEventReceived(
                 eventData.SubInstanceId,

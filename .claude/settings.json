@@ -1,4 +1,11 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Skill(dapr-integration)",
+      "Skill(dapr-integration:*)"
+    ]
+  },
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true,
     "code-review@claude-plugins-official": true,

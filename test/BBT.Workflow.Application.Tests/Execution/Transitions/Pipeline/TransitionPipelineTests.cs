@@ -4,6 +4,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
@@ -29,11 +31,13 @@ public class TransitionPipelineTests
     private readonly ILogger<TransitionPipeline> _mockLogger;
     private readonly ITransitionLockScopeFactory _mockLockScopeFactory;
     private readonly IReservedTransitionResolver _mockReservedResolver;
-    private readonly IInstanceBusyMarker _mockBusyMarker;
+    private readonly IInstanceBusyManager _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
+    private readonly IUnitOfWorkManager _mockUowManager;
     private readonly ITransitionValidationService _mockValidationService;
+    private readonly IStateNotificationScheduler _mockStateNotificationScheduler;
     private readonly List<ITransitionStep> _mockSteps;
     private readonly TransitionPipeline _pipeline;
 
@@ -42,11 +46,13 @@ public class TransitionPipelineTests
         _mockLogger = Substitute.For<ILogger<TransitionPipeline>>();
         _mockLockScopeFactory = Substitute.For<ITransitionLockScopeFactory>();
         _mockReservedResolver = Substitute.For<IReservedTransitionResolver>();
-        _mockBusyMarker = Substitute.For<IInstanceBusyMarker>();
+        _mockBusyMarker = Substitute.For<IInstanceBusyManager>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
+        _mockUowManager = Substitute.For<IUnitOfWorkManager>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
+        _mockStateNotificationScheduler = Substitute.For<IStateNotificationScheduler>();
         _mockSteps = new List<ITransitionStep>();
 
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
@@ -116,8 +122,10 @@ public class TransitionPipelineTests
             _mockContextFactory,
             _mockPostCommitExecutor,
             _mockInstanceRepository,
+            _mockUowManager,
             _mockValidationService,
             new PipelineProfileResolver(),
+            _mockStateNotificationScheduler,
             _mockLogger);
     }
 
@@ -585,7 +593,130 @@ public class TransitionPipelineTests
 
     #endregion
 
+    #region State Notification Tests
+
+    [Fact]
+    public async Task RunAsync_WhenSettledStateDeclaresNotification_ShouldScheduleStateNotification()
+    {
+        // Arrange
+        var context = CreateTransitionExecutionContext();
+        context.Target = CreateStateWithNotification("approved");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert: settled (no next transition) + target declares a state notification -> scheduled once
+        result.IsSuccess.ShouldBeTrue();
+        await _mockStateNotificationScheduler.Received(1).ScheduleAsync(
+            Arg.Is<TransitionExecutionContext>(c => c.Target!.Key == "approved"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenSettledStateHasNoNotification_ShouldNotScheduleStateNotification()
+    {
+        // Arrange: default target is null / declares no notification
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        await _mockStateNotificationScheduler.DidNotReceive().ScheduleAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WithAutoChain_ShouldScheduleOnlyForRestingState()
+    {
+        // Arrange: hop 1 lands on an intermediate state (with a notification) that auto-chains to a
+        // second hop landing on the final resting state (also with a notification). Only the resting
+        // hop should schedule — intermediate hops carry a next transition and never reach the hook.
+        var context1 = CreateTransitionExecutionContext();
+        context1.Target = CreateStateWithNotification("intermediate");
+        var context2 = CreateTransitionExecutionContext("auto-transition");
+        context2.Target = CreateStateWithNotification("final");
+        var workflowContext = CreateWorkflowExecutionContext(context1);
+        var contextCallCount = 0;
+
+        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                contextCallCount++;
+                return Task.FromResult(
+                    contextCallCount == 1
+                        ? Result<TransitionExecutionContext>.Ok(context1)
+                        : Result<TransitionExecutionContext>.Ok(context2));
+            });
+
+        foreach (var step in _mockSteps)
+        {
+            if (step.Order == LifecycleOrder.Auto)
+            {
+                var callCount = 0;
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(callInfo =>
+                    {
+                        callCount++;
+                        if (callCount == 1)
+                        {
+                            var ctx = callInfo.ArgAt<TransitionExecutionContext>(0);
+                            ctx.Directives.RequestNextTransition(new NextTransitionRequest("auto-transition", "auto"));
+                            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                        }
+                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                    });
+            }
+            else
+            {
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+            }
+        }
+
+        // Act
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert: scheduled once, for the resting state only
+        await _mockStateNotificationScheduler.Received(1).ScheduleAsync(
+            Arg.Is<TransitionExecutionContext>(c => c.Target!.Key == "final"),
+            Arg.Any<CancellationToken>());
+        await _mockStateNotificationScheduler.DidNotReceive().ScheduleAsync(
+            Arg.Is<TransitionExecutionContext>(c => c.Target!.Key == "intermediate"),
+            Arg.Any<CancellationToken>());
+    }
+
+    #endregion
+
     #region Helper Methods
+
+    private static State CreateStateWithNotification(string key)
+    {
+        // Uses JsonSerializerConstants.JsonOptions so the ScriptCodeJsonConverter is applied and the
+        // mapping's Code is populated. The state declares a single 'state' notification entry.
+        var json = $$"""
+        {
+            "key": "{{key}}",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "notifications": [
+                { "type": "state", "mapping": { "code": "Y29kZQ==", "encoding": "Base64" } }
+            ]
+        }
+        """;
+
+        return System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions)!;
+    }
 
     private ITransitionStep CreateMockStep(int order)
     {

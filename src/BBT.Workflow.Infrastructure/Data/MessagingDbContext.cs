@@ -1,3 +1,4 @@
+using BBT.Aether.Domain.Entities;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.Domain.EntityFrameworkCore.Modeling;
 using BBT.Aether.Domain.Events;
@@ -9,7 +10,7 @@ namespace BBT.Workflow.Data;
 public class MessagingDbContext(
     DbContextOptions<MessagingDbContext> options)
     : AetherDbContext<MessagingDbContext>(options),
-        IHasEfCoreInbox, IHasEfCoreOutbox
+        IHasEfCoreInbox, IHasEfCoreOutbox, IHasEfCoreBackgroundJobs
 {
     /// <summary>
     /// Gets or sets the inbox messages
@@ -21,12 +22,19 @@ public class MessagingDbContext(
     /// </summary>
     public virtual DbSet<OutboxMessage> OutboxMessages { get; set; }
 
+    /// <summary>
+    /// Background job tracking records. Primary store as of this migration.
+    /// WorkflowDbContext.BackgroundJobs is kept for backwards-compat only (marked Obsolete).
+    /// </summary>
+    public virtual DbSet<BackgroundJobInfo> BackgroundJobs { get; set; }
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         builder.HasDefaultSchema("sys_queues");
         base.OnModelCreating(builder);
 
-        builder.ConfigureInbox("sys_queues");
-        builder.ConfigureOutbox("sys_queues");
+        builder.ConfigureInbox();
+        builder.ConfigureOutbox();
+        builder.ConfigureBackgroundJob();
     }
 }

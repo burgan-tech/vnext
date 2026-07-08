@@ -1,3 +1,15 @@
 {
-  "items": []
+  "items": [
+    {
+      "id": "state-channel-slim-payload",
+      "type": "behavior",
+      "component": "notification",
+      "path": "notificationTask.channels[state]",
+      "since": "0.0.63",
+      "severity": "warning",
+      "title": "State notification channel payload slimmed to a pointer",
+      "description": "The platform-managed 'state' notification channel (NotificationTask state channel and the new state-level notification directive) no longer embeds the full State function output (GetInstanceStateOutput) in the message data. The data payload is now the slim pointer { domain, flow, id, version } inside the CloudEvents envelope; consumers must re-fetch the full state via the State function. Binding metadata and IStateNotificationMapping enrichment are unchanged.",
+      "action": "Update state-channel consumers to treat the message as a change pointer and call the State function for full state instead of reading data.data.* fields."
+    }
+  ]
 }

@@ -90,6 +90,9 @@ public sealed class State : IHasKey
     [JsonInclude] [JsonPropertyName("interaction")]
     private StateInteraction? interaction;
 
+    [JsonInclude] [JsonPropertyName("notifications")]
+    private List<StateNotification> notifications = new();
+
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
     
@@ -129,6 +132,22 @@ public sealed class State : IHasKey
     /// </summary>
     [JsonIgnore]
     public StateInteraction? Interaction => interaction;
+
+    /// <summary>
+    /// State-level notification entries. After the transition pipeline settles (state/status
+    /// finalized), each applicable entry is dispatched as a durable background notification.
+    /// Empty when the state declares no notifications.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<StateNotification> Notifications => notifications.AsReadOnly();
+
+    /// <summary>
+    /// True when the state declares at least one <see cref="StateNotificationType.State"/> notification
+    /// (the only kind processed today). Used by the pipeline to decide whether to schedule the
+    /// settle-time state-notify job.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasStateNotifications => notifications.Any(n => n.Type == StateNotificationType.State);
 
     /// <summary>
     /// True when entering this state must terminate the client's active long-poll request

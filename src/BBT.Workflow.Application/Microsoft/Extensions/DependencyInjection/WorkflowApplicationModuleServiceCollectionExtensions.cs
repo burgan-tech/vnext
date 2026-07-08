@@ -26,29 +26,41 @@ namespace Microsoft.Extensions.DependencyInjection;
 public static class WorkflowApplicationModuleServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds the application module services to the specified <see cref="IServiceCollection" />.
+    /// Adds the full application module: pipeline, app services, cache, task handlers, cast handlers, and validators.
+    /// Used by hosts that run the workflow execution pipeline (Orchestration, Inbox, Outbox).
     /// </summary>
     /// <param name="services">The <see cref="IServiceCollection" /> to add services to.</param>
     /// <returns>The <see cref="IServiceCollection" /> so that additional calls can be chained.</returns>
     public static IServiceCollection AddApplicationModule(this IServiceCollection services)
     {
         services.AddAetherApplication();
-        
-        // Add transition pipeline architecture
-        services.AddPipelineServices();
 
-        // Configure service groups
+        services.AddPipelineServices();
         services.AddApplicationServices();
-        services.AddCacheServices();
+        services.AddApplicationCacheModule();
         services.AddTaskHandlers();
         services.AddComponentCacheHandlers();
         services.AddComponentValidators();
-        
+
         return services;
     }
-    
+
     /// <summary>
-    /// Configures core application services.
+    /// Adds only the component cache infrastructure (cache store, cache backends, domain cache context)
+    /// and component cast handlers/validators -- without the transition pipeline or app services.
+    /// Use this for read-only hosts (e.g. Monitor) that need <see cref="IComponentCacheStore"/>
+    /// but do not execute workflow transitions.
+    /// </summary>
+    public static IServiceCollection AddApplicationCacheModule(this IServiceCollection services)
+    {
+        services.AddCacheServices();
+        services.AddComponentCacheHandlers();
+        services.AddComponentValidators();
+        return services;
+    }
+
+    /// <summary>
+    /// Configures core application services (app services, instance services, runtime services).
     /// </summary>
     private static void AddApplicationServices(this IServiceCollection services)
     {
@@ -69,16 +81,18 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
+        services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
         services.AddScoped<ISubflowFaultService, SubflowFaultService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();
-        services.AddScoped<IInstanceBusyPropagationService, InstanceBusyPropagationService>();
+        services.AddScoped<IInstanceBusyManager, InstanceBusyManager>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
         services.AddScoped<IChildSubflowFaultService, ChildSubflowFaultService>();
         services.AddScoped<ITransitionJobEnqueuer, TransitionJobEnqueuer>();
+        services.AddScoped<IStateNotificationScheduler, StateNotificationScheduler>();
 
         // Instance Services
         services.AddScoped<IInstanceCancellationService, InstanceCancellationService>();

@@ -34,14 +34,18 @@ public sealed class InstanceSubCompletedEventHook(
         EventHookContext context,
         CancellationToken cancellationToken = default)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-        }))
+        };
+        if (eventData.RootInstanceId.HasValue)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.SubFlowEventReceived(eventData.SubInstanceId, eventData.InstanceId, eventData.Domain, eventData.Flow);
 
@@ -102,7 +106,8 @@ public sealed class InstanceSubCompletedEventHook(
             Duration = eventData.Duration,
             SubInstanceId = eventData.SubInstanceId,
             InstanceData = eventData.InstanceData,
-            Version = eventData.Version
+            Version = eventData.Version,
+            Sync = eventData.Sync
         };
     }
 }

@@ -25,10 +25,16 @@ public sealed class StartSubflowJobHandler(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var rootId = context.Instance.GetRootInstanceId();
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.InstanceId] = context.InstanceId
-        }))
+        };
+        if (rootId != context.InstanceId)
+        {
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = rootId;
+        }
+        using (logger.BeginScope(scopeProps))
         {
             // Refresh instance to get the correlation that was added during the step
             var instanceResult = await instanceRepository.GetResultAsync(context.InstanceId.ToString(), true, cancellationToken);
@@ -76,6 +82,23 @@ public sealed class StartSubflowJobHandler(
                 {
                     scriptContext.Mutations.ApplyTo(instance);
                     await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+                }
+
+                // A sync subflow completes inside StartAsync and resumes/finalizes the parent
+                // in its own scope, so the entity tracked in this scope still reads Busy.
+                // Re-read as no-tracking so the sync response reflects the settled status.
+                if (context.CallerMode == ExecMode.Sync)
+                {
+                    var refreshed = await instanceRepository.FindByIdentifierSlimAsync(
+                        context.InstanceId.ToString(), cancellationToken);
+                    if (refreshed is not null)
+                    {
+                        context.ClientResponse = new ClientResponse
+                        {
+                            Id = context.InstanceId,
+                            Status = refreshed.Status
+                        };
+                    }
                 }
 
                 logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);

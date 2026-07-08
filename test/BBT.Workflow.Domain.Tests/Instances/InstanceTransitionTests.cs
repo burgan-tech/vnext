@@ -93,6 +93,59 @@ public class InstanceTransitionTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void Completed_ShouldSetEffectiveStateInfo()
+    {
+        // Arrange
+        var instanceTransition = InstanceTransition.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "transition",
+            "from-state",
+            TriggerType.Manual,
+            JsonData.CreateFrom("{}"),
+            JsonData.CreateFrom("{}")
+        );
+
+        // Act
+        instanceTransition.Completed(
+            "to-state",
+            effectiveState: "sub-state",
+            effectiveStateType: StateType.SubFlow,
+            effectiveStateSubType: StateSubType.Human,
+            stage: "onboarding");
+
+        // Assert
+        Assert.Equal("sub-state", instanceTransition.EffectiveState);
+        Assert.Equal(StateType.SubFlow, instanceTransition.EffectiveStateType);
+        Assert.Equal(StateSubType.Human, instanceTransition.EffectiveStateSubType);
+        Assert.Equal("onboarding", instanceTransition.Stage);
+    }
+
+    [Fact]
+    public void Completed_WithoutEffectiveStateInfo_ShouldLeaveFieldsNull()
+    {
+        // Arrange
+        var instanceTransition = InstanceTransition.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "transition",
+            "from-state",
+            TriggerType.Manual,
+            JsonData.CreateFrom("{}"),
+            JsonData.CreateFrom("{}")
+        );
+
+        // Act
+        instanceTransition.Completed("to-state");
+
+        // Assert
+        Assert.Null(instanceTransition.EffectiveState);
+        Assert.Null(instanceTransition.EffectiveStateType);
+        Assert.Null(instanceTransition.EffectiveStateSubType);
+        Assert.Null(instanceTransition.Stage);
+    }
+
+    [Fact]
     public void Completed_ShouldCalculateDuration()
     {
         // Arrange

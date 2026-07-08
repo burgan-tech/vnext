@@ -275,6 +275,7 @@ ai-docs/
 
 # Claude
 .claude/worktrees/*
+./claude/*.local.json
 
 #Cursor
 .cursor/plans/*
@@ -296,3 +297,7 @@ sonar-project.properties
 /src/BBT.Workflow.HttpApi.Host/Logs/*
 /orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Logs/*
 /execution/BBT.Workflow.Execution.HttpApi.Host/Logs/*
+
+
+# .csproj cache files
+BBT.Workflow.*.csproj.cache

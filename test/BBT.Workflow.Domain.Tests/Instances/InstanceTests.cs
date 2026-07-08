@@ -885,6 +885,83 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal(42, faultedEvent.InstanceData.Value.GetProperty("childValue").GetInt32());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Complete_WhenInstanceIsSubItem_ShouldCarrySyncFlagOnSubCompletedEvent(bool sync)
+    {
+        // Arrange
+        var parentInstanceId = Guid.NewGuid();
+        var instance = InstanceFactory.CreateDefault();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = parentInstanceId.ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "test-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+
+        // Act
+        instance.Complete("child-domain", sync);
+
+        // Assert
+        var completedEvent = instance.GetDomainEvents()
+            .Select(e => e.Event)
+            .OfType<InstanceSubCompletedEvent>()
+            .Single();
+
+        Assert.Equal(parentInstanceId, completedEvent.InstanceId);
+        Assert.Equal(sync, completedEvent.Sync);
+    }
+
+    [Fact]
+    public void Complete_WithoutSyncArgument_ShouldDefaultSubCompletedEventSyncToFalse()
+    {
+        // Arrange
+        var instance = InstanceFactory.CreateDefault();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "test-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+
+        // Act
+        instance.Complete("child-domain");
+
+        // Assert
+        var completedEvent = instance.GetDomainEvents()
+            .Select(e => e.Event)
+            .OfType<InstanceSubCompletedEvent>()
+            .Single();
+
+        Assert.False(completedEvent.Sync);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Fault_WhenInstanceIsSubFlow_ShouldCarrySyncFlagOnSubFaultedEvent(bool sync)
+    {
+        // Arrange
+        var parentInstanceId = Guid.NewGuid();
+        var instance = InstanceFactory.CreateDefault();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = parentInstanceId.ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "test-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+
+        // Act
+        instance.Fault("child-domain", sync);
+
+        // Assert
+        var faultedEvent = instance.GetDomainEvents()
+            .Select(e => e.Event)
+            .OfType<InstanceSubFaultedEvent>()
+            .Single();
+
+        Assert.Equal(parentInstanceId, faultedEvent.InstanceId);
+        Assert.Equal(sync, faultedEvent.Sync);
+    }
+
     private static void AddLatestDataForTest(Instance instance, JsonData data)
     {
         var ctor = typeof(InstanceData).GetConstructor(

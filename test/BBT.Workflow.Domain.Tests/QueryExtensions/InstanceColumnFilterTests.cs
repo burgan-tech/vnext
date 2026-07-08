@@ -325,6 +325,83 @@ public class InstanceColumnFilterTests
     }
 
     [Fact]
+    public void BuildCondition_IsNull_True_ShouldBuildIsNullCondition()
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "CompletedAt", "isnull", "true", ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe("s.\"CompletedAt\" IS NULL");
+        parameters.ShouldBeEmpty();
+        parameterIndex.ShouldBe(0); // No parameter consumed
+    }
+
+    [Fact]
+    public void BuildCondition_IsNull_False_ShouldBuildIsNotNullCondition()
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "CompletedAt", "isnull", "false", ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe("s.\"CompletedAt\" IS NOT NULL");
+        parameters.ShouldBeEmpty();
+        parameterIndex.ShouldBe(0);
+    }
+
+    [Fact]
+    public void BuildCondition_IsNull_IsCaseInsensitive()
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act - GetOperators() yields the operator as "isNull"; BuildCondition lower-cases it
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "ModifiedAt", "isNull", "True", ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe("s.\"ModifiedAt\" IS NULL");
+        parameters.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void BuildCondition_IsNull_UnparseableValue_ShouldDefaultToIsNull()
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act - matches JSON attribute filter semantics: default to IS NULL
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "CompletedAt", "isnull", "", ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe("s.\"CompletedAt\" IS NULL");
+        parameters.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void BuildCondition_IsNull_OnStatusColumn_ShouldNotResolveStatusCode()
+    {
+        // Arrange - isnull must be handled before Status name-to-code resolution
+        var parameterIndex = 0;
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "Status", "isnull", "false", ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe("s.\"Status\" IS NOT NULL");
+        parameters.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void BuildCondition_InvalidColumn_ShouldThrow()
     {
         // Arrange

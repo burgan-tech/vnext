@@ -1,0 +1,14 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: daprConfig
+  namespace: default
+spec:
+  tracing:
+    samplingRate: "1"
+    otlp:
+      endpointAddress: "http://otel-collector:4317"
+  secrets:
+    scopes:
+      - storeName: vnext-execution-secret
+        defaultAccess: allow

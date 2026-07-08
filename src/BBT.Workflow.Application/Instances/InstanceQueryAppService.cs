@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether;
 using BBT.Aether.Application.Services;
 using BBT.Aether.Domain.Entities;
@@ -56,7 +57,21 @@ public sealed class InstanceQueryAppService(
         InstanceStatus.Faulted,
         InstanceStatus.Passive
     ];
-    
+
+    private IDisposable? BeginRootIdScopeIfSubflow(Instance instance)
+    {
+        var rootId = instance.GetRootInstanceId();
+        if (rootId == instance.Id)
+            return null;
+
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+        Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+        return logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.RootInstanceId] = rootId
+        });
+    }
+
     public async Task<ConditionalResult<GetInstanceOutput>> GetInstanceAsync(
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
@@ -266,6 +281,10 @@ public sealed class InstanceQueryAppService(
                         TransitionId = t.TransitionId,
                         FromState = t.FromState,
                         ToState = t.ToState,
+                        EffectiveState = t.EffectiveState,
+                        EffectiveStateType = t.EffectiveStateType,
+                        EffectiveStateSubType = t.EffectiveStateSubType,
+                        Stage = t.Stage,
                         StartedAt = t.StartedAt,
                         FinishedAt = t.FinishedAt,
                         DurationSeconds = t.Duration?.TotalSeconds,
@@ -462,7 +481,19 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceIdentifier, cancellationToken);
-        return instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
+        var result = instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
+        if (result.IsSuccess)
+        {
+            var inst = result.Value!;
+            var rootId = inst.GetRootInstanceId();
+            if (rootId != inst.Id)
+            {
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -762,6 +793,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    using var rootScope = BeginRootIdScopeIfSubflow(data.instance);
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
@@ -1676,7 +1708,7 @@ public sealed class InstanceQueryAppService(
         runtimeInfoProvider.Check(domain);
 
         List<InstanceKeyModel> workflowSchemas;
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Flows))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
         {
             workflowSchemas = await instanceRepository.GetActiveInstanceKeysAsync(cancellationToken);
         }
@@ -1714,7 +1746,7 @@ public sealed class InstanceQueryAppService(
                 var scopedSchema = sp.GetRequiredService<ICurrentSchema>();
                 var scopedRepo = sp.GetRequiredService<IInstanceRepository>();
 
-                using (scopedSchema.Use(schema.Key))
+                using (scopedSchema.Change(schema.Key))
                 {
                     return await scopedRepo.GetHumanTaskInstancesAsync(innerCt);
                 }
@@ -1927,7 +1959,7 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         List<InstanceCorrelation> correlations;
-        using (currentSchema.Use(parentFlow))
+        using (currentSchema.Change(parentFlow))
         {
             correlations = await instanceCorrelationRepository.GetByParentAsync(parentInstanceId, cancellationToken);
         }
@@ -1944,7 +1976,7 @@ public sealed class InstanceQueryAppService(
             var childDomain = correlation.SubFlowDomain;
             Instance? childInstance = null;
 
-            using (currentSchema.Use(childFlow))
+            using (currentSchema.Change(childFlow))
             {
                 childInstance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
                     correlation.SubFlowInstanceId.ToString(),

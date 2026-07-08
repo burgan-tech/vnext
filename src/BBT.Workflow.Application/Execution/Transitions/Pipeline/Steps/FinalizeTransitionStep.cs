@@ -33,7 +33,12 @@ public sealed class FinalizeTransitionStep(
             // Railway chain: Load -> Complete -> Record metric -> Persist
             await Result.Ok(recordId)
                 .BindAsync(id => LoadTransitionRecordAsync(id, cancellationToken))
-                .Tap(transition => transition?.Completed(context.Instance.GetCurrentState))
+                .Tap(transition => transition?.Completed(
+                    context.Instance.GetCurrentState,
+                    context.Instance.EffectiveState,
+                    context.Instance.EffectiveStateType,
+                    context.Instance.EffectiveStateSubType,
+                    context.Instance.Stage))
                 .Tap(transition => RecordDurationMetricIfAvailable(context, transition))
                 .TapAsync(transition => UpdateTransitionIfExistsAsync(transition, cancellationToken));
         }

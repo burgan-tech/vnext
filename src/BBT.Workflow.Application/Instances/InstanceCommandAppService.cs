@@ -60,6 +60,7 @@ public sealed class InstanceCommandAppService(
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
     IInstanceCommandGateway instanceCommandGateway,
+    IWorkflowOutputMappingService workflowOutputMappingService,
     ICurrentUser currentUser,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
@@ -214,7 +215,7 @@ public sealed class InstanceCommandAppService(
         // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
         // operation safe even if cancellation is missed.
         await cancellationService.ProcessStateTransitionsCancellationAsync(
-            instance.Id, [LongPollAckConstants.JobKey], cancellationToken);
+            instance.Id, sourceState: null, [LongPollAckConstants.JobKey], cancellationToken);
 
         return await longPollAckResumeService.ResumeAsync(
             workflow.Domain, workflow.Key, workflow.Version, instance.Id, cancellationToken);
@@ -269,7 +270,8 @@ public sealed class InstanceCommandAppService(
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
-        await using var uow = await UnitOfWorkManager.BeginRequiresNew(cancellationToken);
+        await using var uow = UnitOfWorkManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
         var result = await CreateAndPrepareInstanceAsync(
                 workflow,
                 input.Instance.Id ?? guidGenerator.Create(),
@@ -682,13 +684,27 @@ public sealed class InstanceCommandAppService(
         where TOutput : class
     {
         // Use pipeline instance if available (already committed, avoids redundant DB read).
-        // Falls back to DB read when PipelineInstance is not set (e.g. idempotent existing-instance path).
+        // A Busy snapshot may be stale — a sync subflow completion resumes and finalizes the
+        // parent in its own scope — so re-read as no-tracking (this scope may already track the
+        // row with pre-resume values) to reflect the settled state. Also falls back to the DB
+        // read when PipelineInstance is not set (e.g. idempotent existing-instance path).
         var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
-        var instance = pipelineInstance
-            ?? await instanceRepository.FindByIdentifierAsync(instanceId.ToString(), cancellationToken);
+        var instance = pipelineInstance is not null && !pipelineInstance.Status.Equals(InstanceStatus.Busy)
+            ? pipelineInstance
+            : await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), cancellationToken)
+              ?? pipelineInstance;
 
         if (instance is null)
             return Result<TOutput>.Ok(output);
+
+        // The pipeline reported Busy but the chain has settled to a terminal status meanwhile
+        // (subflow resume finalized the parent in another scope) — surface the settled status.
+        if (output is InstanceOutputBase outputBase
+            && outputBase.Status?.Equals(InstanceStatus.Busy) == true
+            && instance.IsCompleted)
+        {
+            outputBase.Status = instance.Status;
+        }
 
         var latestData = instance.LatestData;
         var rawAttributes = latestData?.Data.JsonElement;
@@ -699,6 +715,7 @@ public sealed class InstanceCommandAppService(
         var attributes = filteredAttributes ?? rawAttributes;
 
         Dictionary<string, object> extensions = new();
+        WorkflowOutputResult? outputResponse = null;
         if (workflow is not null)
         {
             var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
@@ -708,6 +725,16 @@ public sealed class InstanceCommandAppService(
                 .WithTransition(string.Empty)
                 .WithBody(latestData?.Data ?? new JsonData("{}"))
                 .BuildAsync(cancellationToken);
+
+            // Workflow output mapping bypasses the standard envelope, but NEVER for subflow
+            // instances: correlation forward (sub start) and subflow transitions rely on the
+            // standard model, so output is ignored even when configured.
+            if (!instance.IsSubItem)
+            {
+                var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
+                if (outputResult.IsSuccess && outputResult.Value is { } wo)
+                    outputResponse = wo;
+            }
 
             var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
                 extensionRequested,
@@ -730,6 +757,7 @@ public sealed class InstanceCommandAppService(
             start.Extensions = extensions;
             start.PipelineInstance = null;
             start.ETag = representationEtagService.Generate(start);
+            ApplyOutputResponse(start, outputResponse);
         }
         else if (output is TransitionOutput transition)
         {
@@ -739,9 +767,25 @@ public sealed class InstanceCommandAppService(
             transition.Extensions = extensions;
             transition.PipelineInstance = null;
             transition.ETag = representationEtagService.Generate(transition);
+            ApplyOutputResponse(transition, outputResponse);
         }
 
         return Result<TOutput>.Ok(output);
+    }
+
+    /// <summary>
+    /// Copies the workflow output mapping result onto the output DTO. When set, the controller
+    /// mapper returns the payload directly (bypassing the standard envelope), even if Data is null.
+    /// </summary>
+    private static void ApplyOutputResponse(InstanceOutputBase output, WorkflowOutputResult? outputResponse)
+    {
+        if (outputResponse is null)
+            return;
+
+        output.HasOutputResponse = true;
+        output.OutputData = outputResponse.Data;
+        output.OutputStatusCode = outputResponse.StatusCode;
+        output.OutputHeaders = outputResponse.Headers;
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using BBT.Aether.AspNetCore.ExceptionHandling;
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Domain.Services;
 using BBT.Aether.Events;
+using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
@@ -28,6 +29,12 @@ namespace Microsoft.Extensions.DependencyInjection;
 public static class WorkflowApiBaseServiceCollectionExtensions
 {
     /// <summary>
+    /// Configuration section bound onto the Aether background-job options
+    /// (Schema, MaxRetryCount, RetryBaseDelay, ArmingInterval, ArmingBatchSize, VisibilityTimeout).
+    /// </summary>
+    private const string BackgroundJobConfigurationSection = "BackgroundJob";
+
+    /// <summary>
     /// Registers the centralized JsonSerializerOptions as a singleton in DI.
     /// This allows services to inject JsonSerializerOptions for consistent JSON handling.
     /// </summary>
@@ -51,7 +58,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddAspNetCoreModules(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddAspNetCoreModules(this IServiceCollection services,
+        IConfiguration configuration)
     {
         services.AddAetherAmbientServiceProvider();
         services.AddJsonSerializerOptions();
@@ -61,7 +69,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.ApplicationName ??= configuration.GetValue<string?>("ApplicationName") ?? "vNext";
         });
         services.AddAetherAspNetCore();
-        
+
         services.AddEndpointsApiExplorer();
         services.AddAetherApiVersioning(apiTitle: "vNext API");
         services.AddScoped<IWorkflowContext, WorkflowContext>();
@@ -71,13 +79,15 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.Replace(ServiceDescriptor.Singleton<BBT.Workflow.Scripting.IRequestRawBodyProvider,
             BBT.Workflow.Middlewares.HttpContextRawBodyProvider>());
+        services.Configure<BBT.Workflow.Middlewares.RawRequestBodyBufferingOptions>(
+            configuration.GetSection(BBT.Workflow.Middlewares.RawRequestBodyBufferingOptions.SectionPath));
 
         services.AddControllers()
             .AddJsonOptions(options =>
             {
                 // Use centralized JSON configuration from JsonSerializerConstants
                 var centralOptions = JsonSerializerConstants.JsonOptions;
-                
+
                 options.JsonSerializerOptions.WriteIndented = centralOptions.WriteIndented;
                 options.JsonSerializerOptions.PropertyNamingPolicy = centralOptions.PropertyNamingPolicy;
                 options.JsonSerializerOptions.DictionaryKeyPolicy = centralOptions.DictionaryKeyPolicy;
@@ -85,19 +95,22 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 options.JsonSerializerOptions.DefaultIgnoreCondition = centralOptions.DefaultIgnoreCondition;
                 options.JsonSerializerOptions.ReferenceHandler = centralOptions.ReferenceHandler;
                 options.JsonSerializerOptions.MaxDepth = centralOptions.MaxDepth;
-                
+
                 // Add converters from centralized configuration
                 foreach (var converter in centralOptions.Converters)
                 {
                     options.JsonSerializerOptions.Converters.Add(converter);
                 }
             });
-        
+
         return services;
     }
 
     public static IServiceCollection AddDbContext(this IServiceCollection services, IConfiguration configuration)
     {
+        var schemaSwitchingMode = configuration.GetValue("Aether:SchemaSwitchingMode",
+            SchemaSwitchingMode.SessionSearchPath);
+
         services.AddSchemaResolution(options =>
         {
             options.HeaderKey = "X-Workflow";
@@ -106,38 +119,44 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             options.ThrowIfNotFound = false;
         });
 
-        services.AddAetherDbContext<WorkflowDbContext>((sp, options) =>
-        {
-            options.UseNpgsql(configuration.GetConnectionString("Default"),
-                    npgsqlOptions => { npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations"); })
-                .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+        services.AddAetherNpgsql<WorkflowDbContext>(
+            configuration.GetConnectionString("Default")!,
+            schemaSwitchingMode,
+            (sp, options) =>
+            {
+                options.UseNpgsql(configuration.GetConnectionString("Default"),
+                        npgsqlOptions => { npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations"); })
+                    .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 
-            options.ReplaceService<IMigrationsSqlGenerator, MultiSchemaNpgsqlMigrationsSqlGenerator>();
+                options.ReplaceService<IMigrationsSqlGenerator, MultiSchemaNpgsqlMigrationsSqlGenerator>();
 
-            // SchemaAwareModelCacheKeyFactory replaces SET search_path approach:
-            // a separate compiled model is cached per schema, table names are fully qualified,
-            // no session-level directive is ever sent — PgBouncer transaction-mode safe.
-            options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
+                // SchemaAwareModelCacheKeyFactory replaces SET search_path approach:
+                // a separate compiled model is cached per schema, table names are fully qualified,
+                // no session-level directive is ever sent — PgBouncer transaction-mode safe.
+                options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
 
-            options.AddInterceptors(
-                sp.GetRequiredService<WorkflowDatabaseInterceptor>(),
-                sp.GetRequiredService<WorkflowTransactionInterceptor>()
-            );
-        });
+                options.AddInterceptors(
+                    sp.GetRequiredService<WorkflowDatabaseInterceptor>(),
+                    sp.GetRequiredService<WorkflowTransactionInterceptor>()
+                );
+            });
 
         services.AddAetherUnitOfWorkMiddleware();
 
         services.AddSingleton<IDataSeedService, WorkflowDataSeedService>();
 
-        services.AddAetherDbContext<MessagingDbContext>((_, options) =>
-        {
-            options.UseNpgsql(configuration.GetConnectionString("Default"),
-                    npgsqlOptions =>
-                    {
-                        npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations", "sys_queues");
-                    })
-                .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-        });
+        services.AddAetherNpgsql<MessagingDbContext>(
+            configuration.GetConnectionString("Default")!,
+            schemaSwitchingMode,
+            (_, options) =>
+            {
+                options.UseNpgsql(configuration.GetConnectionString("Default"),
+                        npgsqlOptions =>
+                        {
+                            npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations", "sys_queues");
+                        })
+                    .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+            });
 
         return services;
     }
@@ -170,19 +189,33 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddBackgroundJob(this IServiceCollection services)
     {
-        services.AddAetherBackgroundJob<WorkflowDbContext>(options =>
+        var configuration = services.GetConfiguration();
+
+        // Whether to run the arming/reaper hosted service in this process. Defaults to true
+        // (configurable via BackgroundJob:WithHostedService) so the background-job processor runs
+        // unless explicitly disabled (e.g. for read-only / scale-out roles).
+        var withHostedService = configuration.GetValue(
+            $"{BackgroundJobConfigurationSection}:WithHostedService", true);
+
+        services.AddAetherBackgroundJob<MessagingDbContext>(options =>
         {
             options.AddHandler<FlowTimeoutJobHandler>(FlowTimeoutJobHandler.HandlerName);
             options.AddHandler<TransitionJobHandler>(TransitionJobHandler.HandlerName);
             options.AddHandler<TransitionTimerJobHandler>(TransitionTimerJobHandler.HandlerName);
             options.AddHandler<LongPollAckTimeoutJobHandler>(LongPollAckTimeoutJobHandler.HandlerName);
-        });
+            options.AddHandler<StateNotifyJobHandler>(StateNotifyJobHandler.HandlerName);
+            
+            // Bind the tunables (Schema, MaxRetryCount, RetryBaseDelay, ArmingInterval,
+            // ArmingBatchSize, VisibilityTimeout) from configuration. Absent keys keep the
+            // BackgroundJobOptions defaults; the registered handlers are not affected.
+            configuration.GetSection(BackgroundJobConfigurationSection).Bind(options);
+        }, withHostedService: withHostedService);
 
         services.AddDaprJobScheduler();
 
         return services;
     }
-    
+
     public static IServiceCollection AppMapper(this IServiceCollection services)
     {
         services.AddAetherMapperlyMapper(
@@ -221,8 +254,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<BBT.Workflow.Execution.Pipeline.ITransitionLockScopeFactory,
             BBT.Workflow.Infrastructure.Execution.Locks.TransitionLockScopeFactory>();
-        services.AddScoped<BBT.Workflow.Execution.Pipeline.IInstanceBusyMarker,
-            BBT.Workflow.Infrastructure.Execution.Locks.InstanceBusyMarker>();
         return services;
     }
 
@@ -287,11 +318,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         });
         return services;
     }
-    
+
     public static IServiceCollection AddRuntimeMiddleware(this IServiceCollection services)
     {
         services.AddScoped<WorkflowRuntimeMiddleware>();
-       
+
         return services;
     }
 
@@ -299,7 +330,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<ResponseHeaderFilter>();
         services.AddScoped<IHeaderService, HttpContextHeaderService>();
-        services.AddScoped<BBT.Workflow.Languages.ICurrentLanguage, BBT.Workflow.Languages.HttpContextCurrentLanguage>();
+        services
+            .AddScoped<BBT.Workflow.Languages.ICurrentLanguage, BBT.Workflow.Languages.HttpContextCurrentLanguage>();
         services
             .ReplaceSchemaResolver<HeaderSchemaResolutionStrategy, WorkflowHeaderSchemaResolutionStrategy>();
 

@@ -25,6 +25,13 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds an instance by its identifier (GUID or key) without loading DataList.
+    /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
+    /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.
+    /// </summary>
+    Task<Instance?> FindByIdentifierSlimAsync(string identifier, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
     /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
     /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,
@@ -49,7 +56,7 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default);
-    
+
     Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default);
 
     Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(int skip, int take, CancellationToken cancellationToken = default);
@@ -61,7 +68,7 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
         CancellationToken cancellationToken = default);
-        
+
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page,
         int pageSize,
@@ -118,17 +125,82 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds an instance including ALL child correlations (completed and active) as a tracked entity.
+    /// Required by correlation revert: the default detail load filters out completed correlations,
+    /// which would make reverting a just-completed correlation a silent no-op.
+    /// </summary>
+    /// <param name="instanceId">The instance identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The instance with all correlations, or null when not found.</returns>
+    Task<Instance?> FindWithAllCorrelationsAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns active instances with Human state subtype.
     /// Includes DataList for JSON data extraction.
     /// </summary>
     Task<List<Instance>> GetHumanTaskInstancesAsync(CancellationToken cancellationToken = default);
 
-  
+
     /// <summary>
     /// Returns the key and version of every active instance without loading <c>InstanceData.Data</c>.
     /// Used by broadcast-receiving pods to discover what to warm from the distributed cache.
     /// </summary>
     Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the total number of instances matching the optional GraphQL filter.
+    /// Uses the same filter-application logic as <see cref="GetPagedResultsAsync"/>
+    /// but issues a single COUNT query — no rows are transferred.
+    /// </summary>
+    /// <param name="filter">Optional GraphQL/legacy filter JSON. Null means count all instances.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The total row count matching the filter.</returns>
+    Task<long> CountAsync(
+        string? filter,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Read-only: counts instances matching the given status and optional flowVersion filter.
+    /// Uses direct LINQ predicates — does not go through the JSON filter parsing chain.
+    /// Pass <c>null</c> for <paramref name="status"/> to count all statuses.
+    /// Pass <c>null</c> for <paramref name="flowVersion"/> to count all versions (additive, monitor-only).
+    /// </summary>
+    Task<long> CountByStatusAsync(
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: counts instances whose <c>CurrentState</c> equals <paramref name="stateKey"/>,
+    /// filtered by optional <paramref name="status"/> and optional <paramref name="flowVersion"/>.
+    /// Uses direct LINQ predicates (additive, monitor-only).
+    /// </summary>
+    Task<long> CountByStateAsync(
+        string stateKey,
+        InstanceStatus? status,
+        string? flowVersion,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Read-only: avg/min/max completion duration over completed instances (additive, monitor-only).</summary>
+    Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: returns per-status instance counts (Active/Busy/Completed/Faulted/Passive) in a single
+    /// aggregation query, honouring the optional GraphQL/legacy <paramref name="filter"/> (e.g. a
+    /// <c>createdAt</c> date-range). Replaces N separate per-status COUNT round-trips for dashboard
+    /// counters. Reuses the same filter-application path as <see cref="CountAsync"/> (additive, monitor-only).
+    /// </summary>
+    /// <param name="filter">Optional GraphQL/legacy filter JSON. Null counts all instances in the schema.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<InstanceStatusCounts> GetStatusCountsAsync(
+        string? filter,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Read-only: per-current-state count of faulted instances in the current schema (additive, monitor-only).</summary>
+    Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns Busy instances that own an auto-chain token whose heartbeat is older than
@@ -148,4 +220,26 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// the per-flow schemas — not in any single ambient/default schema.
     /// </summary>
     Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paged list of active-instance + data pairs projected to a slim summary,
+    /// ordered by instance Id. Excludes unused Instance columns (CurrentState, Status, etc.).
+    /// Non-tracking — intended for monitoring component list queries only.
+    /// </summary>
+    Task<List<ActiveInstanceDataSummary>> GetActiveDataSummariesPagedAsync(
+        int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paged, slim projection of all published versions for the component
+    /// identified by <paramref name="key"/> in the current schema.
+    /// Results are ordered latest-first (<c>IsLatest DESC</c>, <c>PublishedAt DESC</c>).
+    /// Pass <paramref name="take"/> as <c>pageSize + 1</c> to determine <c>hasNext</c>
+    /// without an extra COUNT query.
+    /// Only monitoring consumes this method (additive, monitoring-only).
+    /// </summary>
+    Task<List<ComponentVersionSummary>> GetVersionsPagedAsync(
+        string key,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
 }

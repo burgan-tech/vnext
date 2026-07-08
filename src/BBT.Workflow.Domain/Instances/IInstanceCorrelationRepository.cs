@@ -79,4 +79,18 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
     Task<InstanceCorrelation?> FindBySubInstanceIdAsync(
         Guid subInstanceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only reverse lookup: finds the correlation where the given instance is the sub-flow child.
+    /// Additive monitor-support method (AsNoTracking). Does not alter FindBySubInstanceIdAsync.
+    /// </summary>
+    /// <param name="subInstanceId">The unique identifier of the sub-flow child instance.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>
+    /// A task representing the asynchronous operation.
+    /// The result contains the correlation record if found, null otherwise.
+    /// </returns>
+    Task<InstanceCorrelation?> FindBySubInstanceIdAsReadOnlyAsync(
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
 } 

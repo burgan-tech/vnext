@@ -273,7 +273,7 @@ public sealed class ScriptEngine(
         var componentCacheStore = _serviceProvider.GetRequiredService<IComponentCacheStore>();
         var currentSchema = _serviceProvider.GetRequiredService<ICurrentSchema>();
 
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Mappings))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Mappings))
         {
             var result = await componentCacheStore.GetMappingAsync(
                 reference.Domain, reference.Key, reference.Version, cancellationToken);
@@ -303,7 +303,7 @@ public sealed class ScriptEngine(
         var componentCacheStore = _serviceProvider.GetRequiredService<IComponentCacheStore>();
         var currentSchema = _serviceProvider.GetRequiredService<ICurrentSchema>();
 
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Mappings))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Mappings))
         {
             foreach (var helper in helpers)
             {

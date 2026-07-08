@@ -49,6 +49,7 @@ public sealed class CancelScheduledJobsStep(
         // Cancel ONLY the scheduled jobs for this state's transitions
         var result = await cancellationService.ProcessStateTransitionsCancellationAsync(
             context.InstanceId,
+            context.Current.Key,
             scheduledTransitionKeys,
             cancellationToken);
 

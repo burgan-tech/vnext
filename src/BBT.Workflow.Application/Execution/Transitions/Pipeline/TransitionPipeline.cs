@@ -1,8 +1,7 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
@@ -24,12 +23,14 @@ public class TransitionPipeline
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly ITransitionLockScopeFactory _lockScopeFactory;
     private readonly IReservedTransitionResolver _reservedTransitionResolver;
-    private readonly IInstanceBusyMarker _busyMarker;
+    private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
     private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
+    private readonly IUnitOfWorkManager _uowManager;
     private readonly ITransitionValidationService _validationService;
     private readonly IPipelineProfileResolver _profileResolver;
+    private readonly IStateNotificationScheduler _stateNotificationScheduler;
     private readonly ILogger<TransitionPipeline> _logger;
 
     /// <summary>
@@ -46,12 +47,14 @@ public class TransitionPipeline
         ContinuationDispatcher continuationDispatcher,
         ITransitionLockScopeFactory lockScopeFactory,
         IReservedTransitionResolver reservedTransitionResolver,
-        IInstanceBusyMarker busyMarker,
+        IInstanceBusyManager busyMarker,
         ITransitionContextFactory contextFactory,
         IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
+        IUnitOfWorkManager uowManager,
         ITransitionValidationService validationService,
         IPipelineProfileResolver profileResolver,
+        IStateNotificationScheduler stateNotificationScheduler,
         ILogger<TransitionPipeline> logger)
     {
         _executor = executor;
@@ -62,8 +65,10 @@ public class TransitionPipeline
         _contextFactory = contextFactory;
         _postCommitExecutor = postCommitExecutor;
         _instanceRepository = instanceRepository;
+        _uowManager = uowManager;
         _validationService = validationService;
         _profileResolver = profileResolver;
+        _stateNotificationScheduler = stateNotificationScheduler;
         _logger = logger;
     }
 
@@ -185,6 +190,11 @@ public class TransitionPipeline
                 ? ContinuationMode.Enqueue
                 : ContinuationMode.Inline;
 
+            // Capture before dispatch: the Enqueue strategy CONSUMES NextTransition, so reading it
+            // afterwards is unreliable. The chain has truly settled only when there was no next
+            // transition AND the dispatcher produced no in-process continuation.
+            var hadNextTransition = context.Directives.NextTransition is not null;
+
             var continuationResult = await _continuationDispatcher.DispatchAsync(
                 continuationMode, context, cancellationToken);
             if (!continuationResult.IsSuccess)
@@ -197,6 +207,13 @@ public class TransitionPipeline
                 // (inside lock, no re-acquire needed).
                 await ApplyResolvedStatusAsync(context, cancellationToken);
                 await ApplyChainOwnershipAsync(context, cancellationToken);
+
+                // State settled (state + status finalized): fire the state-level notification if the
+                // resting state declares one. Skipped when a continuation was enqueued — the chain is
+                // not yet at rest and the settle hook fires again when the final hop completes.
+                if (!hadNextTransition)
+                    await MaybeScheduleStateNotificationAsync(context, cancellationToken);
+
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
@@ -242,20 +259,27 @@ public class TransitionPipeline
     /// <summary>
     /// Marks the workflow instance as faulted. Already within lock scope —
     /// no re-acquisition needed.
+    /// Uses a RequiresNew UoW scope so that any dirty state left on the current
+    /// DbContext by the failed pipeline step does not block SaveChanges.
     /// </summary>
     private async Task MarkInstanceFaultedAsync(
         TransitionExecutionContext context,
         Error error,
         CancellationToken cancellationToken)
     {
-        _logger.LogWarning(
-            "Marking instance {InstanceId} as faulted due to unhandled pipeline error: {ErrorCode} - {ErrorMessage}",
-            context.InstanceId, error.Code, error.Message);
+        _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
-        if (!context.Instance.HasActiveIncident)
+        await using var faultUow = _uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+
+        // Reload in the new scope so we operate on a clean, tracked entity.
+        var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)
+                       ?? context.Instance;
+
+        if (!instance.HasActiveIncident)
         {
             var incident = InstanceIncidentFactory.Create(
-                state: context.Instance.GetCurrentState,
+                state: instance.GetCurrentState,
                 transition: context.TransitionKey,
                 taskKey: null,
                 message: error.Message ?? "Unhandled pipeline error",
@@ -263,16 +287,14 @@ public class TransitionPipeline
                 errorLayer: "Pipeline",
                 traceId: context.TraceId);
 
-            context.Instance.AddIncident(incident);
+            instance.AddIncident(incident);
         }
 
-        context.Instance.Fault(context.Domain);
-        context.ExtractAndDeferInstanceEvents();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
+        await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
+        await faultUow.CommitAsync(cancellationToken);
 
-        _logger.LogInformation(
-            "Instance {InstanceId} marked as faulted successfully. Client will receive Status = 'F'",
-            context.InstanceId);
+        _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }
 
     /// <summary>
@@ -304,7 +326,7 @@ public class TransitionPipeline
             context.Instance.AddIncident(incident);
         }
 
-        context.Instance.Fault(context.Domain);
+        context.Instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
         context.ExtractAndDeferInstanceEvents();
         await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
@@ -366,5 +388,24 @@ public class TransitionPipeline
         _logger.LogDebug(
             "Instance {InstanceId} released chain ownership at rest (stays Busy)",
             context.InstanceId);
+    }
+
+    /// <summary>
+    /// Schedules a state-level notification job when the settled target state declares at least one
+    /// <c>state</c> notification entry. Runs at the chain's rest point — the instance state and status
+    /// are finalized and committed with the ambient UoW — so the durable job's dispatch (off the
+    /// request thread) observes the committed state. Rule evaluation and per-entry dispatch happen in
+    /// the job. Already within lock scope.
+    /// </summary>
+    private async Task MaybeScheduleStateNotificationAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.Target?.HasStateNotifications != true)
+            return;
+
+        await _stateNotificationScheduler.ScheduleAsync(context, cancellationToken);
+
+        _logger.StateNotificationScheduled(context.InstanceId, context.Target.Key);
     }
 }

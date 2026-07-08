@@ -13,6 +13,7 @@ namespace BBT.Workflow.Execution.PostCommit.Handlers;
 /// </summary>
 public sealed class ForwardToSubflowJobHandler(
     ISubflowForwardingService subflowForwardingService,
+    IInstanceRepository instanceRepository,
     ILogger<ForwardToSubflowJobHandler> logger) : IPostCommitHandler<ForwardToSubflowJob>
 {
     /// <inheritdoc />
@@ -21,12 +22,17 @@ public sealed class ForwardToSubflowJobHandler(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        using (logger.BeginScope(new Dictionary<string, object>
+        var rootId = context.Instance?.GetRootInstanceId();
+        var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.InstanceId] = context.InstanceId,
             [TelemetryConstants.TagNames.ParentInstanceId] = job.ParentInstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = job.SubflowInstanceId
-        }))
+        };
+        if (rootId.HasValue && rootId.Value != context.InstanceId)
+            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = rootId.Value;
+
+        using (logger.BeginScope(scopeProps))
         {
             logger.SubFlowForwardStarted(job.TransitionKey, job.SubflowInstanceId, job.ParentInstanceId);
 
@@ -44,10 +50,11 @@ public sealed class ForwardToSubflowJobHandler(
             if (result.IsSuccess)
             {
                 // Success path - update client response with subflow status
-                // Special case: If subflow completed, show parent instance's actual status
-                // Otherwise, show subflow's status
+                // Special case: If subflow completed, show parent instance's actual status.
+                // context.Instance is this scope's snapshot and still reads Busy — the subflow's
+                // completion resumed and finalized the parent in another scope — so re-read fresh.
                 var responseStatus = result.Value!.Status.Equals(InstanceStatus.Completed)
-                    ? context.Instance.Status
+                    ? await GetFreshParentStatusAsync(context, cancellationToken)
                     : result.Value.Status;
 
                 context.ClientResponse = new ClientResponse
@@ -79,6 +86,20 @@ public sealed class ForwardToSubflowJobHandler(
             // Propagate error to policy for decision making
             return Result.Fail(result.Error);
         }
+    }
+
+    /// <summary>
+    /// Reads the parent's settled status as no-tracking. The parent row may already be tracked
+    /// (stale, still Busy) in this scope while the subflow completion resume finalized it elsewhere.
+    /// Falls back to the in-memory snapshot when the read returns nothing.
+    /// </summary>
+    private async Task<InstanceStatus> GetFreshParentStatusAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var fresh = await instanceRepository.FindByIdentifierSlimAsync(
+            context.InstanceId.ToString(), cancellationToken);
+        return fresh?.Status ?? context.Instance.Status;
     }
 
     /// <summary>

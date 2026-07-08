@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace BBT.Workflow.Instances;
 
 public class EfCoreInstanceTransitionRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
     IDataSinkManager dataSinkManager)
     : EfCoreRepository<WorkflowDbContext, InstanceTransition, Guid>(dbContext, serviceProvider),
@@ -99,5 +99,52 @@ public class EfCoreInstanceTransitionRepository(
             .Where(p => p.InstanceId == instanceId)
             .OrderBy(p => p.StartedAt)
             .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTransitionSlim>> GetByInstanceIdAsReadOnlyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.InstanceTransitions
+            .AsNoTracking()
+            .Where(p => p.InstanceId == instanceId)
+            .OrderBy(p => p.StartedAt)
+            .Select(t => new InstanceTransitionSlim(
+                t.Id,
+                t.InstanceId,
+                t.TransitionId,
+                t.FromState,
+                t.ToState,
+                t.StartedAt,
+                t.FinishedAt,
+                t.Duration,
+                t.TriggerType,
+                t.CreatedAt,
+                t.CreatedBy,
+                t.CreatedByBehalfOf))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<TransitionExecutionStat>> GetTransitionStatsAsync(CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var counts = await context.InstanceTransitions.AsNoTracking()
+            .GroupBy(t => new { t.TransitionId, t.FromState, t.ToState })
+            .Select(g => new
+            {
+                g.Key.TransitionId, g.Key.FromState, g.Key.ToState,
+                Count = g.Count(),
+                CompletedCount = g.Count(x => x.FinishedAt != null),
+                ManualCount = g.Count(x => x.TriggerType == TriggerType.Manual),
+                AutomaticCount = g.Count(x => x.TriggerType == TriggerType.Automatic),
+                ScheduledCount = g.Count(x => x.TriggerType == TriggerType.Scheduled),
+                EventCount = g.Count(x => x.TriggerType == TriggerType.Event)
+            })
+            .ToListAsync(cancellationToken);
+
+        return counts.Select(c => new TransitionExecutionStat(
+            c.TransitionId, c.FromState, c.ToState, c.Count,
+            c.CompletedCount, c.ManualCount, c.AutomaticCount, c.ScheduledCount, c.EventCount)).ToList();
     }
 }

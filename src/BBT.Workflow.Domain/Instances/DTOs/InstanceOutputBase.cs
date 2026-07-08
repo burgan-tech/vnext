@@ -57,4 +57,25 @@ public abstract class InstanceOutputBase
     /// </summary>
     [JsonIgnore]
     public Instance? PipelineInstance { get; set; }
+
+    /// <summary>
+    /// True when a workflow output script ran (sync=true, non-subflow, script configured).
+    /// Signals the mapper to bypass the standard envelope and return the mapped payload
+    /// directly — even when <see cref="OutputData"/> is null (intentional empty response).
+    /// Not serialized — internal transport between AppService and the controller mapper only.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasOutputResponse { get; set; }
+
+    /// <summary>Mapped payload returned as the raw response body. May be null. Not serialized.</summary>
+    [JsonIgnore]
+    public object? OutputData { get; set; }
+
+    /// <summary>Optional HTTP status code from the output script. Not serialized.</summary>
+    [JsonIgnore]
+    public int? OutputStatusCode { get; set; }
+
+    /// <summary>Optional response headers from the output script. Not serialized.</summary>
+    [JsonIgnore]
+    public Dictionary<string, string>? OutputHeaders { get; set; }
 }

@@ -14,7 +14,7 @@ public static class InstanceColumnConditionBuilder
     /// Build PostgreSQL WHERE condition for an Instance table column
     /// </summary>
     /// <param name="columnName">Instance column name (e.g., "Key", "Status", "CreatedAt")</param>
-    /// <param name="operatorType">Filter operator (eq, ne, gt, ge, lt, le, between, like, startswith, endswith, in, nin)</param>
+    /// <param name="operatorType">Filter operator (eq, ne, gt, ge, lt, le, between, like, startswith, endswith, in, nin, isnull)</param>
     /// <param name="value">Filter value (string representation)</param>
     /// <param name="parameterIndex">Parameter index counter (ref for auto-increment)</param>
     /// <returns>Tuple of (SQL condition string, list of NpgsqlParameters)</returns>
@@ -32,6 +32,13 @@ public static class InstanceColumnConditionBuilder
 
         // Get properly cased column name
         var properColumnName = InstanceFieldDiscriminator.GetInstanceColumnName(columnName);
+
+        // isnull is value-resolution independent and applies uniformly to every column
+        // (including Status), so handle it before any column-specific resolution.
+        if (operatorType.Equals("isnull", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildIsNullCondition(properColumnName, value);
+        }
 
         // Special handling for Status column - resolve names to codes
         if (properColumnName.Equals("Status", StringComparison.OrdinalIgnoreCase))
@@ -54,6 +61,7 @@ public static class InstanceColumnConditionBuilder
             "endswith" => BuildEndsWithCondition(properColumnName, value, ref parameterIndex),
             "in" => BuildInCondition(properColumnName, value, ref parameterIndex),
             "nin" => BuildNotInCondition(properColumnName, value, ref parameterIndex),
+            // Note: "isnull" is handled earlier (before Status resolution) so it never reaches here.
             _ => throw new ArgumentException($"Unsupported operator: {operatorType}", nameof(operatorType))
         };
     }
@@ -170,7 +178,7 @@ public static class InstanceColumnConditionBuilder
         var escapedValue = EscapeLikePattern(value);
         parameters.Add(new NpgsqlParameter { Value = $"%{escapedValue}%" });
 
-        var condition = $"s.\"{columnName}\" ILIKE {{{paramIndex}}}";
+        var condition = $"s.\"{columnName}\" COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
         return (condition, parameters);
     }
 
@@ -186,7 +194,7 @@ public static class InstanceColumnConditionBuilder
         var escapedValue = EscapeLikePattern(value);
         parameters.Add(new NpgsqlParameter { Value = $"{escapedValue}%" });
 
-        var condition = $"s.\"{columnName}\" ILIKE {{{paramIndex}}}";
+        var condition = $"s.\"{columnName}\" COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
         return (condition, parameters);
     }
 
@@ -202,7 +210,7 @@ public static class InstanceColumnConditionBuilder
         var escapedValue = EscapeLikePattern(value);
         parameters.Add(new NpgsqlParameter { Value = $"%{escapedValue}" });
 
-        var condition = $"s.\"{columnName}\" ILIKE {{{paramIndex}}}";
+        var condition = $"s.\"{columnName}\" COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
         return (condition, parameters);
     }
 
@@ -252,6 +260,21 @@ public static class InstanceColumnConditionBuilder
 
         var condition = $"s.\"{columnName}\" NOT IN ({string.Join(", ", paramPlaceholders)})";
         return (condition, parameters);
+    }
+
+    /// <summary>
+    /// Build IS NULL / IS NOT NULL condition.
+    /// The value selects the check: "true" => IS NULL, "false" => IS NOT NULL.
+    /// Defaults to IS NULL when the value is missing or unparseable,
+    /// matching the JSON attribute filter semantics.
+    /// </summary>
+    private static (string, List<NpgsqlParameter>) BuildIsNullCondition(
+        string columnName, string value)
+    {
+        var isNull = !bool.TryParse(value, out var parsed) || parsed;
+        var sqlOperator = isNull ? "IS NULL" : "IS NOT NULL";
+        var condition = $"s.\"{columnName}\" {sqlOperator}";
+        return (condition, new List<NpgsqlParameter>());
     }
 
     /// <summary>

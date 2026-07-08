@@ -374,6 +374,18 @@ public static class WorkflowErrors
             detail: stackTrace ?? subFlowKey);
 
     /// <summary>
+    /// SubFlow output mapping script execution failed.
+    /// </summary>
+    /// <param name="parentInstanceId">The ID of the parent instance whose output mapping failed.</param>
+    /// <param name="reason">The exception message from the failed OutputHandler.</param>
+    /// <param name="stackTrace">Full exception stack trace stored in <see cref="Error.Detail"/>.</param>
+    public static Error SubFlowOutputMappingFailed(Guid parentInstanceId, string reason, string? stackTrace = null)
+        => Error.Failure(
+            WorkflowErrorCodes.SubflowOutputMappingFailed,
+            $"SubFlow output mapping failed for parent instance '{parentInstanceId}': {reason}",
+            detail: stackTrace);
+
+    /// <summary>
     /// Correlation not found for SubFlow start.
     /// </summary>
     /// <param name="correlationId">The correlation ID that was not found.</param>

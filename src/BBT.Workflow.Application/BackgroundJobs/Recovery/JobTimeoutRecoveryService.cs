@@ -20,9 +20,8 @@ public sealed class JobTimeoutRecoveryService(
     {
         try
         {
-            await using var uow = await uowManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                cancellationToken);
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             var instance = await instanceRepository.FindAsync(args.InstanceId, true, cancellationToken);
 

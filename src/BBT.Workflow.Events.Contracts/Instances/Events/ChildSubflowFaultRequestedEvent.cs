@@ -39,4 +39,10 @@ public class ChildSubflowFaultRequestedEvent : IDistributedEvent
     /// When the parent instance faulted
     /// </summary>
     public required DateTime FaultedAt { get; init; }
+
+    /// <summary>
+    /// The root ancestor instance ID for nested subflow chains.
+    /// <c>null</c> when this is a root (non-subflow) instance.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
 }

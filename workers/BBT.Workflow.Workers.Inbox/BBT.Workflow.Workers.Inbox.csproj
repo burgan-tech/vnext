@@ -19,6 +19,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj"/>
         <ProjectReference Include="..\..\src\BBT.Workflow.Events.Contracts\BBT.Workflow.Events.Contracts.csproj"/>
+        <PackageReference Include="BBT.Aether.Npgsql" Version="$(AetherPackageVersion)" />
     </ItemGroup>
 </Project>
 

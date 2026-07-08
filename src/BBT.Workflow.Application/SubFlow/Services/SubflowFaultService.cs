@@ -54,9 +54,8 @@ public sealed class SubflowFaultService(
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
 
-                await using (var uow = await uowManager.BeginAsync(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                    cancellationToken))
+                await using (var uow = uowManager.Begin(
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
                 {
                     parentInstance = await instanceRepository.FindAsync(
                         input.InstanceId, true, cancellationToken);
@@ -98,7 +97,7 @@ public sealed class SubflowFaultService(
                     if (!parentWorkflowResult.IsSuccess)
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
-                        parentInstance.Fault(input.Domain);
+                        parentInstance.Fault(input.Domain, input.Sync);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
                         return;
@@ -135,15 +134,25 @@ public sealed class SubflowFaultService(
                     }
                     else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
                     {
-                        parentInstance.Fault(input.Domain);
+                        parentInstance.Fault(input.Domain, input.Sync);
                     }
 
-                    await outputMappingService.ApplyAsync(
+                    var mappingResult = await outputMappingService.ApplyAsync(
                         parentInstance,
                         parentWorkflow,
                         correlation.ParentState,
                         input.InstanceData,
                         cancellationToken);
+
+                    // Output mapping failure is non-blocking here: the instance is already
+                    // marked Faulted/transitioned above. Just log and proceed so the fault
+                    // is committed and propagated upward via InstanceSubFaultedEvent.
+                    if (!mappingResult.IsSuccess)
+                    {
+                        logger.SubFlowOutputMappingFailed(
+                            new Exception(mappingResult.Error.Message),
+                            parentInstance.Id);
+                    }
 
                     await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                     await uow.CommitAsync(cancellationToken);
@@ -156,6 +165,7 @@ public sealed class SubflowFaultService(
                         parentWorkflow!,
                         actionResult.TransitionKey,
                         input.SubInstanceId,
+                        input.Sync,
                         cancellationToken);
                 }
                 else if (actionResult?.ShouldContinue == true)
@@ -164,6 +174,7 @@ public sealed class SubflowFaultService(
                         parentInstance,
                         parentWorkflow!,
                         input.SubInstanceId,
+                        input.Sync,
                         cancellationToken);
                 }
 
@@ -242,6 +253,7 @@ public sealed class SubflowFaultService(
         Definitions.Workflow parentWorkflow,
         string transitionKey,
         Guid subInstanceId,
+        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -250,7 +262,8 @@ public sealed class SubflowFaultService(
                 parentInstance,
                 parentWorkflow,
                 transitionKey,
-                isErrorBoundaryTransition: true);
+                isErrorBoundaryTransition: true,
+                sync);
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
             if (!result.IsSuccess)
@@ -274,6 +287,7 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -282,10 +296,12 @@ public sealed class SubflowFaultService(
                 parentInstance,
                 parentWorkflow,
                 transitionKey: string.Empty,
-                isErrorBoundaryTransition: false);
+                isErrorBoundaryTransition: false,
+                sync);
             input.Mode = ExecMode.Resume;
             input.Execution!.ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep;
             input.Execution.IsSubFlowResume = true;
+            input.Execution.SubFlowResumeInstanceId = subInstanceId;
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
             if (!result.IsSuccess && result.Error.Code != WorkflowErrorCodes.AutoTransitionConditionNotMet)
@@ -309,7 +325,8 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         string transitionKey,
-        bool isErrorBoundaryTransition)
+        bool isErrorBoundaryTransition,
+        bool sync)
     {
         return new WorkflowExecutionContext
         {
@@ -320,7 +337,9 @@ public sealed class SubflowFaultService(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Automatic,
             Mode = ExecMode.Sync,
-            CallerMode = ExecMode.Async,
+            // Preserve the faulting chain's caller mode so the parent's error-boundary
+            // resume keeps starting/forwarding subflows synchronously when the caller was sync=true.
+            CallerMode = sync ? ExecMode.Sync : ExecMode.Async,
             Headers = new Dictionary<string, string?>(),
             Actor = ExecutionActor.System,
             RequestedAt = DateTimeOffset.UtcNow,
@@ -342,14 +361,23 @@ public sealed class SubflowFaultService(
     {
         try
         {
-            await using var revertUow = await uowManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew },
-                cancellationToken);
+            await using var revertUow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-            var correlation = parentInstance.RevertCorrelation(subInstanceId);
-            if (correlation != null)
+            // S9 isolation rule: reload with ALL correlations (completed included) so the
+            // revert operates on a tracked entity and cannot silently no-op.
+            var tracked = await instanceRepository.FindWithAllCorrelationsAsync(parentInstanceId, cancellationToken)
+                          ?? parentInstance;
+
+            var correlation = tracked.RevertCorrelation(subInstanceId);
+            if (correlation == null)
             {
-                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                logger.SubFlowCorrelationRevertTargetMissing(subInstanceId, parentInstanceId);
+            }
+            else
+            {
+                logger.SubFlowCorrelationReverted(subInstanceId, parentInstanceId);
+                await instanceRepository.UpdateAsync(tracked, true, cancellationToken);
             }
 
             await revertUow.CommitAsync(cancellationToken);

@@ -16,13 +16,13 @@ namespace BBT.Workflow.Infrastructure.Tests.Security;
 public class SchemaValidatorTests
 {
     private readonly IDistributedCache _cache;
-    private readonly IDbContextProvider<WorkflowDbContext> _dbContextProvider;
+    private readonly IAetherDbContextProvider<WorkflowDbContext> _dbContextProvider;
     private readonly SchemaValidator _validator;
 
     public SchemaValidatorTests()
     {
         _cache = Substitute.For<IDistributedCache>();
-        _dbContextProvider = Substitute.For<IDbContextProvider<WorkflowDbContext>>();
+        _dbContextProvider = Substitute.For<IAetherDbContextProvider<WorkflowDbContext>>();
         _validator = new SchemaValidator(_cache, _dbContextProvider);
     }
 

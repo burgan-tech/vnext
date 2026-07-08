@@ -53,4 +53,10 @@ public record FlowCompletedInput
     /// Duration of the SubItem execution
     /// </summary>
     public TimeSpan? Duration { get; init; }
+
+    /// <summary>
+    /// Whether the completing pipeline chain was executed with a synchronous caller
+    /// (sync=true). The parent resume keeps the chain synchronous when set.
+    /// </summary>
+    public bool Sync { get; init; }
 }

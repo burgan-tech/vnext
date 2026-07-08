@@ -53,25 +53,39 @@ public sealed class InstanceController(
     public async Task<IActionResult> StartAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
-        [FromBody] CreateInstanceDto request,
+        [FromBody] JsonElement? body,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
         [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
+        var httpContext = httpContextAccessor.HttpContext;
+        var headers = httpContext?.Request.Headers ?? new HeaderDictionary();
+
+        CreateInstanceDto request;
+        if (PayloadModeDetector.IsStandard(headers, body))
+        {
+            request = body is null
+                ? new CreateInstanceDto()
+                : JsonSerializer.Deserialize<CreateInstanceDto>(body.Value, JsonSerializerOptions.Web) ?? new CreateInstanceDto();
+        }
+        else
+        {
+            request = new CreateInstanceDto { Attributes = body };
+        }
+
         var input = new StartInstanceInput(domain, workflow, version, sync)
         {
             Instance = new CreateInstanceInput
             {
-                Key = request?.Key,
-                Tags = request?.Tags,
-                Attributes = request?.Attributes,
-                Stage = request?.Stage
+                Key = request.Key,
+                Tags = request.Tags,
+                Attributes = request.Attributes,
+                Stage = request.Stage
             },
             Extensions = extensions
         };
-        var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
         {
             input.Headers = httpContext.Request.Headers.ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());
@@ -79,7 +93,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -320,17 +334,33 @@ public sealed class InstanceController(
         [FromRoute] string workflow,
         [FromRoute] string instance,
         [FromRoute] string transitionKey,
-        [FromBody] TransitionDataInput? data = null,
+        [FromBody] JsonElement? body = null,
         [FromQuery] bool sync = false,
         [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
+        var httpContext = httpContextAccessor.HttpContext;
+        var headers = httpContext?.Request.Headers ?? new HeaderDictionary();
+
+        TransitionDataInput? data;
+        if (body is null)
+        {
+            data = null;
+        }
+        else if (PayloadModeDetector.IsStandard(headers, body))
+        {
+            data = JsonSerializer.Deserialize<TransitionDataInput>(body.Value, JsonSerializerOptions.Web);
+        }
+        else
+        {
+            data = new TransitionDataInput(body);
+        }
+
         var input = new TransitionInput(domain, workflow, data, sync)
         {
             Extensions = extensions
         };
-        var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
         {
             input.Headers = httpContext.Request.Headers.ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());
@@ -342,8 +372,8 @@ public sealed class InstanceController(
             transitionKey,
             input,
             cancellationToken);
-        
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
 
     /// <summary>

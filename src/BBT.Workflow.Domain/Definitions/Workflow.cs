@@ -175,6 +175,14 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public ScriptSettings? Scripts { get; private set; }
 
     /// <summary>
+    /// Optional output mapping script executed when the workflow is called with <c>sync=true</c>.
+    /// When defined, the script result replaces the default instance attributes in the sync response.
+    /// Implements <see cref="BBT.Workflow.Scripting.IOutputHandler"/>.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("output")]
+    public ScriptCode? Output { get; private set; }
+
+    /// <summary>
     /// Root-level query roles for state-based visibility. When a state has no queryRoles, this is used.
     /// </summary>
     [JsonIgnore]
@@ -278,6 +286,11 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public void SetTimeout(WorkflowTimeout timeout)
     {
         Timeout = timeout;
+    }
+
+    public void SetOutput(ScriptCode output)
+    {
+        Output = output;
     }
 
     public void SetCancel(Transition cancel)

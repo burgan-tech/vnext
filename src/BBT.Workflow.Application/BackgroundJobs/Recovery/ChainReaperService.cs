@@ -12,7 +12,7 @@ namespace BBT.Workflow.BackgroundJobs.Recovery;
 /// <remarks>
 /// Operates within the CURRENT schema only — one sweep == one flow schema. The hosting
 /// <c>ChainReaperHostedService</c> enumerates all flow schemas from <c>sys_flows</c> and invokes
-/// this once per schema with <c>ICurrentSchema.Use(flowKey)</c> already established, so all
+/// this once per schema with <c>IcurrentSchema.Change(flowKey)</c> already established, so all
 /// repository queries here resolve to that flow's schema. Re-enqueue of a recoverable
 /// continuation is intentionally NOT attempted here (conservative): a stuck chain with no live
 /// job is faulted.
@@ -37,16 +37,19 @@ public sealed class ChainReaperService(
         var faulted = 0;
         var skippedActive = 0;
 
-        await using var uow = await uowManager.BeginAsync(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, cancellationToken);
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
         var candidates = await instanceRepository.GetStuckBusyChainsAsync(olderThan, MaxPerSweep, cancellationToken);
+
+        // Bulk-check which candidates still have a live job — avoids N+1 round-trips.
+        var instancesWithActiveJob = await jobRepository.GetInstanceIdsWithActiveJobAsync(
+            candidates.Select(i => i.Id), cancellationToken);
 
         foreach (var instance in candidates)
         {
             // A live/pending job means the chain is still progressing — leave it alone.
-            var activeJobs = await jobRepository.GetListActiveAsync(instance.Id, cancellationToken);
-            if (activeJobs.Count > 0)
+            if (instancesWithActiveJob.Contains(instance.Id))
             {
                 skippedActive++;
                 continue;
@@ -71,8 +74,11 @@ public sealed class ChainReaperService(
         }
 
         await uow.CommitAsync(cancellationToken);
+        if (faulted > 0 || skippedActive > 0)
+        {
+            logger.ChainReaperSweepCompleted(faulted, skippedActive);
+        }
 
-        logger.ChainReaperSweepCompleted(faulted, skippedActive);
         return faulted;
     }
 }

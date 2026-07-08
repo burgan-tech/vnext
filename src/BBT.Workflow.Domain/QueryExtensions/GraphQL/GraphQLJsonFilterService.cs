@@ -447,7 +447,11 @@ public static class GraphQLJsonFilterService
         {
             try
             {
-                var stringValue = ConvertToString(value);
+                // Array-valued operators (in, nin, between) arrive as object[] from the JSON
+                // filter syntax. InstanceColumnConditionBuilder expects a comma-separated
+                // string, so flatten the array element-by-element instead of calling
+                // ConvertToString on the array itself (which would yield "System.Object[]").
+                var stringValue = ConvertOperatorValueToString(value);
                 var (conditionSql, conditionParams) = InstanceColumnConditionBuilder.BuildCondition(
                     columnName, op, stringValue, ref parameterIndex);
                 
@@ -775,6 +779,22 @@ public static class GraphQLJsonFilterService
         };
     }
 
+    /// <summary>
+    /// Converts an operator value to the string form expected by
+    /// <see cref="InstanceColumnConditionBuilder"/>. Array values (used by in/nin/between)
+    /// are flattened to a comma-separated string by converting each element individually;
+    /// scalar values fall back to <see cref="ConvertToString"/>.
+    /// </summary>
+    private static string ConvertOperatorValueToString(object? value)
+    {
+        if (value is object[] array)
+        {
+            return string.Join(",", array.Select(ConvertToString));
+        }
+
+        return ConvertToString(value);
+    }
+
     private static string BuildEqualsCondition(
         string field, object? value, string jsonColumnName,
         List<NpgsqlParameter> parameters, ref int parameterIndex)
@@ -997,7 +1017,7 @@ public static class GraphQLJsonFilterService
         parameters.Add(new NpgsqlParameter { Value = $"%{stringValue}%" });
 
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} ILIKE {{{paramIndex}}}";
+        return $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
     }
 
     private static string BuildStartsWithCondition(
@@ -1009,7 +1029,7 @@ public static class GraphQLJsonFilterService
         parameters.Add(new NpgsqlParameter { Value = $"{stringValue}%" });
 
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} ILIKE {{{paramIndex}}}";
+        return $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
     }
 
     private static string BuildEndsWithCondition(
@@ -1021,7 +1041,7 @@ public static class GraphQLJsonFilterService
         parameters.Add(new NpgsqlParameter { Value = $"%{stringValue}" });
 
         var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} ILIKE {{{paramIndex}}}";
+        return $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
     }
 
     private static string BuildInCondition(

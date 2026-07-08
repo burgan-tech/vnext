@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
@@ -43,7 +44,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Functions))
         {
             return await componentCacheStore
                 .GetFunctionAsync(domain, key, version, cancellationToken)
@@ -64,11 +65,18 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(flow))
+        using (currentSchema.Change(flow))
         {
             var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
             if (instance == null)
                 return Result<FunctionResponseOutput>.Fail(WorkflowErrors.InstanceNotFound(instanceKey));
+
+            var rootId = instance.GetRootInstanceId();
+            if (rootId != instance.Id)
+            {
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            }
 
             return await componentCacheStore
                 .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
@@ -83,7 +91,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Functions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Functions))
         {
             var result = await instanceRepository.GetActiveDataListAsync(cancellationToken);
             return Result<List<InstanceAndDataModel>>.Ok(result);

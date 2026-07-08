@@ -37,4 +37,17 @@ public interface IInstanceTransitionRepository : IRepository<InstanceTransition,
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of transitions for the instance.</returns>
     Task<List<InstanceTransition>> GetByInstanceIdAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns all transitions for the given instance ordered by <see cref="InstanceTransition.StartedAt"/> ascending.
+    /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
+    /// Projects to <see cref="InstanceTransitionSlim"/>; Body and Header JSON columns are excluded.
+    /// </summary>
+    /// <param name="instanceId">The instance ID.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Ordered list of transitions; empty if none exist.</returns>
+    Task<List<InstanceTransitionSlim>> GetByInstanceIdAsReadOnlyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>Read-only: per-transition execution aggregation across the current schema (additive, monitor-only).</summary>
+    Task<List<TransitionExecutionStat>> GetTransitionStatsAsync(CancellationToken cancellationToken = default);
 }

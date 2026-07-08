@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Aether.Events;
-using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -12,8 +8,6 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -21,141 +15,121 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Execution.Transitions.Continuations;
 
 /// <summary>
-/// Unit tests for <see cref="EnqueueContinuationStrategy"/> — verifies the direct Dapr-enqueue
-/// mode (default), its outbox fallback on enqueue failure, and the legacy always-outbox mode.
+/// Unit tests for <see cref="EnqueueContinuationStrategy"/>.
+/// Verifies that the strategy persists a durable job intent and delegates enqueue
+/// to <see cref="ITransitionEnqueueGateway"/>; mode decisions (direct vs outbox)
+/// are encapsulated in the gateway and are not tested here.
 /// </summary>
 public class EnqueueContinuationStrategyTests
 {
-    private readonly Mock<IDistributedEventBus> _eventBus = new();
     private readonly Mock<IInstanceJobRepository> _jobRepository = new();
-    private readonly Mock<ITransitionJobEnqueuer> _jobEnqueuer = new();
-    private readonly Mock<ILogger<EnqueueContinuationStrategy>> _logger = new();
+    private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
 
     public EnqueueContinuationStrategyTests()
     {
         _jobRepository
             .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(It.IsAny<InstanceJob>());
-    }
-
-    private EnqueueContinuationStrategy CreateStrategy(bool directEnqueue) =>
-        new(
-            _eventBus.Object,
-            _jobRepository.Object,
-            _jobEnqueuer.Object,
-            Options.Create(new WorkflowExecutionOptions { DirectEnqueueContinuations = directEnqueue }),
-            _logger.Object);
-
-    [Fact]
-    public async Task DirectMode_WhenEnqueueSucceeds_EnqueuesDaprJobAndDoesNotWriteOutbox()
-    {
-        var strategy = CreateStrategy(directEnqueue: true);
-        var context = CreateContextWithNextTransition("approve");
-
-        // Capture the InstanceJob intent and the jobId passed to the enqueuer to prove they match.
-        InstanceJob? insertedJob = null;
-        _jobRepository
-            .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
-            .Callback<InstanceJob, bool, CancellationToken>((j, _, _) => insertedJob = j)
             .ReturnsAsync((InstanceJob j, bool _, CancellationToken _) => j);
 
-        Guid enqueuedJobId = Guid.Empty;
-        _jobEnqueuer
-            .Setup(x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, Guid, CancellationToken>((_, id, _) => enqueuedJobId = id)
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
+    }
+
+    private EnqueueContinuationStrategy CreateStrategy() =>
+        new(_jobRepository.Object, _mockEnqueueGateway.Object);
+
+    [Fact]
+    public async Task WhenNextTransitionExists_ShouldInsertJobAndCallEnqueueGateway()
+    {
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
 
         var result = await strategy.DispatchAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBeNull(); // ends the in-process loop
 
-        _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(
-                It.Is<TransitionJobPayload>(p =>
-                    p.TransitionKey == "approve"
-                    && p.InstanceId == context.InstanceId
-                    && p.ExecutionActor == ExecutionActor.System),
-                It.IsAny<Guid>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-
-        // JobId consistency: the InstanceJob intent carries the SAME id passed to the enqueuer
-        // (no placeholder), so cancellation-by-id resolves the BackgroundJobInfo.
-        insertedJob.ShouldNotBeNull();
-        enqueuedJobId.ShouldNotBe(Guid.Empty);
-        insertedJob!.JobId.ShouldBe(enqueuedJobId);
-        insertedJob.Id.ShouldBe(enqueuedJobId);
-
-        _eventBus.Verify(
-            x => x.PublishAsync(
-                It.IsAny<TransitionContinuationRequested>(),
-                It.IsAny<string?>(),
-                It.IsAny<bool>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
-
         _jobRepository.Verify(
             x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
-    }
 
-    [Fact]
-    public async Task DirectMode_WhenEnqueueFails_FallsBackToOutbox()
-    {
-        var strategy = CreateStrategy(directEnqueue: true);
-        var context = CreateContextWithNextTransition("approve");
-
-        _jobEnqueuer
-            .Setup(x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Dapr unavailable"));
-
-        var result = await strategy.DispatchAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        result.Value.ShouldBeNull();
-
-        _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Once);
-
-        _eventBus.Verify(
-            x => x.PublishAsync(
-                It.Is<TransitionContinuationRequested>(e => e.TransitionKey == "approve"),
-                It.IsAny<string?>(),
-                true,
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Fact]
-    public async Task OutboxMode_AlwaysPublishesViaOutboxAndNeverEnqueuesDirectly()
+    public async Task WhenNextTransitionExists_ShouldPopulatePayloadCorrectly()
     {
-        var strategy = CreateStrategy(directEnqueue: false);
+        var strategy = CreateStrategy();
         var context = CreateContextWithNextTransition("approve");
 
-        var result = await strategy.DispatchAsync(context, CancellationToken.None);
+        TransitionJobPayload? capturedPayload = null;
+        TransitionContinuationRequested? capturedEvent = null;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
+                (payload, evt, _) => { capturedPayload = payload; capturedEvent = evt; })
+            .Returns(Task.CompletedTask);
 
-        result.IsSuccess.ShouldBeTrue();
-        result.Value.ShouldBeNull();
+        await strategy.DispatchAsync(context, CancellationToken.None);
 
-        _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        capturedPayload.ShouldNotBeNull();
+        capturedPayload!.TransitionKey.ShouldBe("approve");
+        capturedPayload.InstanceId.ShouldBe(context.InstanceId);
+        capturedPayload.ExecutionActor.ShouldBe(ExecutionActor.System);
+        capturedPayload.CallerSync.ShouldBeFalse();
 
-        _eventBus.Verify(
-            x => x.PublishAsync(
-                It.Is<TransitionContinuationRequested>(e => e.TransitionKey == "approve"),
-                It.IsAny<string?>(),
-                true,
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        capturedEvent.ShouldNotBeNull();
+        capturedEvent!.TransitionKey.ShouldBe("approve");
+        capturedEvent.InstanceId.ShouldBe(context.InstanceId);
+    }
+
+    [Fact]
+    public async Task WhenNextTransitionExists_JobIdShouldMatchBetweenIntentAndPayload()
+    {
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        InstanceJob? insertedJob = null;
+        _jobRepository
+            .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Callback<InstanceJob, bool, CancellationToken>((j, _, _) => insertedJob = j)
+            .ReturnsAsync((InstanceJob j, bool _, CancellationToken _) => j);
+
+        TransitionContinuationRequested? capturedEvent = null;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
+                (_, evt, _) => capturedEvent = evt)
+            .Returns(Task.CompletedTask);
+
+        await strategy.DispatchAsync(context, CancellationToken.None);
+
+        insertedJob.ShouldNotBeNull();
+        capturedEvent.ShouldNotBeNull();
+        // InstanceJob.Id == JobId == the id carried in the outbox event for cancellation-by-id to work
+        insertedJob!.Id.ShouldBe(insertedJob.JobId);
+        insertedJob.JobId.ShouldBe(capturedEvent!.JobId);
     }
 
     [Fact]
     public async Task WhenNoNextTransition_ReturnsNullWithoutSideEffects()
     {
-        var strategy = CreateStrategy(directEnqueue: true);
+        var strategy = CreateStrategy();
         var context = CreateContext(); // no next transition requested
 
         var result = await strategy.DispatchAsync(context, CancellationToken.None);
@@ -166,14 +140,11 @@ public class EnqueueContinuationStrategyTests
         _jobRepository.Verify(
             x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
-        _jobEnqueuer.Verify(
-            x => x.EnqueueAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-        _eventBus.Verify(
-            x => x.PublishAsync(
+
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
-                It.IsAny<string?>(),
-                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -245,7 +216,6 @@ public class EnqueueContinuationStrategyTests
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
         };
         var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
-
         workflow.SetReference(new Reference(key, domain, "sys-flows", "1.0.0"));
         return workflow;
     }

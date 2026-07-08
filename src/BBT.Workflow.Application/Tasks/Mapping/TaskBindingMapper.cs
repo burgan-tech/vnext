@@ -45,7 +45,8 @@ public static class TaskBindingMapper
                 DaprBindingTask daprBinding => (TaskTypes.DaprBinding, MapDaprBindingTask(daprBinding)),
                 DaprHttpEndpointTask daprHttpEndpoint => (TaskTypes.DaprHttpEndpoint, MapDaprHttpEndpointTask(daprHttpEndpoint)),
                 DaprPubSubTask daprPubSub => (TaskTypes.DaprPubSub, MapDaprPubSubTask(daprPubSub)),
-                
+                StateStoreTask stateStore => (TaskTypes.StateStore, (object)MapStateStoreTask(stateStore)),
+
                 // Trigger tasks (basic mapping - runtime context handled by invokers)
                 StartTask startTask => (TaskTypes.StartTrigger, (object)MapStartTask(startTask)),
                 DirectTriggerTask directTriggerTask => (TaskTypes.DirectTrigger, (object)MapDirectTriggerTask(directTriggerTask)),
@@ -300,11 +301,36 @@ public static class TaskBindingMapper
     {
         PubSubName = task.PubSubName,
         TopicName = task.Topic,  // Topic → TopicName
-        Body = task.Data.ValueKind != JsonValueKind.Undefined 
-            ? task.Data.GetRawText() 
+        Body = task.Data.ValueKind != JsonValueKind.Undefined
+            ? task.Data.GetRawText()
             : null,
-        Metadata = task.Metadata.ValueKind != JsonValueKind.Undefined 
-            ? task.Metadata.Deserialize<Dictionary<string, string>>() 
+        Metadata = task.Metadata.ValueKind != JsonValueKind.Undefined
+            ? task.Metadata.Deserialize<Dictionary<string, string>>()
+            : null
+    };
+
+    /// <summary>
+    /// Maps StateStoreTask to StateStoreBinding.
+    /// Note: CacheKey → Key, CacheKeys → Keys; Value and Query serialized to raw JSON text.
+    /// </summary>
+    private static StateStoreBinding MapStateStoreTask(StateStoreTask task) => new()
+    {
+        Command = task.Command,
+        StoreName = string.IsNullOrWhiteSpace(task.StoreName) ? null : task.StoreName,
+        Key = string.IsNullOrWhiteSpace(task.CacheKey) ? null : task.CacheKey,
+        Keys = task.CacheKeys?.ToList(),
+        Query = task.Query.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            ? null
+            : task.Query.GetRawText(),
+        Value = task.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            ? null
+            : task.Value.GetRawText(),
+        TtlInSeconds = task.TtlInSeconds,
+        ETag = task.ETag,
+        Concurrency = task.Concurrency,
+        Consistency = task.Consistency,
+        Metadata = task.Metadata.ValueKind != JsonValueKind.Undefined
+            ? task.Metadata.Deserialize<Dictionary<string, string>>()
             : null
     };
 

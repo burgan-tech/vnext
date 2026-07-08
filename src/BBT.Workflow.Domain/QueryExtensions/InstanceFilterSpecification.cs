@@ -60,6 +60,7 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
             },
             ["stage"] = value => x => x.Stage == value,
             ["flow"] = value => x => x.Flow == value,
+            ["flowVersion"] = value => x => x.FlowVersion == value,
             ["id"] = value =>
             {
                 var id = Guid.TryParse(value, out var guid) ? guid : Guid.Empty;

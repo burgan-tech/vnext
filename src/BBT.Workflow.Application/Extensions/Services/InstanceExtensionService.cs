@@ -8,6 +8,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Extentions;
@@ -20,6 +21,7 @@ public sealed class InstanceExtensionService(
     ITaskCoordinator taskCoordinator,
     IRuntimeInfoProvider runtimeInfoProvider,
     ICurrentSchema currentSchema,
+    IServiceScopeFactory serviceScopeFactory,
     ILogger<InstanceExtensionService> logger) : IInstanceExtensionService
 {
     /// <inheritdoc />
@@ -130,7 +132,7 @@ public sealed class InstanceExtensionService(
         HashSet<string>? extensionRequested,
         CancellationToken cancellationToken)
     {
-        using (currentSchema.Use(RuntimeSysSchemaInfo.Extensions))
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Extensions))
         {
             var allExtensionsResult = await componentCacheStore.GetAllExtensionsAsync(
                 runtimeInfoProvider.Domain,
@@ -166,6 +168,7 @@ public sealed class InstanceExtensionService(
 
     /// <summary>
     /// Fetches extensions from references in parallel.
+    /// Each fetch runs in its own DI scope to avoid concurrent DbContext access.
     /// Failed fetches are filtered out - the system continues with available extensions.
     /// </summary>
     private async Task<List<Extension>> FetchExtensionsFromReferencesAsync(
@@ -177,7 +180,9 @@ public sealed class InstanceExtensionService(
 
         var extensionTasks = extensionReferences.Select(async reference =>
         {
-            var result = await componentCacheStore.GetExtensionAsync(reference, cancellationToken);
+            await using var scope = serviceScopeFactory.CreateAsyncScope();
+            var scopedCacheStore = scope.ServiceProvider.GetRequiredService<IComponentCacheStore>();
+            var result = await scopedCacheStore.GetExtensionAsync(reference, cancellationToken);
             return result.IsSuccess ? result.Value : null;
         });
 

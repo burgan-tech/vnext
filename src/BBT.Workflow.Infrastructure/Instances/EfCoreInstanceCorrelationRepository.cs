@@ -14,7 +14,7 @@ namespace BBT.Workflow.Instances;
 /// <param name="dbContext">The workflow database context for data operations.</param>
 /// <param name="serviceProvider">Service provider for dependency injection.</param>
 public sealed class EfCoreInstanceCorrelationRepository(
-    IDbContextProvider<WorkflowDbContext> dbContext,
+    IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider)
     : EfCoreRepository<WorkflowDbContext, InstanceCorrelation, Guid>(dbContext, serviceProvider),
         IInstanceCorrelationRepository
@@ -67,10 +67,20 @@ public sealed class EfCoreInstanceCorrelationRepository(
 
     /// <inheritdoc />
     public async Task<InstanceCorrelation?> FindBySubInstanceIdAsync(
-        Guid subInstanceId, 
+        Guid subInstanceId,
         CancellationToken cancellationToken = default)
     {
         return await (await GetDbSetAsync())
+            .FirstOrDefaultAsync(c => c.SubFlowInstanceId == subInstanceId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceCorrelation?> FindBySubInstanceIdAsReadOnlyAsync(
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetDbSetAsync())
+            .AsNoTracking()
             .FirstOrDefaultAsync(c => c.SubFlowInstanceId == subInstanceId, cancellationToken);
     }
 }
