@@ -295,7 +295,12 @@ public sealed class InstanceQuery
 
     // Like BuildRoot but allows an empty filter (null = match-all) — valid for list/groupBy queries.
     private FilterNode? BuildRootOrNull()
-        => _clauses.Count == 0 ? null : (_clauses.Count == 1 ? _clauses[0] : FilterNode.All(_clauses));
+        => _clauses.Count switch
+        {
+            0 => null,
+            1 => _clauses[0],
+            _ => FilterNode.All(_clauses)
+        };
 
     private static FilterField ParseField(string field)
     {
