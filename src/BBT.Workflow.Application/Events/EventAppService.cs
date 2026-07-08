@@ -80,7 +80,7 @@ public sealed class EventAppService(
         }
 
         // Compile + run the domain-authored mapping to obtain correlation key + body.
-        EventMappingResult mapping;
+        EventMappingResult? mapping;
         try
         {
             var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
