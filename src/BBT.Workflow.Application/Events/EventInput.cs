@@ -5,7 +5,7 @@ namespace BBT.Workflow.Events;
 
 
 /// <summary>
-/// Normalized inbound event request, built by the EventController from the route + query + body.
+/// Normalized inbound event request, built by the instance event endpoint from the route + query + body.
 /// </summary>
 public sealed class EventInput
 {
