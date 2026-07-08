@@ -12,6 +12,12 @@ using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Events;
 
+/// <summary>
+/// Application service that receives external workflow events, resolves the event definition
+/// from the workflow cache, compiles and executes the domain-authored mapping script to obtain
+/// a correlation key and body, then dispatches to start or transition an instance.
+/// Registered as a transient service.
+/// </summary>
 /// <inheritdoc />
 public sealed class EventAppService(
     IComponentCacheStore componentCacheStore,
