@@ -127,7 +127,10 @@ internal sealed class InstanceFilterSqlBuilder
     private static string TextAccessor(string accessor, bool isAttribute)
         => isAttribute ? accessor : $"{accessor}::text";
 
-    // For numeric/date comparisons, cast the (text) accessor to the appropriate type based on the operand.
+    // For range comparisons, cast the (text) accessor to the type implied by the operand. Operands
+    // that are neither numeric nor date-like (e.g. an alphabetical range: name > 'M') get no cast —
+    // a ::numeric default would make PostgreSQL reject the value at runtime; plain text comparison
+    // is the correct semantic there.
     private static string TypedAccessor(string accessor, FilterCondition condition, bool isAttribute)
     {
         var probe = condition.Values.FirstOrDefault();
@@ -137,13 +140,13 @@ internal sealed class InstanceFilterSqlBuilder
             sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal => "::numeric",
             string s when DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out _) => "::timestamptz",
             string s when decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out _) => "::numeric",
-            _ => "::numeric"
+            _ => null
         };
 
         // Parenthesize before casting: '::' binds tighter than the JSON '->>' operator, so
         // "Data" ->> 'age'::numeric would cast the key 'age' instead of the extracted value.
         // (isAttribute is irrelevant to the cast; the parens are what matter.)
-        return $"({accessor}){cast}";
+        return cast is null ? accessor : $"({accessor}){cast}";
     }
 
     private static object? Single(FilterCondition condition)

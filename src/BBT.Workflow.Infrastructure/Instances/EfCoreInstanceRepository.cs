@@ -46,7 +46,9 @@ public sealed class EfCoreInstanceRepository(
     {
         ArgumentNullException.ThrowIfNull(filter);
 
-        var schema = currentSchema.Name ?? "public";
+        // Schema resolution can be influenced by request input (headers/route); strip quote
+        // characters before interpolating into the quoted identifier, like the other raw-SQL sites.
+        var schema = SanitizeIdentifier(currentSchema.Name ?? "public");
         var builder = new InstanceFilterSqlBuilder();
         var whereClause = builder.BuildWhere(filter.Root);
 

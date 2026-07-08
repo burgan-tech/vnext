@@ -18,6 +18,11 @@ public sealed class InstanceSelectorResolver(IInstanceRepository instanceReposit
     {
         ArgumentNullException.ThrowIfNull(filter);
 
+        // The domain parameter is intentionally not part of the filter: domain isolation is already
+        // enforced upstream (IRuntimeInfoProvider.Check rejects foreign domains before this runs) and
+        // structurally (each domain queries its own PostgreSQL schema via ICurrentSchema, and the
+        // Instances table has no domain column). Only the flow needs explicit scoping here.
+
         // Scope to the target workflow's instances so a shared schema cannot leak other flows' rows.
         var flowCondition = FilterNode.Leaf(new FilterCondition(
             new FilterField(FilterFieldKind.Column, "flow"),

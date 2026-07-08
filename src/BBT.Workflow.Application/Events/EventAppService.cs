@@ -83,7 +83,11 @@ public sealed class EventAppService(
                 .WithHeaders(input.Headers)
                 // Cast to object? so the dynamic from ToDynamic() doesn't turn the whole fluent
                 // chain dynamic (which would make BuildAsync fail to resolve at runtime).
-                .WithEventPayload((object?)input.Payload.ToDynamic())
+                // Undefined/Null payloads (empty request body) map to a null payload rather than
+                // the empty string ToDynamic() would produce for them.
+                .WithEventPayload(input.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+                    ? null
+                    : (object?)input.Payload.ToDynamic())
                 .BuildAsync(cancellationToken);
 
             var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
@@ -97,6 +101,17 @@ public sealed class EventAppService(
         {
             logger.EventMappingFailed(input.Domain, input.Workflow, input.TransitionKey, ex.Message);
             return Result<object?>.Fail(Error.Failure("EventMappingFailed", ex.Message));
+        }
+
+        // The mapping is domain-authored script code, so a `return null;` is possible despite the
+        // non-nullable contract — fail cleanly instead of NRE-ing on mapping.InstanceKey below.
+        if (mapping is null)
+        {
+            logger.EventMappingFailed(input.Domain, input.Workflow, input.TransitionKey,
+                "Event mapping returned null.");
+            return Result<object?>.Fail(Error.Failure(
+                "EventMappingNullResult",
+                "The event mapping script returned a null result."));
         }
 
         // Transition fallback correlation: when the payload carried no InstanceKey but the mapping
