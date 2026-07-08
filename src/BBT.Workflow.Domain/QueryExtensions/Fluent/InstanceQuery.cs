@@ -47,6 +47,14 @@ public sealed class FieldConditionBuilder
     /// <summary>Null check (true = is null, false = is not null).</summary>
     public FieldConditionBuilder IsNull(bool isNull = true) => Add(FilterOperator.IsNull, isNull);
 
+    /// <summary>
+    /// JSON array containment: the array at this field path must contain at least one element
+    /// matching the given partial object (wire <c>includes</c> operator, PostgreSQL
+    /// <c>jsonb @&gt;</c>), e.g. <c>f.Includes(new { userId })</c>. List queries only — the
+    /// single-resolve First()/Last() engine rejects it.
+    /// </summary>
+    public FieldConditionBuilder Includes(object partialMatch) => Add(FilterOperator.Includes, partialMatch);
+
     private FieldConditionBuilder Add(FilterOperator op, params object?[] values)
     {
         _conditions.Add((op, values));
@@ -253,8 +261,18 @@ public sealed class InstanceQuery
         if (_groupByFields.Count > 0 || HasAggregations())
             throw new InvalidOperationException(
                 "GroupBy/aggregations are list-query features — terminate with Build(), not First()/Last().");
+        if (_clauses.Any(ContainsIncludes))
+            throw new InvalidOperationException(
+                "The Includes operator is a list-query feature — terminate with Build(), not First()/Last().");
         return new InstanceFilter(BuildRoot(), new FilterOrder(_orderField, _orderByDescending), selection);
     }
+
+    // The single-resolve SQL engine has no jsonb containment support; fail at build time
+    // (in the authoring script) rather than when the filter later executes.
+    private static bool ContainsIncludes(FilterNode node) =>
+        node.Kind == FilterNodeKind.Condition
+            ? node.Condition!.Operator == FilterOperator.Includes
+            : node.Children.Any(ContainsIncludes);
 
     private bool HasAggregations()
         => _count || _sum is not null || _avg is not null || _min is not null || _max is not null;

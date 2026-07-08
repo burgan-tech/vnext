@@ -85,6 +85,12 @@ public sealed class ScriptEngine(
             MetadataReference.CreateFromFile(typeof(BBT.Aether.Domain.Entities.AggregateRoot<>).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(JsonSerializableAttribute).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(System.Text.Encodings.Web.JavaScriptEncoder).Assembly.Location),
+            // System.Private.Uri: the runtime implementation of System.Uri. The System.Runtime facade
+            // only type-forwards Uri here, so without this reference any mapping calling
+            // Uri.EscapeDataString — ubiquitous in domain scripts for query-string composition — fails
+            // with CS0103 under the sandbox. URI parsing/encoding only; networking types live in
+            // System.Net.* and stay blocked by the mandatory banned-namespace baseline.
+            MetadataReference.CreateFromFile(typeof(Uri).Assembly.Location),
             // System.Private.Xml / System.Private.Xml.Linq: the runtime *implementations* of XmlDocument
             // and XDocument. Necessary but NOT sufficient — see the facade references below.
             MetadataReference.CreateFromFile(typeof(System.Xml.XmlDocument).Assembly.Location),

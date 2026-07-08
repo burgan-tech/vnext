@@ -142,12 +142,16 @@ public static class TaskBindingMapper
     /// <summary>
     /// Maps GetInstancesTask to GetInstancesBinding.
     /// Note: Instance is resolved at runtime, this provides a basic mapping.
+    /// When a runtime <see cref="GetInstancesTask.FilterSpec"/> is set, filter and sort are serialized
+    /// from the spec; groupBy/aggregations travel inside the filter request envelope, exactly like a
+    /// hand-written filter string.
     /// </summary>
     private static GetInstancesBinding MapGetInstancesTask(GetInstancesTask task) => new()
     {
         Domain = task.TriggerDomain,
         Workflow = task.TriggerFlow,
-        Filter = task.Filter,
+        Filter = task.FilterSpec is { } spec ? spec.ToFilterRequestJson() : task.Filter,
+        Sort = task.FilterSpec?.ToSortJson(),
         Page = task.Page,
         PageSize = task.PageSize,
         ValidateSSL = task.ValidateSSL,

@@ -30,6 +30,32 @@ internal static class GraphQlWireWriter
     public static string WriteAggregations(AggregationSpec aggregations)
         => JsonSerializer.Serialize(BuildAggregations(aggregations), Options);
 
+    /// <summary>
+    /// Serializes the whole list query into the single <c>filter</c>-parameter request envelope
+    /// (<c>{"filter":…,"groupBy":…}</c> / <c>{"filter":…,"aggregations":…}</c>) that the list endpoint
+    /// detects and unwraps when groupBy/aggregations are present.
+    /// </summary>
+    public static string WriteFilterRequest(FilterNode? filter, IReadOnlyList<string> groupByFields, AggregationSpec? aggregations)
+    {
+        var map = new Dictionary<string, object?>();
+        if (filter is not null)
+            map["filter"] = BuildNode(filter);
+
+        if (groupByFields.Count > 0)
+        {
+            var groupBy = new Dictionary<string, object?> { ["fields"] = groupByFields };
+            if (aggregations is { HasAny: true })
+                groupBy["aggregations"] = BuildAggregations(aggregations);
+            map["groupBy"] = groupBy;
+        }
+        else if (aggregations is { HasAny: true })
+        {
+            map["aggregations"] = BuildAggregations(aggregations);
+        }
+
+        return JsonSerializer.Serialize(map, Options);
+    }
+
     /// <summary>Serializes ordering to the wire JSON sort value (<c>{"fields":[{"field","direction"}]}</c>).</summary>
     public static string WriteOrderBy(IReadOnlyList<FilterOrder> orders)
     {
@@ -84,6 +110,7 @@ internal static class GraphQlWireWriter
         FilterOperator.NotIn => ("nin", c.Values.ToArray()),
         FilterOperator.Between => ("between", new[] { c.Values[0], c.Values[1] }),
         FilterOperator.IsNull => ("isNull", c.Values[0]),
+        FilterOperator.Includes => ("includes", c.Values[0]),
         _ => throw new InvalidOperationException($"Unsupported operator '{c.Operator}'.")
     };
 

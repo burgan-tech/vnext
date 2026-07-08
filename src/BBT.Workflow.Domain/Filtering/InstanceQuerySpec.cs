@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace BBT.Workflow.Filtering;
 
 /// <summary>
@@ -66,6 +64,17 @@ public sealed class InstanceQuerySpec
     /// <summary>The <c>sort</c> query value as wire JSON, or null when no ordering was specified.</summary>
     public string? ToSortJson()
         => Orders.Count == 0 ? null : GraphQlWireWriter.WriteOrderBy(Orders);
+
+    /// <summary>
+    /// The complete list-endpoint <c>filter</c> parameter value: the plain filter JSON when the spec
+    /// has no groupBy/aggregations, otherwise the request envelope
+    /// (<c>{"filter":…,"groupBy":…}</c> / <c>{"filter":…,"aggregations":…}</c>) that the endpoint
+    /// already parses out of the <c>filter</c> parameter. Null when the spec is empty (match-all).
+    /// </summary>
+    public string? ToFilterRequestJson()
+        => GroupByFields.Count == 0 && Aggregations is not { HasAny: true }
+            ? ToFilterJson()
+            : GraphQlWireWriter.WriteFilterRequest(Filter, GroupByFields, Aggregations);
 
     /// <summary>
     /// Convenience: builds the full query string (<c>page</c>, <c>pageSize</c>, and whichever of

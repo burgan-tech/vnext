@@ -142,6 +142,33 @@ public class InstanceQuerySpecTests
         and[1]!["attributes"]!["age"]!["lt"]!.GetValue<int>().ShouldBe(65);
     }
 
+    [Fact]
+    public void Filter_Includes_SerializesPartialObjectContainment()
+    {
+        // {"attributes":{"videoCallParticipants":{"includes":{"userId":"adv-1"}}}} — the
+        // jsonb-containment condition rezervation queries use for participant matching.
+        var spec = InstanceQuery.Create()
+            .Where("attributes.videoCallParticipants", f => f.Includes(new { userId = "adv-1" }))
+            .Build();
+
+        var filter = JsonNode.Parse(spec.ToFilterJson()!)!;
+
+        filter["attributes"]!["videoCallParticipants"]!["includes"]!["userId"]!
+            .GetValue<string>().ShouldBe("adv-1");
+    }
+
+    [Fact]
+    public void First_WithIncludes_ThrowsBecauseItIsListOnly()
+    {
+        // The single-resolve SQL engine has no jsonb containment support — fail at build time.
+        Should.Throw<InvalidOperationException>(() =>
+            InstanceQuery.Create()
+                .OrGroup(
+                    q => q.Where("attributes.advisorId", f => f.Eq("adv-1")),
+                    q => q.Where("attributes.videoCallParticipants", f => f.Includes(new { userId = "adv-1" })))
+                .First());
+    }
+
     // ---------------------------------------------------------------------
     // GroupBy + aggregations
     // ---------------------------------------------------------------------
@@ -178,6 +205,67 @@ public class InstanceQuerySpecTests
         spec.ToGroupByJson().ShouldBeNull();
         var agg = JsonNode.Parse(spec.ToAggregationsJson()!)!;
         agg["sum"]!.GetValue<string>().ShouldBe("attributes.amount");
+    }
+
+    // ---------------------------------------------------------------------
+    // Filter request envelope (single filter-parameter value)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void ToFilterRequestJson_WithoutGroupByOrAggregations_IsThePlainFilterJson()
+    {
+        var spec = InstanceQuery.Create()
+            .Where("attributes.scopeGroup", f => f.Eq("bireysel-3"))
+            .Build();
+
+        // No envelope wrapping — byte-identical to the plain filter value.
+        spec.ToFilterRequestJson().ShouldBe(spec.ToFilterJson());
+    }
+
+    [Fact]
+    public void ToFilterRequestJson_WithGroupBy_WrapsFilterAndGroupByInEnvelope()
+    {
+        var spec = InstanceQuery.Create()
+            .Where("attributes.scopeGroup", f => f.Eq("bireysel-3"))
+            .GroupBy("attributes.limitKey")
+            .Sum("attributes.amount")
+            .Build();
+
+        var envelope = JsonNode.Parse(spec.ToFilterRequestJson()!)!;
+
+        envelope["filter"]!["attributes"]!["scopeGroup"]!["eq"]!.GetValue<string>().ShouldBe("bireysel-3");
+        envelope["groupBy"]!["fields"]!.AsArray().Single()!.GetValue<string>().ShouldBe("attributes.limitKey");
+        envelope["groupBy"]!["aggregations"]!["sum"]!.GetValue<string>().ShouldBe("attributes.amount");
+        envelope["aggregations"].ShouldBeNull(); // nested in groupBy, never standalone
+    }
+
+    [Fact]
+    public void ToFilterRequestJson_WithStandaloneAggregations_WrapsAggregationsInEnvelope()
+    {
+        var spec = InstanceQuery.Create()
+            .Where("attributes.scopeGroup", f => f.Eq("bireysel-3"))
+            .Sum("attributes.amount")
+            .Build();
+
+        var envelope = JsonNode.Parse(spec.ToFilterRequestJson()!)!;
+
+        envelope["filter"]!["attributes"]!["scopeGroup"]!["eq"]!.GetValue<string>().ShouldBe("bireysel-3");
+        envelope["aggregations"]!["sum"]!.GetValue<string>().ShouldBe("attributes.amount");
+        envelope["groupBy"].ShouldBeNull();
+    }
+
+    [Fact]
+    public void ToFilterRequestJson_GroupByWithoutFilter_OmitsFilterKey()
+    {
+        var spec = InstanceQuery.Create()
+            .GroupBy("attributes.limitKey")
+            .Count()
+            .Build();
+
+        var envelope = JsonNode.Parse(spec.ToFilterRequestJson()!)!;
+
+        envelope["filter"].ShouldBeNull();
+        envelope["groupBy"]!["aggregations"]!["count"]!.GetValue<bool>().ShouldBeTrue();
     }
 
     // ---------------------------------------------------------------------

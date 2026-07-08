@@ -30,7 +30,13 @@ public enum FilterOperator
     /// <summary>Value is within the inclusive range [min, max].</summary>
     Between,
     /// <summary>Null / not-null check (Value is a bool: true = is null).</summary>
-    IsNull
+    IsNull,
+    /// <summary>
+    /// JSON array containment: the array at the field path contains at least one element matching
+    /// the partial object (wire <c>includes</c> operator, PostgreSQL <c>jsonb @&gt;</c>).
+    /// List queries only — the single-resolve First/Last SQL engine does not support it.
+    /// </summary>
+    Includes
 }
 
 /// <summary>
