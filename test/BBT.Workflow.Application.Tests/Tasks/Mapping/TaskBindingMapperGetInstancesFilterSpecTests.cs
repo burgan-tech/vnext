@@ -104,6 +104,11 @@ public sealed class TaskBindingMapperGetInstancesFilterSpecTests
         CreateBinding(specTask).Filter.ShouldBe(CreateBinding(stringTask).Filter);
     }
 
+    private static readonly string[] Expected =
+    [
+        "attributes.scopeGroup", "attributes.user", "attributes.scope", "attributes.limitKey"
+    ];
+
     [Fact]
     public void CreateEnvelope_GroupBySpec_BindingValuesParseThroughTheEndpointParsers()
     {
@@ -118,18 +123,15 @@ public sealed class TaskBindingMapperGetInstancesFilterSpecTests
         var binding = CreateBinding(task);
 
         // The list endpoint (InstanceQueryAppService) detects the request envelope inside the
-        // filter value — the same detection hand-written envelope strings rely on…
+        // filter value — the same detection handwritten envelope strings rely on…
         GraphQLFilterParser.TryParseRequest(binding.Filter, out var request).ShouldBeTrue();
-        request!.GroupBy!.GetFields().ShouldBe(new[]
-        {
-            "attributes.scopeGroup", "attributes.user", "attributes.scope", "attributes.limitKey"
-        });
+        request!.GroupBy!.GetFields().ShouldBe(Expected);
         request.GroupBy.Aggregations!.Sum.ShouldBe("attributes.amount");
 
         // …and applies the sort value over the envelope's OrderBy.
         var orderBy = GraphQLFilterParser.ParseOrderBy(binding.Sort);
         orderBy.ShouldNotBeNull();
-        orderBy!.GetEntries().ShouldBe(new[] { ("createdAt", "desc") });
+        orderBy!.GetEntries().ShouldBe([("createdAt", "desc")]);
     }
 
     [Fact]

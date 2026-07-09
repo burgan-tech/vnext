@@ -15,8 +15,8 @@ namespace BBT.Workflow.Infrastructure.Instances;
 internal sealed class InstanceFilterSqlBuilder
 {
     // Whitelisted instance columns (input name -> DB column). Case-insensitive on input.
-    private static readonly IReadOnlyDictionary<string, string> ColumnMap =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, string> ColumnMap =
+        new(StringComparer.OrdinalIgnoreCase)
         {
             ["id"] = "Id",
             ["key"] = "Key",

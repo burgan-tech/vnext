@@ -579,8 +579,16 @@ public sealed class InstanceController(
     /// <summary>
     /// Gets a paged list of workflow instances with optional filter, groupBy, aggregations and orderBy.
     /// </summary>
+    /// <param name="domain">Target domain (route).</param>
+    /// <param name="workflow">Target workflow key (route).</param>
+    /// <param name="filter">Filter JSON: a plain GraphQL node (e.g. {"attributes":{"status":{"eq":"active"}}}) or a request envelope embedding groupBy/aggregations. groupBy/aggregations may also arrive as separate query parameters.</param>
+    /// <param name="extensions">Extensions requested for instance data enrichment.</param>
+    /// <param name="page">Page number for pagination (1-based).</param>
+    /// <param name="pageSize">Page size for pagination.</param>
     /// <param name="sort">OrderBy JSON: single {"field":"createdAt","direction":"desc"} or multiple {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}. Also accepted as orderBy.</param>
     /// <param name="orderBy">Alias for sort; same JSON format. If both provided, orderBy wins.</param>
+    /// <param name="version">Optional instance data version; latest data is used when empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     [HttpGet("{domain}/workflows/{workflow}/instances")]
     public async Task<IActionResult> GetInstanceListAsync(
         [FromRoute] string domain,

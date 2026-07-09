@@ -103,7 +103,7 @@ public class TransitionValidationService(
     /// <summary>
     /// Builds a TransitionExecutionContext for start transition validation.
     /// </summary>
-    private TransitionExecutionContext BuildStartTransitionContext(
+    private static TransitionExecutionContext BuildStartTransitionContext(
         Definitions.Workflow workflow,
         Instance instance,
         Transition transition,

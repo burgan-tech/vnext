@@ -29,6 +29,17 @@ public sealed class EfCoreInstanceRepository(
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
 {
+    private const string DefaultSchemaName = "public";
+
+    // Cached and reused: JsonSerializerOptions caches serialization metadata internally, so a fresh
+    // instance per call would rebuild that metadata every time (CA1869). All wire-filter
+    // serialization in this repository uses the same camelCase + compact shape.
+    private static readonly JsonSerializerOptions CamelCaseCompactJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = false
+    };
+
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
         // Loads the full InstanceData history so that Instance.AddData can perform
@@ -48,7 +59,7 @@ public sealed class EfCoreInstanceRepository(
 
         // Schema resolution can be influenced by request input (headers/route); strip quote
         // characters before interpolating into the quoted identifier, like the other raw-SQL sites.
-        var schema = SanitizeIdentifier(currentSchema.Name ?? "public");
+        var schema = SanitizeIdentifier(currentSchema.Name ?? DefaultSchemaName);
         var builder = new InstanceFilterSqlBuilder();
         var whereClause = builder.BuildWhere(filter.Root);
 
@@ -405,8 +416,8 @@ public sealed class EfCoreInstanceRepository(
 
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
-        CancellationToken cancellationToken = default,
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        CancellationToken cancellationToken = default)
     {
         // Apply PostgreSQL native JSON filters if provided
         if (!string.IsNullOrWhiteSpace(filter))
@@ -418,7 +429,7 @@ public sealed class EfCoreInstanceRepository(
                         filter,
                         jsonColumnName: "Data",
                         tableName: "InstancesData",
-                        schema: currentSchema.Name ?? "public",
+                        schema: currentSchema.Name ?? DefaultSchemaName,
                         schemaValidator: schemaValidator,
                         schemaContext: schemaContext
                     );
@@ -479,22 +490,14 @@ public sealed class EfCoreInstanceRepository(
                 {
                     if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
                     }
                     else
                     {
                         var combinedNode = FilterFormatDetector.CombineFilters(filter);
                         if (combinedNode != null)
                         {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                WriteIndented = false
-                            });
+                            combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
                         }
                     }
                 }
@@ -503,23 +506,19 @@ public sealed class EfCoreInstanceRepository(
                     var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
                     if (legacyNode != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
                     }
                 }
             }
 
-             var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
+            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
                 context,
                 dbSet,
                 combinedFilter,
                 groupBy,
                 aggregations,
                 "Data",
-                currentSchema.Name ?? "public",
+                currentSchema.Name ?? DefaultSchemaName,
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
                 cancellationToken,
@@ -557,7 +556,7 @@ public sealed class EfCoreInstanceRepository(
 
         // Normal flow without groupBy/aggregations
         // GetFilteredQueryAsync already includes DataList, no need to include again
-        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        var query = await GetFilteredQueryAsync(filter, null, cancellationToken);
 
         // Manually materialize to ensure DataList is loaded
         var skipCount = (page - 1) * pageSize;
@@ -582,8 +581,8 @@ public sealed class EfCoreInstanceRepository(
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default,
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        CancellationToken cancellationToken = default)
     {
         // If groupBy is provided, use ApplyFilterWithAggregationsAsync
         if (!string.IsNullOrWhiteSpace(groupBy))
@@ -598,22 +597,14 @@ public sealed class EfCoreInstanceRepository(
                 {
                     if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
                     }
                     else
                     {
                         var combinedNode = FilterFormatDetector.CombineFilters(filter);
                         if (combinedNode != null)
                         {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                WriteIndented = false
-                            });
+                            combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
                         }
                     }
                 }
@@ -622,11 +613,7 @@ public sealed class EfCoreInstanceRepository(
                     var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
                     if (legacyNode != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
                     }
                 }
             }
@@ -638,7 +625,7 @@ public sealed class EfCoreInstanceRepository(
                 groupBy,
                 aggregations,
                 "Data",
-                currentSchema.Name ?? "public",
+                currentSchema.Name ?? DefaultSchemaName,
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
                 cancellationToken,
@@ -646,7 +633,7 @@ public sealed class EfCoreInstanceRepository(
 
             // Convert GroupByResponse to GroupSummary
             List<GroupSummary>? groups = null;
-            if (response.Groups != null && response.Groups.Count > 0)
+            if (response.Groups is { Count: > 0 })
             {
                 groups = new List<GroupSummary>();
                 var groupByRequest = GraphQLFilterParser.ParseGroupBy(groupBy);
@@ -671,7 +658,7 @@ public sealed class EfCoreInstanceRepository(
                         summary.Name = string.Join("_", keyValues);
                     }
                     if (group.Keys.Count > 0)
-                    summary.Keys = new Dictionary<string, object?>(group.Keys);
+                        summary.Keys = new Dictionary<string, object?>(group.Keys);
                     // Map aggregations
                     if (group.Aggregations != null)
                     {
@@ -708,11 +695,7 @@ public sealed class EfCoreInstanceRepository(
                     var combinedNode = FilterFormatDetector.CombineFilters(filter);
                     if (combinedNode != null)
                     {
-                        combinedFilter = JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                        {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            WriteIndented = false
-                        });
+                        combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
                     }
                 }
                 else
@@ -728,7 +711,7 @@ public sealed class EfCoreInstanceRepository(
                 null, // no groupBy
                 aggregations,
                 "Data",
-                currentSchema.Name ?? "public",
+                currentSchema.Name ?? DefaultSchemaName,
                 query => query.Include(i => i.DataList).AsSplitQuery(),
                 schemaValidator,
                 cancellationToken,
@@ -760,7 +743,7 @@ public sealed class EfCoreInstanceRepository(
         // Normal flow without groupBy/aggregations
         var orderBy = GraphQLFilterParser.ParseOrderBy(sort);
         var hasAttributesOrderBy = orderBy != null && orderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
-        var schema = currentSchema.Name ?? "public";
+        var schema = currentSchema.Name ?? DefaultSchemaName;
 
         var skipCount = (page - 1) * pageSize;
         List<Instance> items;
@@ -786,7 +769,7 @@ public sealed class EfCoreInstanceRepository(
             }
             else
             {
-                var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
+                var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
                 if (orderBy != null)
                     query = InstanceOrderByApplicator.Apply(query, orderBy);
                 items = await query
@@ -822,7 +805,7 @@ public sealed class EfCoreInstanceRepository(
                 }
                 else
                 {
-                    var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
+                    var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
                     if (orderBy != null)
                         query = InstanceOrderByApplicator.Apply(query, orderBy);
                     items = await query
@@ -836,7 +819,7 @@ public sealed class EfCoreInstanceRepository(
             }
             else
             {
-                var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
+                var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
                 if (orderBy != null)
                     query = InstanceOrderByApplicator.Apply(query, orderBy);
                 items = await query
@@ -850,7 +833,7 @@ public sealed class EfCoreInstanceRepository(
         }
         else
         {
-            var query = await GetFilteredQueryAsync(filter, cancellationToken, schemaContext);
+            var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
             if (orderBy != null)
                 query = InstanceOrderByApplicator.Apply(query, orderBy);
             items = await query
@@ -878,7 +861,7 @@ public sealed class EfCoreInstanceRepository(
         var context = await GetDbContextAsync();
         var dbSet = await GetDbSetAsync();
 
-        var schema = currentSchema.Name ?? "public";
+        var schema = currentSchema.Name ?? DefaultSchemaName;
         var response = await UnifiedFilterService.ExecuteRequestAsync(
             context,
             dbSet,
@@ -900,7 +883,7 @@ public sealed class EfCoreInstanceRepository(
             cancellationToken);
 
         // Handle GroupBy response
-        if (response.Groups != null && response.Groups.Count > 0)
+        if (response.Groups is { Count: > 0 })
         {
             var groups = new List<GroupSummary>();
             var groupByFields = request?.GroupBy?.GetFields() ?? new List<string>();
@@ -1223,20 +1206,12 @@ public sealed class EfCoreInstanceRepository(
         {
             if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
             {
-                return JsonSerializer.Serialize(parsedRequest.Filter, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = false
-                });
+                return JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
             }
             var combinedNode = FilterFormatDetector.CombineFilters(filter);
             if (combinedNode != null)
             {
-                return JsonSerializer.Serialize(combinedNode, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = false
-                });
+                return JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
             }
         }
         else
@@ -1244,11 +1219,7 @@ public sealed class EfCoreInstanceRepository(
             var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
             if (legacyNode != null)
             {
-                return JsonSerializer.Serialize(legacyNode, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = false
-                });
+                return JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
             }
         }
         return null;
@@ -1359,7 +1330,7 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default
     )
     {
-        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        var query = await GetFilteredQueryAsync(filter, null, cancellationToken);
         return await query.LongCountAsync(cancellationToken);
     }
 
@@ -1372,7 +1343,7 @@ public sealed class EfCoreInstanceRepository(
         // Reuses GetFilteredQueryAsync so the optional GraphQL/legacy filter (e.g. createdAt range)
         // is applied identically to CountAsync. GroupBy(_ => 1) collapses to a whole-set aggregate;
         // the i.Status == InstanceStatus.X comparison is the same value-converted predicate CountByStatusAsync uses.
-        var query = await GetFilteredQueryAsync(filter, cancellationToken);
+        var query = await GetFilteredQueryAsync(filter, null, cancellationToken);
         var counts = await query
             .GroupBy(_ => 1)
             .Select(g => new InstanceStatusCounts(
@@ -1420,7 +1391,7 @@ public sealed class EfCoreInstanceRepository(
     /// <inheritdoc />
     public async Task<InstanceDurationStat> GetDurationStatAsync(CancellationToken cancellationToken = default)
     {
-        var schema = currentSchema.Name ?? "public";
+        var schema = currentSchema.Name ?? DefaultSchemaName;
         var context = await GetDbContextAsync();
         var result = await context.Database
             .SqlQueryRaw<InstanceDurationRaw>(

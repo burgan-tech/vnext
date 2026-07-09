@@ -81,8 +81,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <summary>
     /// Gets paged results with optional groups for groupBy queries
     /// </summary>
+    /// <param name="page">Page number for pagination (1-based).</param>
+    /// <param name="pageSize">Page size for pagination.</param>
+    /// <param name="filter">Optional filter JSON: a plain GraphQL node or a request envelope embedding groupBy/aggregations.</param>
+    /// <param name="groupBy">Optional groupBy JSON ({"fields":[...],"aggregations":{...}}).</param>
+    /// <param name="aggregations">Optional standalone aggregations JSON (honored only without groupBy).</param>
     /// <param name="sort">Optional orderBy JSON (e.g. {"field":"createdAt","direction":"desc"} or {"fields":[...]})</param>
     /// <param name="schemaContext">Optional schema-driven filter/sort metadata</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The paged instances, plus group summaries when grouping applies (the paged list is empty in that case).</returns>
     Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
@@ -90,8 +97,8 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default,
-        SchemaFilterContext? schemaContext = null);
+        SchemaFilterContext? schemaContext = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
@@ -209,6 +216,7 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// </summary>
     /// <param name="olderThanUtc">Heartbeat staleness threshold (UTC).</param>
     /// <param name="maxCount">Maximum number of candidates to return per sweep.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     Task<List<Instance>> GetStuckBusyChainsAsync(
         DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default);
 
