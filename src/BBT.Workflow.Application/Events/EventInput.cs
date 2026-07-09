@@ -21,7 +21,10 @@ public sealed class EventInput
     /// <summary>Transition to execute. Required when <see cref="Action"/> is <see cref="EventAction.Transition"/>.</summary>
     public string? TransitionKey { get; init; }
 
-    /// <summary>Raw event payload (pub/sub message / input-binding body).</summary>
+    /// <summary>
+    /// Raw event payload as delivered (pub/sub message / input-binding body). CloudEvent envelopes
+    /// are unwrapped by the event service, not by the caller.
+    /// </summary>
     public JsonElement Payload { get; init; }
 
     /// <summary>Request headers, forwarded into the script context and downstream calls.</summary>

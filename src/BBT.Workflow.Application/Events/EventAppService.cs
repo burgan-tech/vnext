@@ -85,6 +85,9 @@ public sealed class EventAppService(
                 + (input.TransitionKey is null ? "." : $" transition '{input.TransitionKey}'.")));
         }
 
+        // Normalize the delivery envelope before the mapping sees the payload.
+        var payload = UnwrapCloudEvent(input.Payload);
+
         // Compile + run the domain-authored mapping to obtain correlation key + body.
         EventMappingResult? mapping;
         try
@@ -98,9 +101,9 @@ public sealed class EventAppService(
                 // chain dynamic (which would make BuildAsync fail to resolve at runtime).
                 // Undefined/Null payloads (empty request body) map to a null payload rather than
                 // the empty string ToDynamic() would produce for them.
-                .WithEventPayload(input.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+                .WithEventPayload(payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
                     ? null
-                    : (object?)input.Payload.ToDynamic())
+                    : (object?)payload.ToDynamic())
                 .BuildAsync(cancellationToken);
 
             var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
@@ -201,4 +204,19 @@ public sealed class EventAppService(
 
     private static JsonElement? ToAttributes(object? body)
         => body is null ? null : JsonSerializer.SerializeToElement(body, body.GetType());
+
+    /// <summary>
+    /// When the event is fed by a Dapr pub/sub subscription, the message arrives as a structured
+    /// CloudEvent envelope (<c>{ specversion, id, source, type, data, ... }</c>) rather than the raw
+    /// domain payload. Unwrap the inner <c>data</c> so the event mapping sees the same shape it would
+    /// for a direct caller. Bodies that are not CloudEvents are passed through unchanged. Lives here —
+    /// not in the controller — so every entry point that hands an <see cref="EventInput"/> to this
+    /// service gets identical payload normalization.
+    /// </summary>
+    private static JsonElement UnwrapCloudEvent(JsonElement payload)
+        => payload.ValueKind == JsonValueKind.Object
+           && payload.TryGetProperty("specversion", out _)
+           && payload.TryGetProperty("data", out var data)
+            ? data.Clone()
+            : payload;
 }
