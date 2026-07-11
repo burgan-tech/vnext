@@ -3,6 +3,7 @@ using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.Domain.EntityFrameworkCore.Modeling;
 using BBT.Aether.Domain.Events;
 using BBT.Aether.Persistence;
+using BBT.Workflow.Infrastructure.Execution.Locks;
 using Microsoft.EntityFrameworkCore;
 
 namespace BBT.Workflow.Data;
@@ -28,6 +29,13 @@ public class MessagingDbContext(
     /// </summary>
     public virtual DbSet<BackgroundJobInfo> BackgroundJobs { get; set; }
 
+    /// <summary>
+    /// Platform-owned distributed lock leases (see <see cref="NpgsqlDistributedLockService"/>).
+    /// Schema-owned here so the table is created via EF Core migration at deploy time; the
+    /// lock service performs runtime operations with raw ADO.NET on dedicated connections.
+    /// </summary>
+    public virtual DbSet<DistributedLockRecord> DistributedLocks { get; set; }
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         builder.HasDefaultSchema("sys_queues");
@@ -36,5 +44,15 @@ public class MessagingDbContext(
         builder.ConfigureInbox();
         builder.ConfigureOutbox();
         builder.ConfigureBackgroundJob();
+
+        builder.Entity<DistributedLockRecord>(b =>
+        {
+            b.ToTable("DistributedLocks");
+            b.HasKey(l => l.Key);
+            b.Property(l => l.Key).HasMaxLength(512);
+            b.Property(l => l.Owner).HasMaxLength(256).IsRequired();
+            b.Property(l => l.Fence).IsRequired();
+            b.Property(l => l.ExpiresAt).IsRequired();
+        });
     }
 }
