@@ -89,6 +89,25 @@ public sealed class EfCoreInstanceRepository(
         return instance;
     }
 
+    /// <summary>
+    /// Stamps the latest-only marker on every instance in a list/paged result so a consumer
+    /// (view/extension/script) that reaches for <c>DataList</c> / <c>FindData</c> /
+    /// <c>GetVersionHistory</c> fails fast instead of reading a silently-incomplete history.
+    /// No-op when latest-only loading is off. Fluent: returns the same list for inline use.
+    /// </summary>
+    private List<Instance> MarkListIfPartiallyLoaded(List<Instance> instances)
+    {
+        if (LatestOnlyLoading)
+        {
+            foreach (var instance in instances)
+            {
+                instance.MarkDataPartiallyLoaded();
+            }
+        }
+
+        return instances;
+    }
+
     /// <inheritdoc />
     public async Task<Instance?> FindByFilterAsync(
         InstanceFilter filter,
@@ -587,7 +606,7 @@ public sealed class EfCoreInstanceRepository(
                 var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
                 var hasNext = skip + pageSize < totalCount;
 
-                return new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+                return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
             }
 
             // Fallback to empty list
@@ -615,7 +634,7 @@ public sealed class EfCoreInstanceRepository(
             items = items.Take(pageSize).ToList();
         }
 
-        return new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
+        return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
     }
 
     public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
@@ -770,7 +789,7 @@ public sealed class EfCoreInstanceRepository(
                 var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
                 var hasNext = skip + pageSize < totalCount;
 
-                pagedList = new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
             }
             else
             {
@@ -889,7 +908,7 @@ public sealed class EfCoreInstanceRepository(
                 items = items.Take(pageSize).ToList();
         }
  
-        var normalPagedList = new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
+        var normalPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
         return (normalPagedList, null);
     }
 
@@ -982,7 +1001,7 @@ public sealed class EfCoreInstanceRepository(
                 var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
                 var hasNext = skip + pageSize < totalCount;
 
-                pagedList = new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
             }
             else
             {
@@ -1005,7 +1024,7 @@ public sealed class EfCoreInstanceRepository(
             var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
             var hasNext = skip + pageSize < totalCount;
 
-            resultPagedList = new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+            resultPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
         }
         else
         {
