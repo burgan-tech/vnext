@@ -20,13 +20,6 @@ public sealed class RepresentationEtagService(IJsonCanonicalizer canonicalizer) 
         return ToBase64Url(hashBytes);
     }
 
-    /// <inheritdoc />
-    public string GenerateFromSeed(string seed)
-    {
-        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(seed));
-        return ToBase64Url(hashBytes);
-    }
-
     private static string ToBase64Url(byte[] bytes)
     {
         var base64 = Convert.ToBase64String(bytes);

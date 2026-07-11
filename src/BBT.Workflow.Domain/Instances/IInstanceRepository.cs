@@ -22,15 +22,6 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<Instance?> FindByIdentifierSlimAsync(string identifier, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads the cheap state-change signal for the state function's conditional (ETag) fast
-    /// path: a single non-tracking projection query, no aggregate materialization. Resolves
-    /// the identifier like <see cref="FindByIdentifierAsync"/> (id first, then the most
-    /// recent row for the key). Returns null when no instance matches.
-    /// </summary>
-    Task<InstanceStateSignal?> GetStateSignalAsync(string identifier,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
     /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
     /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,

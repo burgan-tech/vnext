@@ -4,19 +4,10 @@ metadata:
   name: vnext-inbox-resiliency
 spec:
   policies:
-    retries:
-      # Connection-level failures only; app responses are never retried here. The
-      # orchestration forwarder (DaprOrchestrationForwarder) already implements the
-      # at-least-once contract at the message level: transient statuses (>= 500, 408, 429)
-      # rethrow so the inbox re-delivers, permanent 4xx are dropped. This sidecar retry
-      # merely smooths sub-second connection blips so they never surface as redeliveries.
-      connectionRetry:
-        policy: exponential
-        maxInterval: 5s
-        maxRetries: 3
     circuitBreakers:
-      # When Orchestration is down, fail forwards fast and let the inbox's bounded
-      # redelivery + dead-letter own durability instead of stacking 60s timeouts.
+      # When Orchestration is down, fail forwards fast and let the inbox's bounded redelivery
+      # + dead-letter own durability instead of stacking 60s timeouts. The breaker only
+      # short-circuits; it never re-sends a forward.
       invocationBreaker:
         maxRequests: 1
         timeout: 30s
@@ -24,8 +15,17 @@ spec:
   targets:
     apps:
       # Inbox worker → Orchestration internal forwards (subflow lifecycle, transition
-      # continuations). No timeout policy: OrchestrationApi:InvocationTimeoutSeconds (60s)
-      # owns the per-call budget.
+      # continuations).
+      #
+      # NO retry policy on purpose. The forwarder (DaprOrchestrationForwarder) already owns the
+      # at-least-once contract at the message level: transient statuses (>= 500, 408, 429)
+      # rethrow so the inbox re-delivers, permanent 4xx are dropped. A sidecar retry here would
+      # both retry the permanent 4xx (delaying the forwarder's drop decision) and duplicate the
+      # inbox's own redelivery of transient failures — cross-layer amplification. Dapr retry
+      # also cannot tell an app error response from an unreachable-app failure by status code
+      # (`matching.httpStatusCodes` filters by code, not origin; an empty set retries all HTTP
+      # errors), so classification stays in the forwarder where the distinction is known.
+      #
+      # No timeout policy: OrchestrationApi:InvocationTimeoutSeconds (60s) owns the per-call budget.
       vnext-app:
-        retry: connectionRetry
         circuitBreaker: invocationBreaker
