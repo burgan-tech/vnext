@@ -14,6 +14,11 @@ namespace BBT.Workflow.Infrastructure.Execution.Locks;
 /// can reject stale holders. Postgres is the platform's portable core per domain runtime, so
 /// this keeps the SaaS infrastructure-isolation guarantee intact.
 /// <para>
+/// The lease table is owned code-first by <c>MessagingDbContext</c> (<c>sys_queues</c> schema,
+/// see <see cref="DistributedLockRecord"/>) and created by an EF Core migration applied at
+/// deploy time — consistent with the outbox/inbox/background-job tables, not runtime DDL.
+/// </para>
+/// <para>
 /// Every operation runs on its own pooled connection, deliberately OUTSIDE any ambient
 /// Unit-of-Work transaction: a lock's lifetime is independent of business transactions, and a
 /// rolled-back transaction must never un-acquire a lock the caller believes it holds.
@@ -21,11 +26,11 @@ namespace BBT.Workflow.Infrastructure.Execution.Locks;
 /// </summary>
 public sealed class NpgsqlDistributedLockService : IDistributedLockService
 {
+    // Schema-qualified table owned code-first by MessagingDbContext (sys_queues) and created by
+    // an EF Core migration at deploy time — see DistributedLockRecord. The service only reads/
+    // writes it at runtime with raw ADO.NET.
     private const string Schema = "sys_queues";
     private const string Table = "DistributedLocks";
-
-    private static readonly SemaphoreSlim BootstrapGate = new(1, 1);
-    private static volatile bool _bootstrapped;
 
     private readonly string _connectionString;
     private readonly ILogger<NpgsqlDistributedLockService> _logger;
@@ -45,8 +50,6 @@ public sealed class NpgsqlDistributedLockService : IDistributedLockService
         string resourceId, int expiryInSeconds = 60, CancellationToken cancellationToken = default)
     {
         var owner = GenerateUniqueOwner();
-
-        await EnsureBootstrappedAsync(cancellationToken);
 
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -120,45 +123,6 @@ public sealed class NpgsqlDistributedLockService : IDistributedLockService
 
         await action();
         return true;
-    }
-
-    /// <summary>
-    /// Creates the lease table once per process. Idempotent (IF NOT EXISTS); the table is
-    /// deliberately NOT part of the EF model so it needs no migration/snapshot involvement.
-    /// </summary>
-    private async Task EnsureBootstrappedAsync(CancellationToken cancellationToken)
-    {
-        if (_bootstrapped)
-        {
-            return;
-        }
-
-        await BootstrapGate.WaitAsync(cancellationToken);
-        try
-        {
-            if (_bootstrapped)
-            {
-                return;
-            }
-
-            await using var connection = new NpgsqlConnection(_connectionString);
-            await connection.OpenAsync(cancellationToken);
-            await using var command = new NpgsqlCommand($"""
-                CREATE SCHEMA IF NOT EXISTS {Schema};
-                CREATE TABLE IF NOT EXISTS {Schema}."{Table}" (
-                    "Key"       text PRIMARY KEY,
-                    "Owner"     text NOT NULL,
-                    "Fence"     bigint NOT NULL DEFAULT 0,
-                    "ExpiresAt" timestamptz NOT NULL
-                );
-                """, connection);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            _bootstrapped = true;
-        }
-        finally
-        {
-            BootstrapGate.Release();
-        }
     }
 
     private static string GenerateUniqueOwner()
