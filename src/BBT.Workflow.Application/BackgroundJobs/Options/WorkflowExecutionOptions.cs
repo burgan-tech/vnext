@@ -134,6 +134,18 @@ public sealed class WorkflowExecutionOptions
     /// single enclosing transaction); a crash between them is recovered by the idempotent
     /// retry/reaper path.
     /// </para>
+    /// <para>
+    /// <see cref="WorkflowEventPublishingMode.SinkDriven"/>: the pipeline stops extracting events
+    /// off the aggregate (<c>ExtractAndDeferInstanceEvents</c> becomes a no-op), so the events stay
+    /// on the instance and flow through the standard Aether domain-event sink → the unit of work
+    /// dispatches them to the outbox on commit. This retires the bespoke defer path and makes the
+    /// aggregate the single source of truth. It REQUIRES the runtime to actually dispatch events on
+    /// a non-transactional commit — i.e. the Aether option
+    /// <c>AetherDomainEventOptions.DispatchNonTransactionalEventsToOutbox</c> must be enabled and
+    /// the Npgsql schema-switching mode must allow non-transactional units of work
+    /// (<c>SessionSearchPath</c>). Enable this mode only together with those; otherwise events
+    /// buffered by the sink are dropped at commit (worse than the defer path).
+    /// </para>
     /// Canary rollout — enable per environment, compare baseline metrics, then flip the default.
     /// </summary>
     public WorkflowEventPublishingMode EventPublishingMode { get; set; } = WorkflowEventPublishingMode.Legacy;
@@ -171,7 +183,14 @@ public enum WorkflowEventPublishingMode
     Legacy = 0,
 
     /// <summary>Commit business state first, then write deferred events to the outbox in a dedicated transactional UoW.</summary>
-    TransactionalOutbox = 1
+    TransactionalOutbox = 1,
+
+    /// <summary>
+    /// Do not extract events off the aggregate; let them flow through the Aether domain-event sink
+    /// and be dispatched by the unit of work on commit. Requires the runtime to dispatch events on
+    /// a non-transactional commit (see <see cref="WorkflowExecutionOptions.EventPublishingMode"/>).
+    /// </summary>
+    SinkDriven = 2
 }
 
 public sealed class TransitionJobFailurePolicyOptions

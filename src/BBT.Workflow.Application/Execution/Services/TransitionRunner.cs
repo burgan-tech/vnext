@@ -51,8 +51,7 @@ public sealed class TransitionRunner(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
-        var transactionalOutbox =
-            executionOptions.Value.EventPublishingMode == WorkflowEventPublishingMode.TransactionalOutbox;
+        var mode = executionOptions.Value.EventPublishingMode;
 
         return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion,
             async (sp, ct) =>
@@ -75,15 +74,16 @@ public sealed class TransitionRunner(
                         coreOutput = coreResult.Value!;
 
                         // Legacy: publish inside the business UoW before its commit (historical order).
-                        // TransactionalOutbox: defer publishing until AFTER the business commit so the
-                        // events are written as a separate durable, transactional outbox envelope.
-                        if (!transactionalOutbox)
+                        // TransactionalOutbox: publish AFTER the business commit in its own transactional UoW.
+                        // SinkDriven: no explicit publish — events stayed on the aggregate and are
+                        //   dispatched by the Aether domain-event sink when this UoW commits.
+                        if (mode == WorkflowEventPublishingMode.Legacy)
                             await PublishDeferredEventsAsync(sp, coreOutput, ct);
 
                         await uow.CommitAsync(ct);
                     }
 
-                    if (transactionalOutbox)
+                    if (mode == WorkflowEventPublishingMode.TransactionalOutbox)
                         await PublishDeferredEventsTransactionalAsync(sp, uowManager, coreOutput, ct);
 
                     return Result<TransitionCoreOutput>.Ok(coreOutput);

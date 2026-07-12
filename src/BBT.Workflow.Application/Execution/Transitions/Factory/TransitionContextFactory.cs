@@ -1,3 +1,4 @@
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -5,6 +6,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Aether.Results;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Transitions.Factory;
 
@@ -12,8 +14,14 @@ namespace BBT.Workflow.Execution.Transitions.Factory;
 public sealed class TransitionContextFactory(
     IInstanceRepository instanceRepository,
     IComponentCacheStore componentCacheStore,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionContextFactory
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IOptions<WorkflowExecutionOptions> executionOptions) : ITransitionContextFactory
 {
+    // SinkDriven mode leaves distributed events on the aggregate for the Aether sink; every other
+    // mode keeps the historical extract-and-defer behavior.
+    private bool DeferInstanceEvents =>
+        executionOptions.Value.EventPublishingMode != WorkflowEventPublishingMode.SinkDriven;
+
     /// <inheritdoc />
     /// <summary>
     /// Creates a TransitionExecutionContext from the input.
@@ -124,6 +132,7 @@ public sealed class TransitionContextFactory(
             CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
+            DeferInstanceEvents = DeferInstanceEvents,
 
             // Telemetry
             TraceId = traceId,

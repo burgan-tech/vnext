@@ -134,6 +134,16 @@ public sealed class TransitionExecutionContext
     /// <summary>Gets the request route values.</summary>
     public IReadOnlyDictionary<string, string?> RouteValues { get; init; } = new Dictionary<string, string?>();
 
+    /// <summary>
+    /// Gets whether the pipeline extracts distributed events off the aggregate and defers them for
+    /// explicit post-pipeline publishing. True (default) is the historical defer behavior. When
+    /// false (SinkDriven mode), <see cref="ExtractAndDeferInstanceEvents"/> is a no-op so the events
+    /// stay on the instance and are dispatched by the Aether domain-event sink on unit-of-work
+    /// commit. Set once by <c>TransitionContextFactory</c> from
+    /// <c>WorkflowExecutionOptions.EventPublishingMode</c>.
+    /// </summary>
+    public bool DeferInstanceEvents { get; init; } = true;
+
     /// <summary>Gets a temporary storage bag for pipeline steps to share data.</summary>
     public IDictionary<string, object?> Items { get; } = new Dictionary<string, object?>();
 
@@ -203,6 +213,11 @@ public sealed class TransitionExecutionContext
     public void ExtractAndDeferInstanceEvents()
     {
         if (Instance == null)
+            return;
+
+        // SinkDriven mode: leave the events on the aggregate so the Aether domain-event sink
+        // collects them on SaveChanges and the unit of work dispatches them to the outbox on commit.
+        if (!DeferInstanceEvents)
             return;
 
         var domainEvents = Instance.GetDomainEvents();
