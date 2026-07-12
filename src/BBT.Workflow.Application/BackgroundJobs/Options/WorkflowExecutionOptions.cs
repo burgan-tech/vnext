@@ -103,6 +103,20 @@ public sealed class WorkflowExecutionOptions
     public int ChainReaperFlowTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Leader-lease duration in seconds for the chain reaper. Every orchestration replica runs
+    /// the reaper hosted service, but only the one that holds the <c>chain-reaper-leader</c>
+    /// lease sweeps in a given cycle — the others skip it. This removes the redundant
+    /// per-replica <c>sys_flows</c> discovery and per-flow-schema polling that would otherwise
+    /// scale with the replica count. The lease is acquired at the start of a cycle and released
+    /// when the sweep completes; the TTL is only a crash-safety net, so it must comfortably
+    /// exceed a typical sweep. Any rare mid-sweep expiry is harmless because the reaper's
+    /// re-drive is idempotent (chain-token gate). Acquire/release use the platform
+    /// <c>IDistributedLockService</c> and work on both the Postgres and Dapr lock providers
+    /// (both grant exactly one winner). Default: 120.
+    /// </summary>
+    public int ChainReaperLeaderLeaseSeconds { get; set; } = 120;
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process

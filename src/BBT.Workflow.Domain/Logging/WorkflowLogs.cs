@@ -198,6 +198,28 @@ public static partial class WorkflowLogs
         string flowKey);
 
     /// <summary>
+    /// Logs when this replica won the chain-reaper leader lease and will run the sweep this cycle.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10128,
+        Level = LogLevel.Debug,
+        Message = "Chain reaper acquired leader lease ({LeaseSeconds}s); sweeping this cycle")]
+    public static partial void ChainReaperLeadershipAcquired(
+        this ILogger logger,
+        int leaseSeconds);
+
+    /// <summary>
+    /// Logs when another replica holds the chain-reaper leader lease, so this replica skips the
+    /// sweep this cycle (avoids redundant sys_flows discovery and per-flow polling across pods).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10129,
+        Level = LogLevel.Debug,
+        Message = "Chain reaper leader lease held by another replica; skipping sweep this cycle")]
+    public static partial void ChainReaperLeadershipHeldElsewhere(
+        this ILogger logger);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>
