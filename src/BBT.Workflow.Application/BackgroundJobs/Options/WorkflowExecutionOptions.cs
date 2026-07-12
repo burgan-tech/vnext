@@ -117,6 +117,41 @@ public sealed class WorkflowExecutionOptions
     public int ChainReaperLeaderLeaseSeconds { get; set; } = 120;
 
     /// <summary>
+    /// Selects how transition-scoped distributed domain events (deferred during the pipeline via
+    /// <c>ExtractAndDeferInstanceEvents</c>) are published.
+    /// <para>
+    /// <see cref="WorkflowEventPublishingMode.Legacy"/> (default): events are published inside the
+    /// non-transactional business UoW <b>before</b> its commit — the historical behavior. This is
+    /// the safe fallback and keeps existing semantics unchanged.
+    /// </para>
+    /// <para>
+    /// <see cref="WorkflowEventPublishingMode.TransactionalOutbox"/>: the business state is committed
+    /// first, then the deferred events are written to the outbox in a dedicated
+    /// <c>RequiresNew, IsTransactional=true</c> UoW that commits them atomically as one durable
+    /// envelope. This restores at-least-once distributed delivery (outbox worker → broker → inbox
+    /// handler + retry) independently of the pipeline's per-step commits. State and events are two
+    /// durable writes rather than one transaction (the per-step durable-progress design precludes a
+    /// single enclosing transaction); a crash between them is recovered by the idempotent
+    /// retry/reaper path.
+    /// </para>
+    /// Canary rollout — enable per environment, compare baseline metrics, then flip the default.
+    /// </summary>
+    public WorkflowEventPublishingMode EventPublishingMode { get; set; } = WorkflowEventPublishingMode.Legacy;
+
+    /// <summary>
+    /// When enabled, a successful event hook no longer suppresses publishing to the inner event bus:
+    /// the hook (synchronous, local side-effect) runs <b>and</b> the event is still written to the
+    /// outbox for distributed delivery (inbox handler). This restores the documented dual-processing
+    /// pattern (hook + handler both run). When false (default), the historical short-circuit is kept
+    /// — a successful hook marks the event handled and it is not published distributed.
+    /// <para>
+    /// Enable only after confirming the corresponding inbox handlers are idempotent, since both the
+    /// local hook and the distributed handler will then process the event. Canary rollout.
+    /// </para>
+    /// </summary>
+    public bool AdditiveEventHooks { get; set; }
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process
@@ -124,6 +159,19 @@ public sealed class WorkflowExecutionOptions
     /// fix in the resume/revert path is already applied.
     /// </summary>
     public bool InProcessSameDomainForwarding { get; set; }
+}
+
+/// <summary>
+/// Publishing strategy for transition-scoped distributed domain events.
+/// See <see cref="WorkflowExecutionOptions.EventPublishingMode"/>.
+/// </summary>
+public enum WorkflowEventPublishingMode
+{
+    /// <summary>Publish inside the non-transactional business UoW before its commit (historical behavior).</summary>
+    Legacy = 0,
+
+    /// <summary>Commit business state first, then write deferred events to the outbox in a dedicated transactional UoW.</summary>
+    TransactionalOutbox = 1
 }
 
 public sealed class TransitionJobFailurePolicyOptions

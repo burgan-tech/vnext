@@ -1,6 +1,8 @@
 using BBT.Aether.Events;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Infrastructure.EventBus;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -67,7 +69,14 @@ public static class EventBusHookServiceCollectionExtensions
         services.Decorate<IDistributedEventBus>((inner, serviceProvider) =>
         {
             var logger = serviceProvider.GetRequiredService<ILogger<HookedDistributedEventBus>>();
-            return new HookedDistributedEventBus(inner, serviceProvider, logger);
+            // Read the additive-hooks flag per publish via IOptionsMonitor so the singleton bus
+            // reflects configuration without a captured snapshot. Falls back to legacy (false)
+            // when the workflow options are not registered (e.g. isolated test hosts).
+            var optionsMonitor = serviceProvider.GetService<IOptionsMonitor<WorkflowExecutionOptions>>();
+            Func<bool> additiveHooks = optionsMonitor is null
+                ? static () => false
+                : () => optionsMonitor.CurrentValue.AdditiveEventHooks;
+            return new HookedDistributedEventBus(inner, serviceProvider, logger, additiveHooks);
         });
 
         return services;

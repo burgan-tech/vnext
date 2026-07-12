@@ -33,6 +33,7 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     private readonly IDistributedEventBus _inner;
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<HookedDistributedEventBus> _logger;
+    private readonly Func<bool> _additiveHooks;
 
     /// <summary>
     /// Cache for checking if event types have the EventHookAttribute.
@@ -42,14 +43,24 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     /// <summary>
     /// Initializes a new instance of the <see cref="HookedDistributedEventBus"/> class.
     /// </summary>
+    /// <param name="additiveHooks">
+    /// Resolves whether hooks are additive: when it returns <c>true</c>, a successful hook does NOT
+    /// suppress the inner (outbox) publish, so the hook and the distributed handler both run
+    /// (documented dual-processing pattern). When <c>false</c> (default), the historical
+    /// short-circuit is kept — a fully successful hook marks the event handled and it is not
+    /// published to the inner bus. A delegate (not a captured bool) so the current option value is
+    /// read per publish, keeping the singleton bus in step with configuration.
+    /// </param>
     public HookedDistributedEventBus(
         IDistributedEventBus inner,
         IServiceProvider serviceProvider,
-        ILogger<HookedDistributedEventBus> logger)
+        ILogger<HookedDistributedEventBus> logger,
+        Func<bool>? additiveHooks = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _additiveHooks = additiveHooks ?? (static () => false);
     }
 
     /// <summary>
@@ -92,8 +103,10 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         // Execute hooks and get result
         var hookResult = await ExecuteHooksAsync(payload, cancellationToken);
 
-        // If all hooks succeeded, event is handled - don't publish to inner bus
-        if (hookResult.HooksExecuted && hookResult.AllSucceeded)
+        // Legacy: a fully successful hook marks the event handled — don't publish to inner bus.
+        // Additive: hooks are a local side-effect and the event is ALSO published (outbox) so the
+        // distributed handler runs too (dual-processing).
+        if (!_additiveHooks() && hookResult.HooksExecuted && hookResult.AllSucceeded)
         {
             return;
         }
@@ -127,8 +140,9 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         // Execute hooks and get result
         var hookResult = await ExecuteHooksAsync(@event, cancellationToken);
 
-        // If all hooks succeeded, event is handled - don't publish to inner bus
-        if (hookResult is { HooksExecuted: true, AllSucceeded: true })
+        // Legacy: a fully successful hook marks the event handled — don't publish to inner bus.
+        // Additive: publish anyway so the distributed handler runs alongside the local hook.
+        if (!_additiveHooks() && hookResult is { HooksExecuted: true, AllSucceeded: true })
         {
             return;
         }

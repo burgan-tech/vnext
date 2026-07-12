@@ -2,10 +2,12 @@ using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Services;
 
@@ -14,10 +16,12 @@ namespace BBT.Workflow.Execution.Services;
 /// Transition chaining (auto/scheduled) is now handled by TransitionPipeline via sync dispatch.
 /// This runner focuses on UoW lifecycle management for a single transition execution.
 /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and context management.
-/// After UoW commit, publishes deferred domain events via IDistributedEventBus.
+/// Deferred domain events are published according to
+/// <see cref="WorkflowExecutionOptions.EventPublishingMode"/>.
 /// </summary>
 public sealed class TransitionRunner(
     IServiceScopeFactory scopeFactory,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<TransitionRunner> logger) : ITransitionRunner
 {
     /// <inheritdoc />
@@ -47,6 +51,9 @@ public sealed class TransitionRunner(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
+        var transactionalOutbox =
+            executionOptions.Value.EventPublishingMode == WorkflowEventPublishingMode.TransactionalOutbox;
+
         return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion,
             async (sp, ct) =>
             {
@@ -56,30 +63,41 @@ public sealed class TransitionRunner(
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
-                    await using var uow = uowManager.Begin(
-                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                    TransitionCoreOutput coreOutput;
 
-                    var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
-                    if (!coreResult.IsSuccess)
-                        return Result<TransitionCoreOutput>.Fail(coreResult.Error);
+                    await using (var uow = uowManager.Begin(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+                    {
+                        var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
+                        if (!coreResult.IsSuccess)
+                            return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
-                    
-                    await uow.CommitAsync(ct);
-                    
-                    return coreResult;
+                        coreOutput = coreResult.Value!;
+
+                        // Legacy: publish inside the business UoW before its commit (historical order).
+                        // TransactionalOutbox: defer publishing until AFTER the business commit so the
+                        // events are written as a separate durable, transactional outbox envelope.
+                        if (!transactionalOutbox)
+                            await PublishDeferredEventsAsync(sp, coreOutput, ct);
+
+                        await uow.CommitAsync(ct);
+                    }
+
+                    if (transactionalOutbox)
+                        await PublishDeferredEventsTransactionalAsync(sp, uowManager, coreOutput, ct);
+
+                    return Result<TransitionCoreOutput>.Ok(coreOutput);
                 }
             }, cancellationToken);
     }
 
     /// <summary>
-    /// Publishes deferred domain events via IDistributedEventBus after UoW commit.
-    /// Each event passes through HookedDistributedEventBus, preserving hook behavior.
+    /// Legacy publish: emits deferred domain events via IDistributedEventBus within the ambient
+    /// (business) UoW. Each event passes through HookedDistributedEventBus, preserving hook behavior.
     /// Events include pre-extracted metadata from AddDistributedEvent time.
     /// </summary>
     private async Task PublishDeferredEventsAsync(
         IServiceProvider sp,
-        IUnitOfWorkManager uowManager,
         TransitionCoreOutput coreOutput,
         CancellationToken ct)
     {
@@ -101,6 +119,45 @@ public sealed class TransitionRunner(
                     "Failed to publish deferred event {EventType} for transition",
                     envelope.Event.GetType().Name);
             }
+        }
+    }
+
+    /// <summary>
+    /// TransactionalOutbox publish: after the business state is durably committed, writes the
+    /// deferred domain events to the outbox in a dedicated <c>RequiresNew, IsTransactional=true</c>
+    /// UoW that commits them atomically as one envelope. The outbox worker then delivers them
+    /// at-least-once (broker → inbox handler), decoupled from the pipeline's per-step commits.
+    /// A failure here does not undo the already-committed business state; it is logged and the
+    /// idempotent retry/reaper path recovers the missed events.
+    /// </summary>
+    private async Task PublishDeferredEventsTransactionalAsync(
+        IServiceProvider sp,
+        IUnitOfWorkManager uowManager,
+        TransitionCoreOutput coreOutput,
+        CancellationToken ct)
+    {
+        if (coreOutput.DeferredEvents.Count == 0)
+            return;
+
+        var eventBus = sp.GetRequiredService<IDistributedEventBus>();
+
+        try
+        {
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+            foreach (var envelope in coreOutput.DeferredEvents)
+                await eventBus.PublishAsync(envelope.Event, envelope.Metadata, cancellationToken: ct);
+
+            await uow.CommitAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to write {Count} deferred event(s) to the outbox for transition; " +
+                "business state is committed and recovery relies on the idempotent retry path",
+                coreOutput.DeferredEvents.Count);
         }
     }
 }
