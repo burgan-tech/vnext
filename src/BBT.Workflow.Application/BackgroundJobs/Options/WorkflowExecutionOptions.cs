@@ -164,6 +164,18 @@ public sealed class WorkflowExecutionOptions
     public bool AdditiveEventHooks { get; set; }
 
     /// <summary>
+    /// Controls the transaction-boundary guardrail (INV-2): a remote/external operation (task
+    /// invocation, script eval, cross-service call) must NOT be invoked while a transactional unit
+    /// of work is active, because the transaction would pin the pooled connection and hold row
+    /// locks for the duration of the remote call. <see cref="TransactionGuardrailMode.Off"/>
+    /// (default) is a no-op — no behavior change. <see cref="TransactionGuardrailMode.Warn"/> logs
+    /// a warning + metric on violation (safe to enable in any environment to observe).
+    /// <see cref="TransactionGuardrailMode.Throw"/> fails fast — intended for tests and the
+    /// segmented-pipeline rollout so a transaction spanning a remote call is caught immediately.
+    /// </summary>
+    public TransactionGuardrailMode TransactionGuardrailMode { get; set; } = TransactionGuardrailMode.Off;
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process
@@ -191,6 +203,22 @@ public enum WorkflowEventPublishingMode
     /// a non-transactional commit (see <see cref="WorkflowExecutionOptions.EventPublishingMode"/>).
     /// </summary>
     SinkDriven = 2
+}
+
+/// <summary>
+/// Modes for the transaction-boundary guardrail. See
+/// <see cref="WorkflowExecutionOptions.TransactionGuardrailMode"/>.
+/// </summary>
+public enum TransactionGuardrailMode
+{
+    /// <summary>No-op — the guardrail does not run (default; no behavior change).</summary>
+    Off = 0,
+
+    /// <summary>Log a warning + metric when a remote call happens inside an active transaction.</summary>
+    Warn = 1,
+
+    /// <summary>Throw when a remote call happens inside an active transaction (tests / rollout).</summary>
+    Throw = 2
 }
 
 public sealed class TransitionJobFailurePolicyOptions

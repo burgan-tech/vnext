@@ -10,6 +10,7 @@ using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.PostCommit.Handlers;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Strategies;
+using BBT.Workflow.Execution.Transactions;
 using BBT.Workflow.Execution.Transitions.Factory;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
@@ -32,6 +33,13 @@ public static class PipelineServiceCollectionExtensions
         
         // Transition Runner (owns chaining with isolated scope + UoW per hop)
         services.AddScoped<ITransitionRunner, TransitionRunner>();
+
+        // Per-operation transactional refactor tooling (F1):
+        //  - ITransactionGuardrail enforces INV-2 (no transaction across a remote call).
+        //  - ITransactionalWorkUnit is the short transactional unit building block (INV-1/INV-3).
+        // Both are additive; the guardrail defaults to Off (no behavior change) until wired.
+        services.AddScoped<ITransactionGuardrail, TransactionGuardrail>();
+        services.AddScoped<ITransactionalWorkUnit, TransactionalWorkUnit>();
         
         // Execution Strategies
         services.AddScoped<IExecutionStrategyFactory, ExecutionStrategyFactory>();

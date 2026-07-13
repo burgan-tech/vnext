@@ -220,6 +220,19 @@ public static partial class WorkflowLogs
         this ILogger logger);
 
     /// <summary>
+    /// Logs a transaction-boundary guardrail violation (INV-2): a remote/external operation was
+    /// invoked while a transactional unit of work was active. Emitted in Warn mode; Throw mode
+    /// raises instead. See <c>WorkflowExecutionOptions.TransactionGuardrailMode</c>.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10130,
+        Level = LogLevel.Warning,
+        Message = "Transaction boundary violation: remote operation '{Operation}' invoked while a transactional unit of work is active; a transaction must not span a remote call")]
+    public static partial void TransactionGuardrailViolation(
+        this ILogger logger,
+        string operation);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>
