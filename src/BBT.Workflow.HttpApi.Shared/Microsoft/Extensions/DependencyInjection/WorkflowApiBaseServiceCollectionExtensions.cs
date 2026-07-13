@@ -171,6 +171,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddAetherDomainEvents<MessagingDbContext>(options =>
         {
+            options.DispatchNonTransactionalEventsToOutbox = true;
             options.DispatchStrategy = DomainEventDispatchStrategy.AlwaysUseOutbox;
         });
 
