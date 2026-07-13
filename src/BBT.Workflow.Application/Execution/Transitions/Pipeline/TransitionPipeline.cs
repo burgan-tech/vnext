@@ -294,8 +294,11 @@ public class TransitionPipeline
     {
         _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
+        // Transactional: DB-only fault path (reload → fault → persist), no remote call. Required
+        // under SchemaSwitchingMode.TransactionLocal and ensures the fault domain events are
+        // dispatched on commit rather than dropped by a non-transactional commit.
         await using var faultUow = _uowManager.Begin(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
         // Reload in the new scope so we operate on a clean, tracked entity.
         var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)

@@ -54,8 +54,13 @@ public sealed class SubflowFaultService(
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
 
+                // Transactional: the fault-propagation phase reads/mutates the parent instance, reads
+                // the workflow definition from cache, resolves the error boundary, and runs the (local)
+                // output-mapping script — all bounded, with no remote/pipeline span (the error-boundary
+                // transition and ResumePipelineAsync run OUTSIDE this unit). Required under
+                // SchemaSwitchingMode.TransactionLocal and lets the fault events dispatch on commit.
                 await using (var uow = uowManager.Begin(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true }))
                 {
                     parentInstance = await instanceRepository.FindAsync(
                         input.InstanceId, true, cancellationToken);
@@ -361,8 +366,10 @@ public sealed class SubflowFaultService(
     {
         try
         {
+            // Transactional: DB-only revert (reload → revert correlation → persist), no remote call.
+            // Required under SchemaSwitchingMode.TransactionLocal.
             await using var revertUow = uowManager.Begin(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
             // S9 isolation rule: reload with ALL correlations (completed included) so the
             // revert operates on a tracked entity and cannot silently no-op.

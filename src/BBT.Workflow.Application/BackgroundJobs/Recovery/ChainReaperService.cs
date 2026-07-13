@@ -37,8 +37,12 @@ public sealed class ChainReaperService(
         var faulted = 0;
         var skippedActive = 0;
 
+        // Transactional: the whole sweep is DB-only (query stuck chains → fault → persist) with no
+        // remote call, so a single short transaction is safe. Required under
+        // SchemaSwitchingMode.TransactionLocal, and ensures the fault domain events raised for each
+        // reaped instance are dispatched on commit rather than dropped by a non-transactional commit.
         await using var uow = uowManager.Begin(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
         var candidates = await instanceRepository.GetStuckBusyChainsAsync(olderThan, MaxPerSweep, cancellationToken);
 

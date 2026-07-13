@@ -65,8 +65,13 @@ public sealed class SubflowCompletionService(
                 Instance? parentInstance;
                 Definitions.Workflow? parentWorkflow;
                 
+                // Transactional: the correlation-completion phase reads/mutates the parent instance,
+                // reads the workflow definition from cache, and runs the (local) output-mapping script
+                // — all bounded, with no remote/pipeline span (ResumePipelineAsync runs OUTSIDE this
+                // unit). Required under SchemaSwitchingMode.TransactionLocal and lets correlation
+                // events dispatch on commit.
                 await using (var correlationUow =  uowManager.Begin(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true }))
                 {
                     parentInstance = await instanceRepository.FindAsync(
                         completedInput.InstanceId, true, cancellationToken);
@@ -320,8 +325,10 @@ public sealed class SubflowCompletionService(
     {
         try
         {
+            // Transactional: DB-only revert (reload → revert correlation → persist), no remote call.
+            // Required under SchemaSwitchingMode.TransactionLocal.
             await using var revertUow = uowManager.Begin(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
             await RevertAndPersistCorrelationAsync(parentInstance, subInstanceId, parentInstanceId, cancellationToken);
             await revertUow.CommitAsync(cancellationToken);

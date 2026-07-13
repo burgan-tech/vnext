@@ -20,8 +20,12 @@ public sealed class JobTimeoutRecoveryService(
     {
         try
         {
+            // Transactional: this unit is DB-only (reload → fault → persist) with no remote call,
+            // so it can hold a short transaction. Required under SchemaSwitchingMode.TransactionLocal
+            // (every command needs an active transaction) and ensures the fault domain events are
+            // dispatched on commit instead of being dropped by a non-transactional commit.
             await using var uow = uowManager.Begin(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
             var instance = await instanceRepository.FindAsync(args.InstanceId, true, cancellationToken);
 
