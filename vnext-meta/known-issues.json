@@ -51,6 +51,16 @@
       "fixedIn": null
     },
     {
+      "id": "async-transition-enqueue-lock-race-silent-loss",
+      "affectedVersions": ">=0.0.26 <0.0.69",
+      "severity": "error",
+      "component": "transition",
+      "path": null,
+      "title": "Async (sync=false) transition jobs could fire while the enqueue-side distributed lock still held the same instance key; the job consumer failed with a lock conflict that was silently swallowed, losing the transition and stranding the instance in Busy status.",
+      "workaround": "Retry the transition after the instance is recovered; upgrade to a fixed version where the enqueue lock is scoped with an :enqueue suffix and the job handler retries lock conflicts and faults the instance on exhaustion.",
+      "fixedIn": "0.0.69"
+    },
+    {
       "id": "duplicate-async-transition-job-conflict",
       "affectedVersions": ">=0.0.26",
       "severity": "info",

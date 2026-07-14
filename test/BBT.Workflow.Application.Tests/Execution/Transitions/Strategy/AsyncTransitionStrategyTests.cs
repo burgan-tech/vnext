@@ -55,6 +55,10 @@ public class AsyncTransitionStrategyTests
             .Setup(x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        _mockBusyManager
+            .Setup(x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BusyMarkOutcome.Marked);
+
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
@@ -118,9 +122,9 @@ public class AsyncTransitionStrategyTests
         var enqueueCalledAfterBusy = false;
 
         _mockBusyManager
-            .Setup(x => x.MarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
             .Callback(() => busyManagerCalled = true)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(BusyMarkOutcome.Marked);
 
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
@@ -232,15 +236,35 @@ public class AsyncTransitionStrategyTests
     #region Busy manager delegation
 
     [Fact]
-    public async Task ExecuteAsync_ShouldDelegateBusyMarkingToManager()
+    public async Task ExecuteAsync_WithNormalTransition_ShouldTryMarkBusyViaManager()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         _mockBusyManager.Verify(
+            x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockBusyManager.Verify(
+            x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithReservedTransition_ShouldMarkBusyUnconditionally()
+    {
+        // Reserved transitions (cancel/exit/...) are accepted while the instance is Busy by design,
+        // so they must not go through the Try guard.
+        var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "cancel");
+
+        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        _mockBusyManager.Verify(
             x => x.MarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()),
             Times.Once);
+        _mockBusyManager.Verify(
+            x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -254,25 +278,76 @@ public class AsyncTransitionStrategyTests
         _mockBusyManager.Verify(
             x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Never);
+        _mockBusyManager.Verify(
+            x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenInstanceAlreadyBusy_ShouldReturn409WithoutEnqueue()
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+
+        _mockBusyManager
+            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BusyMarkOutcome.AlreadyBusy);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBusyMarkSkipped_ShouldStillEnqueue()
+    {
+        // Skipped = instance not found or completed — preserves the previous silent no-op
+        // semantics; upstream instance resolution gates those states.
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+
+        _mockBusyManager
+            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BusyMarkOutcome.Skipped);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     #endregion
 
-    #region Reserved transition lock key
+    #region Enqueue lock key scoping
 
     [Fact]
-    public async Task ExecuteAsync_WithNormalTransition_ShouldLockOnBaseInstanceKey()
+    public async Task ExecuteAsync_WithNormalTransition_ShouldLockOnEnqueueSuffixedKey()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
         var capturedKey = CaptureLockKey();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        capturedKey().ShouldBe(txCtx.LockKey);
+        capturedKey().ShouldBe(txCtx.LockKey + AsyncTransitionStrategy.EnqueueLockSuffix);
+        // Invariant: the producer must never lock the consumer's execution key —
+        // the Dapr job fires while this lock is still held (race condition).
+        capturedKey().ShouldNotBe(txCtx.LockKey);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithReservedTransition_ShouldLockOnOwnTypeScopedKey()
+    public async Task ExecuteAsync_WithReservedTransition_ShouldLockOnOwnTypeScopedEnqueueKey()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "cancel");
         var capturedKey = CaptureLockKey();
@@ -280,7 +355,9 @@ public class AsyncTransitionStrategyTests
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         _reservedTransitionResolver.IsReserved(txCtx).ShouldBeTrue();
-        capturedKey().ShouldBe(txCtx.LockKey + ":cancel");
+        capturedKey().ShouldBe(txCtx.LockKey + ":cancel" + AsyncTransitionStrategy.EnqueueLockSuffix);
+        // Invariant: never the consumer's reserved execution key either.
+        capturedKey().ShouldNotBe(txCtx.LockKey + ":cancel");
         capturedKey().ShouldNotBe(txCtx.LockKey);
     }
 

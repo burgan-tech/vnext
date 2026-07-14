@@ -306,6 +306,19 @@ public static class WorkflowErrors
             target: instanceId.ToString());
 
     /// <summary>
+    /// Instance is Busy: a transition is already queued or executing.
+    /// Returned when a new non-reserved async transition is requested while the
+    /// instance is in Busy status (queued job or running pipeline).
+    /// </summary>
+    /// <param name="instanceId">The instance that is busy.</param>
+    /// <param name="transitionKey">The transition key that was rejected.</param>
+    public static Error InstanceBusy(Guid instanceId, string transitionKey)
+        => Error.Conflict(
+            WorkflowErrorCodes.InstanceBusy,
+            $"Instance is busy; transition '{transitionKey}' cannot be accepted while another transition is queued or executing",
+            target: instanceId.ToString());
+
+    /// <summary>
     /// A background job for this transition is already active.
     /// Returned when sync=false is requested but an active job with the same
     /// instance and transition key already exists in the queue.

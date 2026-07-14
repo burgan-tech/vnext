@@ -202,4 +202,71 @@ public sealed class InstanceBusyManagerTests
             It.Is<MarkBusyInput>(i => i.InstanceId == subflowInstanceId),
             It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // ─── TryMarkBusyWithPropagationAsync ─────────────────────────────────────
+
+    [Fact]
+    public async Task TryMarkBusyWithPropagationAsync_WhenInstanceNotFound_ShouldReturnSkipped()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(instanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance?)null);
+
+        // Act
+        var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(instanceId);
+
+        // Assert
+        outcome.ShouldBe(BusyMarkOutcome.Skipped);
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TryMarkBusyWithPropagationAsync_WhenAlreadyBusy_ShouldReturnAlreadyBusyWithoutPropagation()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, "test-flow", "1.0.0");
+        instance.Busy();
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(instanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(instance);
+
+        // Act
+        var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(instanceId);
+
+        // Assert — short-circuits: no UoW, no gateway propagation
+        outcome.ShouldBe(BusyMarkOutcome.AlreadyBusy);
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TryMarkBusyWithPropagationAsync_WhenInstanceActive_ShouldMarkAndReturnMarked()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, "test-flow", "1.0.0");
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(instanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(instance);
+
+        _instanceRepository
+            .Setup(r => r.UpdateAsync(instance, false, It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(instance));
+
+        // Act
+        var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(instanceId);
+
+        // Assert
+        outcome.ShouldBe(BusyMarkOutcome.Marked);
+        _uowManager.Verify(m => m.Begin(It.Is<UnitOfWorkOptions>(o =>
+            o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
+        _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+        instance.IsBusy.ShouldBeTrue();
+    }
 }

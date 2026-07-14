@@ -10,6 +10,7 @@ using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -43,18 +44,31 @@ public class TransitionJobHandlerTests
             .Setup(r => r.FaultInstanceAsync(
                 It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
+
+        _recoveryService
+            .Setup(r => r.FaultInstanceAsync(
+                It.IsAny<TransitionJobPayload>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
     }
 
-    private TransitionJobHandler CreateHandler(int timeoutSeconds = 300)
+    private TransitionJobHandler CreateHandler(
+        int timeoutSeconds = 300,
+        LockConflictRetryOptions? lockConflictRetry = null)
     {
         var options = Options.Create(new WorkflowExecutionOptions
         {
-            TransitionJobTimeoutSeconds = timeoutSeconds
+            TransitionJobTimeoutSeconds = timeoutSeconds,
+            // 1ms backoff keeps retry tests fast without changing the retry logic under test.
+            LockConflictRetry = lockConflictRetry ?? new LockConflictRetryOptions { BaseDelayMilliseconds = 1 }
         });
         return new TransitionJobHandler(
             _jobRepo.Object, _executionService.Object, _currentSchema.Object,
             _recoveryService.Object, options, _hostLifetime.Object, _logger.Object);
     }
+
+    private static Result<TransitionOutput> LockConflictResult()
+        => Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(Guid.NewGuid()));
 
     private static TransitionJobPayload CreatePayload(Guid? instanceId = null) => new()
     {
@@ -193,6 +207,125 @@ public class TransitionJobHandlerTests
         _recoveryService.Verify(
             r => r.FaultInstanceAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    /// <summary>
+    /// Transient lock conflicts (producer accept lock / finishing chain still holds the
+    /// execution lock) must be retried; success on a later attempt needs no recovery.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WhenLockConflictThenSuccess_RetriesWithoutRecovery()
+    {
+        var instanceId = Guid.NewGuid();
+        var payload = CreatePayload(instanceId);
+        var handler = CreateHandler();
+        var calls = 0;
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++calls <= 2
+                ? LockConflictResult()
+                : Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Active }));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.Equal(3, calls);
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(
+                It.IsAny<TransitionJobPayload>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        _jobRepo.Verify(
+            r => r.MarkAsProcessedAsync(instanceId, payload.JobName, CancellationToken.None),
+            Times.Once);
+    }
+
+    /// <summary>
+    /// Persistent lock conflict → exactly MaxAttempts executions, then the instance is
+    /// routed to recovery (Faulted) instead of being silently stranded in Busy.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WhenLockConflictExhausted_FaultsInstance()
+    {
+        var instanceId = Guid.NewGuid();
+        var payload = CreatePayload(instanceId);
+        var handler = CreateHandler(
+            lockConflictRetry: new LockConflictRetryOptions { MaxAttempts = 3, BaseDelayMilliseconds = 1 });
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(LockConflictResult);
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        _executionService.Verify(
+            s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(3));
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(
+                payload, It.IsAny<string>(), "JOB_LOCK_CONFLICT", CancellationToken.None),
+            Times.Once);
+        _jobRepo.Verify(
+            r => r.MarkAsProcessedAsync(instanceId, payload.JobName, CancellationToken.None),
+            Times.Once);
+    }
+
+    /// <summary>
+    /// Non-conflict business failures must not be retried (single execution, no recovery).
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WhenNonConflictFailure_DoesNotRetry()
+    {
+        var payload = CreatePayload();
+        var handler = CreateHandler();
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(
+                Error.Validation("Transition:NotFound", "Transition not found")));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        _executionService.Verify(
+            s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(
+                It.IsAny<TransitionJobPayload>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// Execution budget expiring during a retry backoff delay must route into the existing
+    /// timeout recovery path — no unhandled exception.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WhenBudgetExpiresDuringRetryDelay_CallsRecovery()
+    {
+        var payload = CreatePayload();
+        var handler = CreateHandler(
+            timeoutSeconds: 1,
+            lockConflictRetry: new LockConflictRetryOptions { MaxAttempts = 5, BaseDelayMilliseconds = 60_000 });
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(LockConflictResult);
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(payload, CancellationToken.None),
+            Times.Once);
     }
 
     /// <summary>
