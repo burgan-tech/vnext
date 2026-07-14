@@ -7,6 +7,7 @@ using BBT.Workflow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitor.Common.DTOs;
 using BBT.Workflow.Monitor.Instances.DTOs;
@@ -62,6 +63,7 @@ public sealed class MonitorInstanceQueryService(
                 input.GroupBy,
                 input.Aggregations,
                 input.Sort,
+                null,
                 ct);
 
             if (result.Groups is { Count: > 0 })
