@@ -3,6 +3,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -11,6 +12,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
@@ -41,6 +43,7 @@ public sealed class AsyncTransitionStrategy(
     IUnitOfWorkManager uowManager,
     IInstanceBusyManager instanceBusyManager,
     ITransitionEnqueueGateway enqueueGateway,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     /// <summary>
@@ -178,15 +181,24 @@ public sealed class AsyncTransitionStrategy(
         var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity);
         var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity);
 
+        // Per-operation transactional model (F3): the intent insert and the outbox continuation row
+        // commit atomically in one short transaction, and the Dapr enqueue is deferred to the Inbox —
+        // so NO remote call runs inside the transaction (required under TransactionLocal + pgbouncer).
+        // Off (default): the historical non-transactional unit with direct-Dapr-or-outbox delivery.
+        var transactional = executionOptions.Value.SegmentedPipelineTransactions;
+
         await using var uow = uowManager.Begin(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = transactional });
 
         await jobRepository.InsertAsync(
             InstanceJob.Create(jobId, jobName, jobId, context.Domain, context.WorkflowKey, transContext.InstanceId),
             true,
             cancellationToken);
 
-        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);
+        if (transactional)
+            await enqueueGateway.EnqueueViaOutboxAsync(outboxEvent, cancellationToken);
+        else
+            await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);
 
         await uow.CommitAsync(cancellationToken);
 

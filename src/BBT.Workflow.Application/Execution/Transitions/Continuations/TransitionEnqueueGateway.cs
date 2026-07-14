@@ -52,6 +52,18 @@ public sealed class TransitionEnqueueGateway(
         await eventBus.PublishAsync(outboxEvent, subject: null, useOutbox: true, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task EnqueueViaOutboxAsync(
+        TransitionContinuationRequested outboxEvent,
+        CancellationToken cancellationToken)
+    {
+        // Outbox-only: the row is written on the caller's (transactional) unit of work and the Inbox
+        // performs the Dapr enqueue later — no remote call inside the caller's transaction.
+        await eventBus.PublishAsync(outboxEvent, subject: null, useOutbox: true, cancellationToken);
+        logger.TransitionContinuationEnqueued(
+            outboxEvent.InstanceId, outboxEvent.TransitionKey, outboxEvent.JobName);
+    }
+
     /// <summary>
     /// Attempts to enqueue the job directly via <see cref="ITransitionJobEnqueuer"/>.
     /// Uses TryAsync because Dapr is an external dependency; failures are safe to catch here

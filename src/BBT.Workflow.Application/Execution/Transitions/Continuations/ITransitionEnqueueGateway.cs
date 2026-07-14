@@ -26,4 +26,19 @@ public interface ITransitionEnqueueGateway
         TransitionJobPayload directPayload,
         TransitionContinuationRequested outboxEvent,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Delivers a transition job exclusively through the transactional outbox — no direct Dapr call.
+    /// The outbox row is written on the caller's ambient unit of work, so it commits atomically with
+    /// the durable <c>InstanceJob</c> intent and NO remote call happens inside the caller's
+    /// transaction. Use this on the per-operation transactional path
+    /// (<c>WorkflowExecutionOptions.SegmentedPipelineTransactions</c>) where a direct Dapr enqueue
+    /// would pin the pooled connection for the duration of the call. The Inbox performs the actual
+    /// Dapr enqueue when it consumes the outbox event.
+    /// </summary>
+    /// <param name="outboxEvent">Event published through the transactional outbox.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task EnqueueViaOutboxAsync(
+        TransitionContinuationRequested outboxEvent,
+        CancellationToken cancellationToken);
 }

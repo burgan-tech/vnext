@@ -194,6 +194,26 @@ public sealed class WorkflowExecutionOptions
     public bool UseTransactionalReadScope { get; set; }
 
     /// <summary>
+    /// Master switch for the per-operation transactional pipeline model (F3), required under
+    /// <c>SchemaSwitchingMode.TransactionLocal</c> where no work may run outside a transaction and no
+    /// transaction may span a remote call. Default: false (the historical whole-pipeline
+    /// non-transactional unit of work; correct under <c>SessionSearchPath</c>).
+    /// <para>
+    /// This flag is wired progressively — each slice preserves current behavior when off:
+    /// <list type="bullet">
+    /// <item>Enqueue (implemented): <c>AsyncTransitionStrategy</c> persists the durable job intent in a
+    /// short transactional unit and hands delivery to the transactional outbox (no Dapr call inside
+    /// the transaction), instead of the non-transactional intent + direct-Dapr enqueue.</item>
+    /// <item>Pipeline execution + task-coordinator journal boundaries (pending): the transition
+    /// pipeline is split into short transactional units with remote task calls between them.</item>
+    /// </list>
+    /// Keep this off until the full model is verified end-to-end against the pgbouncer transaction-pool
+    /// harness (F0) in CI/preprod.
+    /// </para>
+    /// </summary>
+    public bool SegmentedPipelineTransactions { get; set; }
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process

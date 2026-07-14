@@ -7,6 +7,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -15,6 +16,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -36,6 +38,8 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IInstanceBusyManager> _mockBusyManager = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger = new();
+    private readonly WorkflowExecutionOptions _executionOptions = new();
+    private UnitOfWorkOptions? _capturedUowOptions;
     private readonly AsyncTransitionStrategy _strategy;
 
     public AsyncTransitionStrategyTests()
@@ -45,6 +49,7 @@ public class AsyncTransitionStrategyTests
         innerUow.Setup(x => x.CommitAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         _uowManager
             .Setup(x => x.Begin(It.IsAny<UnitOfWorkOptions>()))
+            .Callback<UnitOfWorkOptions>(o => _capturedUowOptions = o)
             .Returns(innerUow.Object);
 
         _mockValidationService
@@ -58,6 +63,12 @@ public class AsyncTransitionStrategyTests
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueViaOutboxAsync(
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -87,6 +98,7 @@ public class AsyncTransitionStrategyTests
             _uowManager.Object,
             _mockBusyManager.Object,
             _mockEnqueueGateway.Object,
+            Options.Create(_executionOptions),
             _mockLogger.Object);
     }
 
@@ -134,6 +146,54 @@ public class AsyncTransitionStrategyTests
 
         busyManagerCalled.ShouldBeTrue();
         enqueueCalledAfterBusy.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSegmentedTransactionsOff_UsesNonTransactionalUnitAndDirectGateway()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+
+        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        _capturedUowOptions.ShouldNotBeNull();
+        _capturedUowOptions!.IsTransactional.ShouldBeFalse();
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueViaOutboxAsync(
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSegmentedTransactionsOn_UsesTransactionalUnitAndOutboxGateway()
+    {
+        _executionOptions.SegmentedPipelineTransactions = true;
+        var (wfCtx, _) = SetupSuccessfulContext();
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        // Intent + outbox row commit atomically in a transactional unit; no direct Dapr call in-tx.
+        _capturedUowOptions.ShouldNotBeNull();
+        _capturedUowOptions!.IsTransactional.ShouldBeTrue();
+        _capturedUowOptions.Scope.ShouldBe(UnitOfWorkScopeOption.RequiresNew);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueViaOutboxAsync(
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     #endregion
