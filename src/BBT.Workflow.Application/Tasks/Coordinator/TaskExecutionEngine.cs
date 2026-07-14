@@ -180,6 +180,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 onExecuteTask,
                 boundaryChain,
                 totalStopwatch.ElapsedMilliseconds,
+                attempt,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -203,6 +204,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <param name="onExecuteTask">The task definition that failed.</param>
     /// <param name="boundaryChain">The compiled boundary chain for resolution.</param>
     /// <param name="totalDurationMs">Total execution duration including retries.</param>
+    /// <param name="attemptsMade">Number of retry attempts actually performed (0 when no Retry rule matched).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The execution result with appropriate boundary action.</returns>
     private async Task<Result<TasksExecutionResult>> HandlePostRetryFailureAsync(
@@ -210,6 +212,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         CompiledBoundaryChain boundaryChain,
         long totalDurationMs,
+        int attemptsMade,
         CancellationToken cancellationToken)
     {
         var taskKey = onExecuteTask.Task.Key;
@@ -233,9 +236,18 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 failedResult.Error, taskKey, "Unknown", totalDurationMs);
         }
 
-        _logger.LogWarning(
-            "Retry exhausted for task {TaskKey}. Resolving fallback boundary action (excluding Retry). Error: {Error}",
-            taskKey, executionError.ErrorMessage);
+        if (attemptsMade > 0)
+        {
+            _logger.LogWarning(
+                "Retry exhausted for task {TaskKey} after {Attempts} attempt(s). Resolving fallback boundary action (excluding Retry). Error: {Error}",
+                taskKey, attemptsMade, executionError.ErrorMessage);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "No matching Retry rule for task {TaskKey}. Resolving fallback boundary action. Error: {Error}",
+                taskKey, executionError.ErrorMessage);
+        }
 
         // Resolve boundary for fallback actions - EXCLUDE Retry since it's already exhausted
         var resolution = _boundaryResolver.ResolveExcluding(
@@ -417,7 +429,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Records task failure metrics and persists the failure.
     /// </summary>
-    private void RecordFailure(
+    /// <remarks>
+    /// The completion persist is awaited (not fire-and-forget) so its SaveChanges cannot race the
+    /// pipeline's next write on the shared request-scoped DbContext, which previously tripped EF Core's
+    /// ConcurrencyDetector and faulted the instance even when an Ignore boundary should have handled the
+    /// failure (issue #807). Persistence errors are caught and logged so recording a failure never throws
+    /// an unhandled exception into the boundary-resolution path.
+    /// </remarks>
+    private async Task RecordFailureAsync(
         InstanceTask instanceTask,
         ITaskPersistenceStrategy? strategy,
         string taskType,
@@ -430,7 +449,15 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         if (strategy != null)
         {
-            _ = strategy.HandleCompletionAsync(instanceTask, cancellationToken);
+            try
+            {
+                await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to persist task failure for {TaskKey}", instanceTask.TaskId);
+            }
         }
 
         _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
@@ -519,7 +546,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         if (!executorResult.IsSuccess)
         {
             stopwatch.Stop();
-            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
                 executorResult.Error.Message, cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
@@ -559,7 +586,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // 9. Handle infrastructure error - return without boundary resolution (not retriable)
         if (!executeResult.IsSuccess)
         {
-            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
                 executeResult.Error.Message ?? "Unknown infrastructure error", cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
