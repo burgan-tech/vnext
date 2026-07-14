@@ -728,7 +728,7 @@ public sealed class InstanceCommandAppService(
             // Workflow output mapping bypasses the standard envelope, but NEVER for subflow
             // instances: correlation forward (sub start) and subflow transitions rely on the
             // standard model, so output is ignored even when configured.
-            if (!instance.IsSubItem)
+            if (!instance.IsSubFlow)
             {
                 var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
                 if (outputResult.IsSuccess && outputResult.Value is { } wo)
