@@ -307,6 +307,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public dynamic? QueryParameters { get; private set; }
 
     /// <summary>
+    /// The raw inbound external event payload (pub/sub message / input-binding body) made available to
+    /// <see cref="IEventMapping"/> during event-driven start/transition. Null outside event-driven executions.
+    /// </summary>
+    public dynamic? EventPayload { get; private set; }
+
+    /// <summary>
     /// The original, unmodified request body exactly as received (a literal string, NOT camelCased or
     /// re-serialized like <see cref="Body"/>). Intended for signature verification (JWS / mTLS) where the
     /// payload must match the bytes that were signed. Null when no raw body is available for the current
@@ -622,6 +628,15 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetQueryParameters(object? queryParameters)
         {
             _context.QueryParameters = queryParameters;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the raw inbound event payload consumed by <see cref="IEventMapping"/>.
+        /// </summary>
+        public Builder SetEventPayload(object? eventPayload)
+        {
+            _context.EventPayload = eventPayload;
             return this;
         }
 

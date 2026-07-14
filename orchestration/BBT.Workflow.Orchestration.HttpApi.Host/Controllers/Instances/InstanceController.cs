@@ -5,7 +5,9 @@ using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Domain.Shared;
+using BBT.Workflow.Events;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
@@ -33,7 +35,8 @@ public sealed class InstanceController(
     IChildSubflowCancellationService childSubflowCancellationService,
     IChildSubflowFaultService childSubflowFaultService,
     ITransitionJobEnqueuer transitionJobEnqueuer,
-    IInstanceCommandGateway instanceCommandGateway) : AetherControllerBase
+    IInstanceCommandGateway instanceCommandGateway,
+    IEventAppService eventAppService) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -457,7 +460,60 @@ public sealed class InstanceController(
         var result = await retryAppService.RetryAsync(input, cancellationToken);
         return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
-    
+
+    /// <summary>
+    /// Receives an external event (delivered by a domain-owned subscription / input binding) and turns
+    /// it into a workflow action: starting a new instance or advancing an existing one via a transition.
+    /// Internal integration endpoint — hidden from the public API surface.
+    /// </summary>
+    /// <param name="domain">Target domain.</param>
+    /// <param name="workflow">Target workflow key.</param>
+    /// <param name="action">Either <c>start</c> (create a new instance) or <c>transition</c> (advance an existing one).</param>
+    /// <param name="transitionKey">Transition to execute. Required when <paramref name="action"/> is <c>transition</c>.</param>
+    /// <param name="payload">Raw event payload, mapped by the workflow's/transition's event mapping.</param>
+    /// <param name="sync">When true, blocks until the pipeline completes; otherwise accepted and run asynchronously.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <response code="200">Event processed (or intentionally ignored when no active instance matches).</response>
+    /// <response code="400">Invalid action, or transitionKey missing for action=transition.</response>
+    /// <response code="404">Workflow or event definition not found.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/events")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> HandleEventAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromQuery] string action,
+        [FromQuery] string? transitionKey = null,
+        [FromBody] JsonElement payload = default,
+        [FromQuery] bool sync = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Enum.TryParse<EventAction>(action, ignoreCase: true, out var eventAction))
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Invalid action",
+                Detail = $"action must be 'start' or 'transition'. Received: '{action}'.",
+                Status = StatusCodes.Status400BadRequest
+            });
+
+        var input = new EventInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Action = eventAction,
+            TransitionKey = transitionKey,
+            Payload = payload,
+            Sync = sync,
+            Headers = HttpContext.Request.Headers
+                .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
+        };
+
+        var result = await eventAppService.HandleAsync(input, cancellationToken);
+        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+    }
+
     /// <summary>
     /// Retrieves a workflow instance by key or ID.
     /// </summary>
@@ -510,8 +566,16 @@ public sealed class InstanceController(
     /// <summary>
     /// Gets a paged list of workflow instances with optional filter, groupBy, aggregations and orderBy.
     /// </summary>
+    /// <param name="domain">Target domain (route).</param>
+    /// <param name="workflow">Target workflow key (route).</param>
+    /// <param name="filter">Filter JSON: a plain GraphQL node (e.g. {"attributes":{"status":{"eq":"active"}}}) or a request envelope embedding groupBy/aggregations. groupBy/aggregations may also arrive as separate query parameters.</param>
+    /// <param name="extensions">Extensions requested for instance data enrichment.</param>
+    /// <param name="page">Page number for pagination (1-based).</param>
+    /// <param name="pageSize">Page size for pagination.</param>
     /// <param name="sort">OrderBy JSON: single {"field":"createdAt","direction":"desc"} or multiple {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}. Also accepted as orderBy.</param>
     /// <param name="orderBy">Alias for sort; same JSON format. If both provided, orderBy wins.</param>
+    /// <param name="version">Optional instance data version; latest data is used when empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     [HttpGet("{domain}/workflows/{workflow}/instances")]
     public async Task<IActionResult> GetInstanceListAsync(
         [FromRoute] string domain,

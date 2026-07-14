@@ -120,6 +120,21 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
 - `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
 - Same context reference flows through all steps — avoid redundant loads.
 
+## Events & Instance Filtering (quick reference)
+
+- **Events**: `event.mapping` on the workflow (`action=start`) or on a `triggerType: 3` transition
+  (`action=transition`). Mapping implements `IEventMapping` → `EventMappingResult { InstanceKey, Body, Selector }`.
+  Delivery is domain-owned Dapr Subscription YAMLs routing topics to
+  `POST /api/v1/{domain}/workflows/{workflow}/instances/events?action=...`. No active match ⇒ 200 + ignore
+  (no redelivery). Full guide: `docs/domain/event-driven-workflows.md`.
+- **Filtering**: author instance queries with fluent `InstanceQuery` (default script import), never
+  hand-concatenated GraphQL JSON. Terminals: `.First()/.Last()` → event `Selector` (single-resolve);
+  `.Build()` → `InstanceQuerySpec` for `GetInstancesTask.SetFilterSpec(...)` (preferred; in-process when
+  same-domain) or `spec.ToFilterJson()/ToSortJson()/ToQueryString()` for raw `DaprServiceTask` calls.
+  Operators: Eq/Ne/Gt/Ge/Lt/Le/Like/StartsWith/EndsWith/In/NotIn/Between/IsNull/Includes + OrGroup/Not;
+  GroupBy + Count/Sum/Avg/Min/Max (list-only, aggregations nest under groupBy). Full guide with operator
+  table and migration examples: `docs/runtime/instance-filtering-and-queries.md`.
+
 ## vnext-meta Package
 
 - **Purpose**: Runtime metadata for offline consumption (Forge Studio, CLI, domain packages).

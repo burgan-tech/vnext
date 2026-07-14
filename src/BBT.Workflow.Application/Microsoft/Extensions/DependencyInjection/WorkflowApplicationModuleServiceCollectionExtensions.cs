@@ -13,6 +13,7 @@ using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.Events;
 using BBT.Workflow.Functions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -72,6 +73,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        services.AddScoped<IEventAppService, EventAppService>();
+        services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
         services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();

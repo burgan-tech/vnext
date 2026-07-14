@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using BBT.Aether;
+using BBT.Workflow.Definitions.Events;
 
 namespace BBT.Workflow.Definitions;
 
@@ -93,6 +94,13 @@ public sealed class Transition : IHasKey
     [JsonInclude] public List<string> AvailableIn { get; private set; }
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
     [JsonInclude] public ResourceLockDefinition? ResourceLock { get; private set; }
+
+    /// <summary>
+    /// Optional event definition (<c>transition.event</c>). When present, this transition can also be
+    /// triggered by an external event via <c>action=transition</c>. Additive: it does not replace the
+    /// transition's existing (manual/automatic) trigger.
+    /// </summary>
+    [JsonInclude] public Event? Event { get; private set; }
 
     /// <summary>
     /// Optional key-value metadata for client-side filtering and UI context.

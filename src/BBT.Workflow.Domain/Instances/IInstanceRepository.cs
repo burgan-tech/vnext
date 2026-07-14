@@ -2,7 +2,7 @@ using BBT.Aether;
 using BBT.Aether.Domain.Repositories;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions.Schemas;
-using Microsoft.AspNetCore.Http;
+using BBT.Workflow.Filtering;
 
 namespace BBT.Workflow.Instances;
 
@@ -11,6 +11,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<Instance?> FindByIdentifierAsync(string? identifier,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Resolves the single instance matching an <see cref="InstanceFilter"/> in the current schema —
+    /// the entry point of the instance filter engine. Instance columns and JSON attribute paths are
+    /// translated to a parameterized query joined to the latest instance-data row, ordered per the
+    /// filter, taking the first/last match. Returns null when nothing matches. The returned instance
+    /// carries its columns (e.g. <c>Key</c>); the data history is not eagerly loaded.
+    /// </summary>
+    Task<Instance?> FindByFilterAsync(InstanceFilter filter,
+        CancellationToken cancellationToken = default);
+    
     Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default);
 
@@ -71,8 +81,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <summary>
     /// Gets paged results with optional groups for groupBy queries
     /// </summary>
+    /// <param name="page">Page number for pagination (1-based).</param>
+    /// <param name="pageSize">Page size for pagination.</param>
+    /// <param name="filter">Optional filter JSON: a plain GraphQL node or a request envelope embedding groupBy/aggregations.</param>
+    /// <param name="groupBy">Optional groupBy JSON ({"fields":[...],"aggregations":{...}}).</param>
+    /// <param name="aggregations">Optional standalone aggregations JSON (honored only without groupBy).</param>
     /// <param name="sort">Optional orderBy JSON (e.g. {"field":"createdAt","direction":"desc"} or {"fields":[...]})</param>
     /// <param name="schemaContext">Optional schema-driven filter/sort metadata</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The paged instances, plus group summaries when grouping applies (the paged list is empty in that case).</returns>
     Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
         int page,
         int pageSize,
@@ -80,8 +97,8 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         string? groupBy = null,
         string? aggregations = null,
         string? sort = null,
-        CancellationToken cancellationToken = default,
-        SchemaFilterContext? schemaContext = null);
+        SchemaFilterContext? schemaContext = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
@@ -199,6 +216,7 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// </summary>
     /// <param name="olderThanUtc">Heartbeat staleness threshold (UTC).</param>
     /// <param name="maxCount">Maximum number of candidates to return per sweep.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     Task<List<Instance>> GetStuckBusyChainsAsync(
         DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default);
 

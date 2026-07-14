@@ -156,14 +156,14 @@ public static class WorkflowErrors
             target: instanceId.ToString());
 
     /// <summary>
-    /// Invalid actor for event transition (requires User actor).
+    /// Invalid actor for event transition (requires System actor).
     /// </summary>
     /// <param name="instanceId">The instance ID.</param>
     /// <param name="actor">The current actor that is invalid.</param>
     public static Error InvalidActorForEventTransition(Guid instanceId, ExecutionActor actor)
         => Error.Validation(
             WorkflowErrorCodes.UnauthorizedTransition,
-            $"Event transitions require User actor. Current actor: {actor}",
+            $"Event transitions can only be triggered by the event subsystem. Current actor: {actor}",
             target: instanceId.ToString());
 
     /// <summary>
