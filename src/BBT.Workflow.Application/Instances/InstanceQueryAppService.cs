@@ -202,8 +202,8 @@ public sealed class InstanceQueryAppService(
                         groupBy,
                         aggregations,
                         input.Sort,
-                        ct,
-                        schemaContext);
+                        schemaContext,
+                        ct);
                     pagedList = result.PagedList;
                     groups = result.Groups;
                 }

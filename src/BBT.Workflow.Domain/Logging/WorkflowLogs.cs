@@ -1246,6 +1246,48 @@ public static partial class WorkflowLogs
         string instanceId);
 
     /// <summary>
+    /// Logs when an async transition request is rejected because the instance is Busy
+    /// (a transition is already queued or executing).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40120,
+        Level = LogLevel.Warning,
+        Message = "Async transition {TransitionKey} rejected for instance {InstanceId}: instance is busy")]
+    public static partial void AsyncTransitionRejectedInstanceBusy(
+        this ILogger logger,
+        string transitionKey,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs a transient instance-lock conflict inside a transition job; the handler retries with backoff.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40121,
+        Level = LogLevel.Warning,
+        Message = "Transition job {JobName} hit instance lock conflict for instance {InstanceId} (attempt {Attempt}/{MaxAttempts}); retrying in {DelayMs}ms")]
+    public static partial void TransitionJobLockConflictRetry(
+        this ILogger logger,
+        string jobName,
+        Guid instanceId,
+        int attempt,
+        int maxAttempts,
+        int delayMs);
+
+    /// <summary>
+    /// Logs when a transition job exhausted all lock-conflict retries; the instance is routed to recovery (Faulted).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40122,
+        Level = LogLevel.Error,
+        Message = "Transition job {JobName} exhausted {MaxAttempts} lock-conflict retries for instance {InstanceId} on transition {TransitionKey}; faulting instance")]
+    public static partial void TransitionJobLockConflictRetriesExhausted(
+        this ILogger logger,
+        string jobName,
+        int maxAttempts,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when start transition validation fails.
     /// </summary>
     [LoggerMessage(
@@ -2093,6 +2135,65 @@ public static partial class WorkflowLogs
     public static partial void DefinitionCacheInvalidationFailed(
         this ILogger logger,
         string podInstance,
+        string error);
+
+    #endregion
+
+    #region Event-driven transitions
+
+    /// <summary>
+    /// Logs when an external event is received for a workflow.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40990,
+        Level = LogLevel.Information,
+        Message = "Event received. Domain: {Domain}, Workflow: {Workflow}, Action: {Action}, TransitionKey: {TransitionKey}")]
+    public static partial void EventReceived(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string action,
+        string? transitionKey);
+
+    /// <summary>
+    /// Logs when an event refers to a workflow/transition that has no event definition.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40991,
+        Level = LogLevel.Warning,
+        Message = "Event has no matching event definition. Domain: {Domain}, Workflow: {Workflow}, TransitionKey: {TransitionKey}")]
+    public static partial void EventDefinitionMissing(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string? transitionKey);
+
+    /// <summary>
+    /// Logs when an event-transition cannot be correlated to an active instance and is therefore ignored.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40992,
+        Level = LogLevel.Information,
+        Message = "Event ignored - no active instance for key. Domain: {Domain}, Workflow: {Workflow}, InstanceKey: {InstanceKey}, TransitionKey: {TransitionKey}")]
+    public static partial void EventInstanceNotFoundIgnored(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string? instanceKey,
+        string? transitionKey);
+
+    /// <summary>
+    /// Logs when the event mapping fails to compile or execute.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40993,
+        Level = LogLevel.Error,
+        Message = "Event mapping failed. Domain: {Domain}, Workflow: {Workflow}, TransitionKey: {TransitionKey}, Error: {Error}")]
+    public static partial void EventMappingFailed(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string? transitionKey,
         string error);
 
     #endregion

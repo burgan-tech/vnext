@@ -3,6 +3,8 @@
 
         <!-- All Prism packages -->
         <AetherPackageVersion>1.0.29</AetherPackageVersion>
+        <!-- Overrides transitive PostSharp 2026.0.7 from BBT.Aether.Aspects; >=2026.0.10 required to read project.assets.json v4 written by .NET SDK 10.0.300+ -->
+        <PostSharpPackageVersion>2026.0.12</PostSharpPackageVersion>
         <!-- Elastic Apm packages -->
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
         <!-- Microsoft packages -->

@@ -16,7 +16,18 @@ public sealed class JobTimeoutRecoveryService(
     IOptions<WorkflowExecutionOptions> options,
     ILogger<JobTimeoutRecoveryService> logger) : IJobTimeoutRecoveryService
 {
-    public async Task FaultInstanceAsync(TransitionJobPayload args, CancellationToken cancellationToken)
+    public Task FaultInstanceAsync(TransitionJobPayload args, CancellationToken cancellationToken)
+        => FaultInstanceAsync(
+            args,
+            $"Job execution timed out or was cancelled after {options.Value.TransitionJobTimeoutSeconds}s",
+            "JOB_EXECUTION_TIMEOUT",
+            cancellationToken);
+
+    public async Task FaultInstanceAsync(
+        TransitionJobPayload args,
+        string incidentMessage,
+        string incidentErrorCode,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -43,8 +54,8 @@ public sealed class JobTimeoutRecoveryService(
                 state: instance.GetCurrentState,
                 transition: args.TransitionKey,
                 taskKey: null,
-                message: $"Job execution timed out or was cancelled after {options.Value.TransitionJobTimeoutSeconds}s",
-                errorCode: "JOB_EXECUTION_TIMEOUT",
+                message: incidentMessage,
+                errorCode: incidentErrorCode,
                 errorLayer: "Job",
                 boundaryAction: "Abort",
                 boundaryLevel: "Job");

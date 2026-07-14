@@ -137,10 +137,10 @@ public class ActorAuthorizationSpecificationTests
     }
 
     [Fact]
-    public void IsSatisfiedBy_EventTrigger_WithUserActor_ShouldReturnSuccess()
+    public void IsSatisfiedBy_EventTrigger_WithSystemActor_ShouldReturnSuccess()
     {
-        // Arrange
-        var context = CreateContext(TriggerType.Event, ExecutionActor.User);
+        // Arrange — event transitions are dispatched by the event subsystem under the System actor.
+        var context = CreateContext(TriggerType.Event, ExecutionActor.System);
 
         // Act
         var result = _specification.IsSatisfiedBy(context);
@@ -150,10 +150,11 @@ public class ActorAuthorizationSpecificationTests
     }
 
     [Fact]
-    public void IsSatisfiedBy_EventTrigger_WithSystemActor_ShouldReturnFailure()
+    public void IsSatisfiedBy_EventTrigger_WithUserActor_ShouldReturnFailure()
     {
-        // Arrange
-        var context = CreateContext(TriggerType.Event, ExecutionActor.System);
+        // Arrange — event transitions are the single entry point of the event subsystem; a manual
+        // (User) actor cannot trigger them.
+        var context = CreateContext(TriggerType.Event, ExecutionActor.User);
 
         // Act
         var result = _specification.IsSatisfiedBy(context);

@@ -66,10 +66,32 @@ public sealed class WorkflowExecutionOptions
     /// fix in the resume/revert path is already applied.
     /// </summary>
     public bool InProcessSameDomainForwarding { get; set; }
+
+    /// <summary>
+    /// In-handler retry policy for transient instance-lock conflicts inside transition jobs.
+    /// The Dapr job can fire while a competing holder (e.g. the enqueue accept lock or a
+    /// finishing chain) still holds the instance execution lock for a few milliseconds;
+    /// a short bounded retry absorbs that instead of losing the transition.
+    /// </summary>
+    public LockConflictRetryOptions LockConflictRetry { get; set; } = new();
 }
 
 public sealed class TransitionJobFailurePolicyOptions
 {
     public int MaxRetries { get; set; } = 5;
     public int IntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// Bounded exponential-backoff retry settings for instance-lock conflicts in
+/// <c>TransitionJobHandler</c>. Worst case total delay with defaults:
+/// 100 + 200 + 400 + 800 = 1.5s across 5 attempts.
+/// </summary>
+public sealed class LockConflictRetryOptions
+{
+    /// <summary>Maximum pipeline execution attempts (first try included). Default: 5.</summary>
+    public int MaxAttempts { get; set; } = 5;
+
+    /// <summary>Base delay before the first retry; doubles per attempt. Default: 100ms.</summary>
+    public int BaseDelayMilliseconds { get; set; } = 100;
 }
