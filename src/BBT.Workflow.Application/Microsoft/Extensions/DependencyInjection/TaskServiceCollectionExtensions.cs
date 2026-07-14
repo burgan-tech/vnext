@@ -7,7 +7,6 @@ using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.Extensions.Configuration;
-using BBT.Workflow.Tasks.Caching;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
@@ -96,9 +95,8 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<StateStoreTaskExecutor>();
 
-        // Cache-Aside (read-through) executor: reads a Dapr state store directly (no extra hop) and
-        // orchestrates the source task on a miss.
-        services.TryAddSingleton<IStateStoreAccessor, DaprStateStoreAccessor>();
+        // Cache-Aside (read-through) executor: cache get/set is dispatched to the Execution service via
+        // the StateStore invoker; the source task on a miss is orchestrated locally.
         services.AddTaskExecutor<CacheAsideTaskExecutor>();
 
         // Notification task executor (multi-channel direct Dapr binding dispatch)
@@ -127,6 +125,9 @@ public static class TaskServiceCollectionExtensions
         services.AddScoped<DynamicExpressoConditionEvaluator>();
         services.AddScoped<IConditionEvaluator, RoutingConditionEvaluator>();
         services.AddScoped<ITimerEvaluator, ScriptTimerEvaluator>();
+
+        // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
+        services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();
 
         // Unified evaluator registry
         services.AddScoped<ITaskEvaluatorRegistry, TaskEvaluatorRegistry>();

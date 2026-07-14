@@ -2,22 +2,15 @@ using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
-using Dapr.Client;
-using Microsoft.Extensions.Configuration;
+using BBT.Workflow.Execution.StateStores;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
 
 /// <summary>
-/// Pure Dapr state store task invoker - stateless execution with strongly-typed binding.
-/// Supports the get, set and delete commands against a Dapr state store.
-/// When the binding does not specify a store name, the runtime's
-/// <c>DAPR_STATE_STORE_NAME</c> configuration value is used so each runtime
-/// targets its own state store component.
-/// All task-supplied keys are stored under the fixed <c>custom:</c> prefix to
-/// namespace task-written entries away from engine-owned cache keys sharing the
-/// same store (query-matched keys come back from the store already prefixed and
-/// are used as-is).
+/// Dapr state store task invoker. Supports the get, set and delete commands. State-store access is
+/// delegated to the shared <see cref="IStateStoreClient"/> (store-name resolution, the <c>custom:</c>
+/// key prefix, TTL, consistency/concurrency), so this invoker only routes commands and shapes results.
 /// </summary>
 public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 {
@@ -26,27 +19,16 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
     private const string SetCommand = "set";
     private const string DeleteCommand = "delete";
 
-    private const string StateStoreNameConfigKey = "DAPR_STATE_STORE_NAME";
-
-    /// <summary>
-    /// Fixed namespace prefix applied to every task-supplied key, preventing
-    /// collisions with engine-owned cache keys in the shared state store.
-    /// </summary>
-    private const string KeyPrefix = "custom:";
-
-    private readonly DaprClient _daprClient;
-    private readonly string? _defaultStoreName;
+    private readonly IStateStoreClient _stateStore;
     private readonly ITaskMetrics _metrics;
     private readonly ILogger<StateStoreTaskInvoker> _logger;
 
     public StateStoreTaskInvoker(
-        DaprClient daprClient,
-        IConfiguration configuration,
+        IStateStoreClient stateStore,
         ILogger<StateStoreTaskInvoker> logger,
         ITaskMetrics? metrics = null)
     {
-        _daprClient = daprClient;
-        _defaultStoreName = configuration[StateStoreNameConfigKey];
+        _stateStore = stateStore;
         _logger = logger;
         _metrics = metrics ?? NullTaskMetrics.Instance;
     }
@@ -85,16 +67,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         var stopwatch = Stopwatch.StartNew();
         var command = binding.Command ?? string.Empty;
 
-        var storeName = !string.IsNullOrWhiteSpace(binding.StoreName)
-            ? binding.StoreName
-            : _defaultStoreName;
+        var storeName = _stateStore.ResolveStoreName(binding.StoreName);
 
         if (string.IsNullOrWhiteSpace(storeName))
         {
             stopwatch.Stop();
             return TaskInvocationResult.Failure(
                 error: "State store name is not configured: set 'storeName' in the task config " +
-                       $"or the {StateStoreNameConfigKey} configuration value",
+                       "or the DAPR_STATE_STORE_NAME configuration value",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
                 taskType: TaskType,
                 metadata: BaseMetadata(binding, storeName: string.Empty));
@@ -159,29 +139,20 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             return MissingFieldFailure(binding, storeName, stopwatch, "get requires 'key'");
         }
 
-        var consistency = ParseConsistency(binding.Consistency);
-        var metadata = BuildMetadata(binding, includeTtl: false);
-
-        var (value, etag) = await _daprClient.GetStateAndETagAsync<JsonElement>(
-            storeName,
-            PrefixKey(binding.Key),
-            consistency,
-            metadata,
-            cancellationToken);
+        var entry = await _stateStore.GetAsync(
+            storeName, binding.Key, binding.Consistency, binding.Metadata, cancellationToken);
 
         stopwatch.Stop();
 
-        var found = value.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null);
-
         return TaskInvocationResult.Success(
-            data: found ? (object?)value : null,
-            body: found ? value.GetRawText() : null,
+            data: entry.Found ? (object?)entry.Value : null,
+            body: entry.Found ? entry.Value.GetRawText() : null,
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
             metadata: BaseMetadata(binding, storeName, extra: new()
             {
-                ["Found"] = found,
-                ["ETag"] = etag ?? string.Empty
+                ["Found"] = entry.Found,
+                ["ETag"] = entry.ETag ?? string.Empty
             }));
     }
 
@@ -202,36 +173,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         }
 
         var value = JsonSerializer.Deserialize<JsonElement>(binding.Value);
-        var metadata = BuildMetadata(binding, includeTtl: true);
-        var stateOptions = BuildStateOptions(binding);
-
-        bool saved = true;
-        if (!string.IsNullOrEmpty(binding.ETag))
-        {
-            saved = await _daprClient.TrySaveStateAsync(
-                storeName,
-                PrefixKey(binding.Key),
-                value,
-                binding.ETag,
-                stateOptions,
-                metadata,
-                cancellationToken);
-        }
-        else
-        {
-            await _daprClient.SaveStateAsync(
-                storeName,
-                PrefixKey(binding.Key),
-                value,
-                stateOptions,
-                metadata,
-                cancellationToken);
-        }
+        var saved = await _stateStore.SetAsync(
+            storeName, binding.Key, value, binding.TtlInSeconds, binding.Consistency,
+            binding.Concurrency, binding.ETag, binding.Metadata, cancellationToken);
 
         stopwatch.Stop();
 
         return TaskInvocationResult.Success(
-            data: new { Saved = saved, Key = PrefixKey(binding.Key) },
+            data: new { Saved = saved, Key = _stateStore.PrefixKey(binding.Key) },
             executionDurationMs: stopwatch.ElapsedMilliseconds,
             taskType: TaskType,
             metadata: BaseMetadata(binding, storeName, extra: new() { ["Saved"] = saved }));
@@ -243,24 +192,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
-        var metadata = BuildMetadata(binding, includeTtl: false);
-
         // 1. Tag/pattern based deletion via the Dapr state Query API.
         if (!string.IsNullOrWhiteSpace(binding.Query))
         {
             List<string> matchedKeys;
             try
             {
-                var queryResponse = await _daprClient.QueryStateAsync<JsonElement>(
-                    storeName,
-                    binding.Query,
-                    metadata,
-                    cancellationToken);
-
-                matchedKeys = queryResponse?.Results?
-                    .Select(r => r.Key)
-                    .Where(k => k != null && k.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                    .ToList() ?? new List<string>();
+                matchedKeys = (await _stateStore.QueryPrefixedKeysAsync(
+                    storeName, binding.Query, binding.Metadata, cancellationToken)).ToList();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -275,7 +214,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
                     }));
             }
 
-            var deletedByQuery = await DeleteKeysAsync(storeName, matchedKeys, cancellationToken);
+            var deletedByQuery = await _stateStore.DeleteBulkAsync(storeName, matchedKeys, cancellationToken);
             stopwatch.Stop();
             return DeleteSuccess(binding, storeName, stopwatch, deletedByQuery);
         }
@@ -285,9 +224,9 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         {
             var prefixedKeys = binding.Keys
                 .Where(k => !string.IsNullOrWhiteSpace(k))
-                .Select(PrefixKey)
+                .Select(_stateStore.PrefixKey)
                 .ToList();
-            var deleted = await DeleteKeysAsync(storeName, prefixedKeys, cancellationToken);
+            var deleted = await _stateStore.DeleteBulkAsync(storeName, prefixedKeys, cancellationToken);
             stopwatch.Stop();
             return DeleteSuccess(binding, storeName, stopwatch, deleted);
         }
@@ -295,43 +234,14 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         // 3. Single key deletion.
         if (!string.IsNullOrWhiteSpace(binding.Key))
         {
-            var stateOptions = BuildStateOptions(binding);
-            await _daprClient.DeleteStateAsync(
-                storeName,
-                PrefixKey(binding.Key),
-                stateOptions,
-                metadata,
-                cancellationToken);
+            await _stateStore.DeleteAsync(
+                storeName, binding.Key, binding.Consistency, binding.Concurrency, binding.Metadata, cancellationToken);
             stopwatch.Stop();
             return DeleteSuccess(binding, storeName, stopwatch, 1);
         }
 
         return MissingFieldFailure(binding, storeName, stopwatch,
             "delete requires one of 'key', 'keys' or 'query'");
-    }
-
-    private async Task<int> DeleteKeysAsync(
-        string storeName,
-        IReadOnlyList<string> keys,
-        CancellationToken cancellationToken)
-    {
-        if (keys.Count == 0)
-        {
-            return 0;
-        }
-
-        var items = keys
-            .Where(k => !string.IsNullOrWhiteSpace(k))
-            .Select(k => new BulkDeleteStateItem(k, etag: string.Empty))
-            .ToList();
-
-        if (items.Count == 0)
-        {
-            return 0;
-        }
-
-        await _daprClient.DeleteBulkStateAsync(storeName, items, cancellationToken);
-        return items.Count;
     }
 
     private TaskInvocationResult DeleteSuccess(
@@ -373,64 +283,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             metadata: BaseMetadata(binding, storeName));
     }
 
-    /// <summary>
-    /// Builds the Dapr operation metadata, merging any caller-supplied metadata and,
-    /// when requested, the <c>ttlInSeconds</c> entry.
-    /// </summary>
-    private static Dictionary<string, string>? BuildMetadata(StateStoreBinding binding, bool includeTtl)
-    {
-        Dictionary<string, string>? metadata = binding.Metadata is { Count: > 0 }
-            ? new Dictionary<string, string>(binding.Metadata)
-            : null;
-
-        if (includeTtl && binding.TtlInSeconds is { } ttl)
-        {
-            metadata ??= new Dictionary<string, string>();
-            metadata["ttlInSeconds"] = ttl.ToString();
-        }
-
-        return metadata;
-    }
-
-    private static StateOptions? BuildStateOptions(StateStoreBinding binding)
-    {
-        var concurrency = ParseConcurrency(binding.Concurrency);
-        var consistency = ParseConsistency(binding.Consistency);
-
-        if (concurrency is null && consistency is null)
-        {
-            return null;
-        }
-
-        return new StateOptions
-        {
-            Concurrency = concurrency,
-            Consistency = consistency
-        };
-    }
-
-    /// <summary>
-    /// Applies the fixed <see cref="KeyPrefix"/> namespace to a task-supplied key.
-    /// </summary>
-    private static string PrefixKey(string key) => KeyPrefix + key;
-
-    private static ConsistencyMode? ParseConsistency(string? consistency) =>
-        consistency?.ToLowerInvariant() switch
-        {
-            "strong" => ConsistencyMode.Strong,
-            "eventual" => ConsistencyMode.Eventual,
-            _ => null
-        };
-
-    private static ConcurrencyMode? ParseConcurrency(string? concurrency) =>
-        concurrency?.ToLowerInvariant() switch
-        {
-            "firstwrite" => ConcurrencyMode.FirstWrite,
-            "lastwrite" => ConcurrencyMode.LastWrite,
-            _ => null
-        };
-
-    private static Dictionary<string, object> BaseMetadata(
+    private Dictionary<string, object> BaseMetadata(
         StateStoreBinding binding,
         string storeName,
         Dictionary<string, object>? extra = null)
@@ -443,7 +296,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
         if (!string.IsNullOrWhiteSpace(binding.Key))
         {
-            metadata["Key"] = PrefixKey(binding.Key);
+            metadata["Key"] = _stateStore.PrefixKey(binding.Key);
         }
 
         if (extra is not null)

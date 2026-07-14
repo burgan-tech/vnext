@@ -9,7 +9,6 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks.Caching;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
@@ -53,21 +52,6 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        // Resolve {context...} placeholders in the configured key template (e.g.
-        // key: "{context.Instance.Data.featureFlagRef}") so a GetInstanceData task can
-        // self-target a dynamic instance WITHOUT a mapping InputHandler override. This lets
-        // an InputHandler-free source task (e.g. one run under a CacheAside task, which
-        // executes its source with no mapping) still load the correct instance. Fully
-        // backward-compatible: Interpolate returns the string unchanged when it contains no
-        // '{' (all existing static / InputHandler-set keys are untouched), and throws only on
-        // an unresolvable placeholder — matching CacheAside cache-key semantics.
-        if (!string.IsNullOrEmpty(task.TriggerKey)
-            && task.TriggerKey.Contains('{')
-            && context.ScriptContext is not null)
-        {
-            task.SetKey(CacheKeyInterpolator.Interpolate(task.TriggerKey, context.ScriptContext));
-        }
-
         // Resolve instance identifier
         var instanceIdResult = ResolveInstanceIdentifier(task);
         if (!instanceIdResult.IsSuccess)

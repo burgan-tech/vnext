@@ -30,8 +30,8 @@ public sealed class CacheAsideTask : WorkflowTask
     }
 
     /// <summary>
-    /// Cache key template. Supports placeholder interpolation from the script context,
-    /// e.g. <c>customer:{context.Headers.customerId}:profile</c> or instance data paths.
+    /// Cache key, used verbatim. A dynamic key is computed by a mapping <c>InputHandler</c> that calls
+    /// <see cref="SetCacheKey"/> (the standard mapping mechanism), exactly as the State Store task does.
     /// </summary>
     public string CacheKey { get; private set; } = string.Empty;
 
@@ -57,19 +57,19 @@ public sealed class CacheAsideTask : WorkflowTask
     public Reference SourceTask { get; private set; } = null!;
 
     /// <summary>
-    /// Optional mapping applied to the source task result before it is cached and returned.
+    /// Optional mapping applied to the cached (raw source) result before it is returned. Runs as the
+    /// mapping's <c>OutputHandler</c> in the executor's output stage, on both hits and misses.
     /// </summary>
     public ScriptCode? SourceMapping { get; private set; }
 
     /// <summary>
-    /// Optional mapping (<c>.csx</c>) that COMPUTES the cache key from the full script context, used
-    /// instead of interpolating the static <see cref="CacheKey"/> template. Its <c>OutputHandler</c>
-    /// returns the cache key as a plain string in <c>Data</c>. Returning <c>null</c> / empty signals the
-    /// result is NOT cacheable for this request (e.g. the evaluation depends on database variables whose
-    /// values can change at any time): the source task then runs directly with no cache read/write.
-    /// Lets a designer derive a content-aware, vary-by-correct key that a static template cannot express.
+    /// Optional Dynamic Expresso expression (a <see cref="ScriptCode"/> with
+    /// <c>location = "dynamicExpresso"</c>) that computes the cache key from the request/script context,
+    /// e.g. <c>"customer:" + context.Headers.customerId + ":profile"</c>. When present, its evaluated
+    /// string result overrides <see cref="CacheKey"/> at runtime — the lightweight way to derive a
+    /// vary-by-correct key from user-supplied data without a full <c>.csx</c> mapping.
     /// </summary>
-    public ScriptCode? KeyMapping { get; private set; }
+    public ScriptCode? KeyExpression { get; private set; }
 
     /// <summary>
     /// When <c>true</c> (default), cache read/write failures fall back to the source task instead of failing
@@ -95,7 +95,7 @@ public sealed class CacheAsideTask : WorkflowTask
     internal void SetConsistencyInternal(string? consistency) => Consistency = consistency;
     internal void SetSourceTaskInternal(Reference sourceTask) => SourceTask = sourceTask;
     internal void SetSourceMappingInternal(ScriptCode? sourceMapping) => SourceMapping = sourceMapping;
-    internal void SetKeyMappingInternal(ScriptCode? keyMapping) => KeyMapping = keyMapping;
+    internal void SetKeyExpressionInternal(ScriptCode? keyExpression) => KeyExpression = keyExpression;
     internal void SetBypassOnCacheErrorInternal(bool bypassOnCacheError) => BypassOnCacheError = bypassOnCacheError;
     internal void SetForceRefreshInternal(bool forceRefresh) => ForceRefresh = forceRefresh;
 
@@ -127,9 +127,9 @@ public sealed class CacheAsideTask : WorkflowTask
             sourceMapping.ValueKind == JsonValueKind.Object)
             SourceMapping = sourceMapping.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
 
-        if (config.TryGetProperty("keyMapping", out var keyMapping) &&
-            keyMapping.ValueKind == JsonValueKind.Object)
-            KeyMapping = keyMapping.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
+        if (config.TryGetProperty("keyExpression", out var keyExpression) &&
+            keyExpression.ValueKind == JsonValueKind.Object)
+            KeyExpression = keyExpression.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
 
         if (config.TryGetProperty("bypassOnCacheError", out var bypass) &&
             (bypass.ValueKind == JsonValueKind.True || bypass.ValueKind == JsonValueKind.False))
@@ -177,7 +177,7 @@ public sealed class CacheAsideTask : WorkflowTask
         cloned.Consistency = Consistency;
         cloned.SourceTask = SourceTask;
         cloned.SourceMapping = SourceMapping;
-        cloned.KeyMapping = KeyMapping;
+        cloned.KeyExpression = KeyExpression;
         cloned.BypassOnCacheError = BypassOnCacheError;
         cloned.ForceRefresh = ForceRefresh;
 
@@ -197,7 +197,7 @@ public sealed class CacheAsideTask : WorkflowTask
         SetConsistencyInternal(source.Consistency);
         SetSourceTaskInternal(source.SourceTask);
         SetSourceMappingInternal(source.SourceMapping);
-        SetKeyMappingInternal(source.KeyMapping);
+        SetKeyExpressionInternal(source.KeyExpression);
         SetBypassOnCacheErrorInternal(source.BypassOnCacheError);
         SetForceRefreshInternal(source.ForceRefresh);
     }
@@ -214,7 +214,7 @@ public sealed class CacheAsideTask : WorkflowTask
         Consistency = null;
         SourceTask = null!;
         SourceMapping = null;
-        KeyMapping = null;
+        KeyExpression = null;
         BypassOnCacheError = true;
         ForceRefresh = false;
     }

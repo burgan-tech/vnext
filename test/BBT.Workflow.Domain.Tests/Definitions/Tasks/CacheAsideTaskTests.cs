@@ -86,6 +86,24 @@ public sealed class CacheAsideTaskTests
     }
 
     [Fact]
+    public void Configure_ParsesKeyExpression()
+    {
+        var config = Json("""
+        {
+          "key": "customer:profile",
+          "keyExpression": { "location": "dynamicExpresso", "code": "\"customer:\" + context.Headers.customerId", "encoding": "NAT" },
+          "sourceTask": { "key": "src", "domain": "core", "version": "1.0.0" }
+        }
+        """);
+
+        var task = CacheAsideTask.Create(config);
+
+        task.KeyExpression.ShouldNotBeNull();
+        task.KeyExpression!.Location.ShouldBe("dynamicExpresso");
+        task.KeyExpression.HasMappingCode.ShouldBeTrue();
+    }
+
+    [Fact]
     public void CloneTyped_CopiesAllFields()
     {
         var config = Json("""

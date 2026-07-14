@@ -2,27 +2,26 @@ using System.Text.Json;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 
-namespace BBT.Workflow.Tasks.Caching;
+namespace BBT.Workflow.Execution.StateStores;
 
 /// <summary>
-/// Dapr-backed implementation of <see cref="IStateStoreAccessor"/>.
-/// Mirrors the get/set semantics of the State Store task invoker (shared <c>custom:</c> prefix,
-/// TTL metadata, consistency/concurrency, optimistic ETag writes) so a cache-aside task can read and
-/// write the same physical entries a State Store task would, without an extra service-invocation hop.
+/// Dapr-backed implementation of <see cref="IStateStoreClient"/>. This is the single place that talks to
+/// <see cref="DaprClient"/> for state-store access; the State Store and Cache-Aside invokers compose it.
 /// </summary>
-public sealed class DaprStateStoreAccessor : IStateStoreAccessor
+public sealed class DaprStateStoreClient : IStateStoreClient
 {
     private const string StateStoreNameConfigKey = "DAPR_STATE_STORE_NAME";
 
     /// <summary>
-    /// Fixed namespace prefix applied to every caller-supplied key.
+    /// Fixed namespace prefix applied to every caller-supplied key, keeping task-written entries away
+    /// from engine-owned cache keys in the shared store.
     /// </summary>
-    private const string KeyPrefix = "custom:";
+    public const string KeyPrefix = "custom:";
 
     private readonly DaprClient _daprClient;
     private readonly string? _defaultStoreName;
 
-    public DaprStateStoreAccessor(DaprClient daprClient, IConfiguration configuration)
+    public DaprStateStoreClient(DaprClient daprClient, IConfiguration configuration)
     {
         _daprClient = daprClient;
         _defaultStoreName = configuration[StateStoreNameConfigKey];
@@ -36,7 +35,7 @@ public sealed class DaprStateStoreAccessor : IStateStoreAccessor
     public string PrefixKey(string key) => KeyPrefix + key;
 
     /// <inheritdoc />
-    public async Task<StateGetResult> GetAsync(
+    public async Task<StateEntry> GetAsync(
         string storeName,
         string key,
         string? consistency,
@@ -47,18 +46,18 @@ public sealed class DaprStateStoreAccessor : IStateStoreAccessor
             storeName,
             PrefixKey(key),
             ParseConsistency(consistency),
-            metadata is { Count: > 0 } ? new Dictionary<string, string>(metadata) : null,
+            ToMetadata(metadata),
             cancellationToken);
 
         var found = value.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null);
-        return new StateGetResult(found, value, string.IsNullOrEmpty(etag) ? null : etag);
+        return new StateEntry(found, value, string.IsNullOrEmpty(etag) ? null : etag);
     }
 
     /// <inheritdoc />
-    public async Task<StateSetResult> SetAsync(
+    public async Task<bool> SetAsync<TValue>(
         string storeName,
         string key,
-        JsonElement value,
+        TValue value,
         int? ttlInSeconds,
         string? consistency,
         string? concurrency,
@@ -71,38 +70,76 @@ public sealed class DaprStateStoreAccessor : IStateStoreAccessor
 
         if (!string.IsNullOrEmpty(etag))
         {
-            var saved = await _daprClient.TrySaveStateAsync(
-                storeName,
-                PrefixKey(key),
-                value,
-                etag,
-                stateOptions,
-                operationMetadata,
-                cancellationToken);
-            return new StateSetResult(saved);
+            return await _daprClient.TrySaveStateAsync(
+                storeName, PrefixKey(key), value, etag, stateOptions, operationMetadata, cancellationToken);
         }
 
         await _daprClient.SaveStateAsync(
-            storeName,
-            PrefixKey(key),
-            value,
-            stateOptions,
-            operationMetadata,
-            cancellationToken);
-        return new StateSetResult(true);
+            storeName, PrefixKey(key), value, stateOptions, operationMetadata, cancellationToken);
+        return true;
     }
 
-    /// <summary>
-    /// Merges caller metadata with the Dapr <c>ttlInSeconds</c> entry. A null or non-positive TTL means
-    /// no expiry (the metadata entry is omitted).
-    /// </summary>
+    /// <inheritdoc />
+    public async Task DeleteAsync(
+        string storeName,
+        string key,
+        string? consistency,
+        string? concurrency,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken cancellationToken = default)
+    {
+        await _daprClient.DeleteStateAsync(
+            storeName,
+            PrefixKey(key),
+            BuildStateOptions(consistency, concurrency),
+            ToMetadata(metadata),
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> DeleteBulkAsync(
+        string storeName,
+        IReadOnlyList<string> prefixedKeys,
+        CancellationToken cancellationToken = default)
+    {
+        var items = prefixedKeys
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Select(k => new BulkDeleteStateItem(k, etag: string.Empty))
+            .ToList();
+
+        if (items.Count == 0)
+        {
+            return 0;
+        }
+
+        await _daprClient.DeleteBulkStateAsync(storeName, items, cancellationToken);
+        return items.Count;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> QueryPrefixedKeysAsync(
+        string storeName,
+        string query,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken cancellationToken = default)
+    {
+        var queryResponse = await _daprClient.QueryStateAsync<JsonElement>(
+            storeName, query, ToMetadata(metadata), cancellationToken);
+
+        return queryResponse?.Results?
+            .Select(r => r.Key)
+            .Where(k => k != null && k.StartsWith(KeyPrefix, StringComparison.Ordinal))
+            .ToList() ?? new List<string>();
+    }
+
+    private static Dictionary<string, string>? ToMetadata(IReadOnlyDictionary<string, string>? metadata) =>
+        metadata is { Count: > 0 } ? new Dictionary<string, string>(metadata) : null;
+
     private static Dictionary<string, string>? BuildMetadata(
         IReadOnlyDictionary<string, string>? metadata,
         int? ttlInSeconds)
     {
-        Dictionary<string, string>? result = metadata is { Count: > 0 }
-            ? new Dictionary<string, string>(metadata)
-            : null;
+        var result = ToMetadata(metadata);
 
         if (ttlInSeconds is > 0)
         {
@@ -123,11 +160,7 @@ public sealed class DaprStateStoreAccessor : IStateStoreAccessor
             return null;
         }
 
-        return new StateOptions
-        {
-            Consistency = consistencyMode,
-            Concurrency = concurrencyMode
-        };
+        return new StateOptions { Consistency = consistencyMode, Concurrency = concurrencyMode };
     }
 
     private static ConsistencyMode? ParseConsistency(string? consistency) =>
