@@ -145,26 +145,27 @@ public sealed class AsyncTransitionStrategy(
 
                 if (!ctx.Directives.IsInternalResume)
                 {
-                    if (isReserved)
-                    {
-                        // Reserved transitions are accepted while the instance is Busy by design.
-                        await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
-                    }
-                    else
-                    {
-                        // Explicit Busy admission guard: with the accept lock scoped away from the
-                        // execution lock, an in-flight transition no longer blocks this key — reject
-                        // here so a normal transition cannot be accepted while another is queued/running.
-                        var busyOutcome = await instanceBusyManager.TryMarkBusyWithPropagationAsync(
-                            ctx.Instance.Id, cancellationToken);
-                        if (busyOutcome == BusyMarkOutcome.AlreadyBusy)
-                        {
-                            logger.AsyncTransitionRejectedInstanceBusy(ctx.TransitionKey, ctx.InstanceId);
-                            lockScopeResult = Result<TransitionExecutionContext>.Fail(
-                                WorkflowErrors.InstanceBusy(ctx.InstanceId, ctx.TransitionKey));
-                            return;
-                        }
-                    }
+                    await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
+                    // if (isReserved)
+                    // {
+                    //     // Reserved transitions are accepted while the instance is Busy by design.
+                    //     await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
+                    // }
+                    // else
+                    // {
+                    //     // Explicit Busy admission guard: with the accept lock scoped away from the
+                    //     // execution lock, an in-flight transition no longer blocks this key — reject
+                    //     // here so a normal transition cannot be accepted while another is queued/running.
+                    //     var busyOutcome = await instanceBusyManager.TryMarkBusyWithPropagationAsync(
+                    //         ctx.Instance.Id, cancellationToken);
+                    //     if (busyOutcome == BusyMarkOutcome.AlreadyBusy)
+                    //     {
+                    //         logger.AsyncTransitionRejectedInstanceBusy(ctx.TransitionKey, ctx.InstanceId);
+                    //         lockScopeResult = Result<TransitionExecutionContext>.Fail(
+                    //             WorkflowErrors.InstanceBusy(ctx.InstanceId, ctx.TransitionKey));
+                    //         return;
+                    //     }
+                    // }
                 }
 
                 var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
