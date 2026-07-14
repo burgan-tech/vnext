@@ -295,6 +295,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // Instance errors
             opt.Map(WorkflowErrorCodes.NotFoundDomain, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.ConflictWorkflow, HttpStatusCode.Conflict);
+            opt.Map(WorkflowErrorCodes.InstanceBusy, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);

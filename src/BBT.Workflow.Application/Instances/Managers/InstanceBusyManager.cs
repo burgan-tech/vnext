@@ -48,16 +48,50 @@ public sealed class InstanceBusyManager(
 
         if (instance is { IsBusy: false, IsCompleted: false })
         {
-            await using var uow = uowManager.Begin(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
-
-            instance.Busy();
-            await instanceRepository.UpdateAsync(instance, false, cancellationToken);
-            await uow.CommitAsync(cancellationToken);
-
-            logger.InstanceMarkedBusy(instanceId);
+            await MarkBusyCoreAsync(instance, cancellationToken);
         }
 
+        await PropagateToSubflowAsync(instance, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(
+        Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
+
+        if (instance is null || instance.IsCompleted)
+            return BusyMarkOutcome.Skipped;
+
+        if (instance.IsBusy)
+            return BusyMarkOutcome.AlreadyBusy;
+
+        await MarkBusyCoreAsync(instance, cancellationToken);
+        await PropagateToSubflowAsync(instance, cancellationToken);
+
+        return BusyMarkOutcome.Marked;
+    }
+
+    /// <summary>
+    /// Persists the Busy flip for an already-loaded instance in an isolated RequiresNew transaction.
+    /// </summary>
+    private async Task MarkBusyCoreAsync(Instance instance, CancellationToken cancellationToken)
+    {
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+        instance.Busy();
+        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+
+        logger.InstanceMarkedBusy(instance.Id);
+    }
+
+    /// <summary>
+    /// Propagates the Busy mark to the active SubFlow (if any) via the instance command gateway.
+    /// </summary>
+    private async Task PropagateToSubflowAsync(Instance instance, CancellationToken cancellationToken)
+    {
         var subflow = instance.Subflow;
         if (subflow is not null)
         {

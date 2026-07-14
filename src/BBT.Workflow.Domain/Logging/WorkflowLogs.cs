@@ -1246,6 +1246,48 @@ public static partial class WorkflowLogs
         string instanceId);
 
     /// <summary>
+    /// Logs when an async transition request is rejected because the instance is Busy
+    /// (a transition is already queued or executing).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40120,
+        Level = LogLevel.Warning,
+        Message = "Async transition {TransitionKey} rejected for instance {InstanceId}: instance is busy")]
+    public static partial void AsyncTransitionRejectedInstanceBusy(
+        this ILogger logger,
+        string transitionKey,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs a transient instance-lock conflict inside a transition job; the handler retries with backoff.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40121,
+        Level = LogLevel.Warning,
+        Message = "Transition job {JobName} hit instance lock conflict for instance {InstanceId} (attempt {Attempt}/{MaxAttempts}); retrying in {DelayMs}ms")]
+    public static partial void TransitionJobLockConflictRetry(
+        this ILogger logger,
+        string jobName,
+        Guid instanceId,
+        int attempt,
+        int maxAttempts,
+        int delayMs);
+
+    /// <summary>
+    /// Logs when a transition job exhausted all lock-conflict retries; the instance is routed to recovery (Faulted).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40122,
+        Level = LogLevel.Error,
+        Message = "Transition job {JobName} exhausted {MaxAttempts} lock-conflict retries for instance {InstanceId} on transition {TransitionKey}; faulting instance")]
+    public static partial void TransitionJobLockConflictRetriesExhausted(
+        this ILogger logger,
+        string jobName,
+        int maxAttempts,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when start transition validation fails.
     /// </summary>
     [LoggerMessage(

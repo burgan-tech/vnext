@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
+using BBT.Aether.Results;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -56,9 +57,10 @@ public sealed class TransitionJobHandler(
                     cancellationToken, executionCts.Token);
 
                 bool needsRecovery = false;
+                (string Message, string ErrorCode)? recoveryReason = null;
 
                 try
-                {   
+                {
                     // Expose the original raw request body to mappings built inside this job (no live
                     // HttpContext here) so background signature verification (JWS/mTLS) can run.
                     using var rawBodyScope = RawBodyExecutionScope.Set(args.RawBody);
@@ -95,13 +97,28 @@ public sealed class TransitionJobHandler(
                     // instead of running in-process.
                     context.EnqueueContinuations = executionOptions.Value.TransitionPerJob;
 
-                    // Use the background-specific method that handles pre-reserved instances
-                    var result = await workflowExecutionService.ExecuteTransitionAsync(context, linkedCts.Token);
+                    // Use the background-specific method that handles pre-reserved instances.
+                    // Lock conflicts are transient (the enqueue accept lock or a finishing chain
+                    // may still hold the execution lock for a few ms) — retry with backoff.
+                    var result = await ExecuteWithLockConflictRetryAsync(context, args, linkedCts.Token);
 
                     if (!result.IsSuccess)
                     {
                         activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
                         logger.JobFailed(args.JobName, args.InstanceId, result.Error.Message ?? "Unknown error");
+
+                        if (IsLockConflict(result.Error))
+                        {
+                            // Retries exhausted: do NOT leave the instance silently stranded in Busy —
+                            // route it through recovery so it becomes Faulted (visible + retryable).
+                            var maxAttempts = executionOptions.Value.LockConflictRetry.MaxAttempts;
+                            logger.TransitionJobLockConflictRetriesExhausted(
+                                args.JobName, maxAttempts, args.InstanceId, args.TransitionKey);
+                            needsRecovery = true;
+                            recoveryReason = (
+                                $"Transition job could not acquire the instance lock after {maxAttempts} attempts",
+                                "JOB_LOCK_CONFLICT");
+                        }
                     }
                     else
                     {
@@ -143,7 +160,15 @@ public sealed class TransitionJobHandler(
                     if (needsRecovery)
                     {
                         // CancellationToken.None: recovery must complete even if host is shutting down
-                        await recoveryService.FaultInstanceAsync(args, CancellationToken.None);
+                        if (recoveryReason is { } reason)
+                        {
+                            await recoveryService.FaultInstanceAsync(
+                                args, reason.Message, reason.ErrorCode, CancellationToken.None);
+                        }
+                        else
+                        {
+                            await recoveryService.FaultInstanceAsync(args, CancellationToken.None);
+                        }
                     }
 
                     await jobRepository.MarkAsProcessedAsync(args.InstanceId, args.JobName, CancellationToken.None);
@@ -151,4 +176,48 @@ public sealed class TransitionJobHandler(
             }
         }
     }
+
+    /// <summary>
+    /// Executes the transition pipeline, retrying transient instance-lock conflicts with
+    /// bounded exponential backoff (100→200→400→800ms with defaults). The race window is
+    /// milliseconds wide — the Dapr job fires ~5ms after scheduling while another holder
+    /// (enqueue accept lock, finishing auto-chain) may still hold the execution lock.
+    /// Delays run on the linked token so the job's execution budget still applies.
+    /// </summary>
+    private async Task<Result<TransitionOutput>> ExecuteWithLockConflictRetryAsync(
+        WorkflowExecutionContext context,
+        TransitionJobPayload args,
+        CancellationToken cancellationToken)
+    {
+        var retryOptions = executionOptions.Value.LockConflictRetry;
+        var maxAttempts = Math.Max(1, retryOptions.MaxAttempts);
+        var baseDelayMs = Math.Max(0, retryOptions.BaseDelayMilliseconds);
+
+        var result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
+
+        for (var attempt = 1; attempt < maxAttempts && !result.IsSuccess && IsLockConflict(result.Error); attempt++)
+        {
+            // Guard misconfigured options: cap the shift and compute in long so the delay
+            // can never go negative (Task.Delay would throw ArgumentOutOfRangeException).
+            var shift = Math.Min(attempt - 1, 30);
+            var delayMs = (int)Math.Min((long)baseDelayMs << shift, int.MaxValue);
+
+            logger.TransitionJobLockConflictRetry(
+                args.JobName, args.InstanceId, attempt, maxAttempts, delayMs);
+
+            await Task.Delay(delayMs, cancellationToken);
+            result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Identifies a transient instance-lock conflict. Within the job's sync pipeline path,
+    /// <see cref="WorkflowErrorCodes.ConflictWorkflow"/> is produced only by
+    /// <c>WorkflowErrors.InstanceLockConflict</c> (pipeline entry and cancel preflight),
+    /// both of which are retry-safe contention signals.
+    /// </summary>
+    private static bool IsLockConflict(Error error)
+        => error.Code == WorkflowErrorCodes.ConflictWorkflow;
 }
