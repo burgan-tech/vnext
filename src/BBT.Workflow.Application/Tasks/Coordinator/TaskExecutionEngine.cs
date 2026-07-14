@@ -453,7 +453,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             {
                 await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex,
                     "Failed to persist task failure for {TaskKey}", instanceTask.TaskId);
