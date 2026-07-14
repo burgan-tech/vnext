@@ -54,6 +54,18 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     }
 
     /// <summary>
+    /// Wraps read (GET) requests in a short transactional read-only unit of work when
+    /// <c>WorkflowExecution:UseTransactionalReadScope</c> is enabled, so read SELECTs run inside an
+    /// active transaction (required under <c>SchemaSwitchingMode.TransactionLocal</c>). No-op for
+    /// non-GET requests and when the flag is disabled. Register after <c>UseSchemaResolution()</c>
+    /// and <c>UseAetherUnitOfWork()</c>.
+    /// </summary>
+    public static IApplicationBuilder UseReadTransactionScope(this IApplicationBuilder app)
+    {
+        return app.UseMiddleware<ReadTransactionScopeMiddleware>();
+    }
+
+    /// <summary>
     /// Buffers the raw request body so the original payload can be exposed to mappings for signature
     /// verification (JWS/mTLS) via <c>ScriptContext.RawBody</c>. Register before controllers/model binding.
     /// </summary>

@@ -176,6 +176,24 @@ public sealed class WorkflowExecutionOptions
     public TransactionGuardrailMode TransactionGuardrailMode { get; set; } = TransactionGuardrailMode.Off;
 
     /// <summary>
+    /// When enabled, read (HTTP GET) requests execute inside a short <c>RequiresNew,
+    /// IsTransactional=true</c> read-only unit of work. Read app services (State/long-poll, view,
+    /// data, list, history, schema, extensions) otherwise run their SELECTs under the ambient
+    /// request unit of work, which is non-transactional by default — that fails under
+    /// <c>SchemaSwitchingMode.TransactionLocal</c>, where every command (including reads) needs an
+    /// active transaction for its <c>SET LOCAL search_path</c>. The scope is opened as RequiresNew
+    /// so it is independent of the ambient request unit and does NOT make write (POST/PUT/…)
+    /// requests transactional — the transition pipeline keeps its own per-operation unit-of-work
+    /// boundaries. Default: false (unchanged behavior; the ambient non-transactional unit serves
+    /// reads, correct under <c>SessionSearchPath</c>). Enable together with
+    /// <c>SchemaSwitchingMode.TransactionLocal</c>. Note: a read that resolves a subflow view/state
+    /// via the cross-domain gateway holds the connection across that bounded remote call for the
+    /// request's duration — acceptable and strictly better than the read failing outright, but size
+    /// the connection pool accordingly.
+    /// </summary>
+    public bool UseTransactionalReadScope { get; set; }
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process

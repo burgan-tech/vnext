@@ -42,6 +42,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
+        app.UseReadTransactionScope();
         app.UseWorkflowHttpMetrics();
         app.UseHttpMetrics();
         app.MapMetrics();
