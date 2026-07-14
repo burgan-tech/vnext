@@ -46,11 +46,13 @@ public sealed class StateStoreTask : WorkflowTask
     /// <summary>
     /// Optional Dapr state Query API filter (JSON) for tag/pattern based <c>delete</c>.
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Query { get; private set; }
 
     /// <summary>
     /// Value written by <c>set</c>.
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Value { get; private set; }
 
     /// <summary>
@@ -76,6 +78,7 @@ public sealed class StateStoreTask : WorkflowTask
     /// <summary>
     /// Optional additional metadata passed to the Dapr state store operation.
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Metadata { get; private set; }
 
     public void SetCommand(string command) => Command = command;
