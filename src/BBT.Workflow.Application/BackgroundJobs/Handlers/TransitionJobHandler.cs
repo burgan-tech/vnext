@@ -191,12 +191,17 @@ public sealed class TransitionJobHandler(
     {
         var retryOptions = executionOptions.Value.LockConflictRetry;
         var maxAttempts = Math.Max(1, retryOptions.MaxAttempts);
+        var baseDelayMs = Math.Max(0, retryOptions.BaseDelayMilliseconds);
 
         var result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
 
         for (var attempt = 1; attempt < maxAttempts && !result.IsSuccess && IsLockConflict(result.Error); attempt++)
         {
-            var delayMs = retryOptions.BaseDelayMilliseconds * (1 << (attempt - 1));
+            // Guard misconfigured options: cap the shift and compute in long so the delay
+            // can never go negative (Task.Delay would throw ArgumentOutOfRangeException).
+            var shift = Math.Min(attempt - 1, 30);
+            var delayMs = (int)Math.Min((long)baseDelayMs << shift, int.MaxValue);
+
             logger.TransitionJobLockConflictRetry(
                 args.JobName, args.InstanceId, attempt, maxAttempts, delayMs);
 

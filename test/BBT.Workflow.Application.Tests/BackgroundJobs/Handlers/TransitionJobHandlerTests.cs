@@ -277,6 +277,36 @@ public class TransitionJobHandlerTests
     }
 
     /// <summary>
+    /// Misconfigured retry options (negative base delay, attempts beyond the shift range)
+    /// must not produce negative delays — Task.Delay would throw ArgumentOutOfRangeException.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithMisconfiguredRetryOptions_DoesNotThrow()
+    {
+        var instanceId = Guid.NewGuid();
+        var payload = CreatePayload(instanceId);
+        var handler = CreateHandler(
+            lockConflictRetry: new LockConflictRetryOptions { MaxAttempts = 40, BaseDelayMilliseconds = -100 });
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(LockConflictResult);
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        // Negative base delay clamps to 0 and the shift is capped, so all 40 attempts run
+        // instantly instead of crashing the job pipeline.
+        _executionService.Verify(
+            s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(40));
+        _jobRepo.Verify(
+            r => r.MarkAsProcessedAsync(instanceId, payload.JobName, CancellationToken.None),
+            Times.Once);
+    }
+
+    /// <summary>
     /// Non-conflict business failures must not be retried (single execution, no recovery).
     /// </summary>
     [Fact]
