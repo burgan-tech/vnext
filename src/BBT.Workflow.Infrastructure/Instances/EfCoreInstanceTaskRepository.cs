@@ -19,6 +19,22 @@ public class EfCoreInstanceTaskRepository(
     : EfCoreRepository<WorkflowDbContext, InstanceTask, Guid>(dbContext, serviceProvider),
         IInstanceTaskRepository
 {
+    /// <inheritdoc />
+    public async Task<InstanceTask?> FindByTransitionAndTaskAsync(
+        Guid transitionId,
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var executionKey = InstanceTask.CreateExecutionKey(transitionId, taskId);
+        return await dbSet
+            .OrderByDescending(task => task.ExecutionKey == executionKey)
+            .ThenByDescending(task => task.StartedAt)
+            .FirstOrDefaultAsync(
+                task => task.TransitionId == transitionId && task.TaskId == taskId,
+                cancellationToken);
+    }
+
     /// <summary>
     /// Inserts a new instance task and transfers to data sinks
     /// </summary>

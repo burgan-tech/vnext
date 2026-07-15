@@ -410,6 +410,14 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(p => new { p.TransitionId, p.Status })
                 .IncludeProperties(p => new { p.TaskId, p.BusinessStatus, p.StartedAt })
                 .HasDatabaseName("IX_InstanceTasks_Transition_Status_Covering");
+
+            b.Property(p => p.ExecutionKey)
+                .HasMaxLength(64);
+
+            b.HasIndex(p => p.ExecutionKey)
+                .IsUnique()
+                .HasFilter("\"ExecutionKey\" IS NOT NULL")
+                .HasDatabaseName("UX_InstanceTasks_ExecutionKey");
         });
 
         builder.Entity<InstanceAction>(b =>

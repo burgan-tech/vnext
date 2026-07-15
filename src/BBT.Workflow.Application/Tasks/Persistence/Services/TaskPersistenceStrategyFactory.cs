@@ -21,21 +21,21 @@ public sealed class TaskPersistenceStrategyFactory(
     /// <summary>
     /// Gets the appropriate task persistence strategy for the given TaskTrigger.
     /// </summary>
-    /// <param name="taskTrigger">The trigger type that determines which strategy to use.</param>
+    /// <param name="origin">The execution origin that determines which strategy to use.</param>
     /// <returns>
     /// A Result containing the strategy instance that can handle the specified TaskTrigger,
     /// or a failure result with TaskPersistenceStrategyNotFound error if no strategy is available.
     /// </returns>
-    public Result<ITaskPersistenceStrategy> GetStrategy(TaskTrigger taskTrigger)
+    public Result<ITaskPersistenceStrategy> GetStrategy(TaskExecutionOrigin origin)
     {
-        var strategy = _strategies.FirstOrDefault(s => s.CanHandle(taskTrigger));
+        var strategy = _strategies.FirstOrDefault(s => s.CanHandle(origin));
 
         return strategy is not null
             ? Result<ITaskPersistenceStrategy>.Ok(strategy)
             : Result<ITaskPersistenceStrategy>.Fail(
                 Error.NotFound(
                     WorkflowErrorCodes.TaskPersistenceStrategyNotFound,
-                    $"No task persistence strategy found for TaskTrigger: {taskTrigger}",
-                    taskTrigger.ToString()));
+                    $"No task persistence strategy found for origin: {origin}",
+                    origin.ToString()));
     }
-} 
+}

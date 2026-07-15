@@ -18,11 +18,11 @@ public sealed class ExtensionTaskPersistenceStrategy : ITaskPersistenceStrategy
     /// Determines if this strategy should handle the task persistence.
     /// Returns true only for Extension TaskTrigger type.
     /// </summary>
-    /// <param name="taskTrigger">The trigger type that initiated the task execution.</param>
+    /// <param name="origin">The component that initiated task execution.</param>
     /// <returns>True if the task trigger is Extension, false otherwise.</returns>
-    public bool CanHandle(TaskTrigger taskTrigger)
+    public bool CanHandle(TaskExecutionOrigin origin)
     {
-        return taskTrigger == TaskTrigger.Extension;
+        return origin is TaskExecutionOrigin.Function or TaskExecutionOrigin.Extension;
     }
 
     /// <summary>
@@ -31,10 +31,10 @@ public sealed class ExtensionTaskPersistenceStrategy : ITaskPersistenceStrategy
     /// </summary>
     /// <param name="instanceTask">The InstanceTask (not persisted for Extension tasks).</param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
-    public Task HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
     {
         // Extension tasks are not persisted to database
-        return Task.CompletedTask;
+        return Task.FromResult(instanceTask);
     }
 
     /// <summary>

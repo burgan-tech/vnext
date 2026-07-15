@@ -9,6 +9,15 @@ namespace BBT.Workflow.Instances;
 public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
 {
     /// <summary>
+    /// Finds the durable journal row for a task definition within a transition.
+    /// The returned entity is tracked so the caller can update the same row on retry.
+    /// </summary>
+    Task<InstanceTask?> FindByTransitionAndTaskAsync(
+        Guid transitionId,
+        string taskId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets all instance tasks for a specific transition.
     /// </summary>
     /// <param name="transitionId">The transition ID.</param>

@@ -603,6 +603,131 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         return newValue;
     }
 
+    /// <summary>
+    /// Creates a private execution copy for a parallel task branch. Mutable collections and the
+    /// instance snapshot are copied so concurrent mappings never write to the caller's context.
+    /// </summary>
+    public ScriptContext CreateParallelBranch()
+    {
+        ThrowIfDisposed();
+
+        var branch = new ScriptContext(logger)
+        {
+            Body = CloneDynamic(Body),
+            Headers = CloneDynamic(Headers),
+            RouteValues = CloneDynamic(RouteValues),
+            QueryParameters = CloneDynamic(QueryParameters),
+            EventPayload = CloneDynamic(EventPayload),
+            RawBody = RawBody,
+            Instance = Instance?.CreateSnapshot(),
+            Workflow = Workflow,
+            Runtime = Runtime,
+            Transition = Transition,
+            CurrentTransition = CurrentTransition,
+            Definitions = new Dictionary<string, dynamic>(Definitions),
+            TaskResponse = CloneDictionary(TaskResponse),
+            OutputResponse = CloneDictionary(OutputResponse),
+            MetaData = CloneMetadata(MetaData)
+        };
+
+        if (branch.Instance != null)
+        {
+            branch.Incident = new ScriptIncidentInfo
+            {
+                HasActiveIncident = branch.Instance.HasActiveIncident,
+                ActiveIncident = branch.Instance.Incidents.LastOrDefault(incident => !incident.IsResolved),
+                TotalIncidentCount = branch.Instance.Incidents.Count
+            };
+        }
+
+        if (Mutations.HasStageChange)
+            branch.Mutations.SetStage(Mutations.Stage);
+
+        return branch;
+    }
+
+    /// <summary>
+    /// Deterministically merges one completed parallel branch into this context.
+    /// The coordinator calls this method in task definition order.
+    /// </summary>
+    public void MergeParallelBranch(ScriptContext branch)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(branch);
+
+        MergeDictionary(TaskResponse, branch.TaskResponse, mergeIntoBody: true);
+        MergeDictionary(OutputResponse, branch.OutputResponse, mergeIntoBody: false);
+        MergeMetadata(branch.MetaData);
+
+        if (branch.Mutations.HasStageChange)
+        {
+            if (Mutations.HasStageChange && !string.Equals(Mutations.Stage, branch.Mutations.Stage, StringComparison.Ordinal))
+                throw new InvalidOperationException("Parallel tasks produced conflicting instance Stage mutations.");
+            Mutations.SetStage(branch.Mutations.Stage);
+        }
+
+        var branchData = branch.Instance?.LatestData;
+        if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id)
+            Instance.AddData(Guid.NewGuid(), branchData.Data, VersionStrategy.IncreasePatch);
+    }
+
+    private void MergeDictionary(
+        Dictionary<string, dynamic?> target,
+        Dictionary<string, dynamic?> source,
+        bool mergeIntoBody)
+    {
+        foreach (var (key, value) in source)
+        {
+            if (target.TryGetValue(key, out var existing))
+            {
+                if (!JsonEquivalent(existing, value))
+                    throw new InvalidOperationException($"Parallel tasks produced conflicting output for key '{key}'.");
+                continue;
+            }
+
+            var cloned = CloneDynamic(value);
+            target.Add(key, cloned);
+            if (mergeIntoBody)
+                SetBody(cloned);
+        }
+    }
+
+    private static Dictionary<string, dynamic?> CloneDictionary(
+        IEnumerable<KeyValuePair<string, dynamic?>> source)
+    {
+        var clone = new Dictionary<string, dynamic?>();
+        foreach (var (key, value) in source)
+            clone.Add(key, CloneDynamic(value));
+        return clone;
+    }
+
+    private static Dictionary<string, dynamic> CloneMetadata(
+        IEnumerable<KeyValuePair<string, dynamic>> source) =>
+        source.ToDictionary(pair => pair.Key, pair => (dynamic)CloneDynamic(pair.Value)!);
+
+    private void MergeMetadata(Dictionary<string, dynamic> source)
+    {
+        foreach (var (key, value) in source)
+        {
+            if (MetaData.TryGetValue(key, out var existing))
+            {
+                if (!JsonEquivalent(existing, value))
+                    throw new InvalidOperationException($"Parallel tasks produced conflicting metadata for key '{key}'.");
+                continue;
+            }
+
+            MetaData.Add(key, CloneDynamic(value)!);
+        }
+    }
+
+    private static dynamic? CloneDynamic(object? value) => value == null
+        ? null
+        : ToDynamic(value, JsonScriptBodyOptions);
+
+    private static bool JsonEquivalent(object? left, object? right) =>
+        JsonSerializer.Serialize(left, JsonScriptBodyOptions) ==
+        JsonSerializer.Serialize(right, JsonScriptBodyOptions);
+
     public sealed class Builder(ILogger<ScriptContext> logger)
     {
         private readonly ScriptContext _context = new(logger);

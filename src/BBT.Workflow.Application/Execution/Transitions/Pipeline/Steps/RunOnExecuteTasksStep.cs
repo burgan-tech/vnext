@@ -176,6 +176,7 @@ public sealed class RunOnExecuteTasksStep(
             context.Transition!.OnExecutionTasks,
             instanceTransitionId,
             TaskTrigger.OnExecute,
+            TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
             cancellationToken);

@@ -28,7 +28,7 @@ public interface ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken);
 }
-

@@ -181,6 +181,7 @@ public sealed class FunctionAppService(
                 function.GetExecuteTasks(),
                 null,
                 TaskTrigger.Extension,
+                TaskExecutionOrigin.Function,
                 scriptContext,
                 cancellationToken);
         }
