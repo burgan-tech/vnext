@@ -150,6 +150,8 @@ public sealed class SubflowCompletionServiceTests
         correlation.IsCompleted.ShouldBeTrue();
         correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Completed);
         correlation.CompletedAt.ShouldBe(completedAt);
+        correlation.SubFlowCurrentState.ShouldBe("child-done");
+        correlation.SubFlowStateChangedAt.ShouldBe(completedAt);
         parent.Status.ShouldBe(InstanceStatus.Active);
         parent.GetEffectiveState.ShouldBe("child-active");
         parent.GetIncidentsForMonitor().ShouldBeEmpty();
@@ -209,6 +211,57 @@ public sealed class SubflowCompletionServiceTests
         _instanceRepository.Verify(
             x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_BlockingSubFlowWithPassiveParent_ShouldNoOp()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        typeof(Instance).GetProperty(nameof(Instance.Status))!
+            .SetValue(parent, InstanceStatus.Passive);
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+
+        await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_SubProcessWithPassiveParent_ShouldCloseCorrelationOnly()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        typeof(Instance).GetProperty(nameof(Instance.Status))!
+            .SetValue(parent, InstanceStatus.Passive);
+        parent.SetEffectiveState("terminal-parent");
+        var completedAt = DateTime.UtcNow.AddMinutes(-1);
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+
+        await CreateService().CompletionAsync(
+            CreateInput(parent.Id, subInstanceId) with { CompletedAt = completedAt });
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Completed);
+        correlation.SubFlowCurrentState.ShouldBe("child-done");
+        correlation.SubFlowStateChangedAt.ShouldBe(completedAt);
+        parent.Status.ShouldBe(InstanceStatus.Passive);
+        parent.GetEffectiveState.ShouldBe("terminal-parent");
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
@@ -373,6 +426,88 @@ public sealed class SubflowCompletionServiceTests
             Times.Once);
     }
 
+    [Fact]
+    public async Task CompletionAsync_WhenParentTerminatesBeforeCompensation_ShouldLockReloadAndNotReopen()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parent.Id, subInstanceId);
+        var workflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+        var terminalReload = CloneParentWithCompletedCorrelation(parent, subInstanceId);
+        terminalReload.Complete("bank");
+        var order = new List<string>();
+        var lockCall = 0;
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"lock-{++lockCall}"))
+            .ReturnsAsync(_lockScope.Object);
+        var loadCall = 0;
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"load-{++loadCall}"))
+            .ReturnsAsync(() => loadCall == 1 ? parent : terminalReload);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(parent, workflow, It.IsAny<string>(),
+                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("resume"))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(parent.Id)));
+
+        await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().CompletionAsync(input, CancellationToken.None));
+
+        order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
+        terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+        _instanceRepository.Verify(x => x.UpdateAsync(
+            terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenCompensationReloadMissesParent_ShouldPreserveOriginalFailureWithoutDetachedFallback()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parent.Id, subInstanceId);
+        var workflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+        _instanceRepository
+            .SetupSequence(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent)
+            .ReturnsAsync((Instance?)null);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(parent, workflow, It.IsAny<string>(),
+                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+        var expected = new InvalidOperationException("original resume failure");
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(expected);
+
+        var actual = await Should.ThrowAsync<InvalidOperationException>(
+            () => CreateService().CompletionAsync(input, CancellationToken.None));
+
+        actual.ShouldBeSameAs(expected);
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
+        _instanceRepository.Verify(x => x.FindWithAllCorrelationsAsync(
+            parent.Id, CancellationToken.None), Times.Exactly(2));
+        VerifyRevertFailureLogged();
+    }
+
     private static Instance CloneParentWithCompletedCorrelation(Instance source, Guid subInstanceId)
     {
         var clone = Instance.Create(source.Id, "parent-flow", "1.0.0", "parent-key");
@@ -457,6 +592,16 @@ public sealed class SubflowCompletionServiceTests
                 value.ToString()!.Contains("terminal outcome conflict") &&
                 value.ToString()!.Contains(existingOutcome)),
             It.IsAny<Exception?>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
+    }
+
+    private void VerifyRevertFailureLogged()
+    {
+        _logger.Verify(x => x.Log(
+            LogLevel.Warning,
+            WorkflowEventIds.SubItemCorrelationRevertFailed,
+            It.IsAny<It.IsAnyType>(),
+            It.IsAny<Exception>(),
             It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
     }
 

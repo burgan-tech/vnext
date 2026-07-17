@@ -143,8 +143,7 @@ public sealed class SubflowCompletionService(
 
                     // A terminal parent still needs an active SubProcess correlation closed, but
                     // a blocking SubFlow must not mutate or resume an already-terminal parent.
-                    if ((parentInstance.Status.Equals(InstanceStatus.Completed) ||
-                         parentInstance.Status.Equals(InstanceStatus.Faulted)) &&
+                    if (parentInstance.IsCompleted &&
                         correlation.SubFlowType.Equals(SubFlowType.SubFlow))
                     {
                         activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
@@ -157,6 +156,7 @@ public sealed class SubflowCompletionService(
                         parentInstance,
                         completedInput.SubInstanceId,
                         completedInput.InstanceId,
+                        completedInput.CompletedState,
                         completedInput.CompletedAt,
                         cancellationToken);
 
@@ -237,6 +237,7 @@ public sealed class SubflowCompletionService(
                     parentInstance,
                     parentWorkflow!,
                     completedInput.SubInstanceId,
+                    lockKey,
                     completedInput.Sync,
                     cancellationToken);
 
@@ -264,6 +265,7 @@ public sealed class SubflowCompletionService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        string parentLockKey,
         bool sync,
         CancellationToken cancellationToken)
     {
@@ -330,10 +332,12 @@ public sealed class SubflowCompletionService(
                 subInstanceId,
                 parentInstance.Id);
 
-            // Phase 1 is already committed; revert correlation in its own UoW so the
-            // operation can be retried. parentInstance is detached (Phase 1 DbContext
-            // disposed), but its in-memory state is correct for the revert call.
-            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            // Phase 1 is already committed; reacquire the parent lock and compensate from
+            // authoritative persisted state so a concurrent terminal winner cannot be reopened.
+            await RevertCorrelationInNewUowAsync(
+                parentLockKey,
+                subInstanceId,
+                parentInstance.Id);
             throw;
         }
     }
@@ -346,9 +350,12 @@ public sealed class SubflowCompletionService(
         Instance parentInstance,
         Guid subInstanceId,
         Guid parentInstanceId,
+        string completedState,
         DateTime completedAt,
         CancellationToken cancellationToken)
     {
+        var existingCorrelation = parentInstance.FindCorrelationBySubInstanceId(subInstanceId);
+        existingCorrelation?.UpdateSubFlowState(completedState, completedAt);
         var correlation = parentInstance.CompleteCorrelation(
             subInstanceId,
             SubItemTerminalOutcome.Completed,
@@ -374,17 +381,24 @@ public sealed class SubflowCompletionService(
     /// so the correlation can be retried.
     /// </summary>
     private async Task RevertCorrelationInNewUowAsync(
-        Instance parentInstance,
+        string parentLockKey,
         Guid subInstanceId,
-        Guid parentInstanceId,
-        CancellationToken cancellationToken)
+        Guid parentInstanceId)
     {
         try
         {
+            var cancellationToken = CancellationToken.None;
+            await using var lockScope = await transitionLockScopeFactory.AcquireAsync(parentLockKey, cancellationToken);
+            if (!lockScope.IsAcquired)
+            {
+                throw new InvalidOperationException(
+                    $"Parent instance compensation lock '{parentLockKey}' could not be acquired.");
+            }
+
             await using var revertUow = uowManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-            await RevertAndPersistCorrelationAsync(parentInstance, subInstanceId, parentInstanceId, cancellationToken);
+            await RevertAndPersistCorrelationAsync(subInstanceId, parentInstanceId, cancellationToken);
             await revertUow.CommitAsync(cancellationToken);
         }
         catch (Exception revertEx)
@@ -398,7 +412,6 @@ public sealed class SubflowCompletionService(
     /// Reverts the SubFlow correlation and persists the changes to the repository.
     /// </summary>
     private async Task RevertAndPersistCorrelationAsync(
-        Instance parentInstance,
         Guid subInstanceId,
         Guid parentInstanceId,
         CancellationToken cancellationToken)
@@ -408,7 +421,13 @@ public sealed class SubflowCompletionService(
         // MUST load with ALL correlations: the default detail load filters completed
         // correlations out, which silently skipped the revert and left the parent stuck Busy.
         var tracked = await instanceRepository.FindWithAllCorrelationsAsync(parentInstanceId, cancellationToken)
-                      ?? parentInstance;
+                      ?? throw new InvalidOperationException(
+                          $"Parent instance {parentInstanceId} was not found while reverting completion.");
+
+        if (tracked.IsCompleted)
+        {
+            return;
+        }
 
         var correlation = tracked.RevertCorrelation(subInstanceId);
         if (correlation == null)

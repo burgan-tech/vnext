@@ -13,6 +13,7 @@ using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -363,7 +364,26 @@ public sealed class InstanceController(
         var headers = httpContext?.Request.Headers ?? new HeaderDictionary();
 
         TransitionDataInput? data;
-        if (body is null)
+        TerminationContext? termination = null;
+        var hasInternalEnvelope = headers.TryGetValue(
+                                      InternalTransitionEnvelope.HeaderName,
+                                      out var envelopeMarker) &&
+                                  envelopeMarker.Count == 1 &&
+                                  string.Equals(
+                                      envelopeMarker[0],
+                                      InternalTransitionEnvelope.HeaderValue,
+                                      StringComparison.Ordinal);
+        if (hasInternalEnvelope)
+        {
+            var envelope = body is null
+                ? null
+                : JsonSerializer.Deserialize<InternalTransitionEnvelope>(
+                    body.Value,
+                    JsonSerializerConstants.JsonOptions);
+            data = envelope?.Data;
+            termination = envelope?.Termination;
+        }
+        else if (body is null)
         {
             data = null;
         }
@@ -378,7 +398,8 @@ public sealed class InstanceController(
 
         var input = new TransitionInput(domain, workflow, data, sync)
         {
-            Extensions = extensions
+            Extensions = extensions,
+            Termination = termination
         };
         if (httpContext is not null)
         {

@@ -135,8 +135,7 @@ public sealed class SubflowFaultService(
 
                     // A terminal parent still needs an active SubProcess correlation closed, but
                     // a blocking SubFlow must not mutate or resume an already-terminal parent.
-                    if ((parentInstance.Status.Equals(InstanceStatus.Faulted) ||
-                         parentInstance.Status.Equals(InstanceStatus.Completed)) &&
+                    if (parentInstance.IsCompleted &&
                         correlation.SubFlowType.Equals(SubFlowType.SubFlow))
                     {
                         activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
@@ -236,6 +235,7 @@ public sealed class SubflowFaultService(
                         parentWorkflow!,
                         actionResult.TransitionKey,
                         input.SubInstanceId,
+                        lockKey,
                         input.Sync,
                         cancellationToken);
                 }
@@ -245,6 +245,7 @@ public sealed class SubflowFaultService(
                         parentInstance,
                         parentWorkflow!,
                         input.SubInstanceId,
+                        lockKey,
                         input.Sync,
                         cancellationToken);
                 }
@@ -324,6 +325,7 @@ public sealed class SubflowFaultService(
         Definitions.Workflow parentWorkflow,
         string transitionKey,
         Guid subInstanceId,
+        string parentLockKey,
         bool sync,
         CancellationToken cancellationToken)
     {
@@ -349,7 +351,10 @@ public sealed class SubflowFaultService(
         }
         catch
         {
-            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            await RevertCorrelationInNewUowAsync(
+                parentLockKey,
+                subInstanceId,
+                parentInstance.Id);
             throw;
         }
     }
@@ -358,6 +363,7 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        string parentLockKey,
         bool sync,
         CancellationToken cancellationToken)
     {
@@ -387,7 +393,10 @@ public sealed class SubflowFaultService(
         }
         catch
         {
-            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            await RevertCorrelationInNewUowAsync(
+                parentLockKey,
+                subInstanceId,
+                parentInstance.Id);
             throw;
         }
     }
@@ -425,20 +434,34 @@ public sealed class SubflowFaultService(
     }
 
     private async Task RevertCorrelationInNewUowAsync(
-        Instance parentInstance,
+        string parentLockKey,
         Guid subInstanceId,
-        Guid parentInstanceId,
-        CancellationToken cancellationToken)
+        Guid parentInstanceId)
     {
         try
         {
+            var cancellationToken = CancellationToken.None;
+            await using var lockScope = await transitionLockScopeFactory.AcquireAsync(parentLockKey, cancellationToken);
+            if (!lockScope.IsAcquired)
+            {
+                throw new InvalidOperationException(
+                    $"Parent instance compensation lock '{parentLockKey}' could not be acquired.");
+            }
+
             await using var revertUow = uowManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             // S9 isolation rule: reload with ALL correlations (completed included) so the
             // revert operates on a tracked entity and cannot silently no-op.
             var tracked = await instanceRepository.FindWithAllCorrelationsAsync(parentInstanceId, cancellationToken)
-                          ?? parentInstance;
+                          ?? throw new InvalidOperationException(
+                              $"Parent instance {parentInstanceId} was not found while reverting fault.");
+
+            if (tracked.IsCompleted)
+            {
+                await revertUow.CommitAsync(cancellationToken);
+                return;
+            }
 
             var correlation = tracked.RevertCorrelation(subInstanceId);
             if (correlation == null)

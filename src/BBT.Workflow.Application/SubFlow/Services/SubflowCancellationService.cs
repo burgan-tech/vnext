@@ -169,6 +169,7 @@ public sealed class SubflowCancellationService(
             parentInstance,
             parentWorkflow!,
             input,
+            lockKey,
             cancellationToken);
     }
 
@@ -176,6 +177,7 @@ public sealed class SubflowCancellationService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         SubItemCanceledInput input,
+        string parentLockKey,
         CancellationToken cancellationToken)
     {
         try
@@ -220,7 +222,10 @@ public sealed class SubflowCancellationService(
         {
             try
             {
-                await RevertCorrelationAsync(parentInstance.Id, input.SubInstanceId);
+                await RevertCorrelationAsync(
+                    parentLockKey,
+                    parentInstance.Id,
+                    input.SubInstanceId);
             }
             catch (Exception revertException)
             {
@@ -235,10 +240,18 @@ public sealed class SubflowCancellationService(
     }
 
     private async Task RevertCorrelationAsync(
+        string parentLockKey,
         Guid parentInstanceId,
         Guid subInstanceId)
     {
         var cancellationToken = CancellationToken.None;
+        await using var lockScope = await transitionLockScopeFactory.AcquireAsync(parentLockKey, cancellationToken);
+        if (!lockScope.IsAcquired)
+        {
+            throw new InvalidOperationException(
+                $"Parent instance compensation lock '{parentLockKey}' could not be acquired.");
+        }
+
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
@@ -247,6 +260,12 @@ public sealed class SubflowCancellationService(
                                  cancellationToken)
                              ?? throw new InvalidOperationException(
                                  $"Parent instance {parentInstanceId} was not found while reverting cancellation");
+
+        if (parentInstance.IsCompleted)
+        {
+            await uow.CommitAsync(cancellationToken);
+            return;
+        }
 
         if (parentInstance.RevertCorrelation(subInstanceId) != null)
         {

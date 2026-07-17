@@ -220,10 +220,18 @@ public sealed class RemoteInstanceCommandAppService(
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var content = input.Data != null
-                ? new StringContent(JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions), Encoding.UTF8,
-                    "application/json")
-                : new StringContent("{}", Encoding.UTF8, "application/json");
+            var requestBody = input.Termination is null
+                ? input.Data is null
+                    ? "{}"
+                    : JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions)
+                : JsonSerializer.Serialize(
+                    new InternalTransitionEnvelope
+                    {
+                        Data = input.Data,
+                        Termination = input.Termination
+                    },
+                    JsonSerializerConstants.JsonOptions);
+            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Patch, requestUri)
             {
@@ -232,6 +240,13 @@ public sealed class RemoteInstanceCommandAppService(
 
             var forwardHeaders = currentUser.ToForwardHeaders();
             CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
+            requestMessage.Headers.Remove(InternalTransitionEnvelope.HeaderName);
+            if (input.Termination is not null)
+            {
+                requestMessage.Headers.TryAddWithoutValidation(
+                    InternalTransitionEnvelope.HeaderName,
+                    InternalTransitionEnvelope.HeaderValue);
+            }
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 

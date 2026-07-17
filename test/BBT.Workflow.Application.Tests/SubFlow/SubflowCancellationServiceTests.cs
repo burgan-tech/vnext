@@ -299,6 +299,43 @@ public sealed class SubflowCancellationServiceTests
     }
 
     [Fact]
+    public async Task CancellationAsync_WhenParentTerminatesBeforeCompensation_ShouldLockReloadAndNotReopen()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        var input = CreateCanceledInput(parent.Id, subInstanceId);
+        SetupBlockingParent(parent);
+        var terminalReload = CloneParentWithCanceledCorrelation(parent.Id, subInstanceId);
+        terminalReload.Complete("bank");
+        var order = new List<string>();
+        var lockCall = 0;
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"lock-{++lockCall}"))
+            .ReturnsAsync(_lockScope.Object);
+        var loadCall = 0;
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"load-{++loadCall}"))
+            .ReturnsAsync(() => loadCall == 1 ? parent : terminalReload);
+        _workflowExecution
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("resume"))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(parent.Id)));
+
+        await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().CancellationAsync(input, CancellationToken.None));
+
+        order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
+        terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+        _instanceRepository.Verify(x => x.UpdateAsync(
+            terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CancellationAsync_WhenResumeThrows_ShouldRevertAndRethrowOriginalException()
     {
         var parent = CreateParentInstance(out var subInstanceId);
@@ -318,6 +355,40 @@ public sealed class SubflowCancellationServiceTests
 
         actual.ShouldBeSameAs(expected);
         reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task CancellationAsync_WhenCompensationLockFails_ShouldLogAndPreserveOriginalFailure()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        SetupBlockingParent(parent);
+        var expected = new InvalidOperationException("original resume failure");
+        _workflowExecution
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(expected);
+        var failedLock = new Mock<ITransitionLockScope>();
+        failedLock.SetupGet(x => x.IsAcquired).Returns(false);
+        failedLock.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        _lockScopeFactory
+            .SetupSequence(x => x.AcquireAsync(It.IsAny<string>(), CancellationToken.None))
+            .ReturnsAsync(_lockScope.Object)
+            .ReturnsAsync(failedLock.Object);
+
+        var actual = await Should.ThrowAsync<InvalidOperationException>(
+            () => CreateService().CancellationAsync(
+                CreateCanceledInput(parent.Id, subInstanceId),
+                CancellationToken.None));
+
+        actual.ShouldBeSameAs(expected);
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
+        _instanceRepository.Verify(x => x.FindWithAllCorrelationsAsync(
+            parent.Id, It.IsAny<CancellationToken>()), Times.Once);
+        _logger.Verify(x => x.Log(
+            LogLevel.Warning,
+            WorkflowEventIds.SubItemCorrelationRevertFailed,
+            It.IsAny<It.IsAnyType>(),
+            It.IsAny<Exception>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
     }
 
     [Fact]

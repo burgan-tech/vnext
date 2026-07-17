@@ -18,6 +18,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\BBT.Workflow.Infrastructure\BBT.Workflow.Infrastructure.csproj"/>
+        <ProjectReference Include="..\..\orchestration\BBT.Workflow.Orchestration.HttpApi.Host\BBT.Workflow.Orchestration.HttpApi.Host.csproj"/>
         <ProjectReference Include="..\BBT.Workflow.Application.Tests\BBT.Workflow.Application.Tests.csproj"/>
         <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)"/>
         <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
