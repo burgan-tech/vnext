@@ -702,13 +702,28 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <returns>The completed correlation if found and not already completed, otherwise null</returns>
     public InstanceCorrelation? CompleteCorrelation(Guid subInstanceId)
     {
+        return CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed);
+    }
+
+    /// <summary>
+    /// Completes a correlation for the given SubFlow instance ID with a terminal outcome.
+    /// </summary>
+    /// <param name="subInstanceId">The SubFlow instance ID to complete</param>
+    /// <param name="outcome">The terminal outcome to persist</param>
+    /// <param name="completedAt">The completion timestamp, or the current UTC time when omitted</param>
+    /// <returns>The completed correlation when the outcome is first applied, otherwise null</returns>
+    public InstanceCorrelation? CompleteCorrelation(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime? completedAt = null)
+    {
         var correlation = FindCorrelationBySubInstanceId(subInstanceId);
         if (correlation == null || correlation.IsCompleted)
         {
             return null;
         }
 
-        correlation.Completed();
+        correlation.ApplyTerminalOutcome(outcome, completedAt ?? DateTime.UtcNow);
 
         // NOTE: Do NOT call Active() here for SubFlow type.
         // The parent must remain Busy until ClearBusyOnResumeStep runs in ResumePipelineAsync.

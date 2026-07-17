@@ -1086,6 +1086,24 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void CompleteCorrelation_ShouldApplySpecifiedTerminalOutcomeAndTimestamp()
+    {
+        var subInstanceId = Guid.NewGuid();
+        var completedAt = DateTime.UtcNow;
+        var instance = InstanceFactory.CreateDefault();
+        instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), instance.Id, "parent-state", subInstanceId, "P",
+            "domain", "flow", null));
+
+        var correlation = instance.CompleteCorrelation(
+            subInstanceId, SubItemTerminalOutcome.Faulted, completedAt);
+
+        Assert.NotNull(correlation);
+        Assert.Equal(SubItemTerminalOutcome.Faulted, correlation.TerminalOutcome);
+        Assert.Equal(completedAt, correlation.CompletedAt);
+    }
+
+    [Fact]
     public void HasActiveSubFlow_ShouldReturnTrue_WhenActiveSubFlowExists()
     {
         // Arrange
