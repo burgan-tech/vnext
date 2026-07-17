@@ -951,6 +951,31 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         request.Termination.CascadeId.ShouldBe(termination.CascadeId);
     }
 
+    [Fact]
+    public void Fault_ParentCascadeAcrossTwoHops_ShouldPreserveCascadeWithoutUpwardBounce()
+    {
+        var parent = InstanceFactory.CreateDefault();
+        var child = CreateSubItem(WorkflowType.SubFlow.Code);
+        AddCorrelation(parent, SubFlowType.SubFlow.Code, child.Id);
+        var grandchild = AddCorrelation(child, SubFlowType.SubFlow.Code);
+
+        parent.Fault("parent-domain");
+        var childRequest = parent.GetDomainEvents().Select(x => x.Event)
+            .OfType<ChildSubflowFaultRequestedEvent>().Single();
+
+        child.Fault("child-domain", termination: childRequest.Termination);
+
+        child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubFaultedEvent>().ShouldBeEmpty();
+        var grandchildRequest = child.GetDomainEvents().Select(x => x.Event)
+            .OfType<ChildSubflowFaultRequestedEvent>().Single();
+        grandchildRequest.InstanceId.ShouldBe(grandchild.SubFlowInstanceId);
+        grandchildRequest.Termination.Origin.ShouldBe(TerminationOrigin.ParentCascade);
+        grandchildRequest.Termination.InitiatorInstanceId
+            .ShouldBe(childRequest.Termination.InitiatorInstanceId);
+        grandchildRequest.Termination.CascadeId.ShouldBe(childRequest.Termination.CascadeId);
+    }
+
     [Theory]
     [InlineData("S", SubItemType.SubFlow)]
     [InlineData("P", SubItemType.SubProcess)]
@@ -1000,6 +1025,31 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         requests.ShouldAllBe(x => x.Termination.Origin == TerminationOrigin.ParentCascade);
         requests.ShouldAllBe(x => x.Termination.InitiatorInstanceId == termination.InitiatorInstanceId);
         requests.ShouldAllBe(x => x.Termination.CascadeId == termination.CascadeId);
+    }
+
+    [Fact]
+    public void Cancel_ParentCascadeAcrossTwoHops_ShouldPreserveCascadeWithoutUpwardBounce()
+    {
+        var parent = InstanceFactory.CreateDefault();
+        var child = CreateSubItem(WorkflowType.SubFlow.Code);
+        AddCorrelation(parent, SubFlowType.SubFlow.Code, child.Id);
+        var grandchild = AddCorrelation(child, SubFlowType.SubProcess.Code);
+
+        parent.Cancel("parent-domain");
+        var childRequest = parent.GetDomainEvents().Select(x => x.Event)
+            .OfType<ChildSubflowCancelRequestedEvent>().Single();
+
+        child.Cancel("child-domain", termination: childRequest.Termination);
+
+        child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubCanceledEvent>().ShouldBeEmpty();
+        var grandchildRequest = child.GetDomainEvents().Select(x => x.Event)
+            .OfType<ChildSubflowCancelRequestedEvent>().Single();
+        grandchildRequest.InstanceId.ShouldBe(grandchild.SubFlowInstanceId);
+        grandchildRequest.Termination.Origin.ShouldBe(TerminationOrigin.ParentCascade);
+        grandchildRequest.Termination.InitiatorInstanceId
+            .ShouldBe(childRequest.Termination.InitiatorInstanceId);
+        grandchildRequest.Termination.CascadeId.ShouldBe(childRequest.Termination.CascadeId);
     }
 
     [Theory]
@@ -1115,10 +1165,13 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         return instance;
     }
 
-    private static InstanceCorrelation AddCorrelation(Instance parent, string subFlowType)
+    private static InstanceCorrelation AddCorrelation(
+        Instance parent,
+        string subFlowType,
+        Guid? subInstanceId = null)
     {
         var correlation = InstanceCorrelation.Create(
-            Guid.NewGuid(), parent.Id, "parent-state", Guid.NewGuid(), subFlowType,
+            Guid.NewGuid(), parent.Id, "parent-state", subInstanceId ?? Guid.NewGuid(), subFlowType,
             "child-domain", "child-flow", "1.0.0");
         parent.AddCorrelation(correlation);
         return correlation;
