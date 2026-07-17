@@ -7,8 +7,6 @@
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="BBT.Aether.Aspects" Version="$(AetherPackageVersion)" />
-    <PackageReference Include="BBT.Aether.Domain" Version="$(AetherPackageVersion)" />
     <PackageReference Include="PostSharp" Version="$(PostSharpPackageVersion)" />
     <PackageReference Include="Dapr.Jobs" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />
@@ -17,6 +15,8 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(EfCorePackageVersion)" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(EfCorePackageVersion)" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Aspects/BBT.Aether.Aspects.csproj" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Domain/BBT.Aether.Domain.csproj" />
     <ProjectReference Include="..\..\modules\BBT.Workflow.Modules.Scripting\BBT.Workflow.Modules.Scripting.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Events.Contracts\BBT.Workflow.Events.Contracts.csproj" />
   </ItemGroup>

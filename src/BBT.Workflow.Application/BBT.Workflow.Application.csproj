@@ -7,14 +7,14 @@
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="BBT.Aether.Application" Version="$(AetherPackageVersion)" />
-    <PackageReference Include="BBT.Aether.Aspects" Version="$(AetherPackageVersion)" />
-    <PackageReference Include="BBT.Aether.Mapperly" Version="$(AetherPackageVersion)" />
     <PackageReference Include="PostSharp" Version="$(PostSharpPackageVersion)" />
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Dapr.Jobs" Version="$(DaprPackageVersion)" />
     <PackageReference Include="DynamicExpresso.Core" Version="2.19.3" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Application/BBT.Aether.Application.csproj" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Aspects/BBT.Aether.Aspects.csproj" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Mapperly/BBT.Aether.Mapperly.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Tasks.Abstractions\BBT.Workflow.Tasks.Abstractions.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Execution.Abstractions\BBT.Workflow.Execution.Abstractions.csproj" />
