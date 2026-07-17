@@ -79,17 +79,6 @@ public sealed class SubflowCompletionService(
                         return;
                     }
 
-                    // Idempotency: if parent is already in a terminal state the subflow completion
-                    // has already been processed (or the parent was terminated via another path).
-                    // No pipeline resume is needed — just return cleanly.
-                    if (parentInstance.Status.Equals(InstanceStatus.Completed) ||
-                        parentInstance.Status.Equals(InstanceStatus.Faulted))
-                    {
-                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
-                        await correlationUow.CommitAsync(cancellationToken);
-                        return;
-                    }
-
                     var correlation = parentInstance.FindCorrelationBySubInstanceId(completedInput.SubInstanceId);
                     if (correlation == null)
                     {
@@ -119,6 +108,17 @@ public sealed class SubflowCompletionService(
                         }
 
                         activity?.SetTag("vnext.subflow.result", "correlation_already_terminal");
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    // A terminal parent still needs an active SubProcess correlation closed, but
+                    // a blocking SubFlow must not mutate or resume an already-terminal parent.
+                    if ((parentInstance.Status.Equals(InstanceStatus.Completed) ||
+                         parentInstance.Status.Equals(InstanceStatus.Faulted)) &&
+                        correlation.SubFlowType.Equals(SubFlowType.SubFlow))
+                    {
+                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
                     }
@@ -311,7 +311,7 @@ public sealed class SubflowCompletionService(
 
     /// <summary>
     /// Completes the SubFlow correlation and persists the changes to the repository.
-    /// Also resets the parent's EffectiveState back to its own CurrentState.
+    /// For a blocking SubFlow, also resets the parent's EffectiveState back to its own CurrentState.
     /// </summary>
     private async Task CompleteAndPersistCorrelationAsync(
         Instance parentInstance,

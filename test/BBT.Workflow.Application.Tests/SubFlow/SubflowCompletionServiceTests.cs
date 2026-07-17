@@ -128,6 +128,59 @@ public sealed class SubflowCompletionServiceTests
     }
 
     [Fact]
+    public async Task CompletionAsync_SubProcessWithTerminalParent_ShouldCloseCorrelationOnly()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        parent.Complete("bank");
+        parent.SetEffectiveState("terminal-parent");
+        var completedAt = DateTime.UtcNow.AddMinutes(-1);
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+
+        await CreateService().CompletionAsync(
+            CreateInput(parent.Id, subInstanceId) with { CompletedAt = completedAt });
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.IsCompleted.ShouldBeTrue();
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Completed);
+        correlation.CompletedAt.ShouldBe(completedAt);
+        parent.Status.ShouldBe(InstanceStatus.Completed);
+        parent.GetEffectiveState.ShouldBe("terminal-parent");
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_BlockingSubFlowWithTerminalParent_ShouldNoOp()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        parent.Complete("bank");
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+
+        await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
+        parent.Status.ShouldBe(InstanceStatus.Completed);
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+    }
+
+    [Fact]
     public async Task CompletionAsync_WhenParentWorkflowLoadFails_FaultsParentWithIncident()
     {
         var parentInstance = CreateParentInstance(out var subInstanceId);
