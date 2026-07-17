@@ -68,8 +68,8 @@ public sealed class SubflowCompletionService(
                 await using (var correlationUow =  uowManager.Begin(
                     new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
                 {
-                    parentInstance = await instanceRepository.FindAsync(
-                        completedInput.InstanceId, true, cancellationToken);
+                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
+                        completedInput.InstanceId, cancellationToken);
 
                     if (parentInstance == null)
                     {
@@ -99,11 +99,36 @@ public sealed class SubflowCompletionService(
                         return;
                     }
 
+                    if (correlation.IsCompleted)
+                    {
+                        if (correlation.TerminalOutcome == SubItemTerminalOutcome.Completed)
+                        {
+                            logger.LogDebug(
+                                "SubItem terminal outcome already recorded as Completed for parent {ParentInstanceId}, child {SubInstanceId}",
+                                completedInput.InstanceId,
+                                completedInput.SubInstanceId);
+                        }
+                        else
+                        {
+                            logger.LogWarning(
+                                "SubItem terminal outcome conflict for parent {ParentInstanceId}, child {SubInstanceId}: existing {ExistingOutcome}, incoming {IncomingOutcome}",
+                                completedInput.InstanceId,
+                                completedInput.SubInstanceId,
+                                correlation.TerminalOutcome?.ToString() ?? "legacy",
+                                SubItemTerminalOutcome.Completed);
+                        }
+
+                        activity?.SetTag("vnext.subflow.result", "correlation_already_terminal");
+                        await correlationUow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
                     // Complete correlation and persist changes
                     await CompleteAndPersistCorrelationAsync(
                         parentInstance,
                         completedInput.SubInstanceId,
                         completedInput.InstanceId,
+                        completedInput.CompletedAt,
                         cancellationToken);
 
                     // If this is a SubProcess (non-blocking), commit and return
@@ -292,15 +317,22 @@ public sealed class SubflowCompletionService(
         Instance parentInstance,
         Guid subInstanceId,
         Guid parentInstanceId,
+        DateTime completedAt,
         CancellationToken cancellationToken)
     {
-        var correlation = parentInstance.CompleteCorrelation(subInstanceId);
-        if(correlation == null)
+        var correlation = parentInstance.CompleteCorrelation(
+            subInstanceId,
+            SubItemTerminalOutcome.Completed,
+            completedAt);
+        if (correlation == null)
             return;
 
-        // Reset parent's EffectiveState back to its own CurrentState
-        // (SubFlow is now completed, so parent's state is no longer reflected from SubFlow)
-        parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+        if (correlation.SubFlowType.Equals(SubFlowType.SubFlow))
+        {
+            // Reset parent's EffectiveState back to its own CurrentState for blocking SubFlows.
+            // A SubProcess completion only closes its persisted correlation.
+            parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+        }
 
         logger.SubFlowCorrelationCompleted(subInstanceId, parentInstanceId);
 

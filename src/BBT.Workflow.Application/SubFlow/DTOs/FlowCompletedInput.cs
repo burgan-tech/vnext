@@ -13,6 +13,11 @@ public record FlowCompletedInput
     /// The ID of the Parent instance
     /// </summary>
     public required Guid InstanceId { get; init; }
+
+    /// <summary>
+    /// The ID of the root instance in the SubItem chain, when available
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
     
     /// <summary>
     /// The domain of the parent

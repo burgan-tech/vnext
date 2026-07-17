@@ -99,6 +99,7 @@ public sealed class InstanceSubCompletedEventHook(
         return new FlowCompletedInput
         {
             InstanceId = eventData.InstanceId,
+            RootInstanceId = eventData.RootInstanceId,
             Domain = eventData.Domain,
             Flow = eventData.Flow,
             CompletedAt = eventData.CompletedAt,

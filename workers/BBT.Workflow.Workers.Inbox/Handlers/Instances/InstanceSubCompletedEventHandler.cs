@@ -60,6 +60,7 @@ internal sealed class InstanceSubCompletedEventHandler(
             {
                 SubInstanceId = eventData.SubInstanceId,
                 InstanceId = eventData.InstanceId,
+                RootInstanceId = eventData.RootInstanceId,
                 Domain = eventData.Domain,
                 Flow = eventData.Flow,
                 Version = eventData.Version,
