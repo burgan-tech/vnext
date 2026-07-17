@@ -141,6 +141,20 @@ public class InstanceSubFaultedEvent : IDistributedEvent
     /// </summary>
     public bool Sync { get; init; }
 
+    /// <summary>
+    /// The kind of faulted SubItem. A missing value represents a legacy SubFlow event.
+    /// </summary>
+    public SubItemType? SubItemType { get; init; }
+
+    /// <summary>The origin of this terminal operation, when provided by the publisher.</summary>
+    public TerminationOrigin? TerminationOrigin { get; init; }
+
+    /// <summary>The instance that initiated the terminal cascade, when available.</summary>
+    public Guid? InitiatorInstanceId { get; init; }
+
+    /// <summary>The identifier shared by the terminal cascade, when available.</summary>
+    public Guid? CascadeId { get; init; }
+
     public override string ToString()
     {
         return $"{nameof(InstanceSubFaultedEvent)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} SubInstanceId={SubInstanceId} FaultedState={FaultedState}";

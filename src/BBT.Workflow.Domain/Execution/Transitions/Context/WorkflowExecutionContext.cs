@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Aether.Aspects;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Execution;
@@ -74,6 +75,9 @@ public sealed class WorkflowExecutionContext
     /// is the chain's own continuation, which the chain-token gate admits past a Busy instance.
     /// </summary>
     public Guid? ChainToken { get; set; }
+
+    /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
+    public TerminationContext? Termination { get; set; }
 
     /// <summary>Gets or sets whether this transition was requested by an error boundary (e.g. Rollback/Notify). When true, state policy checks are bypassed so the transition can run from any state.</summary>
     public bool IsErrorBoundaryTransition { get; set; }

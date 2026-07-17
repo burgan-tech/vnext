@@ -124,6 +124,7 @@ public sealed class TransitionContextFactory(
             CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
+            Termination = input.Termination,
 
             // Telemetry
             TraceId = traceId,

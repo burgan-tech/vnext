@@ -194,6 +194,10 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.SubFlowCurrentState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
 
+            b.Property(p => p.TerminalOutcome)
+                .HasConversion<int?>()
+                .HasComment("Completed=1, Faulted=2, Canceled=3; null for legacy rows");
+
             // Partial covering index for the runtime hot-path. The WithDetailsAsync
             // include now filters c => !c.IsCompleted, so this partial set matches the
             // include precisely and serves it as an index-only scan.

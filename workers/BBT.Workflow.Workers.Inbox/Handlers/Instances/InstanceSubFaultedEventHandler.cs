@@ -79,6 +79,14 @@ internal sealed class InstanceSubFaultedEventHandler(
                 IncidentState = eventData.IncidentState,
                 IncidentBoundaryAction = eventData.IncidentBoundaryAction,
                 IncidentBoundaryLevel = eventData.IncidentBoundaryLevel,
+                RootInstanceId = eventData.RootInstanceId,
+                SubItemType = eventData.SubItemType ?? SubItemType.SubFlow,
+                Termination = eventData.CascadeId.HasValue && eventData.InitiatorInstanceId.HasValue
+                    ? new TerminationContext(
+                        eventData.TerminationOrigin ?? TerminationOrigin.Direct,
+                        eventData.InitiatorInstanceId.Value,
+                        eventData.CascadeId.Value)
+                    : null,
                 // At-least-once async retry path: the sync caller (if any) was already answered
                 // by the synchronous hook. Force async here so a retried resume never blocks the
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.

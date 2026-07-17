@@ -420,13 +420,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     /// <summary>
     /// Marks the instance as faulted and publishes fault cleanup event.
-    /// Also propagates fault downward to active SubFlow children and upward to parent (if this is a SubFlow).
+    /// Also propagates fault downward to active SubFlow children and upward to the parent for direct SubItem faults.
     /// Correlations are intentionally kept open (not completed) so retry can cascade through them.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
     /// <param name="sync">Whether the faulting pipeline chain runs with a synchronous caller (sync=true).</param>
-    public void Fault(string domain, bool sync = false)
+    /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
+    public void Fault(string domain, bool sync = false, TerminationContext? termination = null)
     {
+        var effectiveTermination = termination ?? TerminationContext.Direct(Id);
+        var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Faulted;
         ChainToken = null;
         CompletedAt = DateTime.UtcNow;
@@ -455,15 +458,17 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Flow = correlation.SubFlowName,
                 Version = correlation.SubFlowVersion,
                 FaultedAt = CompletedAt.Value,
-                RootInstanceId = rootId != Id ? rootId : (Guid?)null
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                Termination = childTermination
             });
         }
 
-        // Upward: notify parent if this instance is a blocking SubFlow
-        if (IsSubFlow)
+        // Upward: direct SubItem termination only. Parent cascades never bounce back upward.
+        if (IsSubItem && effectiveTermination.Origin == TerminationOrigin.Direct)
         {
-            var activeIncident = _incidents.LastOrDefault(i => !i.IsResolved);
-            var latestData = LatestData;
+            var subItemType = IsSubFlow ? SubItemType.SubFlow : SubItemType.SubProcess;
+            var activeIncident = IsSubFlow ? _incidents.LastOrDefault(i => !i.IsResolved) : null;
+            var latestData = IsSubFlow ? LatestData : null;
             var contractInfo = ExtraProperties.ToSubFlowContractInfo();
             if (contractInfo.Id != Guid.Empty)
             {
@@ -492,7 +497,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     IncidentBoundaryAction = activeIncident?.BoundaryAction,
                     IncidentBoundaryLevel = activeIncident?.BoundaryLevel,
                     RootInstanceId = rootId != Id ? rootId : (Guid?)null,
-                    Sync = sync
+                    Sync = sync,
+                    SubItemType = subItemType,
+                    TerminationOrigin = effectiveTermination.Origin,
+                    InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
+                    CascadeId = effectiveTermination.CascadeId
                 });
             }
         }
@@ -539,8 +548,12 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Sets the instance status to Canceled and records the completion time.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
-    public void Cancel(string domain)
+    /// <param name="sync">Whether the canceling pipeline chain runs with a synchronous caller.</param>
+    /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
+    public void Cancel(string domain, bool sync = false, TerminationContext? termination = null)
     {
+        var effectiveTermination = termination ?? TerminationContext.Direct(Id);
+        var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
@@ -559,9 +572,33 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
+        if (IsSubItem && effectiveTermination.Origin == TerminationOrigin.Direct)
+        {
+            var contractInfo = ExtraProperties.ToSubFlowContractInfo();
+            if (contractInfo.Id != Guid.Empty)
+            {
+                AddDistributedEvent(new InstanceSubCanceledEvent
+                {
+                    InstanceId = contractInfo.Id,
+                    SubInstanceId = Id,
+                    Domain = contractInfo.Domain,
+                    Flow = contractInfo.Flow,
+                    Version = contractInfo.Version,
+                    CanceledState = GetCurrentState,
+                    CanceledAt = CompletedAt.Value,
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                    SubItemType = IsSubFlow ? SubItemType.SubFlow : SubItemType.SubProcess,
+                    Sync = sync,
+                    TerminationOrigin = effectiveTermination.Origin,
+                    InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
+                    CascadeId = effectiveTermination.CascadeId
+                });
+            }
+        }
+
         foreach (var correlation in ActiveCorrelations)
         {
-            correlation.Completed();
+            correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Canceled, CompletedAt.Value);
             AddDistributedEvent(new ChildSubflowCancelRequestedEvent
             {
                 ParentInstanceId = correlation.ParentInstanceId,
@@ -570,7 +607,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Flow = correlation.SubFlowName,
                 CompletedAt = correlation.CompletedAt!.Value,
                 Version = correlation.SubFlowVersion,
-                RootInstanceId = rootId != Id ? rootId : (Guid?)null
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                Termination = childTermination
             });
         }
     }
@@ -702,13 +740,28 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <returns>The completed correlation if found and not already completed, otherwise null</returns>
     public InstanceCorrelation? CompleteCorrelation(Guid subInstanceId)
     {
+        return CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed);
+    }
+
+    /// <summary>
+    /// Completes a correlation for the given SubFlow instance ID with a terminal outcome.
+    /// </summary>
+    /// <param name="subInstanceId">The SubFlow instance ID to complete</param>
+    /// <param name="outcome">The terminal outcome to persist</param>
+    /// <param name="completedAt">The completion timestamp, or the current UTC time when omitted</param>
+    /// <returns>The completed correlation when the outcome is first applied, otherwise null</returns>
+    public InstanceCorrelation? CompleteCorrelation(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime? completedAt = null)
+    {
         var correlation = FindCorrelationBySubInstanceId(subInstanceId);
         if (correlation == null || correlation.IsCompleted)
         {
             return null;
         }
 
-        correlation.Completed();
+        correlation.ApplyTerminalOutcome(outcome, completedAt ?? DateTime.UtcNow);
 
         // NOTE: Do NOT call Active() here for SubFlow type.
         // The parent must remain Busy until ClearBusyOnResumeStep runs in ResumePipelineAsync.

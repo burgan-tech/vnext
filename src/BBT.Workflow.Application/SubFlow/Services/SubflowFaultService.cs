@@ -72,20 +72,50 @@ public sealed class SubflowFaultService(
                         parentInstance.Status.Equals(InstanceStatus.Completed))
                     {
                         activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
+                        await uow.CommitAsync(cancellationToken);
                         return;
                     }
 
-                    // Verify the correlation exists and is still open
+                    // Verify the correlation exists and apply terminal idempotency semantics.
                     correlation = parentInstance.FindCorrelationBySubInstanceId(input.SubInstanceId);
-                    if (correlation == null || correlation.IsCompleted)
+                    if (correlation == null)
                     {
                         logger.SubFlowCorrelationNotFound(input.SubInstanceId);
-                        activity?.SetTag("vnext.subflow.result", "correlation_not_found_or_completed");
+                        activity?.SetTag("vnext.subflow.result", "correlation_not_found");
+                        await uow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    if (correlation.IsCompleted)
+                    {
+                        if (correlation.TerminalOutcome != SubItemTerminalOutcome.Faulted)
+                        {
+                            logger.LogWarning(
+                                "SubItem terminal outcome conflict for parent {ParentInstanceId}, child {SubInstanceId}: existing {ExistingOutcome}, incoming {IncomingOutcome}",
+                                input.InstanceId,
+                                input.SubInstanceId,
+                                correlation.TerminalOutcome?.ToString() ?? "legacy",
+                                SubItemTerminalOutcome.Faulted);
+                        }
+
+                        activity?.SetTag("vnext.subflow.result", "correlation_already_terminal");
+                        await uow.CommitAsync(cancellationToken);
                         return;
                     }
 
                     correlation.UpdateSubFlowState(input.FaultedState, input.FaultedAt);
-                    parentInstance.CompleteCorrelation(input.SubInstanceId);
+                    parentInstance.CompleteCorrelation(
+                        input.SubInstanceId,
+                        SubItemTerminalOutcome.Faulted,
+                        input.FaultedAt);
+
+                    if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
+                    {
+                        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                        await uow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
                     parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
 
                     var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
