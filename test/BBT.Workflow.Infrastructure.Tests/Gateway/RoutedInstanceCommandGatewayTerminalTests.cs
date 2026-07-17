@@ -5,10 +5,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Runtime;
@@ -22,6 +24,82 @@ namespace BBT.Workflow.Infrastructure.Tests.Gateway;
 
 public sealed class RoutedInstanceCommandGatewayTerminalTests
 {
+    [Fact]
+    public async Task CancelChildAsync_WhenDomainMatches_ExecutesTypedLocalTransition()
+    {
+        var instanceId = Guid.NewGuid();
+        var termination = new TerminationContext(
+            TerminationOrigin.ParentCascade,
+            Guid.NewGuid(),
+            Guid.NewGuid());
+        var input = new ChildSubflowCancelInput("1.0.0", termination);
+        var commandService = Substitute.For<IInstanceCommandAppService>();
+        commandService.TransitionAsync(
+                instanceId.ToString(),
+                WellKnownTransitionKeys.Cancel,
+                Arg.Any<TransitionInput>(),
+                CancellationToken.None)
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput()));
+        var uow = Substitute.For<IUnitOfWork>();
+        var uowManager = Substitute.For<IUnitOfWorkManager>();
+        uowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(uow);
+        var remoteService = Substitute.For<IRemoteInstanceCommandAppService>();
+        var runtimeInfo = Substitute.For<IRuntimeInfoProvider>();
+        runtimeInfo.IsDomainMatch("local-domain").Returns(true);
+        var services = CreateWorkflowServices("local-domain", "child-flow");
+        services.AddSingleton(commandService);
+        services.AddSingleton(uowManager);
+        services.AddSingleton<LocalInstanceCommandGateway>();
+        await using var provider = services.BuildServiceProvider();
+        var sut = new RoutedInstanceCommandGateway(
+            provider.GetRequiredService<LocalInstanceCommandGateway>(),
+            new RemoteInstanceCommandGateway(remoteService),
+            runtimeInfo);
+
+        var result = await sut.CancelChildAsync(
+            instanceId, "local-domain", "child-flow", input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await commandService.Received(1).TransitionAsync(
+            instanceId.ToString(),
+            WellKnownTransitionKeys.Cancel,
+            Arg.Is<TransitionInput>(value =>
+                value.Domain == "local-domain" &&
+                value.Workflow == "child-flow" &&
+                value.Termination == termination),
+            CancellationToken.None);
+        await uow.Received(1).CommitAsync(CancellationToken.None);
+        await remoteService.DidNotReceive().CancelChildAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<ChildSubflowCancelInput>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CancelChildAsync_WhenDomainDiffers_DelegatesTypedInputToRemote()
+    {
+        var instanceId = Guid.NewGuid();
+        var input = new ChildSubflowCancelInput(
+            "1.0.0",
+            new TerminationContext(TerminationOrigin.ParentCascade, Guid.NewGuid(), Guid.NewGuid()));
+        var remoteService = Substitute.For<IRemoteInstanceCommandAppService>();
+        remoteService.CancelChildAsync(
+                instanceId, "remote-domain", "child-flow", input, CancellationToken.None)
+            .Returns(Result.Ok());
+        var runtimeInfo = Substitute.For<IRuntimeInfoProvider>();
+        runtimeInfo.IsDomainMatch("remote-domain").Returns(false);
+        var sut = new RoutedInstanceCommandGateway(
+            new LocalInstanceCommandGateway(Substitute.For<IServiceScopeFactory>()),
+            new RemoteInstanceCommandGateway(remoteService),
+            runtimeInfo);
+
+        var result = await sut.CancelChildAsync(
+            instanceId, "remote-domain", "child-flow", input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await remoteService.Received(1).CancelChildAsync(
+            instanceId, "remote-domain", "child-flow", input, CancellationToken.None);
+    }
+
     [Fact]
     public async Task CancelAsync_WhenDomainMatches_DelegatesFullInputToLocalService()
     {
@@ -84,6 +162,20 @@ public sealed class RoutedInstanceCommandGatewayTerminalTests
         services.AddSingleton(cacheStore);
         services.AddSingleton(Substitute.For<IWorkflowContext>());
         services.AddSingleton(cancellationService);
+        return services;
+    }
+
+    private static ServiceCollection CreateWorkflowServices(string domain, string flow)
+    {
+        var schema = Substitute.For<ICurrentSchema>();
+        schema.Name.Returns((string?)null);
+        var cacheStore = Substitute.For<IComponentCacheStore>();
+        cacheStore.GetFlowAsync(domain, flow, Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok(DeserializeMinimalWorkflow(flow, domain)));
+        var services = new ServiceCollection();
+        services.AddSingleton(schema);
+        services.AddSingleton(cacheStore);
+        services.AddSingleton(Substitute.For<IWorkflowContext>());
         return services;
     }
 

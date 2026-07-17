@@ -50,6 +50,17 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.CancelChildAsync(instanceId, domain, flow, input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default)

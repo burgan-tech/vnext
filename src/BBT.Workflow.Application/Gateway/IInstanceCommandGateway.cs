@@ -50,6 +50,16 @@ public interface IInstanceCommandGateway
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Cancels a child subflow through the internal typed downward-propagation boundary.
+    /// </summary>
+    Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Completes a sub workflow instance and notifies the parent.
     /// Routes to local or remote based on target domain in input.
     /// </summary>

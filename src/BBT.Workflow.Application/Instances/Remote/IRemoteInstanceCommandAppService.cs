@@ -23,6 +23,13 @@ public interface IRemoteInstanceCommandAppService
         TransitionInput input,
         CancellationToken cancellationToken = default);
 
+    Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default);
+
     Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default);

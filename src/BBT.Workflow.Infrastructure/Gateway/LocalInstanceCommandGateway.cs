@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
@@ -95,6 +96,42 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
 
                 await uow.CommitAsync(ct);
                 return result;
+            }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(domain, flow, input.Version ?? string.Empty,
+            async (sp, ct) =>
+            {
+                var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
+                var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
+
+                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
+                {
+                    Scope = UnitOfWorkScopeOption.RequiresNew
+                });
+
+                var result = await commandService.TransitionAsync(
+                    instanceId.ToString(),
+                    WellKnownTransitionKeys.Cancel,
+                    new TransitionInput(domain, flow)
+                    {
+                        Termination = input.Termination
+                    },
+                    ct);
+
+                if (!result.IsSuccess)
+                    return Result.Fail(result.Error);
+
+                await uow.CommitAsync(ct);
+                return Result.Ok();
             }, cancellationToken);
     }
 

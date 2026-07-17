@@ -220,17 +220,9 @@ public sealed class RemoteInstanceCommandAppService(
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var requestBody = input.Termination is null
-                ? input.Data is null
-                    ? "{}"
-                    : JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions)
-                : JsonSerializer.Serialize(
-                    new InternalTransitionEnvelope
-                    {
-                        Data = input.Data,
-                        Termination = input.Termination
-                    },
-                    JsonSerializerConstants.JsonOptions);
+            var requestBody = input.Data is null
+                ? "{}"
+                : JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Patch, requestUri)
@@ -240,13 +232,6 @@ public sealed class RemoteInstanceCommandAppService(
 
             var forwardHeaders = currentUser.ToForwardHeaders();
             CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
-            requestMessage.Headers.Remove(InternalTransitionEnvelope.HeaderName);
-            if (input.Termination is not null)
-            {
-                requestMessage.Headers.TryAddWithoutValidation(
-                    InternalTransitionEnvelope.HeaderName,
-                    InternalTransitionEnvelope.HeaderValue);
-            }
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -257,6 +242,51 @@ public sealed class RemoteInstanceCommandAppService(
         {
             // Network errors → Transient error (per Railway Pattern)
             return Result<TransitionOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Cancels a child subflow through the ignored internal endpoint.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/child-cancel
+    /// </summary>
+    public async Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpointResult = await endpointResolver.GetEndpointAsync(domain, EndpointKind.Url, cancellationToken);
+            if (!endpointResult.IsSuccess)
+                return Result.Fail(endpointResult.Error);
+
+            var relativePath = InstanceUrlTemplates.ChildCancel(
+                domain,
+                flow,
+                instanceId.ToString(),
+                ApiVersionPrefix);
+            var requestUri = new Uri(endpointResult.Value!.BaseUrl, relativePath.TrimStart('/'));
+            var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = new StringContent(jsonContent, Encoding.UTF8, "application/json")
+            };
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                requestMessage,
+                forwardHeaders,
+                null,
+                RemoteHttpResponseHelper.IsRestrictedHeader);
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
         }
     }
 
