@@ -40,6 +40,13 @@ public interface IRemoteInstanceCommandAppService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Propagates a canceled SubItem outcome to its parent instance by calling the remote API.
+    /// </summary>
+    Task<Result> CancelAsync(
+        SubItemCanceledInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Marks an instance Busy and propagates recursively to nested SubFlows.
     /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
     /// </summary>

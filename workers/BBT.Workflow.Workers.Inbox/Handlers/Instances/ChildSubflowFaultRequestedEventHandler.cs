@@ -52,8 +52,13 @@ internal sealed class ChildSubflowFaultRequestedEventHandler(
                 eventData.Domain,
                 eventData.Flow);
 
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-fault?parentInstanceId={eventData.ParentInstanceId}";
-            await forwarder.ForwardAsync(HttpMethod.Post, route, new { },
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-fault";
+            var body = new
+            {
+                eventData.ParentInstanceId,
+                eventData.Termination
+            };
+            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
                 eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
         }
     }

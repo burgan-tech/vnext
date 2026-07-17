@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Instances.Events;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -18,5 +19,6 @@ public interface IChildSubflowFaultService
         string domain,
         string flow,
         Guid parentInstanceId,
+        TerminationContext termination,
         CancellationToken cancellationToken = default);
 }

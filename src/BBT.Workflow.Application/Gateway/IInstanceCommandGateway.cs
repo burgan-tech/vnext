@@ -83,6 +83,14 @@ public interface IInstanceCommandGateway
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Handles upward SubItem cancellation propagation to the parent instance.
+    /// Routes to local or remote execution based on the parent domain in the input.
+    /// </summary>
+    Task<Result> CancelAsync(
+        SubItemCanceledInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Marks a workflow instance as Busy and recursively propagates to active SubFlow correlations.
     /// Routes to local or remote execution based on target domain.
     /// Each level marks itself Busy, then checks for an active SubFlow correlation and
@@ -108,4 +116,3 @@ public interface IInstanceCommandGateway
         AcknowledgeLongPollInput input,
         CancellationToken cancellationToken = default);
 }
-

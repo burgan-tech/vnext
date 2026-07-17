@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -21,6 +22,7 @@ public sealed class ChildSubflowFaultService(
         string domain,
         string flow,
         Guid parentInstanceId,
+        TerminationContext termination,
         CancellationToken cancellationToken = default)
     {
         var childInstance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
@@ -38,7 +40,7 @@ public sealed class ChildSubflowFaultService(
             return Result.Ok();
         }
 
-        childInstance.Fault(domain);
+        childInstance.Fault(domain, termination: termination);
         await instanceRepository.UpdateAsync(childInstance, true, cancellationToken);
 
         logger.ChildSubflowFaultApplied(instanceId, parentInstanceId);

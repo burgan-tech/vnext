@@ -1,6 +1,7 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -26,6 +27,7 @@ public sealed class ChildSubflowCancellationService(
         string domain,
         string flow,
         string? version,
+        TerminationContext termination,
         CancellationToken cancellationToken = default)
     {
         using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Cancellation/{domain}/{flow}");
@@ -44,7 +46,10 @@ public sealed class ChildSubflowCancellationService(
                 var result = await instanceCommandGateway.TransitionAsync(
                     instanceId,
                     WellKnownTransitionKeys.Cancel,
-                    new Instances.TransitionInput(domain, flow),
+                    new Instances.TransitionInput(domain, flow)
+                    {
+                        Termination = termination
+                    },
                     cancellationToken: cancellationToken);
 
                 if (result.IsSuccess)
@@ -67,4 +72,3 @@ public sealed class ChildSubflowCancellationService(
         }
     }
 }
-

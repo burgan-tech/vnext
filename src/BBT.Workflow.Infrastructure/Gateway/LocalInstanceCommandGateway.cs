@@ -149,6 +149,20 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result> CancelAsync(
+        SubItemCanceledInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Flow, input.Version, async (sp, ct) =>
+        {
+            var subflowCancellationService = sp.GetRequiredService<ISubflowCancellationService>();
+            await subflowCancellationService.CancellationAsync(input, ct);
+
+            return Result.Ok();
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default)

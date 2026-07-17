@@ -393,6 +393,52 @@ public sealed class RemoteInstanceCommandAppService(
     }
 
     /// <summary>
+    /// Propagates a canceled SubItem outcome to its parent instance by calling the remote API.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/sub/cancel
+    /// </summary>
+    public async Task<Result> CancelAsync(
+        SubItemCanceledInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            if (!endpointResult.IsSuccess)
+            {
+                return Result.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
+            var relativePath = InstanceUrlTemplates.SubFlowCancel(
+                input.Domain,
+                input.Flow,
+                input.InstanceId.ToString(),
+                ApiVersionPrefix);
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = new StringContent(jsonContent, Encoding.UTF8, "application/json")
+            };
+
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                requestMessage,
+                forwardHeaders,
+                null,
+                RemoteHttpResponseHelper.IsRestrictedHeader);
+
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            return await HandleResponseAsync(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Marks instance Busy recursively by calling the remote API.
     /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
     /// </summary>
