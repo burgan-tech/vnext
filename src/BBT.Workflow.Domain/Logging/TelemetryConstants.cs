@@ -36,6 +36,11 @@ public static class TelemetryConstants
         /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
         /// </summary>
         public const string RootInstanceId = "vnext.root.instance.id";
+        public const string SubItemType = "vnext.subitem.type";
+        public const string SubItemOutcome = "vnext.subitem.outcome";
+        public const string TerminationOrigin = "vnext.termination.origin";
+        public const string TerminationInitiator = "vnext.termination.initiator";
+        public const string TerminationCascadeId = "vnext.termination.cascade_id";
     }
 
     /// <summary>

@@ -6,7 +6,7 @@ namespace BBT.Workflow.Instances.Events;
 /// <summary>
 /// Event published when a SubFlow or SubProcess instance is canceled, notifying the parent instance.
 /// </summary>
-[EventHook]
+[EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.canceled")]
 public class InstanceSubCanceledEvent : IDistributedEvent
 {

@@ -50,6 +50,17 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.CancelChildAsync(instanceId, domain, flow, input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default)
@@ -74,6 +85,14 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result> CancelAsync(
+        SubItemCanceledInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.CancelAsync(input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default)
@@ -89,4 +108,3 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
         return _remoteService.AcknowledgeLongPollAsync(input, cancellationToken);
     }
 }
-

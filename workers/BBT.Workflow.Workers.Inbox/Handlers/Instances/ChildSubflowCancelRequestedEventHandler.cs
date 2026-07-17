@@ -52,9 +52,13 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
                 eventData.Domain,
                 eventData.Flow);
 
-            var version = string.IsNullOrEmpty(eventData.Version) ? string.Empty : $"?version={eventData.Version}";
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-cancel{version}";
-            await forwarder.ForwardAsync(HttpMethod.Post, route, new { },
+            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-cancel";
+            var body = new
+            {
+                eventData.Version,
+                eventData.Termination
+            };
+            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
                 eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
         }
     }

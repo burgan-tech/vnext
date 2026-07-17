@@ -154,6 +154,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     {
         services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
         services.AddEventHook<InstanceSubFaultedEvent, InstanceSubFaultedEventHook>();
+        services.AddEventHook<InstanceSubCanceledEvent, InstanceSubCanceledEventHook>();
         services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
         services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
         services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();

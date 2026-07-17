@@ -14,7 +14,7 @@ namespace BBT.Workflow.Instances.Events;
 /// services.AddEventHook&lt;InstanceSubFaultedEvent, InstanceSubFaultedEventHook&gt;();
 /// </code>
 /// </remarks>
-[EventHook]
+[EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.faulted")]
 public class InstanceSubFaultedEvent : IDistributedEvent
 {

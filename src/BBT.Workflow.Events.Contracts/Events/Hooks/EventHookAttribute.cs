@@ -13,4 +13,11 @@ namespace BBT.Workflow.Events.Hooks;
 /// </para>
 /// </remarks>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public sealed class EventHookAttribute : Attribute;
+public sealed class EventHookAttribute(
+    EventHookMode mode = EventHookMode.HandledOrFallback) : Attribute
+{
+    /// <summary>
+    /// Gets the hook execution mode for the decorated event.
+    /// </summary>
+    public EventHookMode Mode { get; } = mode;
+}

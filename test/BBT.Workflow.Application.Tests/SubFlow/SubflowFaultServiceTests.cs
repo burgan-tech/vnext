@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +12,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
@@ -29,6 +33,8 @@ public sealed class SubflowFaultServiceTests
     private readonly Mock<IInstanceRepository> _instanceRepository = new();
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
+    private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
+    private readonly Mock<ITransitionLockScope> _lockScope = new();
     private readonly Mock<ILogger<SubflowFaultService>> _logger = new();
 
     public SubflowFaultServiceTests()
@@ -50,6 +56,28 @@ public sealed class SubflowFaultServiceTests
                 It.IsAny<JsonElement?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(true);
+        _lockScope.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_lockScope.Object);
+        _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    {
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid(), CreateJsonElement("{}"));
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+
+        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().FaultAsync(input));
+
+        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -253,6 +281,10 @@ public sealed class SubflowFaultServiceTests
         var reloaded = CloneParentWithCompletedCorrelation(parentInstance, subInstanceId);
         _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .SetupSequence(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance)
             .ReturnsAsync(reloaded);
 
         await Should.ThrowAsync<SubflowCompletionException>(
@@ -260,11 +292,54 @@ public sealed class SubflowFaultServiceTests
 
         _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Exactly(2));
         reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         _instanceRepository.Verify(
             x => x.UpdateAsync(reloaded, true, It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenParentTerminatesBeforeCompensation_ShouldLockReloadAndNotReopen()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        var workflow = CreateParentWorkflow(ErrorBoundary.Builder().OnError(ErrorAction.Ignore).Build());
+        var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}"));
+        var terminalReload = CloneParentWithCompletedCorrelation(parent, subInstanceId);
+        terminalReload.Complete("bank");
+        var order = new List<string>();
+        var lockCall = 0;
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"lock-{++lockCall}"))
+            .ReturnsAsync(_lockScope.Object);
+        var loadCall = 0;
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"load-{++loadCall}"))
+            .ReturnsAsync(() => loadCall == 1 ? parent : terminalReload);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("resume"))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(parent.Id)));
+
+        await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().FaultAsync(input, CancellationToken.None));
+
+        order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
+        terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+        _instanceRepository.Verify(x => x.UpdateAsync(
+            terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -298,9 +373,41 @@ public sealed class SubflowFaultServiceTests
     }
 
     [Fact]
+    public async Task FaultAsync_SubProcessWithTerminalParent_ShouldCloseCorrelationOnly()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        parent.Complete("bank");
+        parent.SetEffectiveState("terminal-parent");
+        var faultedAt = DateTime.UtcNow.AddMinutes(-1);
+        var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}")) with
+        {
+            FaultedAt = faultedAt
+        };
+        SetupParentInstance(parent);
+
+        await CreateService().FaultAsync(input);
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Faulted);
+        correlation.CompletedAt.ShouldBe(faultedAt);
+        correlation.SubFlowCurrentState.ShouldBe(input.FaultedState);
+        parent.Status.ShouldBe(InstanceStatus.Completed);
+        parent.GetEffectiveState.ShouldBe("terminal-parent");
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task FaultAsync_WhenFaultOutcomeAlreadyRecorded_ShouldNoOp()
     {
         var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        Activity? terminalActivity = null;
+        using var activityListener = CaptureTerminalActivity(parent.Id, activity => terminalActivity = activity);
         var originalCompletedAt = DateTime.UtcNow.AddMinutes(-2);
         parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Faulted, originalCompletedAt);
         var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}"));
@@ -319,6 +426,10 @@ public sealed class SubflowFaultServiceTests
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
         _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+        GetTelemetryScope()[TelemetryConstants.TagNames.SubItemType]
+            .ShouldBe(SubFlowType.SubProcess.Code);
+        terminalActivity!.GetTagItem(TelemetryConstants.TagNames.SubItemType)
+            .ShouldBe(SubFlowType.SubProcess.Code);
     }
 
     [Fact]
@@ -390,6 +501,54 @@ public sealed class SubflowFaultServiceTests
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
         _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task FaultAsync_BlockingSubFlowWithPassiveParent_ShouldNoOpAndCommit()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        typeof(Instance).GetProperty(nameof(Instance.Status))!
+            .SetValue(parent, InstanceStatus.Passive);
+        var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}"));
+        SetupParentInstance(parent);
+
+        await CreateService().FaultAsync(input);
+
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+        _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task FaultAsync_SubProcessWithPassiveParent_ShouldCloseCorrelationOnly()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        typeof(Instance).GetProperty(nameof(Instance.Status))!
+            .SetValue(parent, InstanceStatus.Passive);
+        parent.SetEffectiveState("terminal-parent");
+        var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}"));
+        SetupParentInstance(parent);
+
+        await CreateService().FaultAsync(input);
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Faulted);
+        correlation.SubFlowCurrentState.ShouldBe(input.FaultedState);
+        parent.Status.ShouldBe(InstanceStatus.Passive);
+        parent.GetEffectiveState.ShouldBe("terminal-parent");
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -469,6 +628,7 @@ public sealed class SubflowFaultServiceTests
             _outputMappingService.Object,
             resolver,
             executor,
+            _lockScopeFactory.Object,
             _logger.Object);
     }
 
@@ -486,6 +646,30 @@ public sealed class SubflowFaultServiceTests
             Times.Once);
     }
 
+    private Dictionary<string, object> GetTelemetryScope() =>
+        _logger.Invocations
+            .Single(x => x.Method.Name == nameof(ILogger.BeginScope))
+            .Arguments[0]
+            .ShouldBeOfType<Dictionary<string, object>>();
+
+    private static ActivityListener CaptureTerminalActivity(Guid parentInstanceId, Action<Activity> onStopped)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.SubFlow",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.GetTagItem(TelemetryConstants.TagNames.InstanceId)?.ToString() == parentInstanceId.ToString())
+                {
+                    onStopped(activity);
+                }
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
+
     private void SetupParent(Instance parentInstance, Definitions.Workflow parentWorkflow)
     {
         SetupParentInstance(parentInstance);
@@ -500,7 +684,7 @@ public sealed class SubflowFaultServiceTests
     private void SetupParentInstance(Instance parentInstance)
     {
         _instanceRepository
-            .Setup(x => x.FindAsync(parentInstance.Id, true, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);
     }
 

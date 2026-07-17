@@ -855,6 +855,46 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid subInstanceId);
 
+    [LoggerMessage(
+        EventId = 40031,
+        Level = LogLevel.Debug,
+        Message = "Duplicate {Outcome} SubItem terminal outcome for parent {ParentInstanceId}, child {SubInstanceId}")]
+    public static partial void SubItemTerminalDuplicate(
+        this ILogger logger,
+        string outcome,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    [LoggerMessage(
+        EventId = 40053,
+        Level = LogLevel.Warning,
+        Message = "SubItem terminal outcome conflict for parent {ParentInstanceId}, child {SubInstanceId}: existing {ExistingOutcome}, incoming {IncomingOutcome}")]
+    public static partial void SubItemTerminalConflict(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        string existingOutcome,
+        string incomingOutcome);
+
+    [LoggerMessage(
+        EventId = 40054,
+        Level = LogLevel.Warning,
+        Message = "Failed to revert terminal SubItem correlation for parent {ParentInstanceId}, child {SubInstanceId}")]
+    public static partial void SubItemCorrelationRevertFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    [LoggerMessage(
+        EventId = 40055,
+        Level = LogLevel.Warning,
+        Message = "Parent terminal lock {LockKey} could not be acquired for {Outcome} outcome")]
+    public static partial void SubItemTerminalLockNotAcquired(
+        this ILogger logger,
+        string lockKey,
+        string outcome);
+
     /// <summary>
     /// Logs when a correlation is marked as completed.
     /// </summary>

@@ -23,6 +23,13 @@ public interface IRemoteInstanceCommandAppService
         TransitionInput input,
         CancellationToken cancellationToken = default);
 
+    Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default);
+
     Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default);
@@ -37,6 +44,13 @@ public interface IRemoteInstanceCommandAppService
     /// </summary>
     Task<Result> FaultAsync(
         SubFlowFaultedInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Propagates a canceled SubItem outcome to its parent instance by calling the remote API.
+    /// </summary>
+    Task<Result> CancelAsync(
+        SubItemCanceledInput input,
         CancellationToken cancellationToken = default);
 
     /// <summary>

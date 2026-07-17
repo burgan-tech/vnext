@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
+using BBT.Aether.Uow;
 using BBT.Workflow.Events.Hooks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -10,7 +11,8 @@ namespace BBT.Workflow.Infrastructure.EventBus;
 
 /// <summary>
 /// Decorator implementation of <see cref="IDistributedEventBus"/> that executes hooks
-/// before publishing events. Hooks are discovered via DI using <see cref="IEventHookInvoker"/>.
+/// according to the event's <see cref="EventHookMode"/>. Hooks are discovered via DI using
+/// <see cref="IEventHookInvoker"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,6 +26,11 @@ namespace BBT.Workflow.Infrastructure.EventBus;
 /// If any hook fails, the event will be published to the inner bus as a fallback.
 /// </para>
 /// <para>
+/// <b>Durable Post-Commit Behavior:</b> The event is always published to the inner bus first.
+/// Hooks execute after the ambient UoW commits, or immediately after publishing when no UoW exists.
+/// Hook failures are logged and never fail already committed state.
+/// </para>
+/// <para>
 /// Only events decorated with <see cref="EventHookAttribute"/> can have hooks.
 /// The attribute check is cached for performance.
 /// </para>
@@ -32,12 +39,13 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
 {
     private readonly IDistributedEventBus _inner;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IUnitOfWorkManager _unitOfWorkManager;
     private readonly ILogger<HookedDistributedEventBus> _logger;
 
     /// <summary>
-    /// Cache for checking if event types have the EventHookAttribute.
+    /// Cache for event hook modes declared by EventHookAttribute.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, bool> EventHookAttributeCache = new();
+    private static readonly ConcurrentDictionary<Type, EventHookMode?> EventHookModeCache = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="HookedDistributedEventBus"/> class.
@@ -45,10 +53,12 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     public HookedDistributedEventBus(
         IDistributedEventBus inner,
         IServiceProvider serviceProvider,
+        IUnitOfWorkManager unitOfWorkManager,
         ILogger<HookedDistributedEventBus> logger)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+        _unitOfWorkManager = unitOfWorkManager ?? throw new ArgumentNullException(nameof(unitOfWorkManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -89,6 +99,21 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
             throw new ArgumentNullException(nameof(payload));
         }
 
+        if (GetEventHookMode(payload.GetType()) == EventHookMode.DurablePostCommit)
+        {
+            await _inner.PublishAsync(payload, subject, useOutbox, cancellationToken);
+
+            var ambient = _unitOfWorkManager.Current;
+            if (ambient is null)
+            {
+                await ExecutePostCommitHooksSafelyAsync(payload);
+                return;
+            }
+
+            ambient.OnCompleted(_ => ExecutePostCommitHooksSafelyAsync(payload));
+            return;
+        }
+
         // Execute hooks and get result
         var hookResult = await ExecuteHooksAsync(payload, cancellationToken);
 
@@ -122,6 +147,21 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         if (@event == null)
         {
             throw new ArgumentNullException(nameof(@event));
+        }
+
+        if (GetEventHookMode(@event.GetType()) == EventHookMode.DurablePostCommit)
+        {
+            await _inner.PublishAsync(@event, metadata, subject, useOutbox, cancellationToken);
+
+            var ambient = _unitOfWorkManager.Current;
+            if (ambient is null)
+            {
+                await ExecutePostCommitHooksSafelyAsync(@event);
+                return;
+            }
+
+            ambient.OnCompleted(_ => ExecutePostCommitHooksSafelyAsync(@event));
+            return;
         }
 
         // Execute hooks and get result
@@ -195,7 +235,7 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         var eventType = @event.GetType();
 
         // Quick check: does this event type support hooks?
-        if (!HasEventHookAttribute(eventType))
+        if (GetEventHookMode(eventType) is null)
         {
             return HookExecutionResult.NoHooks;
         }
@@ -311,14 +351,38 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     }
 
     /// <summary>
-    /// Checks if the event type has the <see cref="EventHookAttribute"/>.
-    /// Result is cached for performance.
+    /// Executes durable hooks after commit without allowing hook failures to affect committed state.
     /// </summary>
-    private static bool HasEventHookAttribute(Type eventType)
+    private async Task ExecutePostCommitHooksSafelyAsync<TEvent>(TEvent @event)
+        where TEvent : class
     {
-        return EventHookAttributeCache.GetOrAdd(
+        try
+        {
+            var hookResult = await ExecuteHooksAsync(@event, CancellationToken.None);
+            if (hookResult.HasFailures)
+            {
+                _logger.LogWarning(
+                    "Post-commit hook(s) failed for event {EventType}",
+                    @event.GetType().Name);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Unexpected exception executing post-commit hooks for event {EventType}",
+                @event.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Gets the hook mode declared on the event type. Result is cached for performance.
+    /// </summary>
+    private static EventHookMode? GetEventHookMode(Type eventType)
+    {
+        return EventHookModeCache.GetOrAdd(
             eventType,
-            static type => Attribute.IsDefined(type, typeof(EventHookAttribute)));
+            static type => type.GetCustomAttribute<EventHookAttribute>()?.Mode);
     }
 
     /// <summary>
