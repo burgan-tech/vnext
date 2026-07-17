@@ -45,4 +45,9 @@ public class ChildSubflowCancelRequestedEvent: IDistributedEvent
     /// <c>null</c> when this is a root (non-subflow) instance.
     /// </summary>
     public Guid? RootInstanceId { get; init; }
+
+    /// <summary>
+    /// Typed context identifying the terminal cascade that requested this cancellation.
+    /// </summary>
+    public TerminationContext Termination { get; init; } = default!;
 }
