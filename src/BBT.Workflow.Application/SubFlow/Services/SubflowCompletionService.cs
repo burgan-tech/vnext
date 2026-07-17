@@ -21,6 +21,7 @@ public sealed class SubflowCompletionService(
     IRuntimeInfoProvider runtimeInfoProvider,
     IWorkflowExecutionService workflowExecutionService,
     ISubflowOutputMappingService outputMappingService,
+    ITransitionLockScopeFactory transitionLockScopeFactory,
     ILogger<SubflowCompletionService> logger)
     : ISubflowCompletionService
 {
@@ -37,16 +38,30 @@ public sealed class SubflowCompletionService(
             completedInput.InstanceId,
             completedInput.Domain,
             completedInput.Flow);
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, completedInput.Version ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, completedInput.RootInstanceId?.ToString() ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, completedInput.InstanceId.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.SubItemOutcome, SubItemTerminalOutcome.Completed.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationOrigin, "legacy");
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationInitiator, "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationCascadeId, "N/A");
 
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProperties = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = completedInput.Domain,
             [TelemetryConstants.TagNames.Flow] = completedInput.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = completedInput.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = completedInput.InstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = completedInput.RootInstanceId?.ToString() ?? "N/A",
             [TelemetryConstants.TagNames.ParentInstanceId] = completedInput.InstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = completedInput.SubInstanceId
-        }))
+            [TelemetryConstants.TagNames.SubflowInstanceId] = completedInput.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = "N/A",
+            [TelemetryConstants.TagNames.SubItemOutcome] = SubItemTerminalOutcome.Completed.ToString(),
+            [TelemetryConstants.TagNames.TerminationOrigin] = "legacy",
+            [TelemetryConstants.TagNames.TerminationInitiator] = "N/A",
+            [TelemetryConstants.TagNames.TerminationCascadeId] = "N/A"
+        };
+        using (logger.BeginScope(scopeProperties))
         {
             // Check if this domain is handled by this runtime instance
             try
@@ -64,12 +79,24 @@ public sealed class SubflowCompletionService(
             {
                 Instance? parentInstance;
                 Definitions.Workflow? parentWorkflow;
-                
-                await using (var correlationUow =  uowManager.Begin(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+
+                var lockKey = $"vnext:{completedInput.Domain}:{completedInput.Flow}:{completedInput.InstanceId}";
+                await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
                 {
-                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
-                        completedInput.InstanceId, cancellationToken);
+                    if (!lockScope.IsAcquired)
+                    {
+                        logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Completed.ToString());
+                        throw new SubflowCompletionException(
+                            completedInput.Domain,
+                            completedInput.Flow,
+                            completedInput.InstanceId.ToString(),
+                            WorkflowErrorCodes.ConflictWorkflow,
+                            "Parent instance terminal lock could not be acquired.");
+                    }
+
+                    await using var correlationUow = uowManager.Begin(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(completedInput.InstanceId, cancellationToken);
 
                     if (parentInstance == null)
                     {
@@ -92,25 +119,27 @@ public sealed class SubflowCompletionService(
                     {
                         if (correlation.TerminalOutcome == SubItemTerminalOutcome.Completed)
                         {
-                            logger.LogDebug(
-                                "SubItem terminal outcome already recorded as Completed for parent {ParentInstanceId}, child {SubInstanceId}",
+                            logger.SubItemTerminalDuplicate(
+                                SubItemTerminalOutcome.Completed.ToString(),
                                 completedInput.InstanceId,
                                 completedInput.SubInstanceId);
                         }
                         else
                         {
-                            logger.LogWarning(
-                                "SubItem terminal outcome conflict for parent {ParentInstanceId}, child {SubInstanceId}: existing {ExistingOutcome}, incoming {IncomingOutcome}",
+                            logger.SubItemTerminalConflict(
                                 completedInput.InstanceId,
                                 completedInput.SubInstanceId,
                                 correlation.TerminalOutcome?.ToString() ?? "legacy",
-                                SubItemTerminalOutcome.Completed);
+                                SubItemTerminalOutcome.Completed.ToString());
                         }
 
                         activity?.SetTag("vnext.subflow.result", "correlation_already_terminal");
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
                     }
+
+                    activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
+                    scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
 
                     // A terminal parent still needs an active SubProcess correlation closed, but
                     // a blocking SubFlow must not mutate or resume an already-terminal parent.
@@ -202,7 +231,7 @@ public sealed class SubflowCompletionService(
 
                     await correlationUow.CommitAsync(cancellationToken);
                 }
-                
+
                 logger.SubFlowPipelineResumed(parentInstance.Id);
                 await ResumePipelineAsync(
                     parentInstance,
@@ -361,7 +390,7 @@ public sealed class SubflowCompletionService(
         catch (Exception revertEx)
         {
             // Log but don't throw — the original exception from ResumePipelineAsync takes priority
-            logger.SubFlowCompletionFailed(revertEx, subInstanceId, parentInstanceId);
+            logger.SubItemCorrelationRevertFailed(revertEx, parentInstanceId, subInstanceId);
         }
     }
 

@@ -27,6 +27,8 @@ public sealed class SubflowCancellationServiceTests
     private readonly Mock<IComponentCacheStore> _componentCacheStore = new();
     private readonly Mock<IInstanceRepository> _instanceRepository = new();
     private readonly Mock<IWorkflowExecutionService> _workflowExecution = new();
+    private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
+    private readonly Mock<ITransitionLockScope> _lockScope = new();
     private readonly Mock<ILogger<SubflowCancellationService>> _logger = new();
 
     public SubflowCancellationServiceTests()
@@ -37,6 +39,28 @@ public sealed class SubflowCancellationServiceTests
             .Returns(ValueTask.CompletedTask);
         _uowManager.Setup(x => x.Begin(It.IsAny<UnitOfWorkOptions>()))
             .Returns(_uow.Object);
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(true);
+        _lockScope.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_lockScope.Object);
+        _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+    }
+
+    [Fact]
+    public async Task CancellationAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    {
+        var input = CreateCanceledInput(Guid.NewGuid(), Guid.NewGuid());
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+
+        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().CancellationAsync(input));
+
+        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -336,6 +360,7 @@ public sealed class SubflowCancellationServiceTests
         _componentCacheStore.Object,
         _instanceRepository.Object,
         _workflowExecution.Object,
+        _lockScopeFactory.Object,
         _logger.Object);
 
     private void SetupBlockingParent(Instance parent)

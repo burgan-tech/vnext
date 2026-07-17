@@ -8,6 +8,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -29,6 +30,8 @@ public sealed class SubflowCompletionServiceTests
     private readonly Mock<IRuntimeInfoProvider> _runtimeInfoProvider = new();
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
+    private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
+    private readonly Mock<ITransitionLockScope> _lockScope = new();
     private readonly Mock<ILogger<SubflowCompletionService>> _logger = new();
 
     public SubflowCompletionServiceTests()
@@ -41,6 +44,28 @@ public sealed class SubflowCompletionServiceTests
         _uowManager
             .Setup(m => m.Begin(It.IsAny<UnitOfWorkOptions>()))
             .Returns(_uow.Object);
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(true);
+        _lockScope.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_lockScope.Object);
+        _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    {
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+
+        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().CompletionAsync(input));
+
+        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -358,6 +383,7 @@ public sealed class SubflowCompletionServiceTests
             _runtimeInfoProvider.Object,
             _workflowExecutionService.Object,
             _outputMappingService.Object,
+            _lockScopeFactory.Object,
             _logger.Object);
 
     private void SetupCompletedCorrelationPath(Instance parent)
@@ -408,7 +434,7 @@ public sealed class SubflowCompletionServiceTests
             LogLevel.Debug,
             It.IsAny<EventId>(),
             It.Is<It.IsAnyType>((value, _) =>
-                value.ToString()!.Contains("already recorded as Completed")),
+                value.ToString()!.Contains("Duplicate Completed SubItem terminal outcome")),
             It.IsAny<Exception?>(),
             It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
     }

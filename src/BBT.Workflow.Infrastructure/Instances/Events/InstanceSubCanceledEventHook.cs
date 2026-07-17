@@ -25,12 +25,15 @@ public sealed class InstanceSubCanceledEventHook(
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId
+            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = eventData.SubItemType.ToString(),
+            [TelemetryConstants.TagNames.SubItemOutcome] = "Canceled",
+            [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin.ToString(),
+            [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId.ToString(),
+            [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId.ToString()
         };
-        if (eventData.RootInstanceId.HasValue)
-        {
-            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
-        }
 
         using (logger.BeginScope(scopeProps))
         {

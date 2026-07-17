@@ -78,6 +78,7 @@ public static class WorkflowEventIds
     public static readonly EventId SubFlowStateChangeReceived = new(40027, nameof(SubFlowStateChangeReceived));
     public static readonly EventId SubFlowStateChangeApplied = new(40028, nameof(SubFlowStateChangeApplied));
     public static readonly EventId SubFlowStateChangedEventReceived = new(40029, nameof(SubFlowStateChangedEventReceived));
+    public static readonly EventId SubItemTerminalDuplicate = new(40030, nameof(SubItemTerminalDuplicate));
     public static readonly EventId SubFlowStateUpdateFailed = new(40079, nameof(SubFlowStateUpdateFailed));
     public static readonly EventId SubFlowOutputMappingFailed = new(40080, nameof(SubFlowOutputMappingFailed));
 
@@ -92,6 +93,9 @@ public static class WorkflowEventIds
     public static readonly EventId ChildSubflowCancelFailed = new(40050, nameof(ChildSubflowCancelFailed));
     public static readonly EventId TransitionValidationFailed = new(40051, nameof(TransitionValidationFailed));
     public static readonly EventId TransitionLockExtendFailed = new(40052, nameof(TransitionLockExtendFailed));
+    public static readonly EventId SubItemTerminalConflict = new(40053, nameof(SubItemTerminalConflict));
+    public static readonly EventId SubItemCorrelationRevertFailed = new(40054, nameof(SubItemCorrelationRevertFailed));
+    public static readonly EventId SubItemTerminalLockNotAcquired = new(40055, nameof(SubItemTerminalLockNotAcquired));
 
     // Error (40070-40099)
     public static readonly EventId SubFlowCompletionFailed = new(40073, nameof(SubFlowCompletionFailed));

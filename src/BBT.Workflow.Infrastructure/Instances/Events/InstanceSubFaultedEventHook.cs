@@ -35,10 +35,15 @@ public sealed class InstanceSubFaultedEventHook(
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = (eventData.SubItemType ?? SubItemType.SubFlow).ToString(),
+            [TelemetryConstants.TagNames.SubItemOutcome] = "Faulted",
+            [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin?.ToString() ?? "legacy",
+            [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId?.ToString() ?? "N/A"
         };
-        if (eventData.RootInstanceId.HasValue)
-            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
 
         using (logger.BeginScope(scopeProps))
         {

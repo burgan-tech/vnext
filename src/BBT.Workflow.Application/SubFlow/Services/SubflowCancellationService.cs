@@ -18,6 +18,7 @@ public sealed class SubflowCancellationService(
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
     IWorkflowExecutionService workflowExecutionService,
+    ITransitionLockScopeFactory transitionLockScopeFactory,
     ILogger<SubflowCancellationService> logger)
     : ISubflowCancellationService
 {
@@ -26,12 +27,56 @@ public sealed class SubflowCancellationService(
         SubItemCanceledInput input,
         CancellationToken cancellationToken = default)
     {
+        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Cancellation/{input.Domain}/{input.Flow}");
+        SubFlowActivityHelper.EnrichWithCompletion(
+            activity,
+            input.SubInstanceId,
+            input.InstanceId,
+            input.Domain,
+            input.Flow);
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, input.Version ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, input.RootInstanceId?.ToString() ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, input.InstanceId.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.SubItemOutcome, SubItemTerminalOutcome.Canceled.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationOrigin, input.Termination?.Origin.ToString() ?? "legacy");
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationInitiator, input.Termination?.InitiatorInstanceId.ToString() ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationCascadeId, input.Termination?.CascadeId.ToString() ?? "N/A");
+        var scopeProperties = new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.Domain] = input.Domain,
+            [TelemetryConstants.TagNames.Flow] = input.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = input.Version ?? "N/A",
+            [TelemetryConstants.TagNames.InstanceId] = input.InstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = input.RootInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.ParentInstanceId] = input.InstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = input.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = "N/A",
+            [TelemetryConstants.TagNames.SubItemOutcome] = SubItemTerminalOutcome.Canceled.ToString(),
+            [TelemetryConstants.TagNames.TerminationOrigin] = input.Termination?.Origin.ToString() ?? "legacy",
+            [TelemetryConstants.TagNames.TerminationInitiator] = input.Termination?.InitiatorInstanceId.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.TerminationCascadeId] = input.Termination?.CascadeId.ToString() ?? "N/A"
+        };
+        using var logScope = logger.BeginScope(scopeProperties);
+
         Instance? parentInstance;
         Definitions.Workflow? parentWorkflow = null;
 
-        await using (var uow = uowManager.Begin(
-                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+        var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}";
+        await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
         {
+            if (!lockScope.IsAcquired)
+            {
+                logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Canceled.ToString());
+                throw new SubflowCompletionException(
+                    input.Domain,
+                    input.Flow,
+                    input.InstanceId.ToString(),
+                    WorkflowErrorCodes.ConflictWorkflow,
+                    "Parent instance terminal lock could not be acquired.");
+            }
+
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
             parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
                 input.InstanceId,
                 cancellationToken);
@@ -61,24 +106,26 @@ public sealed class SubflowCancellationService(
             {
                 if (correlation.TerminalOutcome == SubItemTerminalOutcome.Canceled)
                 {
-                    logger.LogDebug(
-                        "Duplicate canceled SubItem outcome for parent {ParentInstanceId}, child {SubInstanceId}",
+                    logger.SubItemTerminalDuplicate(
+                        SubItemTerminalOutcome.Canceled.ToString(),
                         input.InstanceId,
                         input.SubInstanceId);
                 }
                 else
                 {
-                    logger.LogWarning(
-                        "SubItem terminal outcome conflict for parent {ParentInstanceId}, child {SubInstanceId}: existing {ExistingOutcome}, incoming {IncomingOutcome}",
+                    logger.SubItemTerminalConflict(
                         input.InstanceId,
                         input.SubInstanceId,
                         correlation.TerminalOutcome?.ToString() ?? "legacy",
-                        SubItemTerminalOutcome.Canceled);
+                        SubItemTerminalOutcome.Canceled.ToString());
                 }
 
                 await uow.CommitAsync(cancellationToken);
                 return;
             }
+
+            activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
+            scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
 
             if (correlation.SubFlowType.Equals(SubFlowType.SubFlow))
             {
@@ -175,9 +222,8 @@ public sealed class SubflowCancellationService(
             }
             catch (Exception revertException)
             {
-                logger.LogError(
+                logger.SubItemCorrelationRevertFailed(
                     revertException,
-                    "Failed to revert canceled SubItem correlation for parent {ParentInstanceId}, child {SubInstanceId}",
                     parentInstance.Id,
                     input.SubInstanceId);
             }

@@ -40,11 +40,17 @@ internal sealed class InstanceSubCompletedEventHandler(
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = "N/A",
+            [TelemetryConstants.TagNames.SubItemOutcome] = "Completed",
+            [TelemetryConstants.TagNames.TerminationOrigin] = "legacy",
+            [TelemetryConstants.TagNames.TerminationInitiator] = "N/A",
+            [TelemetryConstants.TagNames.TerminationCascadeId] = "N/A"
         };
         if (eventData.RootInstanceId.HasValue)
         {
-            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
             Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
                 eventData.RootInstanceId.Value.ToString());
         }

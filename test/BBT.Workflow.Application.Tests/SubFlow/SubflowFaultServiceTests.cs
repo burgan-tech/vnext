@@ -9,6 +9,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
@@ -29,6 +30,8 @@ public sealed class SubflowFaultServiceTests
     private readonly Mock<IInstanceRepository> _instanceRepository = new();
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
+    private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
+    private readonly Mock<ITransitionLockScope> _lockScope = new();
     private readonly Mock<ILogger<SubflowFaultService>> _logger = new();
 
     public SubflowFaultServiceTests()
@@ -50,6 +53,28 @@ public sealed class SubflowFaultServiceTests
                 It.IsAny<JsonElement?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(true);
+        _lockScope.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_lockScope.Object);
+        _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    {
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid(), CreateJsonElement("{}"));
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+
+        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+            () => CreateService().FaultAsync(input));
+
+        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -253,6 +278,10 @@ public sealed class SubflowFaultServiceTests
         var reloaded = CloneParentWithCompletedCorrelation(parentInstance, subInstanceId);
         _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .SetupSequence(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance)
             .ReturnsAsync(reloaded);
 
         await Should.ThrowAsync<SubflowCompletionException>(
@@ -260,7 +289,7 @@ public sealed class SubflowFaultServiceTests
 
         _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Exactly(2));
         reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         _instanceRepository.Verify(
             x => x.UpdateAsync(reloaded, true, It.IsAny<CancellationToken>()),
@@ -469,6 +498,7 @@ public sealed class SubflowFaultServiceTests
             _outputMappingService.Object,
             resolver,
             executor,
+            _lockScopeFactory.Object,
             _logger.Object);
     }
 
@@ -500,7 +530,7 @@ public sealed class SubflowFaultServiceTests
     private void SetupParentInstance(Instance parentInstance)
     {
         _instanceRepository
-            .Setup(x => x.FindAsync(parentInstance.Id, true, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);
     }
 
