@@ -32,9 +32,8 @@ public sealed class SubflowCancellationService(
         await using (var uow = uowManager.Begin(
                          new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
         {
-            parentInstance = await instanceRepository.FindAsync(
+            parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
                 input.InstanceId,
-                true,
                 cancellationToken);
 
             if (parentInstance == null)
@@ -44,8 +43,7 @@ public sealed class SubflowCancellationService(
                 return;
             }
 
-            if (parentInstance.Status.Equals(InstanceStatus.Completed) ||
-                parentInstance.Status.Equals(InstanceStatus.Faulted))
+            if (parentInstance.IsCompleted)
             {
                 await uow.CommitAsync(cancellationToken);
                 return;
@@ -173,7 +171,7 @@ public sealed class SubflowCancellationService(
         {
             try
             {
-                await RevertCorrelationAsync(parentInstance.Id, input.SubInstanceId, cancellationToken);
+                await RevertCorrelationAsync(parentInstance.Id, input.SubInstanceId);
             }
             catch (Exception revertException)
             {
@@ -190,9 +188,9 @@ public sealed class SubflowCancellationService(
 
     private async Task RevertCorrelationAsync(
         Guid parentInstanceId,
-        Guid subInstanceId,
-        CancellationToken cancellationToken)
+        Guid subInstanceId)
     {
+        var cancellationToken = CancellationToken.None;
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
