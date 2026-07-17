@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
+using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
@@ -886,6 +887,122 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Theory]
+    [InlineData("S", SubItemType.SubFlow)]
+    [InlineData("P", SubItemType.SubProcess)]
+    public void Fault_DirectSubItem_ShouldPublishUpwardEvent(string flowType, SubItemType expectedType)
+    {
+        var child = CreateSubItem(flowType);
+
+        child.Fault("child-domain");
+
+        var message = child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubFaultedEvent>().Single();
+        message.SubItemType.ShouldBe(expectedType);
+        message.TerminationOrigin.ShouldBe(TerminationOrigin.Direct);
+        message.InitiatorInstanceId.ShouldBe(child.Id);
+        message.CascadeId.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Fault_DirectSubProcess_ShouldNotPublishSubFlowPayload()
+    {
+        var child = CreateSubItem(WorkflowType.SubProcess.Code);
+        AddLatestDataForTest(child, JsonData.CreateFrom("{\"childValue\":42}"));
+        child.AddIncident(InstanceIncidentFactory.Create(
+            state: "state", transition: "submit", taskKey: "task", message: "failed",
+            errorCode: "Task:Failed", errorLayer: "Task"));
+
+        child.Fault("child-domain");
+
+        var message = child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubFaultedEvent>().Single();
+        message.InstanceData.ShouldBeNull();
+        message.IncidentMessage.ShouldBeNull();
+        message.IncidentTaskKey.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Fault_ParentCascadeSubItem_ShouldNotPublishUpwardEvent()
+    {
+        var child = CreateSubItem(WorkflowType.SubFlow.Code);
+
+        child.Fault("child-domain", termination: new TerminationContext(
+            TerminationOrigin.ParentCascade, Guid.NewGuid(), Guid.NewGuid()));
+
+        child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubFaultedEvent>().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Fault_WithActiveBlockingChild_ShouldPreserveCascadeOnDownwardRequest()
+    {
+        var parent = InstanceFactory.CreateDefault();
+        var blocking = AddCorrelation(parent, SubFlowType.SubFlow.Code);
+        AddCorrelation(parent, SubFlowType.SubProcess.Code);
+        var termination = TerminationContext.Direct(parent.Id);
+
+        parent.Fault("parent-domain", termination: termination);
+
+        var request = parent.GetDomainEvents().Select(x => x.Event)
+            .OfType<ChildSubflowFaultRequestedEvent>().Single();
+        request.InstanceId.ShouldBe(blocking.SubFlowInstanceId);
+        request.Termination.Origin.ShouldBe(TerminationOrigin.ParentCascade);
+        request.Termination.InitiatorInstanceId.ShouldBe(termination.InitiatorInstanceId);
+        request.Termination.CascadeId.ShouldBe(termination.CascadeId);
+    }
+
+    [Theory]
+    [InlineData("S", SubItemType.SubFlow)]
+    [InlineData("P", SubItemType.SubProcess)]
+    public void Cancel_DirectSubItem_ShouldPublishUpwardEvent(string flowType, SubItemType expectedType)
+    {
+        var child = CreateSubItem(flowType);
+
+        child.Cancel("child-domain", sync: true);
+
+        var message = child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubCanceledEvent>().Single();
+        message.SubItemType.ShouldBe(expectedType);
+        message.TerminationOrigin.ShouldBe(TerminationOrigin.Direct);
+        message.InitiatorInstanceId.ShouldBe(child.Id);
+        message.CascadeId.ShouldNotBe(Guid.Empty);
+        message.Sync.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Cancel_ParentCascadeSubItem_ShouldNotPublishUpwardEvent()
+    {
+        var child = CreateSubItem(WorkflowType.SubFlow.Code);
+
+        child.Cancel("child-domain", termination: new TerminationContext(
+            TerminationOrigin.ParentCascade, Guid.NewGuid(), Guid.NewGuid()));
+
+        child.GetDomainEvents().Select(x => x.Event)
+            .OfType<InstanceSubCanceledEvent>().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Cancel_WithActiveChildren_ShouldCancelCorrelationsAndPreserveCascadeOnEveryRequest()
+    {
+        var parent = InstanceFactory.CreateDefault();
+        var subFlow = AddCorrelation(parent, SubFlowType.SubFlow.Code);
+        var subProcess = AddCorrelation(parent, SubFlowType.SubProcess.Code);
+        var termination = TerminationContext.Direct(parent.Id);
+
+        parent.Cancel("parent-domain", termination: termination);
+
+        subFlow.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Canceled);
+        subProcess.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Canceled);
+        subFlow.CompletedAt.ShouldBe(subProcess.CompletedAt);
+        var requests = parent.GetDomainEvents().Select(x => x.Event)
+            .OfType<ChildSubflowCancelRequestedEvent>().ToArray();
+        requests.Length.ShouldBe(2);
+        requests.ShouldAllBe(x => x.Termination.Origin == TerminationOrigin.ParentCascade);
+        requests.ShouldAllBe(x => x.Termination.InitiatorInstanceId == termination.InitiatorInstanceId);
+        requests.ShouldAllBe(x => x.Termination.CascadeId == termination.CascadeId);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void Complete_WhenInstanceIsSubItem_ShouldCarrySyncFlagOnSubCompletedEvent(bool sync)
@@ -985,6 +1102,26 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         Assert.NotNull(field);
         var list = Assert.IsType<List<InstanceData>>(field.GetValue(instance));
         list.Add(instanceData);
+    }
+
+    private static Instance CreateSubItem(string flowType)
+    {
+        var instance = InstanceFactory.CreateDefault();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = flowType;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "parent-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        return instance;
+    }
+
+    private static InstanceCorrelation AddCorrelation(Instance parent, string subFlowType)
+    {
+        var correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(), parent.Id, "parent-state", Guid.NewGuid(), subFlowType,
+            "child-domain", "child-flow", "1.0.0");
+        parent.AddCorrelation(correlation);
+        return correlation;
     }
 
     [Fact]
