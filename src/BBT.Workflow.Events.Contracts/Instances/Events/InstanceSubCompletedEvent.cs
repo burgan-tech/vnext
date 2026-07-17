@@ -14,7 +14,7 @@ namespace BBT.Workflow.Instances.Events;
 /// services.AddEventHook&lt;InstanceSubCompletedEvent, InstanceSubCompletedEventHook&gt;();
 /// </code>
 /// </remarks>
-[EventHook]
+[EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.completed")]
 public class InstanceSubCompletedEvent : IDistributedEvent
 {

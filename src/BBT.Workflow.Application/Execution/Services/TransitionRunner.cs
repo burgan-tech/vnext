@@ -14,7 +14,8 @@ namespace BBT.Workflow.Execution.Services;
 /// Transition chaining (auto/scheduled) is now handled by TransitionPipeline via sync dispatch.
 /// This runner focuses on UoW lifecycle management for a single transition execution.
 /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and context management.
-/// After UoW commit, publishes deferred domain events via IDistributedEventBus.
+/// Before UoW commit, stages deferred domain events via IDistributedEventBus.
+/// Durable hooks run from the UoW completion callback after commit.
 /// </summary>
 public sealed class TransitionRunner(
     IServiceScopeFactory scopeFactory,
@@ -40,7 +41,8 @@ public sealed class TransitionRunner(
     /// <summary>
     /// Executes the transition in a new DI scope with RequiresNew UoW.
     /// This ensures complete isolation from any ambient UoW.
-    /// After commit, publishes deferred domain events collected during pipeline execution.
+    /// Before commit, stages deferred domain events collected during pipeline execution.
+    /// Durable hooks run after commit from the UoW completion callback.
     /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and IWorkflowContext setup.
     /// </summary>
     private Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
@@ -73,8 +75,8 @@ public sealed class TransitionRunner(
     }
 
     /// <summary>
-    /// Publishes deferred domain events via IDistributedEventBus after UoW commit.
-    /// Each event passes through HookedDistributedEventBus, preserving hook behavior.
+    /// Stages deferred domain events via IDistributedEventBus before UoW commit.
+    /// Each event passes through HookedDistributedEventBus; durable hooks are registered for post-commit execution.
     /// Events include pre-extracted metadata from AddDistributedEvent time.
     /// </summary>
     private async Task PublishDeferredEventsAsync(
@@ -90,17 +92,7 @@ public sealed class TransitionRunner(
 
         foreach (var envelope in coreOutput.DeferredEvents)
         {
-            try
-            {
-                await eventBus.PublishAsync(envelope.Event, envelope.Metadata, cancellationToken: ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "Failed to publish deferred event {EventType} for transition",
-                    envelope.Event.GetType().Name);
-            }
+            await eventBus.PublishAsync(envelope.Event, envelope.Metadata, cancellationToken: ct);
         }
     }
 }
