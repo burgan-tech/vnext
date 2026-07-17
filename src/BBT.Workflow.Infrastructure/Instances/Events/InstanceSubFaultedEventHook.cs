@@ -111,6 +111,14 @@ public sealed class InstanceSubFaultedEventHook(
             IncidentState = eventData.IncidentState,
             IncidentBoundaryAction = eventData.IncidentBoundaryAction,
             IncidentBoundaryLevel = eventData.IncidentBoundaryLevel,
+            RootInstanceId = eventData.RootInstanceId,
+            SubItemType = eventData.SubItemType ?? SubItemType.SubFlow,
+            Termination = eventData.CascadeId.HasValue && eventData.InitiatorInstanceId.HasValue
+                ? new TerminationContext(
+                    eventData.TerminationOrigin ?? TerminationOrigin.Direct,
+                    eventData.InitiatorInstanceId.Value,
+                    eventData.CascadeId.Value)
+                : null,
             Sync = eventData.Sync
         };
     }
