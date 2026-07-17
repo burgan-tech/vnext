@@ -115,6 +115,9 @@ public sealed class SubflowCompletionService(
                         return;
                     }
 
+                    activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
+                    scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
+
                     if (correlation.IsCompleted)
                     {
                         if (correlation.TerminalOutcome == SubItemTerminalOutcome.Completed)
@@ -137,9 +140,6 @@ public sealed class SubflowCompletionService(
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
                     }
-
-                    activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
-                    scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
 
                     // A terminal parent still needs an active SubProcess correlation closed, but
                     // a blocking SubFlow must not mutate or resume an already-terminal parent.

@@ -78,7 +78,7 @@ public static class WorkflowEventIds
     public static readonly EventId SubFlowStateChangeReceived = new(40027, nameof(SubFlowStateChangeReceived));
     public static readonly EventId SubFlowStateChangeApplied = new(40028, nameof(SubFlowStateChangeApplied));
     public static readonly EventId SubFlowStateChangedEventReceived = new(40029, nameof(SubFlowStateChangedEventReceived));
-    public static readonly EventId SubItemTerminalDuplicate = new(40030, nameof(SubItemTerminalDuplicate));
+    public static readonly EventId SubItemTerminalDuplicate = new(40031, nameof(SubItemTerminalDuplicate));
     public static readonly EventId SubFlowStateUpdateFailed = new(40079, nameof(SubFlowStateUpdateFailed));
     public static readonly EventId SubFlowOutputMappingFailed = new(40080, nameof(SubFlowOutputMappingFailed));
 

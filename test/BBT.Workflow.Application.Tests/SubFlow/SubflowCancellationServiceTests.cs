@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
@@ -141,6 +144,8 @@ public sealed class SubflowCancellationServiceTests
     public async Task CancellationAsync_WhenPersistedDifferentOutcomeAlreadyRecorded_ShouldLoadAllAndNotOverwrite()
     {
         var parent = CreateParentInstance(out var subInstanceId);
+        Activity? terminalActivity = null;
+        using var activityListener = CaptureTerminalActivity(parent.Id, activity => terminalActivity = activity);
         var originalCompletedAt = DateTime.UtcNow.AddMinutes(-2);
         parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Faulted, originalCompletedAt);
         var input = CreateCanceledInput(parent.Id, subInstanceId);
@@ -154,6 +159,10 @@ public sealed class SubflowCancellationServiceTests
         VerifyCommonPhaseLoadedAllCorrelations(parent.Id);
         VerifyNoMutationOrResume();
         VerifyTerminalConflictLogged("Faulted");
+        GetTelemetryScope()[TelemetryConstants.TagNames.SubItemType]
+            .ShouldBe(SubFlowType.SubFlow.Code);
+        terminalActivity!.GetTagItem(TelemetryConstants.TagNames.SubItemType)
+            .ShouldBe(SubFlowType.SubFlow.Code);
     }
 
     [Fact]
@@ -188,6 +197,32 @@ public sealed class SubflowCancellationServiceTests
 
         parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         VerifyNoMutationOrResume();
+    }
+
+    [Fact]
+    public async Task CancellationAsync_SubProcessWithTerminalParent_ShouldCloseCorrelationOnly()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        parent.Complete("bank");
+        parent.SetEffectiveState("terminal-parent");
+        var canceledAt = DateTime.UtcNow.AddMinutes(-1);
+        var input = CreateCanceledInput(parent.Id, subInstanceId) with { CanceledAt = canceledAt };
+        SetupParent(parent);
+
+        await CreateService().CancellationAsync(input);
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Canceled);
+        correlation.CompletedAt.ShouldBe(canceledAt);
+        correlation.SubFlowCurrentState.ShouldBe(input.CanceledState);
+        parent.Status.ShouldBe(InstanceStatus.Completed);
+        parent.GetEffectiveState.ShouldBe("terminal-parent");
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        _componentCacheStore.VerifyNoOtherCalls();
+        _workflowExecution.VerifyNoOtherCalls();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -411,6 +446,30 @@ public sealed class SubflowCancellationServiceTests
                 value.ToString()!.Contains(existingOutcome)),
             It.IsAny<Exception?>(),
             It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
+    }
+
+    private Dictionary<string, object> GetTelemetryScope() =>
+        _logger.Invocations
+            .Single(x => x.Method.Name == nameof(ILogger.BeginScope))
+            .Arguments[0]
+            .ShouldBeOfType<Dictionary<string, object>>();
+
+    private static ActivityListener CaptureTerminalActivity(Guid parentInstanceId, Action<Activity> onStopped)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.SubFlow",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.GetTagItem(TelemetryConstants.TagNames.InstanceId)?.ToString() == parentInstanceId.ToString())
+                {
+                    onStopped(activity);
+                }
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     private static Result<TransitionOutput> Success(Instance parent) =>

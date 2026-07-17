@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -72,6 +75,8 @@ public sealed class SubflowCompletionServiceTests
     public async Task CompletionAsync_WhenCompletedOutcomeAlreadyRecorded_ShouldNoOp()
     {
         var parent = CreateParentInstance(out var subInstanceId);
+        Activity? terminalActivity = null;
+        using var activityListener = CaptureTerminalActivity(parent.Id, activity => terminalActivity = activity);
         var originalCompletedAt = DateTime.UtcNow.AddMinutes(-2);
         parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed, originalCompletedAt);
         SetupCompletedCorrelationPath(parent);
@@ -83,6 +88,10 @@ public sealed class SubflowCompletionServiceTests
         correlation.CompletedAt.ShouldBe(originalCompletedAt);
         VerifyNoMappingOrResume();
         VerifyTerminalDuplicateLogged();
+        GetTelemetryScope()[TelemetryConstants.TagNames.SubItemType]
+            .ShouldBe(SubFlowType.SubFlow.Code);
+        terminalActivity!.GetTagItem(TelemetryConstants.TagNames.SubItemType)
+            .ShouldBe(SubFlowType.SubFlow.Code);
     }
 
     [Fact]
@@ -449,6 +458,30 @@ public sealed class SubflowCompletionServiceTests
                 value.ToString()!.Contains(existingOutcome)),
             It.IsAny<Exception?>(),
             It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
+    }
+
+    private Dictionary<string, object> GetTelemetryScope() =>
+        _logger.Invocations
+            .Single(x => x.Method.Name == nameof(ILogger.BeginScope))
+            .Arguments[0]
+            .ShouldBeOfType<Dictionary<string, object>>();
+
+    private static ActivityListener CaptureTerminalActivity(Guid parentInstanceId, Action<Activity> onStopped)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.SubFlow",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.GetTagItem(TelemetryConstants.TagNames.InstanceId)?.ToString() == parentInstanceId.ToString())
+                {
+                    onStopped(activity);
+                }
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     private static Instance CreateParentInstance(

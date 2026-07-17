@@ -97,15 +97,6 @@ public sealed class SubflowFaultService(
                         return;
                     }
 
-                    // Idempotency: skip if parent is already in a terminal state
-                    if (parentInstance.Status.Equals(InstanceStatus.Faulted) ||
-                        parentInstance.Status.Equals(InstanceStatus.Completed))
-                    {
-                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
-                        await uow.CommitAsync(cancellationToken);
-                        return;
-                    }
-
                     // Verify the correlation exists and apply terminal idempotency semantics.
                     correlation = parentInstance.FindCorrelationBySubInstanceId(input.SubInstanceId);
                     if (correlation == null)
@@ -115,6 +106,9 @@ public sealed class SubflowFaultService(
                         await uow.CommitAsync(cancellationToken);
                         return;
                     }
+
+                    activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
+                    scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
 
                     if (correlation.IsCompleted)
                     {
@@ -139,8 +133,16 @@ public sealed class SubflowFaultService(
                         return;
                     }
 
-                    activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
-                    scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
+                    // A terminal parent still needs an active SubProcess correlation closed, but
+                    // a blocking SubFlow must not mutate or resume an already-terminal parent.
+                    if ((parentInstance.Status.Equals(InstanceStatus.Faulted) ||
+                         parentInstance.Status.Equals(InstanceStatus.Completed)) &&
+                        correlation.SubFlowType.Equals(SubFlowType.SubFlow))
+                    {
+                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
+                        await uow.CommitAsync(cancellationToken);
+                        return;
+                    }
 
                     correlation.UpdateSubFlowState(input.FaultedState, input.FaultedAt);
                     parentInstance.CompleteCorrelation(

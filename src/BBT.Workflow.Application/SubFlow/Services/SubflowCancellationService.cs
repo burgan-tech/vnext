@@ -88,12 +88,6 @@ public sealed class SubflowCancellationService(
                 return;
             }
 
-            if (parentInstance.IsCompleted)
-            {
-                await uow.CommitAsync(cancellationToken);
-                return;
-            }
-
             var correlation = parentInstance.FindCorrelationBySubInstanceId(input.SubInstanceId);
             if (correlation == null)
             {
@@ -101,6 +95,9 @@ public sealed class SubflowCancellationService(
                 await uow.CommitAsync(cancellationToken);
                 return;
             }
+
+            activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
+            scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
 
             if (correlation.IsCompleted)
             {
@@ -124,8 +121,13 @@ public sealed class SubflowCancellationService(
                 return;
             }
 
-            activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
-            scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
+            // A terminal parent still needs an active SubProcess correlation closed, but
+            // a blocking SubFlow must not mutate or resume an already-terminal parent.
+            if (parentInstance.IsCompleted && correlation.SubFlowType.Equals(SubFlowType.SubFlow))
+            {
+                await uow.CommitAsync(cancellationToken);
+                return;
+            }
 
             if (correlation.SubFlowType.Equals(SubFlowType.SubFlow))
             {

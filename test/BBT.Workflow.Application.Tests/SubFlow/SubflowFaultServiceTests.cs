@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -327,9 +330,41 @@ public sealed class SubflowFaultServiceTests
     }
 
     [Fact]
+    public async Task FaultAsync_SubProcessWithTerminalParent_ShouldCloseCorrelationOnly()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        parent.Complete("bank");
+        parent.SetEffectiveState("terminal-parent");
+        var faultedAt = DateTime.UtcNow.AddMinutes(-1);
+        var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}")) with
+        {
+            FaultedAt = faultedAt
+        };
+        SetupParentInstance(parent);
+
+        await CreateService().FaultAsync(input);
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Faulted);
+        correlation.CompletedAt.ShouldBe(faultedAt);
+        correlation.SubFlowCurrentState.ShouldBe(input.FaultedState);
+        parent.Status.ShouldBe(InstanceStatus.Completed);
+        parent.GetEffectiveState.ShouldBe("terminal-parent");
+        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        _componentCacheStore.VerifyNoOtherCalls();
+        _outputMappingService.VerifyNoOtherCalls();
+        _workflowExecutionService.VerifyNoOtherCalls();
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task FaultAsync_WhenFaultOutcomeAlreadyRecorded_ShouldNoOp()
     {
         var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubProcess);
+        Activity? terminalActivity = null;
+        using var activityListener = CaptureTerminalActivity(parent.Id, activity => terminalActivity = activity);
         var originalCompletedAt = DateTime.UtcNow.AddMinutes(-2);
         parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Faulted, originalCompletedAt);
         var input = CreateInput(parent.Id, subInstanceId, CreateJsonElement("{}"));
@@ -348,6 +383,10 @@ public sealed class SubflowFaultServiceTests
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
         _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+        GetTelemetryScope()[TelemetryConstants.TagNames.SubItemType]
+            .ShouldBe(SubFlowType.SubProcess.Code);
+        terminalActivity!.GetTagItem(TelemetryConstants.TagNames.SubItemType)
+            .ShouldBe(SubFlowType.SubProcess.Code);
     }
 
     [Fact]
@@ -514,6 +553,30 @@ public sealed class SubflowFaultServiceTests
                 It.IsAny<Exception?>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
+    }
+
+    private Dictionary<string, object> GetTelemetryScope() =>
+        _logger.Invocations
+            .Single(x => x.Method.Name == nameof(ILogger.BeginScope))
+            .Arguments[0]
+            .ShouldBeOfType<Dictionary<string, object>>();
+
+    private static ActivityListener CaptureTerminalActivity(Guid parentInstanceId, Action<Activity> onStopped)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.SubFlow",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.GetTagItem(TelemetryConstants.TagNames.InstanceId)?.ToString() == parentInstanceId.ToString())
+                {
+                    onStopped(activity);
+                }
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     private void SetupParent(Instance parentInstance, Definitions.Workflow parentWorkflow)

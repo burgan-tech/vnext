@@ -856,7 +856,7 @@ public static partial class WorkflowLogs
         Guid subInstanceId);
 
     [LoggerMessage(
-        EventId = 40030,
+        EventId = 40031,
         Level = LogLevel.Debug,
         Message = "Duplicate {Outcome} SubItem terminal outcome for parent {ParentInstanceId}, child {SubInstanceId}")]
     public static partial void SubItemTerminalDuplicate(
