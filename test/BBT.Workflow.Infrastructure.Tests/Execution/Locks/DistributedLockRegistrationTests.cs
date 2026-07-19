@@ -1,8 +1,11 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using BBT.Aether;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.DistributedLock.Dapr;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Infrastructure.Execution.Locks;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
@@ -59,10 +62,45 @@ public sealed class DistributedLockRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var defaultLock = provider.GetRequiredService<IDistributedLockService>();
+        var defaultLockAgain = provider.GetRequiredService<IDistributedLockService>();
         var postgresLock = provider.GetRequiredService<IPostgreSqlDistributedLockService>();
+        var postgresLockAgain = provider.GetRequiredService<IPostgreSqlDistributedLockService>();
 
         defaultLock.ShouldBeOfType<DaprDistributedLockService>();
         postgresLock.ShouldBeOfType<NpgsqlDistributedLockService>();
+        defaultLockAgain.ShouldBeSameAs(defaultLock);
+        postgresLockAgain.ShouldBeSameAs(postgresLock);
         ReferenceEquals(defaultLock, postgresLock).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Shipped_orchestration_configuration_disables_lease_extension_for_the_dapr_default()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(repositoryRoot)
+            .AddJsonFile(
+                "orchestration/BBT.Workflow.Orchestration.HttpApi.Host/appsettings.json",
+                optional: false)
+            .Build();
+        var options = new WorkflowExecutionOptions();
+
+        configuration.GetSection(WorkflowExecutionOptions.SectionName).Bind(options);
+
+        configuration["WorkflowExecution:LockProvider"].ShouldBeNull();
+        options.EnableLockLeaseExtension.ShouldBeFalse();
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "BBT.Workflow.slnx")))
+                return directory.FullName;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate the vNext repository root.");
     }
 }

@@ -111,8 +111,8 @@ public sealed class WorkflowExecutionOptions
     /// when the sweep completes; the TTL is only a crash-safety net, so it must comfortably
     /// exceed a typical sweep. Any rare mid-sweep expiry is harmless because the reaper's
     /// re-drive is idempotent (chain-token gate). Acquire/release use the platform
-    /// <c>IDistributedLockService</c> and work on both the Postgres and Dapr lock providers
-    /// (both grant exactly one winner). Default: 120.
+    /// <c>IPostgreSqlDistributedLockService</c>, backed only by the PostgreSQL lease store.
+    /// Default: 120.
     /// </summary>
     public int ChainReaperLeaderLeaseSeconds { get; set; } = 120;
 

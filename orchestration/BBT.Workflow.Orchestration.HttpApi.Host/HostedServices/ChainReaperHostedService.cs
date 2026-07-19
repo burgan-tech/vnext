@@ -28,14 +28,12 @@ namespace BBT.Workflow.HostedServices;
 /// per replica would multiply the <c>sys_flows</c> discovery and per-flow-schema polling by the
 /// replica count. To avoid that redundancy, each cycle first tries to acquire a single
 /// <c>chain-reaper-leader</c> lease via <see cref="IPostgreSqlDistributedLockService"/>; only the winner
-/// sweeps, the others skip. Acquire is atomic on both lock providers (Postgres
-/// <c>INSERT … ON CONFLICT</c> and Dapr <c>SET NX</c> each grant exactly one winner). The lease
-/// is released as soon as the sweep completes; its TTL
+/// sweeps, the others skip. PostgreSQL grants exactly one winner through an atomic
+/// <c>INSERT … ON CONFLICT</c>. The lease is released as soon as the sweep completes; its TTL
 /// (<c>WorkflowExecutionOptions.ChainReaperLeaderLeaseSeconds</c>) is only a crash-safety net so
 /// another replica can take over on the next cycle if the leader dies mid-sweep. A rare mid-sweep
 /// expiry is harmless because the reaper's re-drive is idempotent (chain-token gate), so no
-/// keep-alive extension is needed — which also keeps this correct on the Dapr provider, whose
-/// lease cannot be extended.
+/// keep-alive extension is needed.
 /// </para>
 /// </remarks>
 public sealed class ChainReaperHostedService(

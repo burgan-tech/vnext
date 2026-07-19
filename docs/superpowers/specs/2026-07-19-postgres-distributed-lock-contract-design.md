@@ -77,4 +77,3 @@ Tests will prove:
 The change is source-compatible for callers of `NpgsqlDistributedLockService` and preserves the full Aether lock method contract. It intentionally changes DI behavior for deployments that previously selected the PostgreSQL provider globally through `WorkflowExecution:LockProvider`: general consumers return to the Aether Dapr implementation, while Chain Reaper remains PostgreSQL-backed.
 
 No database migration, lock-table change, configuration migration, Inbox/Outbox change, or Aether framework modification is included.
-
