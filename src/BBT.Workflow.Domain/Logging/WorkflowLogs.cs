@@ -558,12 +558,12 @@ public static partial class WorkflowLogs
         string transitionKeys);
 
     /// <summary>
-    /// Logs when state-specific scheduled jobs are successfully canceled.
+    /// Logs when state-specific scheduled jobs are successfully processed.
     /// </summary>
     [LoggerMessage(
         EventId = 10058,
         Level = LogLevel.Information,
-        Message = "Canceled {Count} scheduled jobs for instance {InstanceId}, transitions: {TransitionKeys}")]
+        Message = "Processed {Count} scheduled jobs for instance {InstanceId}, transitions: {TransitionKeys}")]
     public static partial void StateTransitionsJobsCanceled(
         this ILogger logger,
         int count,
@@ -1498,7 +1498,7 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 40019,
         Level = LogLevel.Information,
-        Message = "Instance cancellation jobs processed for instance {InstanceId}, {JobCount} jobs canceled")]
+        Message = "Processed {JobCount} instance cancellation jobs for instance {InstanceId}")]
     public static partial void InstanceCanceledJobsProcessed(
         this ILogger logger,
         Guid instanceId,

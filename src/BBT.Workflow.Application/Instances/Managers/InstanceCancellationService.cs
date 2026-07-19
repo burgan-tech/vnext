@@ -48,11 +48,15 @@ public sealed class InstanceCancellationService(
                 return Result.Ok();
             }
 
+            var processedJobCount = 0;
             foreach (var job in jobs)
             {
                 try
                 {
-                    await ProcessJobCancellationAsync(job, instance.Id, cancellationToken);
+                    if (await ProcessJobCancellationAsync(job, instance.Id, cancellationToken))
+                    {
+                        processedJobCount++;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -60,7 +64,7 @@ public sealed class InstanceCancellationService(
                 }
             }
 
-            logger.InstanceCanceledJobsProcessed(instanceId, jobs.Count);
+            logger.InstanceCanceledJobsProcessed(instanceId, processedJobCount);
 
             return Result.Ok();
         }
@@ -118,11 +122,15 @@ public sealed class InstanceCancellationService(
                 return Result.Ok();
             }
 
+            var processedJobCount = 0;
             foreach (var job in jobsToCancel)
             {
                 try
                 {
-                    await ProcessJobCancellationAsync(job, instance.Id, cancellationToken);
+                    if (await ProcessJobCancellationAsync(job, instance.Id, cancellationToken))
+                    {
+                        processedJobCount++;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -131,7 +139,7 @@ public sealed class InstanceCancellationService(
             }
 
             logger.StateTransitionsJobsCanceled(
-                jobsToCancel.Count,
+                processedJobCount,
                 instanceId,
                 string.Join(", ", transitionKeys));
 
@@ -146,7 +154,7 @@ public sealed class InstanceCancellationService(
         }
     }
 
-    private async Task ProcessJobCancellationAsync(
+    private async Task<bool> ProcessJobCancellationAsync(
         InstanceJob job,
         Guid instanceId,
         CancellationToken cancellationToken)
@@ -155,10 +163,11 @@ public sealed class InstanceCancellationService(
         if (outcome == BackgroundJobCancellationResult.SkippedRunning)
         {
             logger.InstanceJobCleanupSkippedRunning(job.JobId, instanceId);
-            return;
+            return false;
         }
 
         job.MarkAsProcessed();
         await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
+        return true;
     }
 }
