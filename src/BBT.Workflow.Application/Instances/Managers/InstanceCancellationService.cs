@@ -52,9 +52,7 @@ public sealed class InstanceCancellationService(
             {
                 try
                 {
-                    await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
-                    job.MarkAsProcessed();
-                    await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
+                    await ProcessJobCancellationAsync(job, instance.Id, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -124,9 +122,7 @@ public sealed class InstanceCancellationService(
             {
                 try
                 {
-                    await backgroundJobService.DeleteAsync(job.JobId, cancellationToken);
-                    job.MarkAsProcessed();
-                    await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
+                    await ProcessJobCancellationAsync(job, instance.Id, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -149,5 +145,20 @@ public sealed class InstanceCancellationService(
             return Result.Fail(WorkflowErrors.InstanceCancellationFailed(instanceId, ex.Message));
         }
     }
-}
 
+    private async Task ProcessJobCancellationAsync(
+        InstanceJob job,
+        Guid instanceId,
+        CancellationToken cancellationToken)
+    {
+        var outcome = await backgroundJobService.CancelWaitingAsync(job.JobId, cancellationToken);
+        if (outcome == BackgroundJobCancellationResult.SkippedRunning)
+        {
+            logger.InstanceJobCleanupSkippedRunning(job.JobId, instanceId);
+            return;
+        }
+
+        job.MarkAsProcessed();
+        await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
+    }
+}

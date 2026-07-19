@@ -1529,6 +1529,18 @@ public static partial class WorkflowLogs
         Guid jobId,
         Guid instanceId);
 
+    /// <summary>
+    /// Logs when cleanup leaves a running background job to its dispatcher.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40104,
+        Level = LogLevel.Information,
+        Message = "Background job {JobId} is already running for instance {InstanceId}; cleanup left it to the dispatcher")]
+    public static partial void InstanceJobCleanupSkippedRunning(
+        this ILogger logger,
+        Guid jobId,
+        Guid instanceId);
+
     #endregion
 
     #region Instance Completion Cleanup
