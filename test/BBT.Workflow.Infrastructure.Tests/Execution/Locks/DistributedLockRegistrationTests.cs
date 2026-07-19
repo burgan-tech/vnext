@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using BBT.Aether;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.DistributedLock.Dapr;
@@ -20,6 +21,20 @@ public sealed class DistributedLockRegistrationTests
         typeof(IDistributedLockService)
             .IsAssignableFrom(typeof(IPostgreSqlDistributedLockService))
             .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void ChainReaper_requires_the_postgres_specific_contract()
+    {
+        var constructor = typeof(BBT.Workflow.HostedServices.ChainReaperHostedService)
+            .GetConstructors()
+            .Single();
+        var parameterTypes = constructor.GetParameters()
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        parameterTypes.ShouldContain(typeof(IPostgreSqlDistributedLockService));
+        parameterTypes.ShouldNotContain(typeof(IDistributedLockService));
     }
 
     [Fact]

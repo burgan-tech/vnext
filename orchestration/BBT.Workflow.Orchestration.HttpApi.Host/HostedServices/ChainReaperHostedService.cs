@@ -1,9 +1,9 @@
-using BBT.Aether.DistributedLock;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Hosting;
+using BBT.Workflow.Infrastructure.Execution.Locks;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Options;
@@ -27,7 +27,7 @@ namespace BBT.Workflow.HostedServices;
 /// Leader election: this hosted service runs on every orchestration replica, but a full sweep
 /// per replica would multiply the <c>sys_flows</c> discovery and per-flow-schema polling by the
 /// replica count. To avoid that redundancy, each cycle first tries to acquire a single
-/// <c>chain-reaper-leader</c> lease via <see cref="IDistributedLockService"/>; only the winner
+/// <c>chain-reaper-leader</c> lease via <see cref="IPostgreSqlDistributedLockService"/>; only the winner
 /// sweeps, the others skip. Acquire is atomic on both lock providers (Postgres
 /// <c>INSERT … ON CONFLICT</c> and Dapr <c>SET NX</c> each grant exactly one winner). The lease
 /// is released as soon as the sweep completes; its TTL
@@ -40,7 +40,7 @@ namespace BBT.Workflow.HostedServices;
 /// </remarks>
 public sealed class ChainReaperHostedService(
     IServiceScopeFactory scopeFactory,
-    IDistributedLockService lockService,
+    IPostgreSqlDistributedLockService lockService,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<ChainReaperHostedService> logger)
     : BackgroundService
