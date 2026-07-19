@@ -24,7 +24,7 @@ namespace BBT.Workflow.Infrastructure.Execution.Locks;
 /// rolled-back transaction must never un-acquire a lock the caller believes it holds.
 /// </para>
 /// </summary>
-public sealed class NpgsqlDistributedLockService : IDistributedLockService
+public sealed class NpgsqlDistributedLockService : IPostgreSqlDistributedLockService
 {
     // Schema-qualified table owned code-first by MessagingDbContext (sys_queues) and created by
     // an EF Core migration at deploy time — see DistributedLockRecord. The service only reads/
