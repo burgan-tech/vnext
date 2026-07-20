@@ -43,6 +43,19 @@ public sealed class DynamicExpressoValueEvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_Sha256Helper_ProducesDeterministicHash()
+    {
+        var script = ScriptCode.FromNative("\"k:\" + sha256(\"abc\")", ConditionScriptLocations.DynamicExpresso);
+        var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
+
+        var result = CreateEvaluator().Evaluate(script, context);
+
+        result.IsSuccess.ShouldBeTrue();
+        // Known SHA-256 of "abc".
+        result.Value.ShouldBe("k:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    [Fact]
     public void Evaluate_WhenNotDynamicExpressoLocation_Fails()
     {
         var script = ScriptCode.FromNative("\"x\"");  // default location "inline"

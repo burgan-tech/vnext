@@ -14,6 +14,8 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Evaluators;
+using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Functions;
@@ -31,7 +33,10 @@ public sealed class FunctionAppService(
     ITaskCoordinator taskCoordinator,
     IScriptEngine scriptEngine,
     ICurrentUser currentUser,
-    ITransitionAuthorizationManager transitionAuthorizationManager) : ApplicationService(serviceProvider), IFunctionAppService
+    ITransitionAuthorizationManager transitionAuthorizationManager,
+    IDynamicExpressoValueEvaluator keyEvaluator,
+    IStateStoreCacheGateway cacheGateway,
+    IRemoteInvokerService remoteInvoker) : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
     public async Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
@@ -174,6 +179,39 @@ public sealed class FunctionAppService(
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
 
+        // Read-through cache: when the function opts in, serve the cached response on a hit (tasks skipped).
+        string? cacheKey = null;
+        if (function.Cache is { } cache && cache.HasKeySource)
+        {
+            var keyResult = ResolveCacheKey(cache, scriptContext);
+            if (!keyResult.IsSuccess)
+                return Result<FunctionResponseOutput>.Fail(keyResult.Error);
+
+            cacheKey = keyResult.Value;
+            if (!string.IsNullOrWhiteSpace(cacheKey))
+            {
+                var traceContext = remoteInvoker.CreateTraceContext(scriptContext);
+                var read = await cacheGateway.GetAsync(cacheKey, cache.StoreName, cache.Consistency, traceContext, cancellationToken);
+                if (!read.CacheOk)
+                {
+                    if (!cache.BypassOnCacheError)
+                        return Result<FunctionResponseOutput>.Fail(Error.Failure(
+                            WorkflowErrorCodes.ExtensionExecutionFailed,
+                            $"Function '{function.Key}' cache read failed."));
+
+                    Logger.LogWarning(
+                        "Function {FunctionKey}: cache read failed; executing the function (bypassOnCacheError=true).",
+                        function.Key);
+                }
+                else if (read.Hit)
+                {
+                    var cached = read.Value.Deserialize<FunctionResponseOutput>(JsonSerializerConstants.JsonOptions);
+                    if (cached is not null)
+                        return Result<FunctionResponseOutput>.Ok(cached);
+                }
+            }
+        }
+
         Result executeResult;
         try
         {
@@ -219,9 +257,49 @@ public sealed class FunctionAppService(
                 function.Domain,
                 instance?.Id,
                 responseResult.Error.Message ?? "Unknown error");
+
+            return responseResult;
+        }
+
+        // Write-through: cache the computed response on a miss (best-effort unless bypass is disabled).
+        if (function.Cache is { } writeCache && !string.IsNullOrWhiteSpace(cacheKey))
+        {
+            var traceContext = remoteInvoker.CreateTraceContext(scriptContext);
+            var stored = await cacheGateway.SetAsync(
+                cacheKey!, responseResult.Value, writeCache.TtlInSeconds, writeCache.StoreName,
+                writeCache.Consistency, traceContext, cancellationToken);
+
+            if (!stored)
+            {
+                if (!writeCache.BypassOnCacheError)
+                    return Result<FunctionResponseOutput>.Fail(Error.Failure(
+                        WorkflowErrorCodes.ExtensionExecutionFailed,
+                        $"Function '{function.Key}' cache write failed."));
+
+                Logger.LogWarning(
+                    "Function {FunctionKey}: cache write failed; returning the computed result (bypassOnCacheError=true).",
+                    function.Key);
+            }
         }
 
         return responseResult;
+    }
+
+    /// <summary>
+    /// Resolves the cache key from the function's cache config: evaluates the Dynamic Expresso
+    /// <c>keyExpression</c> against the script context, or falls back to the static <c>key</c>.
+    /// </summary>
+    private Result<string?> ResolveCacheKey(FunctionCache cache, ScriptContext scriptContext)
+    {
+        if (cache.KeyExpression is { } expression && expression.HasMappingCode)
+        {
+            var result = keyEvaluator.Evaluate(expression, scriptContext);
+            return result.IsSuccess
+                ? Result<string?>.Ok(result.Value)
+                : Result<string?>.Fail(result.Error);
+        }
+
+        return Result<string?>.Ok(cache.Key);
     }
 
     /// <summary>

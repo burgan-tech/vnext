@@ -91,6 +91,30 @@ an explicit `storeName` must be exposed by the Execution sidecar
 }
 ```
 
+## Related: function-level result caching
+
+A whole **function's** response can be cached with the same read-through semantics, without wiring a
+CacheAside task, by adding a `cache` block to the function definition:
+
+```jsonc
+"cache": {
+  "keyExpression": { "location": "dynamicExpresso",
+                     "code": "\"dcs:\" + context.Headers.configKey + \":\" + context.Headers.version + \":\" + sha256(context.Headers.varyBy)" },
+  "storeName": "vnext-state",
+  "ttlInSeconds": 300,
+  "consistency": "Eventual",
+  "bypassOnCacheError": true
+}
+```
+
+`FunctionAppService` wraps execution: it resolves the key (Dynamic Expresso `keyExpression` — evaluated
+against the request/script context — or a static `key`), reads the cache; on a **hit** it returns the
+cached `FunctionResponseOutput` (Data + StatusCode + Headers) and skips the tasks; on a **miss** it runs
+the function and writes the response back. The cache get/set goes through the Execution `statestore`
+invoker (same `custom:` prefix / TTL / consistency). Only side-effect-free (read) functions should opt
+in. Invalidation is the caller's responsibility (e.g. delete `custom:dcs:*` when a dependency changes).
+A deterministic `sha256(string)` helper is available in `keyExpression` for bounded, vary-by-correct keys.
+
 ## References
 
 - `src/BBT.Workflow.Domain/Definitions/Tasks/CacheAsideTask.cs`
@@ -99,4 +123,6 @@ an explicit `storeName` must be exposed by the Execution sidecar
 - `src/BBT.Workflow.Application/Tasks/Evaluators/DynamicExpressoValueEvaluator.cs`
 - `src/BBT.Workflow.Execution/Invokers/CacheAsideTaskInvoker.cs`
 - `src/BBT.Workflow.Execution/StateStores/IStateStoreClient.cs`
+- `src/BBT.Workflow.Domain/Definitions/Functions/FunctionCache.cs`
+- `src/BBT.Workflow.Application/Functions/StateStoreCacheGateway.cs`
 - `docs/runtime/state-store-task.md`

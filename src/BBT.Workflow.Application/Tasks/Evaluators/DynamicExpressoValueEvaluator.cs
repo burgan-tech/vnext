@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
@@ -85,7 +87,19 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
     private static Func<ExpressoRuleContext, string> CompileExpression(string expression)
     {
         var interpreter = new Interpreter(InterpreterOptions.Default);
+        // Deterministic hash helper for building bounded, vary-by-correct cache keys from many/large
+        // header sets, e.g. "dcs:" + context.Headers.configKey + ":" + sha256(context.Headers.varyBy).
+        interpreter.SetFunction("sha256", (Func<string?, string>)Sha256Hex);
         var lambda = interpreter.Parse(expression, typeof(string), new Parameter("context", typeof(ExpressoRuleContext)));
         return lambda.Compile<Func<ExpressoRuleContext, string>>();
+    }
+
+    /// <summary>
+    /// Lowercase hex SHA-256 of the UTF-8 bytes of <paramref name="input"/> (empty string for null).
+    /// </summary>
+    private static string Sha256Hex(string? input)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input ?? string.Empty));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

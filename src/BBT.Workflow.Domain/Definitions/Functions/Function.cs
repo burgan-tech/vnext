@@ -22,7 +22,8 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         List<OnExecuteTask>? onExecutionTasks = null,
         ScriptCode? output = null,
         List<RoleGrant>? roles = null,
-        bool rawResponse = false
+        bool rawResponse = false,
+        FunctionCache? cache = null
     ) : this()
     {
         Scope = scope;
@@ -31,6 +32,7 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         Output = output;
         this.roles = roles ?? [];
         RawResponse = rawResponse;
+        Cache = cache;
     }
 
     /// <summary>
@@ -81,6 +83,13 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     /// </summary>
     [JsonPropertyName("rawResponse")]
     public bool RawResponse { get; private set; }
+
+    /// <summary>
+    /// Optional read-through cache configuration. When set, the function's response is served from the
+    /// cache on a hit (tasks skipped) and written to the cache on a miss.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("cache")]
+    public FunctionCache? Cache { get; private set; }
 
     [JsonInclude] [JsonPropertyName("roles")]
     private List<RoleGrant> roles = new();
