@@ -168,55 +168,71 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
         CancellationToken cancellationToken)
     {
         Logger.LogDebug("Using RemoteInvokerService for GetInstance task {TaskKey}", task.Key);
-
-        // Create envelope from task using TaskBindingMapper
-        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
-        if (!envelopeResult.IsSuccess)
+        try
         {
-            Logger.TaskEnvelopeCreationFailed(
+            // Create envelope from task using TaskBindingMapper
+            var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+            if (!envelopeResult.IsSuccess)
+            {
+                Logger.TaskEnvelopeCreationFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    context.ScriptContext?.Instance?.Id ?? Guid.Empty,
+                    envelopeResult.Error.Message ?? "Failed to create envelope");
+                return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
+            }
+
+            // Enrich binding with runtime context (endpoint, headers, resolved instance)
+            var enrichResult = await EnrichBindingAsync(
+                envelopeResult.Value!,
+                task.TriggerDomain,
+                task.UseDapr,
+                instanceIdentifier,
+                cancellationToken);
+
+            if (!enrichResult.IsSuccess)
+            {
+                Logger.TaskRemoteExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    context.ScriptContext?.Instance?.Id ?? Guid.Empty,
+                    enrichResult.Error.Message ?? "Failed to resolve endpoint");
+                return Result<TaskInvocationResult>.Fail(enrichResult.Error);
+            }
+
+            var traceContext = RemoteInvoker.CreateTraceContext(context.ScriptContext);
+            var result = await RemoteInvoker.InvokeAsync(
+                TaskTypes.GetInstance,
                 task.Key,
-                TaskType.ToString(),
-                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
-                envelopeResult.Error.Message ?? "Failed to create envelope");
-            return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
+                enrichResult.Value!,
+                traceContext,
+                cancellationToken);
+
+            if (!result.IsSuccess)
+            {
+                Logger.TaskRemoteExecutionFailed(
+                    task.Key,
+                    TaskType.ToString(),
+                    context.ScriptContext?.Instance?.Id ?? Guid.Empty,
+                    result.Error.Message ?? "Unknown error");
+            }
+
+            return result;
         }
-
-        // Enrich binding with runtime context (endpoint, headers, resolved instance)
-        var enrichResult = await EnrichBindingAsync(
-            envelopeResult.Value!,
-            task.TriggerDomain,
-            task.UseDapr,
-            instanceIdentifier,
-            cancellationToken);
-
-        if (!enrichResult.IsSuccess)
+        catch (Exception ex)
         {
             Logger.TaskRemoteExecutionFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext?.Instance?.Id ?? Guid.Empty,
-                enrichResult.Error.Message ?? "Failed to resolve endpoint");
-            return Result<TaskInvocationResult>.Fail(enrichResult.Error);
+                ex.Message);
+
+            return Result<TaskInvocationResult>.Fail(
+                Error.Failure(
+                    WorkflowErrorCodes.TaskExecution,
+                    $"GetInstance remote execution failed: {ex.Message}",
+                    detail: ex.GetType().Name));
         }
-
-        var traceContext = RemoteInvoker.CreateTraceContext(context.ScriptContext);
-        var result = await RemoteInvoker.InvokeAsync(
-            TaskTypes.GetInstance,
-            task.Key,
-            enrichResult.Value!,
-            traceContext,
-            cancellationToken);
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskRemoteExecutionFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext?.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
     }
 
     private async Task<Result<TaskEnvelope>> EnrichBindingAsync(
