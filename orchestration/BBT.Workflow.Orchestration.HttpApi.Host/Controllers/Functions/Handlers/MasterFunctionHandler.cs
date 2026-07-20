@@ -24,7 +24,7 @@ public sealed class MasterFunctionHandler(
             Domain = request.Domain,
             Workflow = request.Workflow,
             Instance = request.Instance,
-            Version = request.Parameters.Version,
+            Version = request.Parameters?.Version,
             Headers = request.Headers,
             QueryParameters = request.QueryParameters,
             Roles = request.CurrentUser.ResolveCallerRoles(request.Headers),

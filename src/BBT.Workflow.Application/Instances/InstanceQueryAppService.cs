@@ -1341,7 +1341,7 @@ public sealed class InstanceQueryAppService(
         // instance.Subflow returns the first active subflow (Type: S and not completed)
         if (instance.Subflow != null)
         {
-            return await GetSubFlowMasterAsync(instance.Subflow, cancellationToken);
+            return await GetSubFlowMasterAsync(instance.Subflow, input, cancellationToken);
         }
 
         // No active SubFlow - resolve the flow-level master schema reference
@@ -1366,6 +1366,7 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     private async Task<Result<GetSchemaOutput>> GetSubFlowMasterAsync(
         InstanceCorrelation subflow,
+        GetMasterInput input,
         CancellationToken cancellationToken)
     {
         var subFlowInput = new GetFunctionWithInstanceInput
@@ -1374,8 +1375,10 @@ public sealed class InstanceQueryAppService(
             Workflow = subflow.SubFlowName,
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
-            Role = currentUser.ResolveCallerRole(null),
-            Roles = currentUser.ResolveCallerRoles(null)
+            Headers = input.Headers ?? new Dictionary<string, string?>(),
+            QueryParams = input.QueryParameters ?? new Dictionary<string, string?>(),
+            Role = currentUser.ResolveCallerRole(input.Headers),
+            Roles = currentUser.ResolveCallerRoles(input.Headers)
         };
 
         return await instanceQueryGateway.GetFunctionWithMasterAsync(subFlowInput, cancellationToken);
