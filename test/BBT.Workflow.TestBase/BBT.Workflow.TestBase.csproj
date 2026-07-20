@@ -7,6 +7,7 @@
     <NoWarn>$(NoWarn);CS1591;CS8618;EF1001;CS1570;xUnit2002;CS8603</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="BBT.Aether.TestBase" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkPackageVersion)" />
     <PackageReference Include="Moq" Version="$(MoqPackageVersion)" />
     <PackageReference Include="NSubstitute" Version="$(NSubstitutePackageVersion)" />
@@ -19,8 +20,5 @@
     <PackageReference Include="xunit.extensibility.execution" Version="$(xunitPackageVersion)" />
     <PackageReference Include="xunit.runner.visualstudio" Version="$(xunitRunnerPackageVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.Diagnostics.Middleware" Version="$(MicrosoftPackageVersion)" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.TestBase/BBT.Aether.TestBase.csproj" />
   </ItemGroup>
 </Project>
