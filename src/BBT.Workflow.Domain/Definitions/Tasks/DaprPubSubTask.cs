@@ -33,11 +33,13 @@ public sealed class DaprPubSubTask : WorkflowTask
     /// <summary>
     /// Data
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Data { get; private set; }
 
     /// <summary>
     /// Mete data
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Metadata { get; private set; }
     
     public void SetPubSubName(string pubSubName) => PubSubName = pubSubName;

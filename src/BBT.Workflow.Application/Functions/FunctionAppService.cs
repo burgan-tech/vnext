@@ -13,7 +13,10 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Evaluators;
+using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Functions;
@@ -31,7 +34,10 @@ public sealed class FunctionAppService(
     ITaskCoordinator taskCoordinator,
     IScriptEngine scriptEngine,
     ICurrentUser currentUser,
-    ITransitionAuthorizationManager transitionAuthorizationManager) : ApplicationService(serviceProvider), IFunctionAppService
+    ITransitionAuthorizationManager transitionAuthorizationManager,
+    IDynamicExpressoValueEvaluator keyEvaluator,
+    IStateStoreCacheGateway cacheGateway,
+    IRemoteInvokerService remoteInvoker) : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
     public async Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
@@ -174,6 +180,64 @@ public sealed class FunctionAppService(
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);
 
+        // Read-through cache: when the function opts in, serve the cached response on a hit (tasks skipped).
+        string? cacheKey = null;
+        if (function.Cache is { } cache && cache.HasKeySource)
+        {
+            var keyResult = ResolveCacheKey(cache, scriptContext);
+            if (!keyResult.IsSuccess)
+                return Result<FunctionResponseOutput>.Fail(keyResult.Error);
+
+            cacheKey = keyResult.Value;
+            if (!string.IsNullOrWhiteSpace(cacheKey))
+            {
+                var traceContext = remoteInvoker.CreateTraceContext(scriptContext);
+
+                // Generation-namespace: fold the current generation stamp into the key so bumping the
+                // stamp (on a dependency change) invalidates every cached variant at once.
+                if (cache.HasGenerationSource)
+                {
+                    var generationResult = await ResolveGenerationAsync(cache, scriptContext, traceContext, cancellationToken);
+                    if (!generationResult.IsSuccess)
+                    {
+                        if (!cache.BypassOnCacheError)
+                            return Result<FunctionResponseOutput>.Fail(generationResult.Error);
+
+                        Logger.LogWarning(
+                            "Function {FunctionKey}: cache generation read failed; executing without caching (bypassOnCacheError=true).",
+                            function.Key);
+                        cacheKey = null;
+                    }
+                    else
+                    {
+                        cacheKey = $"{cacheKey}:g:{generationResult.Value}";
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(cacheKey))
+                {
+                    var read = await cacheGateway.GetAsync(cacheKey, cache.StoreName, cache.Consistency, traceContext, cancellationToken);
+                    if (!read.CacheOk)
+                    {
+                        if (!cache.BypassOnCacheError)
+                            return Result<FunctionResponseOutput>.Fail(Error.Failure(
+                                WorkflowErrorCodes.ExtensionExecutionFailed,
+                                $"Function '{function.Key}' cache read failed."));
+
+                        Logger.LogWarning(
+                            "Function {FunctionKey}: cache read failed; executing the function (bypassOnCacheError=true).",
+                            function.Key);
+                    }
+                    else if (read.Hit)
+                    {
+                        var cached = read.Value.Deserialize<FunctionResponseOutput>(JsonSerializerConstants.JsonOptions);
+                        if (cached is not null)
+                            return Result<FunctionResponseOutput>.Ok(cached);
+                    }
+                }
+            }
+        }
+
         Result executeResult;
         try
         {
@@ -220,10 +284,96 @@ public sealed class FunctionAppService(
                 function.Domain,
                 instance?.Id,
                 responseResult.Error.Message ?? "Unknown error");
+
+            return responseResult;
+        }
+
+        // Write-through: cache the computed response on a miss (best-effort unless bypass is disabled).
+        if (function.Cache is { } writeCache && !string.IsNullOrWhiteSpace(cacheKey))
+        {
+            var traceContext = remoteInvoker.CreateTraceContext(scriptContext);
+            var stored = await cacheGateway.SetAsync(
+                cacheKey!, responseResult.Value, writeCache.TtlInSeconds, writeCache.StoreName,
+                writeCache.Consistency, traceContext, cancellationToken);
+
+            if (!stored)
+            {
+                if (!writeCache.BypassOnCacheError)
+                    return Result<FunctionResponseOutput>.Fail(Error.Failure(
+                        WorkflowErrorCodes.ExtensionExecutionFailed,
+                        $"Function '{function.Key}' cache write failed."));
+
+                Logger.LogWarning(
+                    "Function {FunctionKey}: cache write failed; returning the computed result (bypassOnCacheError=true).",
+                    function.Key);
+            }
         }
 
         return responseResult;
     }
+
+    /// <summary>
+    /// Resolves the cache key from the function's cache config: evaluates the Dynamic Expresso
+    /// <c>keyExpression</c> against the script context, or falls back to the static <c>key</c>.
+    /// </summary>
+    private Result<string?> ResolveCacheKey(FunctionCache cache, ScriptContext scriptContext)
+    {
+        if (cache.KeyExpression is { } expression && expression.HasMappingCode)
+        {
+            var result = keyEvaluator.Evaluate(expression, scriptContext);
+            return result.IsSuccess
+                ? Result<string?>.Ok(result.Value)
+                : Result<string?>.Fail(result.Error);
+        }
+
+        return Result<string?>.Ok(cache.Key);
+    }
+
+    /// <summary>
+    /// Reads the cache generation stamp for the given cache config: resolves the generation state key
+    /// (Dynamic Expresso expression or static), reads it from the cache, and returns the stamp as a
+    /// string. Returns <c>"0"</c> when no generation key resolves or the stamp entry is absent; fails
+    /// only when the cache read itself errors.
+    /// </summary>
+    private async Task<Result<string>> ResolveGenerationAsync(
+        FunctionCache cache,
+        ScriptContext scriptContext,
+        TaskTraceContext traceContext,
+        CancellationToken cancellationToken)
+    {
+        string? generationKey;
+        if (cache.GenerationKeyExpression is { HasMappingCode: true } expression)
+        {
+            var keyResult = keyEvaluator.Evaluate(expression, scriptContext);
+            if (!keyResult.IsSuccess)
+                return Result<string>.Fail(keyResult.Error);
+            generationKey = keyResult.Value;
+        }
+        else
+        {
+            generationKey = cache.GenerationKey;
+        }
+
+        if (string.IsNullOrWhiteSpace(generationKey))
+            return Result<string>.Ok("0");
+
+        var read = await cacheGateway.GetAsync(generationKey, cache.StoreName, cache.Consistency, traceContext, cancellationToken);
+        if (!read.CacheOk)
+            return Result<string>.Fail(Error.Failure(
+                WorkflowErrorCodes.ExtensionExecutionFailed,
+                "Cache generation read failed."));
+
+        return Result<string>.Ok(read.Hit ? ExtractGeneration(read.Value) : "0");
+    }
+
+    /// <summary>Extracts the generation stamp from its cached JSON value (number or string).</summary>
+    private static string ExtractGeneration(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString() ?? "0",
+        JsonValueKind.Number => value.GetRawText(),
+        JsonValueKind.Undefined or JsonValueKind.Null => "0",
+        _ => value.GetRawText()
+    };
 
     /// <summary>
     /// Builds the final response: uses the <c>output</c> script when defined, otherwise falls back to

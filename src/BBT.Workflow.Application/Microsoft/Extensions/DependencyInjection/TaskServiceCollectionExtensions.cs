@@ -101,6 +101,10 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<StateStoreTaskExecutor>();
 
+        // Cache-Aside (read-through) executor: cache get/set is dispatched to the Execution service via
+        // the StateStore invoker; the source task on a miss is orchestrated locally.
+        services.AddTaskExecutor<CacheAsideTaskExecutor>();
+
         // Notification task executor (multi-channel direct Dapr binding dispatch)
         services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
         services.TryAddScoped<IStateNotificationDispatcher, StateNotificationDispatcher>();
@@ -128,6 +132,9 @@ public static class TaskServiceCollectionExtensions
         services.AddScoped<DynamicExpressoConditionEvaluator>();
         services.AddScoped<IConditionEvaluator, RoutingConditionEvaluator>();
         services.AddScoped<ITimerEvaluator, ScriptTimerEvaluator>();
+
+        // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
+        services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();
 
         // Unified evaluator registry
         services.AddScoped<ITaskEvaluatorRegistry, TaskEvaluatorRegistry>();

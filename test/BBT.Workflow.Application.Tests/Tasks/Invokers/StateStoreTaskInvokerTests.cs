@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Invokers;
+using BBT.Workflow.Execution.StateStores;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -256,8 +257,7 @@ public sealed class StateStoreTaskInvokerTests
             .Build();
 
         return new StateStoreTaskInvoker(
-            daprClient.Object,
-            configuration,
+            new DaprStateStoreClient(daprClient.Object, configuration),
             NullLogger<StateStoreTaskInvoker>.Instance);
     }
 

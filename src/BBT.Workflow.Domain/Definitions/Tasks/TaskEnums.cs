@@ -25,7 +25,8 @@ public enum TaskType
     GetInstances = 15,
     Soap = 16,
     StateStore = 17,
-    GetInstance = 18
+    CacheAside = 18,
+    GetInstance = 19
 }
 
 /// <summary>

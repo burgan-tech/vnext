@@ -43,6 +43,7 @@ public class HumanTask : WorkflowTask
     /// <summary>
     /// Form
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Form { get; private set; }
 
     /// <summary>
