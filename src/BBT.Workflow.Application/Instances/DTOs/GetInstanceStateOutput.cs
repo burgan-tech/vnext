@@ -18,6 +18,12 @@ public sealed class GetInstanceStateOutput
     public ViewHref View { get; set; } = new();
 
     /// <summary>
+    /// Master schema href link. Points to the master function endpoint that returns the flow-level
+    /// master schema the instance is bound to (forwarding to the active subflow when present).
+    /// </summary>
+    public MasterHref Master { get; set; } = new();
+
+    /// <summary>
     /// Current state of the instance
     /// </summary>
     public string State { get; set; } = string.Empty;

@@ -110,6 +110,16 @@ public interface IUrlTemplateBuilder
     string BuildSchemaUrl(string domain, string workflow, string instanceId, string transitionKey, string? apiVersionPrefix = null);
 
     /// <summary>
+    /// Builds URL for the instance master schema function endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance key or ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated client-facing URL</returns>
+    string BuildMasterUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null);
+
+    /// <summary>
     /// Builds URL for the long-poll acknowledge endpoint of an instance.
     /// </summary>
     /// <param name="domain">The domain name</param>

@@ -779,6 +779,29 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
 
+    [Fact]
+    public async Task GetInstanceStateAsync_AlwaysIncludesMasterHref()
+    {
+        // Arrange
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert — the state response exposes the master function endpoint as an href
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Master.ShouldNotBeNull();
+        result.Result.Value!.Master.Href.ShouldBe("https://master-url");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void DenyQueryRoles() =>
@@ -856,6 +879,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns("https://transition-url");
         _urlTemplateBuilder.BuildSchemaUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
             .Returns("https://schema-url");
+        _urlTemplateBuilder.BuildMasterUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://master-url");
 
         _transitionAuthorizationManager
             .FilterAuthorizedTransitionKeysAsync(

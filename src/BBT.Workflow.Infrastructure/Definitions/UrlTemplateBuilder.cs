@@ -93,6 +93,13 @@ public sealed class UrlTemplateBuilder : IUrlTemplateBuilder
         var path = string.Format(_options.Schema, domain, workflow, instanceId, transitionKey);
         return BuildUrl(path, apiVersionPrefix);
     }
+
+    /// <inheritdoc />
+    public string BuildMasterUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.Master, domain, workflow, instance);
+        return BuildUrl(path, apiVersionPrefix);
+    }
     
     /// <summary>
     /// Combines the relative path with optional API version prefix.

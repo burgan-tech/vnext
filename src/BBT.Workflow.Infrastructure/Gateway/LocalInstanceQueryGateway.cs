@@ -170,4 +170,27 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                 return await queryService.GetExtensionsAsync(extensionsInput, ct);
             }, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result<GetSchemaOutput>> GetFunctionWithMasterAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+            async (sp, ct) =>
+            {
+                var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
+                var masterInput = new GetMasterInput
+                {
+                    Domain = input.Domain,
+                    Workflow = input.Workflow,
+                    Version = input.Version,
+                    Instance = input.Instance,
+                    Headers = input.Headers,
+                    QueryParameters = input.QueryParams,
+                    Roles = input.Roles
+                };
+                return await queryService.GetMasterAsync(masterInput, ct);
+            }, cancellationToken);
+    }
 }

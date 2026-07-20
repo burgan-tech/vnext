@@ -65,6 +65,14 @@ public sealed class SchemaHref : HrefBase
 }
 
 /// <summary>
+/// Master schema href link. Points to the master function endpoint, which returns the flow-level
+/// master schema the instance is bound to (forwarding to the active subflow when present).
+/// </summary>
+public sealed class MasterHref : HrefBase
+{
+}
+
+/// <summary>
 /// Acknowledge href link (e.g. the long-poll termination acknowledge endpoint).
 /// </summary>
 public sealed class AckHref : HrefBase
