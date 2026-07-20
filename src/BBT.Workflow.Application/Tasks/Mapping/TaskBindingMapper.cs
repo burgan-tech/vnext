@@ -53,7 +53,8 @@ public static class TaskBindingMapper
                 SubProcessTask subProcessTask => (TaskTypes.SubProcess, (object)MapSubProcessTask(subProcessTask)),
                 GetInstancesTask getInstancesTask => (TaskTypes.GetInstances, (object)MapGetInstancesTask(getInstancesTask)),
                 GetInstanceDataTask getDataTask => (TaskTypes.GetInstanceData, (object)MapGetInstanceDataTask(getDataTask)),
-                
+                GetInstanceTask getInstanceTask => (TaskTypes.GetInstance, (object)MapGetInstanceTask(getInstanceTask)),
+
                 // Note: DirectTriggerTask and SubProcessTask require runtime context (InstanceId, Correlation)
                 // and should use ITriggerTaskRemoteExecutor directly with pre-built bindings
                 _ => throw new NotSupportedException($"Task type {task.GetType().Name} is not supported for remote execution")
@@ -167,6 +168,24 @@ public static class TaskBindingMapper
     /// Note: Instance is resolved at runtime, this provides a basic mapping.
     /// </summary>
     private static GetInstanceDataBinding MapGetInstanceDataTask(GetInstanceDataTask task) => new()
+    {
+        Domain = task.TriggerDomain,
+        Workflow = task.TriggerFlow,
+        Instance = task.Identifier ?? string.Empty,
+        Extensions = task.Extensions,
+        ValidateSSL = task.ValidateSSL,
+        UseDapr = task.UseDapr,
+        Headers = task.Headers?.GetRawText(),
+        TimeoutSeconds = task.TimeoutSeconds,
+        ETag = null,
+        AcceptedStatusCodes = task.AcceptedStatusCodes
+    };
+
+    /// <summary>
+    /// Maps GetInstanceTask to GetInstanceBinding.
+    /// Note: Instance is resolved at runtime, this provides a basic mapping.
+    /// </summary>
+    private static GetInstanceBinding MapGetInstanceTask(GetInstanceTask task) => new()
     {
         Domain = task.TriggerDomain,
         Workflow = task.TriggerFlow,

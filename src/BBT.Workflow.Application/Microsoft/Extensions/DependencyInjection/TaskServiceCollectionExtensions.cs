@@ -112,6 +112,7 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DirectTriggerTaskExecutor>();
         services.AddTaskExecutor<GetInstanceDataTaskExecutor>();
         services.AddTaskExecutor<GetInstancesTaskExecutor>();
+        services.AddTaskExecutor<GetInstanceTaskExecutor>();
 
         return services;
     }
