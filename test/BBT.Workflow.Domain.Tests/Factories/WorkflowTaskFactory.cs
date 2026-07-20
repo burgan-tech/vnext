@@ -72,4 +72,30 @@ public static class WorkflowTaskFactory
         task.SetReference(new Reference(name, domain, "sys-tasks", "1.0.0"));
         return task;
     }
+
+    public static GetInstanceTask CreateGetInstanceTask(
+        string name = "get-instance",
+        string domain = "test-domain",
+        string flow = "test-flow",
+        string? key = "inst-key",
+        string? instanceId = null,
+        bool useDapr = false)
+    {
+        var keyJson = key != null ? $@"""key"": ""{key}""," : "";
+        var instanceIdJson = instanceId != null ? $@"""instanceId"": ""{instanceId}""," : "";
+
+        var config = $@"{{
+            ""key"": ""{name}"",
+            ""type"": ""18"",
+            ""domain"": ""{domain}"",
+            ""flow"": ""{flow}"",
+            {keyJson}
+            {instanceIdJson}
+            ""useDapr"": {useDapr.ToString().ToLowerInvariant()}
+        }}";
+
+        var task = GetInstanceTask.Create(config.ToJsonElement());
+        task.SetReference(new Reference(name, domain, "sys-tasks", "1.0.0"));
+        return task;
+    }
 }

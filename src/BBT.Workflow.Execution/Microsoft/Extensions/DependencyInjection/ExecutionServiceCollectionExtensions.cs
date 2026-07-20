@@ -60,6 +60,7 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, SubProcessRemoteInvoker>();
         services.AddSingleton<ITaskInvoker, GetInstanceDataRemoteInvoker>();
         services.AddSingleton<ITaskInvoker, GetInstancesRemoteInvoker>();
+        services.AddSingleton<ITaskInvoker, GetInstanceRemoteInvoker>();
         
         return services;
     }
