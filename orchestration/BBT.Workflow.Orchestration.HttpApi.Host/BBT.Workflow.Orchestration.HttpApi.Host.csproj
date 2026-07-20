@@ -17,4 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BBT.Workflow.Application.Tests" />
+  </ItemGroup>
 </Project>

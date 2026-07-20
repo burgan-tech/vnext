@@ -10,12 +10,14 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkPackageVersion)" />
+        <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="$(MicrosoftPackageVersion)" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
       <ProjectReference Include="..\..\src\BBT.Workflow.Execution\BBT.Workflow.Execution.csproj" />
       <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj" />
+      <ProjectReference Include="..\..\orchestration\BBT.Workflow.Orchestration.HttpApi.Host\BBT.Workflow.Orchestration.HttpApi.Host.csproj" />
       <ProjectReference Include="..\BBT.Workflow.Domain.Tests\BBT.Workflow.Domain.Tests.csproj" />
     </ItemGroup>
 
