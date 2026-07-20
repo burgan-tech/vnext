@@ -112,8 +112,28 @@ against the request/script context — or a static `key`), reads the cache; on a
 cached `FunctionResponseOutput` (Data + StatusCode + Headers) and skips the tasks; on a **miss** it runs
 the function and writes the response back. The cache get/set goes through the Execution `statestore`
 invoker (same `custom:` prefix / TTL / consistency). Only side-effect-free (read) functions should opt
-in. Invalidation is the caller's responsibility (e.g. delete `custom:dcs:*` when a dependency changes).
-A deterministic `sha256(string)` helper is available in `keyExpression` for bounded, vary-by-correct keys.
+in. A deterministic `sha256(string)` helper is available in `keyExpression` for bounded, vary-by-correct
+keys; the config's own version is available as `context.Instance.Version`, so folding it into the key
+makes a new config version produce a new key (no active deletion needed for config changes).
+
+### Invalidation (generation-namespace)
+
+For dependencies that change **without** a version bump (e.g. db-vars), add a `generationKey` /
+`generationKeyExpression` — the state key holding a monotonic "generation" stamp. The runtime reads the
+stamp and folds it into the cache key (`…:g:{generation}`). Bumping the stamp (a single write on the
+dependency-change transition) makes every subsequent request compute a new key, so **all cached variants
+of the config are invalidated at once** — old entries are simply never read again and expire via TTL. No
+prefix scan / delete is required, so it stays Dapr-store-agnostic. Absent a stamp entry, generation is
+`0`; a generation-read failure with `bypassOnCacheError: true` runs the function without caching.
+
+```jsonc
+"cache": {
+  "keyExpression": { "location": "dynamicExpresso",
+                     "code": "\"dcs:\" + context.Headers.configKey + \":\" + context.Instance.Version + \":\" + sha256(context.Headers.varyBy)" },
+  "generationKey": "dcs:gen:configA",   // db-var write bumps this → all variants invalidated
+  "storeName": "vnext-state", "ttlInSeconds": 300, "bypassOnCacheError": true
+}
+```
 
 ## References
 

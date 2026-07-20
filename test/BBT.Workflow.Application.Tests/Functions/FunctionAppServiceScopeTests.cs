@@ -267,16 +267,42 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task GetFunctionByKeyAsync_WithGeneration_FoldsStampIntoKey()
+    {
+        SetupCachedFunction(generationKey: "dcs:gen");
+        // Generation stamp read = 8 → cache key becomes "fn:test:g:8".
+        _cacheGateway
+            .GetAsync("dcs:gen", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: true, Value: JsonSerializer.SerializeToElement(8)));
+        _cacheGateway
+            .GetAsync("fn:test:g:8", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: false, Value: default));
+        _cacheGateway
+            .SetAsync(Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        // The response is cached under the generation-folded key.
+        await _cacheGateway.Received(1).SetAsync(
+            "fn:test:g:8", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+            Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────────
 
-    private void SetupCachedFunction()
+    private void SetupCachedFunction(string? generationKey = null)
     {
         var task = OnExecuteTask.Create(
             1,
             new Reference("my-task", TestDomain, "sys-tasks", TestVersion),
             ScriptCode.FromNative(string.Empty));
         var function = new Function(
-            TaskScope.Domain, task, cache: new FunctionCache(key: "fn:test", ttlInSeconds: 300));
+            TaskScope.Domain, task,
+            cache: new FunctionCache(key: "fn:test", ttlInSeconds: 300, generationKey: generationKey));
         function.SetReference(new Reference(FunctionKey, TestDomain, "sys-functions", TestVersion));
 
         _componentCacheStore

@@ -17,7 +17,9 @@ public sealed class FunctionCache
         string? storeName = null,
         int? ttlInSeconds = null,
         string? consistency = null,
-        bool bypassOnCacheError = true)
+        bool bypassOnCacheError = true,
+        ScriptCode? generationKeyExpression = null,
+        string? generationKey = null)
     {
         KeyExpression = keyExpression;
         Key = key;
@@ -25,6 +27,8 @@ public sealed class FunctionCache
         TtlInSeconds = ttlInSeconds;
         Consistency = consistency;
         BypassOnCacheError = bypassOnCacheError;
+        GenerationKeyExpression = generationKeyExpression;
+        GenerationKey = generationKey;
     }
 
     /// <summary>
@@ -63,8 +67,31 @@ public sealed class FunctionCache
     public bool BypassOnCacheError { get; }
 
     /// <summary>
+    /// Optional Dynamic Expresso expression resolving to the <b>state key</b> that holds this config's
+    /// cache "generation" stamp (a monotonic value). When configured, the runtime reads that stamp and
+    /// folds it into the cache key (<c>…:g:{generation}</c>); bumping the stamp (on a dependency change
+    /// such as a db-var write) invalidates every cached variant of the config at once without deleting
+    /// keys — old entries are simply never read again and expire via TTL. Takes precedence over
+    /// <see cref="GenerationKey"/>.
+    /// </summary>
+    public ScriptCode? GenerationKeyExpression { get; }
+
+    /// <summary>
+    /// Optional static state key holding the cache generation stamp (used when
+    /// <see cref="GenerationKeyExpression"/> is absent).
+    /// </summary>
+    public string? GenerationKey { get; }
+
+    /// <summary>
     /// True when a key source (expression or static key) is configured.
     /// </summary>
     [JsonIgnore]
     public bool HasKeySource => (KeyExpression?.HasMappingCode ?? false) || !string.IsNullOrWhiteSpace(Key);
+
+    /// <summary>
+    /// True when a generation-stamp key source is configured (enables generation-namespace invalidation).
+    /// </summary>
+    [JsonIgnore]
+    public bool HasGenerationSource =>
+        (GenerationKeyExpression?.HasMappingCode ?? false) || !string.IsNullOrWhiteSpace(GenerationKey);
 }

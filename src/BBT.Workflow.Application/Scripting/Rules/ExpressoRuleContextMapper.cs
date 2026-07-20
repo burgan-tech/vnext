@@ -102,6 +102,7 @@ public static class ExpressoRuleContextMapper
             Id = instance.Id,
             Key = instance.Key,
             Flow = instance.Flow,
+            Version = instance.FlowVersion,
             CurrentState = instance.CurrentState,
             EffectiveState = instance.EffectiveState,
             EffectiveStateType = instance.EffectiveStateType?.ToString(),

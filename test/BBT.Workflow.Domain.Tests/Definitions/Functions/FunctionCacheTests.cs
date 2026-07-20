@@ -47,6 +47,34 @@ public sealed class FunctionCacheTests
     }
 
     [Fact]
+    public void Deserialize_ParsesGenerationKey_AndHasGenerationSource()
+    {
+        var json = """
+        {
+          "key": "dcs:configA",
+          "generationKey": "dcs:gen:configA",
+          "ttlInSeconds": 300
+        }
+        """;
+
+        var cache = JsonSerializer.Deserialize<FunctionCache>(json, JsonSerializerConstants.JsonOptions);
+
+        cache.ShouldNotBeNull();
+        cache!.GenerationKey.ShouldBe("dcs:gen:configA");
+        cache.HasGenerationSource.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void HasGenerationSource_False_WhenNoGenerationKey()
+    {
+        var cache = JsonSerializer.Deserialize<FunctionCache>(
+            """{ "key": "dcs:configA" }""", JsonSerializerConstants.JsonOptions);
+
+        cache.ShouldNotBeNull();
+        cache!.HasGenerationSource.ShouldBeFalse();
+    }
+
+    [Fact]
     public void HasKeySource_False_WhenNeitherKeyNorExpression()
     {
         var cache = JsonSerializer.Deserialize<FunctionCache>(
