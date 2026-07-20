@@ -37,4 +37,3 @@ For a same-order group, the coordinator snapshots the input context once, clones
 - Parallel infrastructure failure is propagated.
 - Parallel output merge is deterministic and conflicting keys fail explicitly.
 - A delayed remote invocation observes no active journal transaction.
-

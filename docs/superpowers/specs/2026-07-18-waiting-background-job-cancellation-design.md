@@ -216,4 +216,3 @@ No path changes a `Running` job to `Cancelled` through cleanup.
 - vNext cleanup callers switch together so completion, fault, and cancel transitions share one policy.
 - No database migration is required because the design uses existing status and claim/arming columns.
 - Existing `Cancelled` records remain valid historical data.
-

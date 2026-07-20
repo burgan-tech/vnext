@@ -105,4 +105,3 @@
 - [ ] **Step 2: Run the test** against the repository test fixture and verify the pre-fix failure mode is reproduced or guarded.
 - [ ] **Step 3: Make the minimum boundary adjustment** needed so journal transactions are complete before invocation and each result write is isolated.
 - [ ] **Step 4: Run** the focused application tests, infrastructure tests, and `dotnet build BBT.Workflow.slnx --no-restore`; record any unrelated dirty-worktree failures separately.
-
