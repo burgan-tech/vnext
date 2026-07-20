@@ -215,12 +215,22 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
 
     private static string BuildPath(GetInstanceBinding binding)
     {
-        var path = $"/api/v1/{binding.Domain}/workflows/{binding.Workflow}/instances/{binding.Instance}";
+        var domain = Uri.EscapeDataString(binding.Domain);
+        var workflow = Uri.EscapeDataString(binding.Workflow);
+        var instance = Uri.EscapeDataString(binding.Instance);
+        var path = $"/api/v1/{domain}/workflows/{workflow}/instances/{instance}";
 
         if (binding.Extensions is { Length: > 0 })
         {
-            var extensionsParam = string.Join("&", binding.Extensions.Where(e => !string.IsNullOrEmpty(e)).Select(e => $"extensions={Uri.EscapeDataString(e)}"));
-            path += $"?{extensionsParam}";
+            var validExtensions = binding.Extensions
+                .Where(e => !string.IsNullOrEmpty(e))
+                .Select(e => $"extensions={Uri.EscapeDataString(e)}")
+                .ToList();
+
+            if (validExtensions.Count > 0)
+            {
+                path += $"?{string.Join("&", validExtensions)}";
+            }
         }
 
         return path;
