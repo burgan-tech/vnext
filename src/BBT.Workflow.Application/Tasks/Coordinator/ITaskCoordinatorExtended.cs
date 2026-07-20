@@ -29,6 +29,7 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken = default);
 
@@ -47,6 +48,7 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
         CancellationToken cancellationToken = default);

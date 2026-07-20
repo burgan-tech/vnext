@@ -67,9 +67,17 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken)
     {
+        if (origin == TaskExecutionOrigin.Flow && instanceTransitionId is null)
+        {
+            return Result<TasksExecutionResult>.Fail(Error.Validation(
+                WorkflowErrorCodes.TaskExecution,
+                $"Flow task '{onExecuteTask.Task.Key}' requires a persisted instance transition id."));
+        }
+
         // 1. Build boundary chain upfront (Task -> State -> Global)
         var boundaryChain = CompiledBoundaryChain.Compile(
             onExecuteTask.ErrorBoundary,
@@ -91,7 +99,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // 2. Execute with error-aware retry (retry policy resolved per failure from matching rule)
         return await ExecuteWithErrorAwareRetryAsync(
-            onExecuteTask, instanceTransitionId, taskTrigger, context,
+            onExecuteTask, instanceTransitionId, taskTrigger, origin, context,
             boundaryChain, cancellationToken);
     }
 
@@ -111,6 +119,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CompiledBoundaryChain boundaryChain,
         CancellationToken cancellationToken)
@@ -125,7 +134,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
             while (true)
             {
-                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, context, boundaryChain, cancellationToken);
+                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, origin, context, boundaryChain, cancellationToken);
 
                 // Success - return directly
                 if (result is { IsSuccess: true, Value.IsSuccess: true })
@@ -180,6 +189,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 onExecuteTask,
                 boundaryChain,
                 totalStopwatch.ElapsedMilliseconds,
+                attempt,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -203,6 +213,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <param name="onExecuteTask">The task definition that failed.</param>
     /// <param name="boundaryChain">The compiled boundary chain for resolution.</param>
     /// <param name="totalDurationMs">Total execution duration including retries.</param>
+    /// <param name="attemptsMade">Number of retry attempts actually performed (0 when no Retry rule matched).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The execution result with appropriate boundary action.</returns>
     private async Task<Result<TasksExecutionResult>> HandlePostRetryFailureAsync(
@@ -210,6 +221,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         CompiledBoundaryChain boundaryChain,
         long totalDurationMs,
+        int attemptsMade,
         CancellationToken cancellationToken)
     {
         var taskKey = onExecuteTask.Task.Key;
@@ -233,9 +245,18 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 failedResult.Error, taskKey, "Unknown", totalDurationMs);
         }
 
-        _logger.LogWarning(
-            "Retry exhausted for task {TaskKey}. Resolving fallback boundary action (excluding Retry). Error: {Error}",
-            taskKey, executionError.ErrorMessage);
+        if (attemptsMade > 0)
+        {
+            _logger.LogWarning(
+                "Retry exhausted for task {TaskKey} after {Attempts} attempt(s). Resolving fallback boundary action (excluding Retry). Error: {Error}",
+                taskKey, attemptsMade, executionError.ErrorMessage);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "No matching Retry rule for task {TaskKey}. Resolving fallback boundary action. Error: {Error}",
+                taskKey, executionError.ErrorMessage);
+        }
 
         // Resolve boundary for fallback actions - EXCLUDE Retry since it's already exhausted
         var resolution = _boundaryResolver.ResolveExcluding(
@@ -374,14 +395,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Gets the persistence strategy for the given task trigger.
     /// </summary>
-    private ITaskPersistenceStrategy? GetPersistenceStrategy(TaskTrigger taskTrigger)
+    private ITaskPersistenceStrategy? GetPersistenceStrategy(TaskExecutionOrigin origin)
     {
-        var strategyResult = _persistenceStrategyFactory.GetStrategy(taskTrigger);
+        var strategyResult = _persistenceStrategyFactory.GetStrategy(origin);
         if (!strategyResult.IsSuccess)
         {
             _logger.LogDebug(
-                "No persistence strategy found for trigger {TaskTrigger}, skipping persistence",
-                taskTrigger);
+                "No persistence strategy found for origin {TaskExecutionOrigin}, skipping persistence",
+                origin);
             return null;
         }
 
@@ -391,14 +412,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Persists task creation.
     /// </summary>
-    private static async Task PersistCreationAsync(
+    private static async Task<InstanceTask> PersistCreationAsync(
         ITaskPersistenceStrategy? strategy,
         InstanceTask instanceTask,
         CancellationToken cancellationToken)
     {
         if (strategy == null)
-            return;
-        await strategy.HandleCreationAsync(instanceTask, cancellationToken);
+            return instanceTask;
+        return await strategy.HandleCreationAsync(instanceTask, cancellationToken);
     }
 
     /// <summary>
@@ -417,7 +438,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Records task failure metrics and persists the failure.
     /// </summary>
-    private void RecordFailure(
+    /// <remarks>
+    /// The completion persist is awaited (not fire-and-forget) so its SaveChanges cannot race the
+    /// pipeline's next write on the shared request-scoped DbContext, which previously tripped EF Core's
+    /// ConcurrencyDetector and faulted the instance even when an Ignore boundary should have handled the
+    /// failure (issue #807). Persistence errors are allowed to propagate so a task failure is never
+    /// reported as durably recorded when its journal update did not commit.
+    /// </remarks>
+    private async Task RecordFailureAsync(
         InstanceTask instanceTask,
         ITaskPersistenceStrategy? strategy,
         string taskType,
@@ -429,9 +457,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         instanceTask.Faulted(errorMessage ?? "Unknown error");
 
         if (strategy != null)
-        {
-            _ = strategy.HandleCompletionAsync(instanceTask, cancellationToken);
-        }
+            await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
 
         _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
         _workflowMetrics.FinishTaskExecution(taskType, workflowKey);
@@ -465,6 +491,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CompiledBoundaryChain boundaryChain,
         CancellationToken cancellationToken)
@@ -497,11 +524,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // 2. Create instance task for tracking
         var instanceTask = new InstanceTask(
             _guidGenerator.Create(),
-            instanceTransitionId ?? _guidGenerator.Create(),
+            instanceTransitionId ?? Guid.Empty,
             task.Key);
 
         // 3. Get persistence strategy
-        var persistenceStrategy = GetPersistenceStrategy(taskTrigger);
+        var persistenceStrategy = GetPersistenceStrategy(origin);
 
         // 4. Record metrics start
         _workflowMetrics.RecordTaskExecuted(taskTypeStr, workflowKey);
@@ -512,14 +539,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task.Key, taskType, context.Instance?.Id);
 
         // 5. Persist creation
-        await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
+        instanceTask = await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);
         if (!executorResult.IsSuccess)
         {
             stopwatch.Stop();
-            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
                 executorResult.Error.Message, cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
@@ -559,7 +586,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // 9. Handle infrastructure error - return without boundary resolution (not retriable)
         if (!executeResult.IsSuccess)
         {
-            RecordFailure(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
                 executeResult.Error.Message ?? "Unknown infrastructure error", cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
@@ -655,4 +682,3 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             [summary], stopwatch.ElapsedMilliseconds));
     }
 }
-

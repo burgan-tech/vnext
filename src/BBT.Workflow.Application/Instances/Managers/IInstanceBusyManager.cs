@@ -1,6 +1,21 @@
 namespace BBT.Workflow.Instances;
 
 /// <summary>
+/// Outcome of an attempt to mark an instance as Busy.
+/// </summary>
+public enum BusyMarkOutcome
+{
+    /// <summary>The instance was transitioned to Busy.</summary>
+    Marked = 0,
+
+    /// <summary>The instance was already Busy — a transition is queued or executing.</summary>
+    AlreadyBusy = 1,
+
+    /// <summary>No mark applied: the instance was not found or is Completed.</summary>
+    Skipped = 2
+}
+
+/// <summary>
 /// Manages the Busy status of workflow instances with isolated transactions.
 /// Consolidates pre-pipeline busy marking, async pre-enqueue marking, and SubFlow chain propagation.
 /// </summary>
@@ -18,4 +33,12 @@ public interface IInstanceBusyManager
     /// Idempotent: silently no-ops when the instance is already Busy or Completed.
     /// </summary>
     Task MarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attempts to mark an instance as Busy with SubFlow propagation, reporting the prior state.
+    /// Unlike <see cref="MarkBusyWithPropagationAsync"/>, an already-Busy instance short-circuits
+    /// with <see cref="BusyMarkOutcome.AlreadyBusy"/> (no propagation) so callers can reject the
+    /// request instead of silently proceeding.
+    /// </summary>
+    Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
 }

@@ -40,9 +40,53 @@ public sealed class WorkflowExecutionOptions
     public bool StrictChainTokenGate { get; set; }
 
     /// <summary>
-    /// Enables the stuck-Busy chain reaper (S7) sweep. Default: false.
+    /// Enables the stuck-Busy chain reaper (S7) sweep. Default: true — without it, a crash on
+    /// the sync execution path (no durable job row) leaves the instance Busy forever and the
+    /// Retry endpoint (Faulted-only) is unreachable. Staleness is measured from the chain
+    /// heartbeat, which the step executor refreshes on every committed step, so legitimately
+    /// long-running chains are not falsely reaped.
     /// </summary>
-    public bool EnableChainReaper { get; set; }
+    public bool EnableChainReaper { get; set; } = true;
+
+    /// <summary>
+    /// When enabled, aggregate instance loads include only the IsLatest data row instead of the
+    /// full version history — the full-merge model makes the latest row self-sufficient for
+    /// pipeline merges, script context and polling, turning O(history) IO per load into O(1).
+    /// History-dependent operations must use the repository full-history APIs; the aggregate
+    /// fails fast otherwise. Default: false (canary rollout — enable per environment, compare
+    /// baseline metrics, then flip the default).
+    /// </summary>
+    public bool LatestOnlyInstanceLoading { get; set; }
+
+    /// <summary>
+    /// Lease duration in seconds for the transition chain lock (L1). The lease must cover the
+    /// whole auto-chain budget because the Dapr lock building block has no working TTL
+    /// extension (its Redis component uses SET NX, which rejects re-acquire attempts even
+    /// from the same owner). When 0 (default), the effective lease is derived as
+    /// <see cref="TransitionJobTimeoutSeconds"/> + 30 so the lock always outlives the job
+    /// execution budget and the timeout-recovery path.
+    /// </summary>
+    public int TransitionLockLeaseSeconds { get; set; }
+
+    /// <summary>
+    /// Enables per-hop lock lease extension between chained transitions. Only enable this with
+    /// a lock provider that supports atomic TTL extension (e.g. the Redis provider); the Dapr
+    /// lock provider always fails extension, which would stop every chain after its first hop.
+    /// When enabled, a failed extension stops the chain instead of continuing without a held
+    /// lease. Default: false — the budget-aligned lease
+    /// (<see cref="TransitionLockLeaseSeconds"/>) carries the chain instead.
+    /// </summary>
+    public bool EnableLockLeaseExtension { get; set; }
+
+    /// <summary>
+    /// Resolves the effective L1 lock lease: the configured
+    /// <see cref="TransitionLockLeaseSeconds"/> when positive, otherwise
+    /// <see cref="TransitionJobTimeoutSeconds"/> + 30.
+    /// </summary>
+    public int GetEffectiveLockLeaseSeconds() =>
+        TransitionLockLeaseSeconds > 0
+            ? TransitionLockLeaseSeconds
+            : TransitionJobTimeoutSeconds + 30;
 
     /// <summary>
     /// Maximum number of flow schemas swept concurrently by the chain reaper.
@@ -59,6 +103,20 @@ public sealed class WorkflowExecutionOptions
     public int ChainReaperFlowTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Leader-lease duration in seconds for the chain reaper. Every orchestration replica runs
+    /// the reaper hosted service, but only the one that holds the <c>chain-reaper-leader</c>
+    /// lease sweeps in a given cycle — the others skip it. This removes the redundant
+    /// per-replica <c>sys_flows</c> discovery and per-flow-schema polling that would otherwise
+    /// scale with the replica count. The lease is acquired at the start of a cycle and released
+    /// when the sweep completes; the TTL is only a crash-safety net, so it must comfortably
+    /// exceed a typical sweep. Any rare mid-sweep expiry is harmless because the reaper's
+    /// re-drive is idempotent (chain-token gate). Acquire/release use the platform
+    /// <c>IPostgreSqlDistributedLockService</c>, backed only by the PostgreSQL lease store.
+    /// Default: 120.
+    /// </summary>
+    public int ChainReaperLeaderLeaseSeconds { get; set; } = 120;
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process
@@ -66,10 +124,32 @@ public sealed class WorkflowExecutionOptions
     /// fix in the resume/revert path is already applied.
     /// </summary>
     public bool InProcessSameDomainForwarding { get; set; }
+
+    /// <summary>
+    /// In-handler retry policy for transient instance-lock conflicts inside transition jobs.
+    /// The Dapr job can fire while a competing holder (e.g. the enqueue accept lock or a
+    /// finishing chain) still holds the instance execution lock for a few milliseconds;
+    /// a short bounded retry absorbs that instead of losing the transition.
+    /// </summary>
+    public LockConflictRetryOptions LockConflictRetry { get; set; } = new();
 }
 
 public sealed class TransitionJobFailurePolicyOptions
 {
     public int MaxRetries { get; set; } = 5;
     public int IntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// Bounded exponential-backoff retry settings for instance-lock conflicts in
+/// <c>TransitionJobHandler</c>. Worst case total delay with defaults:
+/// 100 + 200 + 400 + 800 = 1.5s across 5 attempts.
+/// </summary>
+public sealed class LockConflictRetryOptions
+{
+    /// <summary>Maximum pipeline execution attempts (first try included). Default: 5.</summary>
+    public int MaxAttempts { get; set; } = 5;
+
+    /// <summary>Base delay before the first retry; doubles per attempt. Default: 100ms.</summary>
+    public int BaseDelayMilliseconds { get; set; } = 100;
 }

@@ -25,5 +25,6 @@ public static class TaskTypes
     public const string SubProcess = "subprocess";
     public const string GetInstanceData = "getinstancedata";
     public const string GetInstances = "getinstances";
+    public const string GetInstance = "getinstance";
 }
 

@@ -126,6 +126,7 @@ public class TransitionPipelineTests
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
+            Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }
 
@@ -382,7 +383,14 @@ public class TransitionPipelineTests
     [Fact]
     public async Task RunAsync_WithAutoChain_ShouldExtendLockBetweenIterations()
     {
-        // Arrange
+        // Arrange — between-hop lease extension is OPT-IN (the default Dapr lock provider
+        // cannot extend a held lock, so the budget-aligned lease carries the chain instead);
+        // build a pipeline configured for a provider that supports atomic extension.
+        var pipeline = CreatePipelineWithOptions(
+            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions
+            {
+                EnableLockLeaseExtension = true
+            });
         var context1 = CreateTransitionExecutionContext();
         var context2 = CreateTransitionExecutionContext("auto-transition");
         var workflowContext = CreateWorkflowExecutionContext(context1);
@@ -432,11 +440,40 @@ public class TransitionPipelineTests
         }
 
         // Act
-        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+        await pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         // Assert: lock extended between chain iterations
         await mockLockScope.Received(1)
             .ExtendAsync(Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Builds a pipeline with explicit execution options, reusing the fixture's mocks.
+    /// </summary>
+    private TransitionPipeline CreatePipelineWithOptions(
+        BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions options)
+    {
+        var executor = new TransitionExecutor(
+            _mockSteps,
+            Substitute.For<ILogger<TransitionExecutor>>());
+        var continuationDispatcher = new ContinuationDispatcher(
+            new IContinuationStrategy[] { new InlineContinuationStrategy() });
+
+        return new TransitionPipeline(
+            executor,
+            continuationDispatcher,
+            _mockLockScopeFactory,
+            _mockReservedResolver,
+            _mockBusyMarker,
+            _mockContextFactory,
+            _mockPostCommitExecutor,
+            _mockInstanceRepository,
+            _mockUowManager,
+            _mockValidationService,
+            new PipelineProfileResolver(),
+            _mockStateNotificationScheduler,
+            Microsoft.Extensions.Options.Options.Create(options),
+            _mockLogger);
     }
 
     #endregion

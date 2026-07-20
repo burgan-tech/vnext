@@ -28,6 +28,9 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 6. Read [API and Service Contracts](contracts/api-and-service-contracts.md) before changing HTTP or Dapr-facing contracts.
 7. Read [JSON Validation](contracts/json-validation.md) before changing schema validation errors.
 8. Read [Long-Poll Termination on State Entry](domain/long-poll-termination.md) before changing State-function long-poll behavior or the pipeline pause/resume path.
+9. Read [Event-Driven Workflows](domain/event-driven-workflows.md) before wiring external events into workflows or transitions (event mappings, Dapr subscriptions, correlation).
+10. Read [Instance Filtering and Queries](runtime/instance-filtering-and-queries.md) before writing instance queries in mapping scripts (fluent `InstanceQuery`, operator reference, `GetInstancesTask` vs `DaprServiceTask`, migration from hand-written GraphQL filters).
+11. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `18`, local/remote response parity).
 
 ## Documentation Rules
 

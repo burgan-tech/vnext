@@ -159,6 +159,21 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public Guid? LongPollAckToken { get; private set; }
 
     /// <summary>
+    /// True when the aggregate was materialized with only the IsLatest data row (latest-only
+    /// loading). History-dependent members fail fast in this mode instead of silently returning
+    /// wrong answers; use the repository full-history APIs
+    /// (<c>FindByIdentifierWithFullHistoryAsync</c> / <c>FindByIdentifierWithFullDataAsync</c>)
+    /// for version-line reads and line-targeted appends. Not persisted.
+    /// </summary>
+    public bool IsDataPartiallyLoaded { get; private set; }
+
+    /// <summary>
+    /// Marks the aggregate as latest-only loaded. Set by the repository right after
+    /// materialization when latest-only instance loading is enabled.
+    /// </summary>
+    public void MarkDataPartiallyLoaded() => IsDataPartiallyLoaded = true;
+
+    /// <summary>
     /// Completed at
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
@@ -405,13 +420,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     /// <summary>
     /// Marks the instance as faulted and publishes fault cleanup event.
-    /// Also propagates fault downward to active SubFlow children and upward to parent (if this is a SubFlow).
+    /// Also propagates fault downward to active SubFlow children and upward to the parent for direct SubItem faults.
     /// Correlations are intentionally kept open (not completed) so retry can cascade through them.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
     /// <param name="sync">Whether the faulting pipeline chain runs with a synchronous caller (sync=true).</param>
-    public void Fault(string domain, bool sync = false)
+    /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
+    public void Fault(string domain, bool sync = false, TerminationContext? termination = null)
     {
+        var effectiveTermination = termination ?? TerminationContext.Direct(Id);
+        var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Faulted;
         ChainToken = null;
         CompletedAt = DateTime.UtcNow;
@@ -440,15 +458,17 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Flow = correlation.SubFlowName,
                 Version = correlation.SubFlowVersion,
                 FaultedAt = CompletedAt.Value,
-                RootInstanceId = rootId != Id ? rootId : (Guid?)null
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                Termination = childTermination
             });
         }
 
-        // Upward: notify parent if this instance is a blocking SubFlow
-        if (IsSubFlow)
+        // Upward: direct SubItem termination only. Parent cascades never bounce back upward.
+        if (IsSubItem && effectiveTermination.Origin == TerminationOrigin.Direct)
         {
-            var activeIncident = _incidents.LastOrDefault(i => !i.IsResolved);
-            var latestData = LatestData;
+            var subItemType = IsSubFlow ? SubItemType.SubFlow : SubItemType.SubProcess;
+            var activeIncident = IsSubFlow ? _incidents.LastOrDefault(i => !i.IsResolved) : null;
+            var latestData = IsSubFlow ? LatestData : null;
             var contractInfo = ExtraProperties.ToSubFlowContractInfo();
             if (contractInfo.Id != Guid.Empty)
             {
@@ -477,7 +497,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     IncidentBoundaryAction = activeIncident?.BoundaryAction,
                     IncidentBoundaryLevel = activeIncident?.BoundaryLevel,
                     RootInstanceId = rootId != Id ? rootId : (Guid?)null,
-                    Sync = sync
+                    Sync = sync,
+                    SubItemType = subItemType,
+                    TerminationOrigin = effectiveTermination.Origin,
+                    InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
+                    CascadeId = effectiveTermination.CascadeId
                 });
             }
         }
@@ -524,8 +548,12 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Sets the instance status to Canceled and records the completion time.
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
-    public void Cancel(string domain)
+    /// <param name="sync">Whether the canceling pipeline chain runs with a synchronous caller.</param>
+    /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
+    public void Cancel(string domain, bool sync = false, TerminationContext? termination = null)
     {
+        var effectiveTermination = termination ?? TerminationContext.Direct(Id);
+        var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
@@ -544,9 +572,33 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             RootInstanceId = rootId != Id ? rootId : (Guid?)null
         });
 
+        if (IsSubItem && effectiveTermination.Origin == TerminationOrigin.Direct)
+        {
+            var contractInfo = ExtraProperties.ToSubFlowContractInfo();
+            if (contractInfo.Id != Guid.Empty)
+            {
+                AddDistributedEvent(new InstanceSubCanceledEvent
+                {
+                    InstanceId = contractInfo.Id,
+                    SubInstanceId = Id,
+                    Domain = contractInfo.Domain,
+                    Flow = contractInfo.Flow,
+                    Version = contractInfo.Version,
+                    CanceledState = GetCurrentState,
+                    CanceledAt = CompletedAt.Value,
+                    RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                    SubItemType = IsSubFlow ? SubItemType.SubFlow : SubItemType.SubProcess,
+                    Sync = sync,
+                    TerminationOrigin = effectiveTermination.Origin,
+                    InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
+                    CascadeId = effectiveTermination.CascadeId
+                });
+            }
+        }
+
         foreach (var correlation in ActiveCorrelations)
         {
-            correlation.Completed();
+            correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Canceled, CompletedAt.Value);
             AddDistributedEvent(new ChildSubflowCancelRequestedEvent
             {
                 ParentInstanceId = correlation.ParentInstanceId,
@@ -555,7 +607,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Flow = correlation.SubFlowName,
                 CompletedAt = correlation.CompletedAt!.Value,
                 Version = correlation.SubFlowVersion,
-                RootInstanceId = rootId != Id ? rootId : (Guid?)null
+                RootInstanceId = rootId != Id ? rootId : (Guid?)null,
+                Termination = childTermination
             });
         }
     }
@@ -687,13 +740,28 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <returns>The completed correlation if found and not already completed, otherwise null</returns>
     public InstanceCorrelation? CompleteCorrelation(Guid subInstanceId)
     {
+        return CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed);
+    }
+
+    /// <summary>
+    /// Completes a correlation for the given SubFlow instance ID with a terminal outcome.
+    /// </summary>
+    /// <param name="subInstanceId">The SubFlow instance ID to complete</param>
+    /// <param name="outcome">The terminal outcome to persist</param>
+    /// <param name="completedAt">The completion timestamp, or the current UTC time when omitted</param>
+    /// <returns>The completed correlation when the outcome is first applied, otherwise null</returns>
+    public InstanceCorrelation? CompleteCorrelation(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime? completedAt = null)
+    {
         var correlation = FindCorrelationBySubInstanceId(subInstanceId);
         if (correlation == null || correlation.IsCompleted)
         {
             return null;
         }
 
-        correlation.Completed();
+        correlation.ApplyTerminalOutcome(outcome, completedAt ?? DateTime.UtcNow);
 
         // NOTE: Do NOT call Active() here for SubFlow type.
         // The parent must remain Busy until ClearBusyOnResumeStep runs in ResumePipelineAsync.
@@ -885,16 +953,42 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         lock (_dataListLock)
         {
             var latestData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
-            if (ignoreSameData && latestData?.HasSameData(inputData) == true)
+
+            // Invariant: IsLatest = the highest version across the entire history. An explicit
+            // (possibly older-line) version only takes the flag when it compares >= the current
+            // head; otherwise it becomes the head of its own version line without stealing the
+            // global latest (parallel artifact lines such as 1.0.x vs 2.0.x stay independent).
+            var takesLatest = latestData is null
+                || InstanceDataVersionComparer.CompareVersionStrings(version, latestData.Version) >= 0;
+
+            // Appending to an older line requires that line's rows for dedup + sequence math,
+            // which a latest-only loaded aggregate does not have in memory.
+            if (!takesLatest && IsDataPartiallyLoaded)
             {
-                // Data hasn't changed, return the existing latest data
-                return latestData;
+                throw new InvalidOperationException(
+                    $"Cannot append version '{version}' to instance '{Id}': the aggregate was " +
+                    "loaded latest-only and the target version line is not in memory. Load the " +
+                    "instance with full data history for line-targeted appends.");
             }
 
-            // Mark previous latest as not latest
-            if (latestData != null)
+            // Dedup against the head of the SAME version line — not the global latest:
+            // appending data to line 1.0.x must neither be skipped because it happens to equal
+            // the 2.0.0 payload, nor duplicate what its own line already holds.
+            if (ignoreSameData)
             {
-                latestData.MarkAsNotLatest();
+                var lineHead = _dataList
+                    .Where(d => d.Version == version)
+                    .OrderByDescending(d => d.HistorySequence)
+                    .FirstOrDefault();
+                if (lineHead?.HasSameData(inputData) == true)
+                {
+                    return lineHead;
+                }
+            }
+
+            if (takesLatest)
+            {
+                latestData?.MarkAsNotLatest();
             }
 
             var newData = new InstanceData(
@@ -902,7 +996,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 Id,
                 version,
                 inputData,
-                true,
+                takesLatest,
                 GetNextHistorySequence(version)
             );
             _dataList.Add(newData);
@@ -978,7 +1072,20 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             var bestVersion = InstanceDataVersionComparer.FindBestMatch(availableVersions, version);
 
             if (string.IsNullOrEmpty(bestVersion))
+            {
+                // Latest-only aggregates hold a single row: a miss for an explicit version is
+                // ambiguous ("does not exist" vs "not loaded") — fail fast instead of lying.
+                // A hit is always correct (the loaded row is the global highest version).
+                if (IsDataPartiallyLoaded && !IsLatestRequest(version))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot resolve data version '{version}' on instance '{Id}': the " +
+                        "aggregate was loaded latest-only. Load the instance with full data " +
+                        "history for explicit-version reads.");
+                }
+
                 return null;
+            }
 
             // Resolve the selected version back to InstanceData
             // If multiple entries exist with the same version, return the highest by HistorySequence
@@ -1002,12 +1109,27 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     }
 
     /// <summary>
+    /// Returns whether a version request means "the latest" (null/empty or the literal
+    /// <c>latest</c>), which a latest-only loaded aggregate can always answer.
+    /// </summary>
+    private static bool IsLatestRequest(string? version) =>
+        string.IsNullOrWhiteSpace(version)
+        || string.Equals(version, "latest", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Gets all history entries for a specific version
     /// </summary>
     public IEnumerable<InstanceData> GetVersionHistory(string version)
     {
         lock (_dataListLock)
         {
+            if (IsDataPartiallyLoaded)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot enumerate version history on instance '{Id}': the aggregate was " +
+                    "loaded latest-only. Use the repository full-history API instead.");
+            }
+
             return _dataList
                 .Where(d => d.Version == version)
                 .OrderBy(d => d.HistorySequence)

@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Results;
-using BBT.Workflow.Domain;
+using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -134,6 +134,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     [JsonInclude] [JsonPropertyName("errorBoundary")]
     public ErrorBoundary? ErrorBoundary { get; private set; }
 
+    /// <summary>
+    /// Optional event definition (<c>attributes.event</c>). When present, an external event may start a
+    /// new instance of this workflow via <c>action=start</c>. Independent of any transition-level event.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("event")]
+    public Event? Event { get; private set; }
+
 
     [JsonInclude] [JsonPropertyName("labels")]
     private List<LanguageLabel> labels = new();
@@ -260,6 +267,15 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public void SetType(string type)
     {
         Type = WorkflowType.FromCode(type);
+    }
+
+    /// <summary>
+    /// Sets the flow-level master schema reference. In production this is populated via JSON
+    /// deserialization of the <c>schema</c> property; exposed here for programmatic construction.
+    /// </summary>
+    public void SetSchema(Reference reference)
+    {
+        Schema = reference;
     }
 
     public void AddLanguage(string label, string language)

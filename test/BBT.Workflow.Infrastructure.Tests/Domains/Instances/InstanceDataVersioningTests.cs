@@ -59,7 +59,11 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     /// </summary>
     private static async Task ApplyVersioningTrigger(WorkflowDbContext context)
     {
-        // Create function
+        // Create function — mirrors the production trigger
+        // (20260711114525_AlignInstanceDataLatestTriggerWithSemanticVersion): it assigns the
+        // monotonic VersionNo and demotes the previous latest ONLY when the incoming row is
+        // itself marked latest, so the application layer's semantic-version IsLatest decision
+        // is respected instead of overwritten (last-insert-wins).
         await context.Database.ExecuteSqlRawAsync(@"
 CREATE OR REPLACE FUNCTION set_instance_data_version_and_latest()
 RETURNS trigger AS $$
@@ -75,12 +79,12 @@ BEGIN
 
     NEW.""VersionNo"" := next_version_no;
 
-    UPDATE ""InstancesData""
-       SET ""IsLatest"" = FALSE
-     WHERE ""InstanceId"" = NEW.""InstanceId""
-       AND ""IsLatest"" = TRUE;
-
-    NEW.""IsLatest"" := TRUE;
+    IF NEW.""IsLatest"" THEN
+        UPDATE ""InstancesData""
+           SET ""IsLatest"" = FALSE
+         WHERE ""InstanceId"" = NEW.""InstanceId""
+           AND ""IsLatest"" = TRUE;
+    END IF;
 
     RETURN NEW;
 END;
@@ -133,7 +137,7 @@ $$;
                 // We need to add InstanceData directly since Instance is already created
                 await ctx.Database.ExecuteSqlRawAsync(@"
                     INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, false)",
+                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
                     Guid.NewGuid(),
                     instanceId,
                     "1.0.0",
@@ -200,7 +204,7 @@ $$;
             {
                 await ctx.Database.ExecuteSqlRawAsync(@"
                     INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, false)",
+                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
                     Guid.NewGuid(),
                     instanceId1,
                     "1.0.0",
@@ -216,7 +220,7 @@ $$;
             {
                 await ctx.Database.ExecuteSqlRawAsync(@"
                     INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, false)",
+                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
                     Guid.NewGuid(),
                     instanceId2,
                     "1.0.0",
@@ -274,7 +278,7 @@ $$;
             await using var ctx = CreateContext();
             await ctx.Database.ExecuteSqlRawAsync(@"
                 INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, false)",
+                VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
                 Guid.NewGuid(),
                 instanceId,
                 "1.0.0",
@@ -303,6 +307,68 @@ $$;
             var latest = list.Single(x => x.IsLatest);
             latest.VersionNo.ShouldBe(5);
         }
+    }
+
+    [Fact]
+    public async Task Lower_Semantic_Version_Inserted_After_Higher_Should_Not_Steal_Latest()
+    {
+        // Regression for the domain IsLatest invariant at the DB layer (review): appending a
+        // lower semantic version to an older line (e.g. 1.0.5 while 2.0.0 is the head) must NOT
+        // steal the latest flag. The application layer (Instance.AddDataWithVersion) decides via
+        // the semantic-version comparer and inserts the older-line row with IsLatest = false;
+        // the aligned trigger must respect that and leave 2.0.0 as the sole latest — the old
+        // last-insert-wins trigger would instead have marked 1.0.5 latest.
+        var instanceId = Guid.NewGuid();
+        var baseline = DateTime.UtcNow;
+
+        await using (var ctx = CreateContext())
+        {
+            ctx.Instances.Add(Instance.Create(instanceId, "test-flow", "1.0.0"));
+            await ctx.SaveChangesAsync();
+        }
+
+        // Head of history: 2.0.0 (application marks it latest).
+        await InsertInstanceDataRowAsync(instanceId, "2.0.0", isLatest: true, enteredAt: baseline);
+
+        // Older-line append: 1.0.5 (application decided takesLatest = false).
+        await InsertInstanceDataRowAsync(instanceId, "1.0.5", isLatest: false, enteredAt: baseline.AddMilliseconds(1));
+
+        await using (var ctx = CreateContext())
+        {
+            var list = await ctx.InstancesData
+                .Where(x => x.InstanceId == instanceId)
+                .ToListAsync();
+
+            list.Count.ShouldBe(2);
+
+            // Exactly one latest, and it is 2.0.0 — the lower version did not steal it.
+            var latest = list.Single(x => x.IsLatest);
+            latest.Version.ShouldBe("2.0.0");
+
+            list.Single(x => x.Version == "1.0.5").IsLatest.ShouldBeFalse();
+        }
+    }
+
+    /// <summary>
+    /// Inserts a single InstanceData row with the given semantic version and IsLatest flag,
+    /// mirroring how the application layer persists a versioned row (the trigger assigns
+    /// VersionNo and, only when IsLatest = true, demotes the previous latest).
+    /// </summary>
+    private async Task InsertInstanceDataRowAsync(
+        Guid instanceId, string version, bool isLatest, DateTime enteredAt)
+    {
+        await using var ctx = CreateContext();
+        await ctx.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
+            VALUES ({0}, {1}, {2}, 0, {3}, {4}, {5}::jsonb, {6}, 0, {7})",
+            Guid.NewGuid(),
+            instanceId,
+            version,
+            Ulid.NewUlid().ToString(),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+            "{}",
+            enteredAt,
+            isLatest);
     }
 }
 

@@ -18,12 +18,17 @@ namespace BBT.Workflow.Execution.Strategies;
 /// Asynchronous transition execution strategy.
 /// Executes transitions as background jobs for better scalability and fault tolerance.
 /// Acquires a distributed lock before processing to prevent concurrent enqueuing for
-/// the same instance. Reserved transitions (cancel, exit, updateData, timeout, subflow
-/// resume, shared) lock on their own type-scoped key independent of the base instance
-/// lock — so they are accepted and enqueued even while the main flow is Busy, mirroring
-/// the sync <see cref="Pipeline.TransitionPipeline"/>. Under the lock, checks if an active
-/// job already exists and returns 409 if so. Sets the instance to Busy before enqueueing so callers immediately see
-/// the correct in-progress status.
+/// the same instance. The enqueue lock uses an <see cref="EnqueueLockSuffix"/>-scoped key
+/// (accept scope) that is distinct from the execution lock key the job consumer acquires
+/// in <see cref="Pipeline.TransitionPipeline"/> — the Dapr job fires ~5ms after scheduling,
+/// while this lock is still held, so sharing the key would make the consumer's non-blocking
+/// acquire fail (race condition). Reserved transitions (cancel, exit, updateData, timeout,
+/// subflow resume, shared) scope the suffix onto their own type-specific key so they are
+/// accepted and enqueued even while the main flow is Busy, mirroring the sync pipeline.
+/// Under the lock, checks if an active job already exists (409) and rejects non-reserved
+/// requests when the instance is already Busy (409) — the explicit replacement for the
+/// implicit rejection the previously shared lock key provided. Sets the instance to Busy
+/// before enqueueing so callers immediately see the correct in-progress status.
 /// <para>
 /// Enqueue atomicity is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
 /// when ON (default), the durable intent + Dapr schedule commit in one unit of work (transactional
@@ -47,6 +52,12 @@ public sealed class AsyncTransitionStrategy(
     /// Lock lease duration in seconds — covers the check + enqueue + UoW commit cycle.
     /// </summary>
     private const int DefaultLockLeaseSeconds = 30;
+
+    /// <summary>
+    /// Suffix scoping the accept/enqueue lock away from the execution lock key used by the
+    /// job consumer (TransitionPipeline). Must never be used on the consumer side.
+    /// </summary>
+    public const string EnqueueLockSuffix = ":enqueue";
 
     public ExecMode Mode => ExecMode.Async;
 
@@ -111,13 +122,14 @@ public sealed class AsyncTransitionStrategy(
             Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
 
         // Reserved transitions (cancel, exit, updateData, timeout, subflow resume, shared)
-        // lock on their own type-scoped key — independent of the base instance lock — so the
-        // request is accepted and enqueued even while the main flow holds the instance lock.
-        // Mirrors TransitionPipeline.RunAsync; execution safety is enforced when the job runs
-        // through the sync pipeline.
-        var lockKey = reservedTransitionResolver.IsReserved(ctx)
+        // scope onto their own type-specific key so the request is accepted and enqueued even
+        // while the main flow is Busy. The EnqueueLockSuffix keeps this accept-scope lock
+        // distinct from the execution lock the job consumer acquires in TransitionPipeline —
+        // the Dapr job fires while this lock is still held, so sharing the key would race.
+        var isReserved = reservedTransitionResolver.IsReserved(ctx);
+        var lockKey = (isReserved
             ? reservedTransitionResolver.GetOwnLockKey(ctx)
-            : ctx.LockKey;
+            : ctx.LockKey) + EnqueueLockSuffix;
 
         var lockAcquired = await distributedLockService.ExecuteWithLockAsync(
             lockKey,
@@ -132,7 +144,29 @@ public sealed class AsyncTransitionStrategy(
                 }
 
                 if (!ctx.Directives.IsInternalResume)
+                {
                     await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
+                    // if (isReserved)
+                    // {
+                    //     // Reserved transitions are accepted while the instance is Busy by design.
+                    //     await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
+                    // }
+                    // else
+                    // {
+                    //     // Explicit Busy admission guard: with the accept lock scoped away from the
+                    //     // execution lock, an in-flight transition no longer blocks this key — reject
+                    //     // here so a normal transition cannot be accepted while another is queued/running.
+                    //     var busyOutcome = await instanceBusyManager.TryMarkBusyWithPropagationAsync(
+                    //         ctx.Instance.Id, cancellationToken);
+                    //     if (busyOutcome == BusyMarkOutcome.AlreadyBusy)
+                    //     {
+                    //         logger.AsyncTransitionRejectedInstanceBusy(ctx.TransitionKey, ctx.InstanceId);
+                    //         lockScopeResult = Result<TransitionExecutionContext>.Fail(
+                    //             WorkflowErrors.InstanceBusy(ctx.InstanceId, ctx.TransitionKey));
+                    //         return;
+                    //     }
+                    // }
+                }
 
                 var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
                 lockScopeResult = enqueueResult.Match(

@@ -14,6 +14,17 @@ namespace BBT.Workflow.Tasks.Executors;
 /// <summary>
 /// Implementation of IRemoteInvokerService using Dapr service invocation.
 /// Handles the communication with the Execution Service for remote task execution.
+/// <para>
+/// Retry layering: NO retry runs at the transport layer. The Dapr sidecar
+/// (<c>etc/orchestration/dapr/components/resiliency.yaml</c>) contributes only a circuit
+/// breaker (fast-fail when Execution is down) — no retry policy, because Dapr cannot tell an
+/// app error response (the task ran, possible side effects) from an unreachable-app failure
+/// by status code, and retrying the former would re-invoke a side-effecting task. So this
+/// class performs no retries either; a transport failure becomes a task failure that the
+/// user-defined error boundary decides on. The linked CTS below owns the per-call budget
+/// inside the hierarchy: invocation timeout (60s) ⊂ job budget (300s) ⊂ chain lock lease
+/// (330s) — validated at startup by <c>WorkflowExecutionOptionsValidator</c>.
+/// </para>
 /// </summary>
 public sealed class RemoteInvokerService : IRemoteInvokerService
 {

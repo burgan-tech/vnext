@@ -78,6 +78,20 @@ public sealed class TransitionExecutor
 
                     var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
 
+                    // S8 checkpoint: record the last successfully completed step so a crash /
+                    // retry / job-redelivery of the SAME transition resumes from the next step
+                    // instead of the top (see the resume read above). The value rides the next
+                    // step's own SaveChanges — zero extra round trips. Never advanced at or
+                    // after Finalize: FinalizeTransitionStep clears the checkpoint, and a later
+                    // set (e.g. ResolveAvailable) would leak it into the next transition.
+                    // The heartbeat touch keeps the chain reaper's staleness window measured
+                    // from live progress rather than chain start.
+                    if (state.CurrentStep.Order < LifecycleOrder.Finalize)
+                    {
+                        context.Instance.SetResumePoint(state.CurrentStep.Order);
+                        context.Instance.TouchChainHeartbeat();
+                    }
+
                     if (flowControl.ShouldStop)
                         break;
 

@@ -27,7 +27,6 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Definitions.Timer;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
-using Dapr.Jobs.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -624,6 +623,7 @@ public sealed class InstanceCommandAppService(
             WorkflowVersion = resolvedInstance.FlowVersion,
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
+            Actor = input.Actor,
             Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -728,7 +728,7 @@ public sealed class InstanceCommandAppService(
             // Workflow output mapping bypasses the standard envelope, but NEVER for subflow
             // instances: correlation forward (sub start) and subflow transitions rely on the
             // standard model, so output is ignored even when configured.
-            if (!instance.IsSubItem)
+            if (!instance.IsSubFlow)
             {
                 var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
                 if (outputResult.IsSuccess && outputResult.Value is { } wo)
@@ -791,7 +791,7 @@ public sealed class InstanceCommandAppService(
     /// Creates and prepares a new instance with the provided parameters.
     /// Note: Existing instance check is done in CheckExistingInstanceAsync (idempotent behavior).
     /// </summary>
-    private Task<Result<Instance>> CreateAndPrepareInstanceAsync(
+    private static Task<Result<Instance>> CreateAndPrepareInstanceAsync(
         Definitions.Workflow workflow,
         Guid instanceId,
         string? instanceKey,

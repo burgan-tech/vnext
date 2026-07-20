@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
@@ -24,7 +25,7 @@ public sealed class InstanceCancellationServiceTests
     private readonly Mock<IBackgroundJobService> _backgroundJobService = new();
     private readonly Mock<IUnitOfWorkManager> _uowManager = new();
     private readonly Mock<IUnitOfWork> _uow = new();
-    private readonly Mock<ILogger<InstanceCancellationService>> _logger = new();
+    private readonly CapturingLogger _logger = new();
 
     private readonly Instance _instance = Instance.Create(Guid.NewGuid(), "flow", "1.0.0", "key");
 
@@ -59,7 +60,7 @@ public sealed class InstanceCancellationServiceTests
 
         result.IsSuccess.ShouldBeTrue();
         _backgroundJobService.Verify(
-            b => b.DeleteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            b => b.CancelWaitingAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -76,16 +77,152 @@ public sealed class InstanceCancellationServiceTests
         _instanceJobRepository
             .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<InstanceJob> { job });
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(job.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.Cancelled);
 
         var result = await CreateService().ProcessStateTransitionsCancellationAsync(
             _instance.Id, "state-a", new[] { "check" }, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         _backgroundJobService.Verify(
-            b => b.DeleteAsync(job.JobId, It.IsAny<CancellationToken>()),
+            b => b.CancelWaitingAsync(job.JobId, It.IsAny<CancellationToken>()),
             Times.Once);
         job.IsActive.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task ProcessStateTransitionsCancellation_running_job_remains_active()
+    {
+        var job = CreateInstanceJob();
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob> { job });
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(job.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.SkippedRunning);
+
+        var result = await CreateService().ProcessStateTransitionsCancellationAsync(
+            _instance.Id, "state-a", new[] { "check" }, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        job.IsActive.ShouldBeTrue();
+        _instanceJobRepository.Verify(r => r.UpdateAsync(
+            It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ProcessCancellation_running_job_remains_active()
+    {
+        var job = CreateInstanceJob();
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob> { job });
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(job.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.SkippedRunning);
+
+        var result = await CreateService().ProcessCancellationAsync(_instance.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+        job.IsActive.ShouldBeTrue();
+        _instanceJobRepository.Verify(r => r.UpdateAsync(
+            It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(BackgroundJobCancellationResult.Cancelled)]
+    [InlineData(BackgroundJobCancellationResult.AlreadyTerminal)]
+    [InlineData(BackgroundJobCancellationResult.NotFound)]
+    public async Task ProcessCancellation_non_running_outcomes_close_tracking(
+        BackgroundJobCancellationResult outcome)
+    {
+        var job = CreateInstanceJob();
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob> { job });
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(job.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(outcome);
+
+        var result = await CreateService().ProcessCancellationAsync(_instance.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+        job.IsActive.ShouldBeFalse();
+        _instanceJobRepository.Verify(r => r.UpdateAsync(
+            job, false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessCancellation_mixed_jobs_reports_only_processed_count()
+    {
+        var failed = CreateInstanceJob("failed");
+        var waiting = CreateInstanceJob("waiting");
+        var running = CreateInstanceJob("running");
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob> { failed, waiting, running });
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(failed.JobId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("cancel failed"));
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(waiting.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.Cancelled);
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(running.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.SkippedRunning);
+
+        var result = await CreateService().ProcessCancellationAsync(_instance.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+        failed.IsActive.ShouldBeTrue();
+        waiting.IsActive.ShouldBeFalse();
+        running.IsActive.ShouldBeTrue();
+        _logger.SingleMessage(40019)
+            .ShouldBe($"Processed 1 instance cancellation jobs for instance {_instance.Id}");
+    }
+
+    [Fact]
+    public async Task ProcessStateTransitionsCancellation_mixed_jobs_reports_only_processed_count()
+    {
+        var failed = CreateInstanceJob("failed");
+        var waiting = CreateInstanceJob("waiting");
+        var running = CreateInstanceJob("running");
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob> { failed, waiting, running });
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(failed.JobId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("cancel failed"));
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(waiting.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.Cancelled);
+        _backgroundJobService
+            .Setup(s => s.CancelWaitingAsync(running.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BackgroundJobCancellationResult.SkippedRunning);
+
+        var result = await CreateService().ProcessStateTransitionsCancellationAsync(
+            _instance.Id,
+            "state-a",
+            new[] { "failed", "waiting", "running" },
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        failed.IsActive.ShouldBeTrue();
+        waiting.IsActive.ShouldBeFalse();
+        running.IsActive.ShouldBeTrue();
+        _logger.SingleMessage(10058).ShouldBe(
+            $"Processed 1 scheduled jobs for instance {_instance.Id}, transitions: failed, waiting, running");
+    }
+
+    private InstanceJob CreateInstanceJob(string transition = "check") =>
+        InstanceJob.Create(
+            Guid.NewGuid(),
+            JobName.ForScheduledTransition(_instance.Id, "state-a", transition),
+            Guid.NewGuid(),
+            "bank",
+            "flow",
+            _instance.Id);
 
     private InstanceCancellationService CreateService()
         => new(
@@ -93,5 +230,31 @@ public sealed class InstanceCancellationServiceTests
             _instanceJobRepository.Object,
             _backgroundJobService.Object,
             _uowManager.Object,
-            _logger.Object);
+            _logger);
+
+    private sealed class CapturingLogger : ILogger<InstanceCancellationService>
+    {
+        private readonly List<(EventId EventId, string Message)> _entries = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _entries.Add((eventId, formatter(state, exception)));
+        }
+
+        public string SingleMessage(int eventId)
+        {
+            var entries = _entries.Where(entry => entry.EventId.Id == eventId).ToList();
+            entries.Count.ShouldBe(1);
+            return entries[0].Message;
+        }
+    }
 }

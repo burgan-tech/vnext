@@ -63,6 +63,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, AuthorizeFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, AuthorizationMatrixFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, HierarchyFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, MasterFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
 
         services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();

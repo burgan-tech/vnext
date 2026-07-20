@@ -214,6 +214,9 @@ public static class PoolableTaskRegistry
         RegisterPoolableTask<SubProcessTask>(
             SubProcessTask.CreateEmpty,
             (source, target) => ((SubProcessTask)target).CopyFromInternal((SubProcessTask)source));
+        RegisterPoolableTask<GetInstanceTask>(
+            GetInstanceTask.CreateEmpty,
+            (source, target) => ((GetInstanceTask)target).CopyFromInternal((GetInstanceTask)source));
     }
 
     public static void RegisterPoolableTask<T>(

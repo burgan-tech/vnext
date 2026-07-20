@@ -89,6 +89,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
                 Arg.Any<IEnumerable<OnExecuteTask>>(),
                 Arg.Any<Guid?>(),
                 Arg.Any<TaskTrigger>(),
+                Arg.Any<TaskExecutionOrigin>(),
                 Arg.Any<ScriptContext>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result.Ok());

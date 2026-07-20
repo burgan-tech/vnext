@@ -25,6 +25,7 @@ namespace BBT.Workflow.Definitions;
 [JsonDerivedType(typeof(SoapTask), typeDiscriminator: "16")]
 [JsonDerivedType(typeof(StateStoreTask), typeDiscriminator: "17")]
 [JsonDerivedType(typeof(CacheAsideTask), typeDiscriminator: "18")]
+[JsonDerivedType(typeof(GetInstanceTask), typeDiscriminator: "19")]
 public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSetter, ITaskClonable
 {
     protected WorkflowTask()

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BBT.Workflow.Filtering;
 
 namespace BBT.Workflow.Definitions;
 
@@ -48,6 +49,13 @@ public sealed class GetInstancesTask : WorkflowTask
     /// Filter expression to apply to the query (JSON format)
     /// </summary>
     public string? Filter { get; private set; }
+
+    /// <summary>
+    /// Model-typed list-query specification, set at runtime by mapping scripts via
+    /// <see cref="SetFilterSpec"/>. Not read from the component JSON config. When set, it is the
+    /// source of the <see cref="Filter"/>/<see cref="Sort"/> wire strings.
+    /// </summary>
+    public InstanceQuerySpec? FilterSpec { get; private set; }
 
     /// <summary>
     /// Whether to use Dapr service invocation instead of direct HTTP
@@ -102,16 +110,34 @@ public sealed class GetInstancesTask : WorkflowTask
     public void SetSort(string? sort)
     {
         Sort = sort;
+        FilterSpec = null;
     }
 
     public void SetFilter(string? filter)
     {
         Filter = filter;
+        FilterSpec = null;
     }
-    
+
     public void SetFilter(object? filter)
     {
         Filter = JsonSerializer.Serialize(filter);
+        FilterSpec = null;
+    }
+
+    /// <summary>
+    /// Sets the list query from a fluent <see cref="InstanceQuery"/> spec and materializes the
+    /// equivalent <see cref="Filter"/>/<see cref="Sort"/> wire strings (groupBy/aggregations travel
+    /// inside the filter request envelope), so execution is identical to a hand-written filter on
+    /// both the local and remote paths. A later <see cref="SetFilter(string?)"/>/<see cref="SetSort"/>
+    /// call clears the spec and reverts the task to the plain string path.
+    /// </summary>
+    public void SetFilterSpec(InstanceQuerySpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        Filter = spec.ToFilterRequestJson();
+        Sort = spec.ToSortJson();
+        FilterSpec = spec;
     }
 
     public void SetUseDapr(bool useDapr)
@@ -163,6 +189,7 @@ public sealed class GetInstancesTask : WorkflowTask
     internal void SetPageSizeInternal(int pageSize) => PageSize = pageSize;
     internal void SetSortInternal(string? sort) => Sort = sort;
     internal void SetFilterInternal(string? filter) => Filter = filter;
+    internal void SetFilterSpecInternal(InstanceQuerySpec? filterSpec) => FilterSpec = filterSpec;
     internal void SetUseDaprInternal(bool useDapr) => UseDapr = useDapr;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
     internal void SetHeadersInternal(JsonElement? headers) => Headers = headers;
@@ -261,6 +288,7 @@ public sealed class GetInstancesTask : WorkflowTask
         cloned.PageSize = PageSize;
         cloned.Sort = Sort;
         cloned.Filter = Filter;
+        cloned.FilterSpec = FilterSpec;
         cloned.UseDapr = UseDapr;
         cloned.ValidateSSL = ValidateSSL;
         cloned.Headers = Headers;
@@ -283,6 +311,7 @@ public sealed class GetInstancesTask : WorkflowTask
         SetPageSizeInternal(source.PageSize);
         SetSortInternal(source.Sort);
         SetFilterInternal(source.Filter);
+        SetFilterSpecInternal(source.FilterSpec);
         SetUseDaprInternal(source.UseDapr);
         SetValidateSSLInternal(source.ValidateSSL);
         SetHeadersInternal(source.Headers);
@@ -302,6 +331,7 @@ public sealed class GetInstancesTask : WorkflowTask
         PageSize = 10;
         Sort = null;
         Filter = null;
+        FilterSpec = null;
         UseDapr = false;
         ValidateSSL = true;
         Headers = null;

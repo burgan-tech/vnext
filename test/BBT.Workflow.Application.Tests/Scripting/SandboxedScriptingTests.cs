@@ -165,6 +165,41 @@ public class SandboxedScriptingTests
         instance.Calc().ShouldBe(5);
     }
 
+    [Fact]
+    public async Task Sandbox_Allows_Uri_Escaping_With_Uri_Impl_Referenced()
+    {
+        // Regression: System.Uri lives in System.Private.Uri — the System.Runtime facade only
+        // type-forwards it, so omitting the implementation reference surfaced as CS0103 on any
+        // mapping calling Uri.EscapeDataString (ubiquitous in domain query-string composition).
+        // Mirrors the engine's reference contract, which always includes the Uri implementation.
+        var evaluator = new CSharpEvaluator(EnabledSandbox());
+        const string code =
+            "public class C : ISandboxTestCalc { public int Calc() => System.Uri.EscapeDataString(\"a b\").Length; }";
+
+        var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
+            code,
+            extraReferences: [ContractRef, MetadataReference.CreateFromFile(typeof(System.Uri).Assembly.Location)],
+            usingDirectives: ["BBT.Workflow.Scripting"]);
+
+        instance.Calc().ShouldBe(5); // "a%20b"
+    }
+
+    [Fact]
+    public async Task Sandbox_Rejects_Uri_Without_Uri_Impl_Reference()
+    {
+        // Documents the failure mode this fix addresses: with only the granted facades, Uri does
+        // not resolve (CS0103/CS0012) because no referenced assembly carries the implementation.
+        var evaluator = new CSharpEvaluator(EnabledSandbox());
+        const string code =
+            "public class C : ISandboxTestCalc { public int Calc() => System.Uri.EscapeDataString(\"a b\").Length; }";
+
+        var ex = await Should.ThrowAsync<System.InvalidOperationException>(async () =>
+            await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
+                code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]));
+
+        ex.Message.ShouldContain("Uri");
+    }
+
     private static MetadataReference SoapTaskRef =>
         MetadataReference.CreateFromFile(typeof(BBT.Workflow.Definitions.SoapTask).Assembly.Location);
 

@@ -202,8 +202,8 @@ public sealed class InstanceQueryAppService(
                         groupBy,
                         aggregations,
                         input.Sort,
-                        ct,
-                        schemaContext);
+                        schemaContext,
+                        ct);
                     pagedList = result.PagedList;
                     groups = result.Groups;
                 }
@@ -1044,6 +1044,12 @@ public sealed class InstanceQueryAppService(
             HasView = subFlowStateInfo.SubFlowView?.HasView ?? stateHasView,
             LoadData = subFlowStateInfo.SubFlowView?.LoadData ?? viewLoadData
         };
+        // Master schema endpoint href. The endpoint itself forwards to the active subflow when present,
+        // so the link always points to this instance regardless of subflow state.
+        var masterHref = new MasterHref
+        {
+            Href = urlTemplateBuilder.BuildMasterUrl(input.Domain, input.Workflow, instance.Id.ToString())
+        };
         var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations.Select(correlation =>
             new ActiveCorrelationHref
             {
@@ -1106,6 +1112,7 @@ public sealed class InstanceQueryAppService(
         {
             Data = dataHref,
             View = viewHref,
+            Master = masterHref,
             State = displayedState ?? string.Empty,
             StateType = subFlowStateInfo.StateType.IsNullOrWhiteSpace()
                 ? ToCamelCaseName(currentStateValue.StateType)
@@ -1295,6 +1302,86 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .ThenAsync(data =>
                 BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Retrieves the flow-level master schema an instance is bound to.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow instance.
+    /// </summary>
+    public async Task<Result<GetSchemaOutput>> GetMasterAsync(
+        GetMasterInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        // Railway chain: Get Instance → Get Workflow → Build Master Schema Output
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .ThenAsync(data =>
+                BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Builds the flow-level master schema output.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow instance.
+    /// </summary>
+    private async Task<Result<GetSchemaOutput>> BuildMasterOutputAsync(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        GetMasterInput input,
+        CancellationToken cancellationToken)
+    {
+        // TODO: Need?
+        // if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+        //     return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
+
+        // Check if there's an active SubFlow - if so, forward the request to SubFlow
+        // instance.Subflow returns the first active subflow (Type: S and not completed)
+        if (instance.Subflow != null)
+        {
+            return await GetSubFlowMasterAsync(instance.Subflow, input, cancellationToken);
+        }
+
+        // No active SubFlow - resolve the flow-level master schema reference
+        if (currentWorkflow.Schema == null)
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"Master schema not found for workflow {input.Workflow}"));
+        }
+
+        return await componentCacheStore.GetSchemaAsync(currentWorkflow.Schema, cancellationToken)
+            .MapAsync(schema => new GetSchemaOutput
+            {
+                Key = schema.Key,
+                Type = schema.Type,
+                Schema = schema.Schema
+            });
+    }
+
+    /// <summary>
+    /// Gets the master schema from a remote SubFlow instance.
+    /// </summary>
+    private async Task<Result<GetSchemaOutput>> GetSubFlowMasterAsync(
+        InstanceCorrelation subflow,
+        GetMasterInput input,
+        CancellationToken cancellationToken)
+    {
+        var subFlowInput = new GetFunctionWithInstanceInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            Version = subflow.SubFlowVersion,
+            Instance = subflow.SubFlowInstanceId.ToString(),
+            Headers = input.Headers ?? new Dictionary<string, string?>(),
+            QueryParams = input.QueryParameters ?? new Dictionary<string, string?>(),
+            Role = currentUser.ResolveCallerRole(input.Headers),
+            Roles = currentUser.ResolveCallerRoles(input.Headers)
+        };
+
+        return await instanceQueryGateway.GetFunctionWithMasterAsync(subFlowInput, cancellationToken);
     }
 
     /// <summary>

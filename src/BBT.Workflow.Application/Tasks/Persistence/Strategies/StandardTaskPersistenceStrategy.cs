@@ -1,3 +1,4 @@
+using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 
@@ -13,17 +14,18 @@ namespace BBT.Workflow.Tasks.Persistence.Strategies;
 /// workflow execution history is maintained.
 /// </remarks>
 public sealed class StandardTaskPersistenceStrategy(
-    IInstanceTaskRepository instanceTaskRepository) : ITaskPersistenceStrategy
+    IInstanceTaskRepository instanceTaskRepository,
+    IUnitOfWorkManager unitOfWorkManager) : ITaskPersistenceStrategy
 {
     /// <summary>
     /// Determines if this strategy should handle the task persistence.
     /// Returns true for all TaskTrigger types except Extension.
     /// </summary>
-    /// <param name="taskTrigger">The trigger type that initiated the task execution.</param>
+    /// <param name="origin">The component that initiated task execution.</param>
     /// <returns>True if the task should be persisted to database, false otherwise.</returns>
-    public bool CanHandle(TaskTrigger taskTrigger)
+    public bool CanHandle(TaskExecutionOrigin origin)
     {
-        return taskTrigger != TaskTrigger.Extension;
+        return origin == TaskExecutionOrigin.Flow;
     }
 
     /// <summary>
@@ -31,9 +33,22 @@ public sealed class StandardTaskPersistenceStrategy(
     /// </summary>
     /// <param name="instanceTask">The InstanceTask to be inserted into the database.</param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
-    public async Task HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    public async Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
     {
-        await instanceTaskRepository.InsertAsync(instanceTask, true, cancellationToken);
+        await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
+        {
+            Scope = UnitOfWorkScopeOption.RequiresNew,
+            IsTransactional = true
+        });
+
+        var existing = await instanceTaskRepository.FindByTransitionAndTaskAsync(
+            instanceTask.TransitionId,
+            instanceTask.TaskId,
+            cancellationToken);
+
+        var journal = existing ?? await instanceTaskRepository.InsertAsync(instanceTask, true, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+        return journal;
     }
 
     /// <summary>
@@ -43,6 +58,12 @@ public sealed class StandardTaskPersistenceStrategy(
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
     {
+        await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
+        {
+            Scope = UnitOfWorkScopeOption.RequiresNew,
+            IsTransactional = true
+        });
         await instanceTaskRepository.UpdateAsync(instanceTask, true, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
     }
 }

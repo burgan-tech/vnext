@@ -70,4 +70,12 @@ public interface IRemoteInstanceQueryAppService
     Task<Result<DTOs.GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default);
-} 
+
+    /// <summary>
+    /// Retrieves the master schema function result for an instance (returns GetSchemaOutput with the flow-level master schema)
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/master
+    /// </summary>
+    Task<Result<DTOs.GetSchemaOutput>> GetFunctionWithMasterAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default);
+}

@@ -87,6 +87,14 @@ The current trace is enriched with `vnext.chain.depth`, `vnext.pipeline.profile`
 - Keep profile exclusions synchronized with tests in `PipelineExecutionProfileTests`.
 - Do not bypass `TransitionContextFactory` when the pipeline needs workflow or instance state.
 
+### PostgreSQL-to-Dapr Lock Cutover
+
+Deployments upgrading from the former PostgreSQL-backed general `IDistributedLockService`
+binding to the Dapr-backed binding must not use a rolling update. Old and new orchestration
+replicas would coordinate through different stores, so the same logical lock could be acquired
+in both. Use a quiesced/Recreate cutover, or blue-green only when the old replicas are fully
+quiesced and stopped before the new replicas can execute workflow or background operations.
+
 ## References
 
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/TransitionPipeline.cs`
@@ -96,4 +104,3 @@ The current trace is enriched with `vnext.chain.depth`, `vnext.pipeline.profile`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/PipelineProfileResolver.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`
 - [Async Transition Execution Modes](async-transition-execution-modes.md) — how the `WorkflowExecution` flags route async continuations.
-

@@ -7,7 +7,7 @@ namespace BBT.Workflow.Monitor.Components.Filters;
 /// Pure, stateless helper that applies an in-memory filter to a component summary list.
 /// Called after <c>ProjectToSummary</c> and before pagination in <c>GetComponentSummaryAsync</c>.
 /// </summary>
-internal static class MonitorComponentFilter
+public static class MonitorComponentFilter
 {
     /// <summary>
     /// Filters <paramref name="items"/> according to <paramref name="filter"/>.

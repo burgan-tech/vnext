@@ -39,11 +39,17 @@ internal sealed class InstanceSubFaultedEventHandler(
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
             [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = (eventData.SubItemType ?? SubItemType.SubFlow).ToString(),
+            [TelemetryConstants.TagNames.SubItemOutcome] = "Faulted",
+            [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin?.ToString() ?? "legacy",
+            [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId?.ToString() ?? "N/A"
         };
         if (eventData.RootInstanceId.HasValue)
         {
-            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
             Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
                 eventData.RootInstanceId.Value.ToString());
         }
@@ -79,6 +85,14 @@ internal sealed class InstanceSubFaultedEventHandler(
                 IncidentState = eventData.IncidentState,
                 IncidentBoundaryAction = eventData.IncidentBoundaryAction,
                 IncidentBoundaryLevel = eventData.IncidentBoundaryLevel,
+                RootInstanceId = eventData.RootInstanceId,
+                SubItemType = eventData.SubItemType ?? SubItemType.SubFlow,
+                Termination = eventData.CascadeId.HasValue && eventData.InitiatorInstanceId.HasValue
+                    ? new TerminationContext(
+                        eventData.TerminationOrigin ?? TerminationOrigin.Direct,
+                        eventData.InitiatorInstanceId.Value,
+                        eventData.CascadeId.Value)
+                    : null,
                 // At-least-once async retry path: the sync caller (if any) was already answered
                 // by the synchronous hook. Force async here so a retried resume never blocks the
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.

@@ -31,6 +31,7 @@
     <Project Path="test/BBT.Workflow.Application.Tests/BBT.Workflow.Application.Tests.csproj" />
     <Project Path="test/BBT.Workflow.Domain.Tests/BBT.Workflow.Domain.Tests.csproj" />
     <Project Path="test/BBT.Workflow.Infrastructure.Tests/BBT.Workflow.Infrastructure.Tests.csproj" />
+    <Project Path="test/BBT.Workflow.Monitor.Application.Tests/BBT.Workflow.Monitor.Application.Tests.csproj" />
     <Project Path="test/BBT.Workflow.TestBase/BBT.Workflow.TestBase.csproj" />
   </Folder>
   <Folder Name="/tools/">

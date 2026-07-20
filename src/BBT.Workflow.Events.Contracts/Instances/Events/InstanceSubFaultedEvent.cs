@@ -14,7 +14,7 @@ namespace BBT.Workflow.Instances.Events;
 /// services.AddEventHook&lt;InstanceSubFaultedEvent, InstanceSubFaultedEventHook&gt;();
 /// </code>
 /// </remarks>
-[EventHook]
+[EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.faulted")]
 public class InstanceSubFaultedEvent : IDistributedEvent
 {
@@ -140,6 +140,20 @@ public class InstanceSubFaultedEvent : IDistributedEvent
     /// (sync=true). Carried to the parent so its error-boundary resume keeps the chain synchronous.
     /// </summary>
     public bool Sync { get; init; }
+
+    /// <summary>
+    /// The kind of faulted SubItem. A missing value represents a legacy SubFlow event.
+    /// </summary>
+    public SubItemType? SubItemType { get; init; }
+
+    /// <summary>The origin of this terminal operation, when provided by the publisher.</summary>
+    public TerminationOrigin? TerminationOrigin { get; init; }
+
+    /// <summary>The instance that initiated the terminal cascade, when available.</summary>
+    public Guid? InitiatorInstanceId { get; init; }
+
+    /// <summary>The identifier shared by the terminal cascade, when available.</summary>
+    public Guid? CascadeId { get; init; }
 
     public override string ToString()
     {

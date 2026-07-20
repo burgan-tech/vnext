@@ -62,6 +62,12 @@ public static class TaskServiceCollectionExtensions
         services.AddOptions<WorkflowExecutionOptions>()
             .BindConfiguration(WorkflowExecutionOptions.SectionName);
 
+        // Budget-hierarchy guard (invocation timeout ⊂ job budget ⊂ lock lease) — validated
+        // on first options resolution so misconfiguration fails fast.
+        services.AddSingleton<
+            Microsoft.Extensions.Options.IValidateOptions<WorkflowExecutionOptions>,
+            WorkflowExecutionOptionsValidator>();
+
         services.AddScoped<IJobTimeoutRecoveryService, JobTimeoutRecoveryService>();
         services.AddScoped<IChainReaperService, ChainReaperService>();
 
@@ -110,6 +116,7 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DirectTriggerTaskExecutor>();
         services.AddTaskExecutor<GetInstanceDataTaskExecutor>();
         services.AddTaskExecutor<GetInstancesTaskExecutor>();
+        services.AddTaskExecutor<GetInstanceTaskExecutor>();
 
         return services;
     }

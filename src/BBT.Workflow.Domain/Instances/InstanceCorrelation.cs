@@ -108,11 +108,27 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
     /// </summary>
     public DateTime? CompletedAt { get; private set; }
 
-    public void Completed()
+    public SubItemTerminalOutcome? TerminalOutcome { get; private set; }
+
+    public TerminalOutcomeApplyResult ApplyTerminalOutcome(
+        SubItemTerminalOutcome outcome,
+        DateTime completedAt)
     {
+        if (IsCompleted)
+        {
+            return TerminalOutcome == outcome
+                ? TerminalOutcomeApplyResult.Duplicate
+                : TerminalOutcomeApplyResult.Conflict;
+        }
+
         IsCompleted = true;
-        CompletedAt = DateTime.UtcNow;
+        CompletedAt = completedAt;
+        TerminalOutcome = outcome;
+        return TerminalOutcomeApplyResult.Applied;
     }
+
+    public void Completed() =>
+        ApplyTerminalOutcome(SubItemTerminalOutcome.Completed, DateTime.UtcNow);
 
     /// <summary>
     /// Reverts the correlation to its incomplete state.
@@ -122,6 +138,7 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
     {
         IsCompleted = false;
         CompletedAt = null;
+        TerminalOutcome = null;
     }
 
     /// <summary>
@@ -151,7 +168,8 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
             SubFlowCurrentState = SubFlowCurrentState,
             SubFlowStateChangedAt = SubFlowStateChangedAt,
             IsCompleted = IsCompleted,
-            CompletedAt = CompletedAt
+            CompletedAt = CompletedAt,
+            TerminalOutcome = TerminalOutcome
         };
 
         return snapshot;

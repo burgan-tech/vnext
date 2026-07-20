@@ -69,6 +69,14 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves the flow-level master schema an instance is bound to.
+    /// If the instance has an active SubFlow, the request is forwarded to the SubFlow instance.
+    /// </summary>
+    Task<Result<GetSchemaOutput>> GetMasterAsync(
+        GetMasterInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves the runtime hierarchy of an instance as a recursive tree.
     /// Includes direct and indirect child subflow/subprocess instances.
     /// </summary>

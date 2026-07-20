@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BBT.Workflow.Instances.Events;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -117,6 +118,22 @@ public record SubFlowFaultedInput
     /// Boundary level that matched in the SubFlow (if any)
     /// </summary>
     public string? IncidentBoundaryLevel { get; init; }
+
+    /// <summary>
+    /// The root ancestor instance ID for nested SubItem chains.
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
+
+    /// <summary>
+    /// The faulted SubItem kind. Legacy events are normalized to SubFlow by adapters.
+    /// Parent handling uses the stored correlation type as the source of truth.
+    /// </summary>
+    public SubItemType SubItemType { get; init; }
+
+    /// <summary>
+    /// Terminal cascade context when all required event fields are available.
+    /// </summary>
+    public TerminationContext? Termination { get; init; }
 
     /// <summary>
     /// Whether the faulting pipeline chain was executed with a synchronous caller

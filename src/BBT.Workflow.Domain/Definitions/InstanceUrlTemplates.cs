@@ -71,6 +71,12 @@ public static class InstanceUrlTemplates
     public const string ExtensionsTemplate = "/{0}/workflows/{1}/instances/{2}/functions/extensions";
 
     /// <summary>
+    /// URL template for instance master schema endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/master
+    /// </summary>
+    public const string MasterTemplate = "/{0}/workflows/{1}/instances/{2}/functions/master";
+
+    /// <summary>
     /// URL template for instance authorize function endpoint.
     /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/authorize
     /// </summary>
@@ -117,6 +123,18 @@ public static class InstanceUrlTemplates
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/sub/fault
     /// </summary>
     public const string SubFlowFaultTemplate = "/{0}/workflows/{1}/instances/{2}/sub/fault";
+
+    /// <summary>
+    /// URL template for SubItem cancellation propagation endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/sub/cancel
+    /// </summary>
+    public const string SubFlowCancelTemplate = "/{0}/workflows/{1}/instances/{2}/sub/cancel";
+
+    /// <summary>
+    /// URL template for internal downward child-subflow cancellation endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/child-cancel
+    /// </summary>
+    public const string ChildCancelTemplate = "/{0}/workflows/{1}/instances/{2}/child-cancel";
 
     /// <summary>
     /// URL template for SubFlow Busy propagation endpoints.
@@ -264,6 +282,17 @@ public static class InstanceUrlTemplates
         => BuildUrl(ExtensionsTemplate, apiVersionPrefix, domain, workflow, instanceId);
 
     /// <summary>
+    /// Generates URL for instance master schema function endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instanceId">The instance ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string Master(string domain, string workflow, string instanceId, string? apiVersionPrefix = null)
+        => BuildUrl(MasterTemplate, apiVersionPrefix, domain, workflow, instanceId);
+
+    /// <summary>
     /// Generates URL for instance authorize function endpoint.
     /// </summary>
     /// <param name="domain">The domain name</param>
@@ -348,6 +377,18 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string SubFlowFault(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(SubFlowFaultTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for SubItem cancellation propagation endpoint.
+    /// </summary>
+    public static string SubFlowCancel(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(SubFlowCancelTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for internal downward child-subflow cancellation.
+    /// </summary>
+    public static string ChildCancel(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(ChildCancelTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for SubFlow Busy propagation endpoint.

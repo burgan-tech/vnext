@@ -22,6 +22,7 @@ public sealed class SubflowFaultService(
     ISubflowOutputMappingService outputMappingService,
     IErrorBoundaryResolver errorBoundaryResolver,
     IErrorActionExecutor errorActionExecutor,
+    ITransitionLockScopeFactory transitionLockScopeFactory,
     ILogger<SubflowFaultService> logger)
     : ISubflowFaultService
 {
@@ -37,15 +38,31 @@ public sealed class SubflowFaultService(
             input.InstanceId,
             input.Domain,
             input.Flow);
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, input.Version ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, input.RootInstanceId?.ToString() ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, input.InstanceId.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.SubItemType, input.SubItemType.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.SubItemOutcome, SubItemTerminalOutcome.Faulted.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationOrigin, input.Termination?.Origin.ToString() ?? "legacy");
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationInitiator, input.Termination?.InitiatorInstanceId.ToString() ?? "N/A");
+        activity?.SetTag(TelemetryConstants.TagNames.TerminationCascadeId, input.Termination?.CascadeId.ToString() ?? "N/A");
 
-        using (logger.BeginScope(new Dictionary<string, object>
+        var scopeProperties = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = input.Domain,
             [TelemetryConstants.TagNames.Flow] = input.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = input.Version ?? "N/A",
             [TelemetryConstants.TagNames.InstanceId] = input.InstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = input.SubInstanceId
-        }))
+            [TelemetryConstants.TagNames.RootInstanceId] = input.RootInstanceId?.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.ParentInstanceId] = input.InstanceId,
+            [TelemetryConstants.TagNames.SubflowInstanceId] = input.SubInstanceId,
+            [TelemetryConstants.TagNames.SubItemType] = input.SubItemType.ToString(),
+            [TelemetryConstants.TagNames.SubItemOutcome] = SubItemTerminalOutcome.Faulted.ToString(),
+            [TelemetryConstants.TagNames.TerminationOrigin] = input.Termination?.Origin.ToString() ?? "legacy",
+            [TelemetryConstants.TagNames.TerminationInitiator] = input.Termination?.InitiatorInstanceId.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.TerminationCascadeId] = input.Termination?.CascadeId.ToString() ?? "N/A"
+        };
+        using (logger.BeginScope(scopeProperties))
         {
             try
             {
@@ -54,11 +71,24 @@ public sealed class SubflowFaultService(
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
 
-                await using (var uow = uowManager.Begin(
-                    new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+                var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}";
+                await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
                 {
-                    parentInstance = await instanceRepository.FindAsync(
-                        input.InstanceId, true, cancellationToken);
+                    if (!lockScope.IsAcquired)
+                    {
+                        logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Faulted.ToString());
+                        throw new SubflowCompletionException(
+                            input.Domain,
+                            input.Flow,
+                            input.InstanceId.ToString(),
+                            WorkflowErrorCodes.ConflictWorkflow,
+                            "Parent instance terminal lock could not be acquired.");
+                    }
+
+                    await using var uow = uowManager.Begin(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
+                        input.InstanceId, cancellationToken);
 
                     if (parentInstance == null)
                     {
@@ -67,25 +97,65 @@ public sealed class SubflowFaultService(
                         return;
                     }
 
-                    // Idempotency: skip if parent is already in a terminal state
-                    if (parentInstance.Status.Equals(InstanceStatus.Faulted) ||
-                        parentInstance.Status.Equals(InstanceStatus.Completed))
+                    // Verify the correlation exists and apply terminal idempotency semantics.
+                    correlation = parentInstance.FindCorrelationBySubInstanceId(input.SubInstanceId);
+                    if (correlation == null)
                     {
-                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
+                        logger.SubFlowCorrelationNotFound(input.SubInstanceId);
+                        activity?.SetTag("vnext.subflow.result", "correlation_not_found");
+                        await uow.CommitAsync(cancellationToken);
                         return;
                     }
 
-                    // Verify the correlation exists and is still open
-                    correlation = parentInstance.FindCorrelationBySubInstanceId(input.SubInstanceId);
-                    if (correlation == null || correlation.IsCompleted)
+                    activity?.SetTag(TelemetryConstants.TagNames.SubItemType, correlation.SubFlowType.Code);
+                    scopeProperties[TelemetryConstants.TagNames.SubItemType] = correlation.SubFlowType.Code;
+
+                    if (correlation.IsCompleted)
                     {
-                        logger.SubFlowCorrelationNotFound(input.SubInstanceId);
-                        activity?.SetTag("vnext.subflow.result", "correlation_not_found_or_completed");
+                        if (correlation.TerminalOutcome == SubItemTerminalOutcome.Faulted)
+                        {
+                            logger.SubItemTerminalDuplicate(
+                                SubItemTerminalOutcome.Faulted.ToString(),
+                                input.InstanceId,
+                                input.SubInstanceId);
+                        }
+                        else
+                        {
+                            logger.SubItemTerminalConflict(
+                                input.InstanceId,
+                                input.SubInstanceId,
+                                correlation.TerminalOutcome?.ToString() ?? "legacy",
+                                SubItemTerminalOutcome.Faulted.ToString());
+                        }
+
+                        activity?.SetTag("vnext.subflow.result", "correlation_already_terminal");
+                        await uow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
+                    // A terminal parent still needs an active SubProcess correlation closed, but
+                    // a blocking SubFlow must not mutate or resume an already-terminal parent.
+                    if (parentInstance.IsCompleted &&
+                        correlation.SubFlowType.Equals(SubFlowType.SubFlow))
+                    {
+                        activity?.SetTag("vnext.subflow.result", "parent_already_terminal");
+                        await uow.CommitAsync(cancellationToken);
                         return;
                     }
 
                     correlation.UpdateSubFlowState(input.FaultedState, input.FaultedAt);
-                    parentInstance.CompleteCorrelation(input.SubInstanceId);
+                    parentInstance.CompleteCorrelation(
+                        input.SubInstanceId,
+                        SubItemTerminalOutcome.Faulted,
+                        input.FaultedAt);
+
+                    if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
+                    {
+                        await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                        await uow.CommitAsync(cancellationToken);
+                        return;
+                    }
+
                     parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
 
                     var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
@@ -165,6 +235,7 @@ public sealed class SubflowFaultService(
                         parentWorkflow!,
                         actionResult.TransitionKey,
                         input.SubInstanceId,
+                        lockKey,
                         input.Sync,
                         cancellationToken);
                 }
@@ -174,6 +245,7 @@ public sealed class SubflowFaultService(
                         parentInstance,
                         parentWorkflow!,
                         input.SubInstanceId,
+                        lockKey,
                         input.Sync,
                         cancellationToken);
                 }
@@ -253,6 +325,7 @@ public sealed class SubflowFaultService(
         Definitions.Workflow parentWorkflow,
         string transitionKey,
         Guid subInstanceId,
+        string parentLockKey,
         bool sync,
         CancellationToken cancellationToken)
     {
@@ -278,7 +351,10 @@ public sealed class SubflowFaultService(
         }
         catch
         {
-            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            await RevertCorrelationInNewUowAsync(
+                parentLockKey,
+                subInstanceId,
+                parentInstance.Id);
             throw;
         }
     }
@@ -287,6 +363,7 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         Guid subInstanceId,
+        string parentLockKey,
         bool sync,
         CancellationToken cancellationToken)
     {
@@ -316,7 +393,10 @@ public sealed class SubflowFaultService(
         }
         catch
         {
-            await RevertCorrelationInNewUowAsync(parentInstance, subInstanceId, parentInstance.Id, cancellationToken);
+            await RevertCorrelationInNewUowAsync(
+                parentLockKey,
+                subInstanceId,
+                parentInstance.Id);
             throw;
         }
     }
@@ -354,20 +434,34 @@ public sealed class SubflowFaultService(
     }
 
     private async Task RevertCorrelationInNewUowAsync(
-        Instance parentInstance,
+        string parentLockKey,
         Guid subInstanceId,
-        Guid parentInstanceId,
-        CancellationToken cancellationToken)
+        Guid parentInstanceId)
     {
         try
         {
+            var cancellationToken = CancellationToken.None;
+            await using var lockScope = await transitionLockScopeFactory.AcquireAsync(parentLockKey, cancellationToken);
+            if (!lockScope.IsAcquired)
+            {
+                throw new InvalidOperationException(
+                    $"Parent instance compensation lock '{parentLockKey}' could not be acquired.");
+            }
+
             await using var revertUow = uowManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             // S9 isolation rule: reload with ALL correlations (completed included) so the
             // revert operates on a tracked entity and cannot silently no-op.
             var tracked = await instanceRepository.FindWithAllCorrelationsAsync(parentInstanceId, cancellationToken)
-                          ?? parentInstance;
+                          ?? throw new InvalidOperationException(
+                              $"Parent instance {parentInstanceId} was not found while reverting fault.");
+
+            if (tracked.IsCompleted)
+            {
+                await revertUow.CommitAsync(cancellationToken);
+                return;
+            }
 
             var correlation = tracked.RevertCorrelation(subInstanceId);
             if (correlation == null)
@@ -384,7 +478,7 @@ public sealed class SubflowFaultService(
         }
         catch (Exception revertEx)
         {
-            logger.SubFlowCompletionFailed(revertEx, subInstanceId, parentInstanceId);
+            logger.SubItemCorrelationRevertFailed(revertEx, parentInstanceId, subInstanceId);
         }
     }
 }

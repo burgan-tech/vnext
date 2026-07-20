@@ -1,7 +1,9 @@
 using BBT.Aether.DistributedLock;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Infrastructure.Execution.Locks;
 
@@ -9,17 +11,21 @@ namespace BBT.Workflow.Infrastructure.Execution.Locks;
 /// Creates request-scoped lock scopes backed by the Aether distributed lock service.
 /// Each scope wraps an <see cref="IDistributedLockHandle"/> and delegates
 /// extend / release operations to the underlying handle.
+/// <para>
+/// The lease is sized to cover the entire auto-chain budget
+/// (<see cref="WorkflowExecutionOptions.GetEffectiveLockLeaseSeconds"/>, default
+/// <c>TransitionJobTimeoutSeconds + 30</c>) rather than relying on per-hop extension:
+/// the Dapr lock provider cannot extend a held lock (its Redis component uses
+/// <c>SET NX</c>, which rejects same-owner re-acquire), so a short lease with
+/// between-hop extension would silently expire mid-chain.
+/// </para>
 /// </summary>
 public sealed class TransitionLockScopeFactory(
     IDistributedLockService distributedLockService,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<TransitionLockScopeFactory> logger) : ITransitionLockScopeFactory
 {
-    /// <summary>
-    /// Default lock lease duration in seconds.
-    /// Doubled compared to the old per-transition lease (60s) because the lock
-    /// now covers the entire auto-chain. ExtendAsync resets the TTL between iterations.
-    /// </summary>
-    private const int DefaultLeaseSeconds = 120;
+    private readonly int _leaseSeconds = executionOptions.Value.GetEffectiveLockLeaseSeconds();
 
     /// <inheritdoc />
     public async Task<ITransitionLockScope> AcquireAsync(
@@ -28,7 +34,7 @@ public sealed class TransitionLockScopeFactory(
     {
         var handle = await distributedLockService.TryAcquireLockAsync(
             lockKey,
-            DefaultLeaseSeconds,
+            _leaseSeconds,
             cancellationToken);
 
         if (handle is null)
@@ -38,9 +44,9 @@ public sealed class TransitionLockScopeFactory(
         }
 
         logger.LogDebug("Transition lock acquired for {LockKey} (lease={LeaseSeconds}s)",
-            lockKey, DefaultLeaseSeconds);
+            lockKey, _leaseSeconds);
 
-        return new TransitionLockScope(lockKey, handle, DefaultLeaseSeconds, logger);
+        return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
     }
 }
 

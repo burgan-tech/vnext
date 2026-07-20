@@ -123,8 +123,8 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Any<CancellationToken>(),
-                Arg.Is<SchemaFilterContext?>(c => c == null))
+                Arg.Is<SchemaFilterContext?>(c => c == null),
+                Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult((emptyPage, (List<GroupSummary>?)null)));
 
         var urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
@@ -146,8 +146,8 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             null,
             null,
             null,
-            Arg.Any<CancellationToken>(),
-            Arg.Is<SchemaFilterContext?>(c => c == null));
+            Arg.Is<SchemaFilterContext?>(c => c == null),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -201,8 +201,8 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Any<CancellationToken>(),
-                Arg.Is<SchemaFilterContext?>(c => c != null))
+                Arg.Is<SchemaFilterContext?>(c => c != null),
+                Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult((emptyPage, (List<GroupSummary>?)null)));
 
         var urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
@@ -224,8 +224,8 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             null,
             null,
             null,
-            Arg.Any<CancellationToken>(),
-            Arg.Is<SchemaFilterContext?>(c => c != null));
+            Arg.Is<SchemaFilterContext?>(c => c != null),
+            Arg.Any<CancellationToken>());
     }
 
     private InstanceQueryAppService CreateService(
