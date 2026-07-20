@@ -509,6 +509,53 @@ public sealed class RemoteInstanceQueryAppService(
     }
 
     /// <summary>
+    /// Retrieves the master schema function result for an instance (returns GetSchemaOutput with the flow-level master schema)
+    /// GET {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instance}/functions/master
+    /// </summary>
+    public async Task<Result<DTOs.GetSchemaOutput>> GetFunctionWithMasterAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Resolve endpoint dynamically based on target domain
+            var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
+
+            if (!endpointResult.IsSuccess)
+            {
+                return Result<DTOs.GetSchemaOutput>.Fail(endpointResult.Error);
+            }
+
+            var endpoint = endpointResult.Value!;
+
+            var relativePath = InstanceUrlTemplates.Master(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
+
+            var queryParams = new List<string>();
+            if (!string.IsNullOrEmpty(input.Version))
+            {
+                queryParams.Add($"{nameof(input.Version).ToLowerInvariant()}={Uri.EscapeDataString(input.Version)}");
+            }
+
+            if (queryParams.Count > 0)
+                relativePath += "?" + string.Join("&", queryParams);
+
+            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
+            var forwardHeaders = currentUser.ToForwardHeaders();
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+
+            // Status code → Result.Fail (per Railway Pattern)
+            return await HandleResponseAsync<DTOs.GetSchemaOutput>(response, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            // Network errors → Transient error (per Railway Pattern)
+            return Result<DTOs.GetSchemaOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Handles HTTP response by mapping status codes to appropriate Result types.
     /// Follows Railway Pattern: Status code → Result.Fail (not exceptions).
     /// </summary>

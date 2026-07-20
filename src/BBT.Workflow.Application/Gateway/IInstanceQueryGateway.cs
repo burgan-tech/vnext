@@ -103,5 +103,16 @@ public interface IInstanceQueryGateway
     Task<Result<GetExtensionsOutput>> GetFunctionWithExtensionsAsync(
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves the flow-level master schema for an instance.
+    /// Routes to local or remote based on target domain in input.
+    /// </summary>
+    /// <param name="input">The get function with instance input containing domain, workflow, and instance.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result containing the master schema output.</returns>
+    Task<Result<GetSchemaOutput>> GetFunctionWithMasterAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default);
 }
 
