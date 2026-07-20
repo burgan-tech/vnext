@@ -175,6 +175,7 @@ public sealed class RunOnEntryTasksStep(
             context.Target!.OnEntries,
             instanceTransitionId,
             TaskTrigger.OnEntry,
+            TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
             cancellationToken);

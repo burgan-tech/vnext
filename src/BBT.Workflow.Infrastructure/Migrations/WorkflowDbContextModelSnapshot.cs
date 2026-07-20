@@ -418,6 +418,10 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("character varying(180)");
 
+                    b.Property<int?>("TerminalOutcome")
+                        .HasColumnType("integer")
+                        .HasComment("Completed=1, Faulted=2, Canceled=3; null for legacy rows");
+
                     b.HasKey("Id");
 
                     b.HasIndex("InstanceId");
@@ -571,6 +575,10 @@ namespace BBT.Workflow.Migrations
                     b.Property<TimeSpan?>("Duration")
                         .HasColumnType("interval");
 
+                    b.Property<string>("ExecutionKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<Guid?>("FaultedTaskId")
                         .HasColumnType("uuid");
 
@@ -592,6 +600,11 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ExecutionKey")
+                        .IsUnique()
+                        .HasDatabaseName("UX_InstanceTasks_ExecutionKey")
+                        .HasFilter("\"ExecutionKey\" IS NOT NULL");
 
                     b.HasIndex("FaultedTaskId");
 

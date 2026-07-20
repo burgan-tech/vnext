@@ -277,6 +277,9 @@ ai-docs/
 .claude/worktrees/*
 ./claude/*.local.json
 
+# Codex isolated worktrees
+.worktrees/
+
 #Cursor
 .cursor/plans/*
 .cursor/*.log

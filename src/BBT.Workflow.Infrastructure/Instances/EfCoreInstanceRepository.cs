@@ -12,8 +12,11 @@ using BBT.Workflow.Infrastructure.Instances;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
+using BBT.Workflow.BackgroundJobs.Options;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
 namespace BBT.Workflow.Instances;
 
@@ -25,6 +28,7 @@ public sealed class EfCoreInstanceRepository(
     IDataSinkManager dataSinkManager,
      ICurrentSchema currentSchema,
     ISchemaValidator schemaValidator,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<EfCoreInstanceRepository> logger)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
@@ -42,12 +46,66 @@ public sealed class EfCoreInstanceRepository(
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
-        // Loads the full InstanceData history so that Instance.AddData can perform
-        // correct JSON merges against previous versions during execution.
-        // ChildCorrelations are still filtered to active-only.
-        return (await base.WithDetailsAsync())
-            .Include(i => i.DataList)
-            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+        // Default (legacy) load pulls the full InstanceData history. With latest-only loading
+        // enabled (WorkflowExecution:LatestOnlyInstanceLoading), only the IsLatest row is
+        // included: the full-merge model makes it self-sufficient for pipeline merges, script
+        // context and polling (it carries the complete state, the highest version and the
+        // highest HistorySequence of its own version line). History-dependent callers must use
+        // FindByIdentifierWithFullHistoryAsync / FindByIdentifierWithFullDataAsync — aggregates
+        // materialized through the identifier finders are marked partially loaded and fail fast
+        // on history reads. ChildCorrelations are always filtered to active-only.
+        var query = await base.WithDetailsAsync();
+
+        query = LatestOnlyLoading
+            ? query.Include(i => i.DataList.Where(d => d.IsLatest))
+            : query.Include(i => i.DataList);
+
+        return query.Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+    }
+
+    private bool LatestOnlyLoading => executionOptions.Value.LatestOnlyInstanceLoading;
+
+    /// <summary>
+    /// Conditional data include for list/query paths: list consumers read only the latest
+    /// version (full-merge model), so latest-only loading spares each listed instance its
+    /// entire version history. History-reading flows use the dedicated full-history APIs.
+    /// </summary>
+    private IQueryable<Instance> IncludeListData(IQueryable<Instance> query) =>
+        LatestOnlyLoading
+            ? query.Include(i => i.DataList.Where(d => d.IsLatest))
+            : query.Include(i => i.DataList);
+
+    /// <summary>
+    /// Stamps the latest-only marker on a materialized aggregate so history-dependent domain
+    /// members fail fast instead of silently answering from a partial list.
+    /// </summary>
+    private Instance? MarkIfPartiallyLoaded(Instance? instance)
+    {
+        if (instance is not null && LatestOnlyLoading)
+        {
+            instance.MarkDataPartiallyLoaded();
+        }
+
+        return instance;
+    }
+
+    /// <summary>
+    /// Stamps the latest-only marker on every instance in a list/paged result so a consumer
+    /// (view/extension/script) that reaches for <c>DataList</c> / <c>FindData</c> /
+    /// <c>GetVersionHistory</c> fails fast instead of reading a silently-incomplete history.
+    /// No-op when latest-only loading is off. Fluent: returns the same list for inline use.
+    /// </summary>
+    private List<Instance> MarkListIfPartiallyLoaded(List<Instance> instances)
+    {
+        if (LatestOnlyLoading)
+        {
+            foreach (var instance in instances)
+            {
+                instance.MarkDataPartiallyLoaded();
+            }
+        }
+
+        return instances;
     }
 
     /// <inheritdoc />
@@ -189,16 +247,16 @@ public sealed class EfCoreInstanceRepository(
                    cancellationToken);
             if (response != null)
             {
-                return response;
+                return MarkIfPartiallyLoaded(response);
             }
         }
 
         // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
         // keeps the fallback deterministic by returning the most recent instance for the key.
-        return await query
+        return MarkIfPartiallyLoaded(await query
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken));
     }
 
     /// <inheritdoc />
@@ -211,11 +269,11 @@ public sealed class EfCoreInstanceRepository(
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
         // result deterministic even if legacy data left more than one live row for a key.
-        return await query
+        return MarkIfPartiallyLoaded(await query
             .Where(i => i.Key == key
                         && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy))
             .OrderByDescending(i => i.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken));
     }
 
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
@@ -233,16 +291,16 @@ public sealed class EfCoreInstanceRepository(
                     cancellationToken);
             if (response != null)
             {
-                return response;
+                return MarkIfPartiallyLoaded(response);
             }
         }
 
         // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
         // keeps the fallback deterministic by returning the most recent instance for the key.
-        return await query
+        return MarkIfPartiallyLoaded(await query
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken));
     }
 
     /// <inheritdoc />
@@ -368,32 +426,42 @@ public sealed class EfCoreInstanceRepository(
                 .FirstOrDefaultAsync(cancellationToken);
         }
 
-        // For artifact or partial version → load all matching versions and use smart matching
-        var candidates = await context.Instances
+        // For artifact or partial version → two-phase resolution: SQL narrows, the canonical
+        // comparer decides. Phase 1 projects only the version strings (no jsonb payloads —
+        // under the full-merge model every historical payload is a complete state copy, so
+        // materializing all candidates was the real cost). Phase 2 fetches exactly the one
+        // winning row. FindBestMatch stays the single source of truth for version semantics.
+        var candidateVersions = await context.Instances
             .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
             .Join(context.InstancesData,
                 i => i.Id,
                 d => d.InstanceId,
-                (i, d) => new InstanceAndDataModel
-                {
-                    Instance = i,
-                    InstanceData = d
-                })
+                (i, d) => d.Version)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
-        if (candidates.Count == 0)
+        if (candidateVersions.Count == 0)
             return null;
 
-        // Use smart version matching
-        var versions = candidates.Select(c => c.InstanceData.Version).ToList();
-        var bestMatchVersion = InstanceDataVersionComparer.FindBestMatch(versions, version);
+        var bestMatchVersion = InstanceDataVersionComparer.FindBestMatch(candidateVersions, version);
 
         if (string.IsNullOrEmpty(bestMatchVersion))
             return null;
 
-        return candidates.FirstOrDefault(c =>
-            string.Equals(c.InstanceData.Version, bestMatchVersion, StringComparison.OrdinalIgnoreCase));
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => new { Instance = i, Data = d })
+            .Where(x => x.Data.Version == bestMatchVersion)
+            .Select(x => new InstanceAndDataModel
+            {
+                Instance = x.Instance,
+                InstanceData = x.Data
+            })
+            .AsNoTracking()
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
@@ -434,38 +502,33 @@ public sealed class EfCoreInstanceRepository(
                         schemaContext: schemaContext
                     );
 
-                return filteredInstances
-                    .Include(i => i.DataList);
+                return IncludeListData(filteredInstances);
             }
             catch (ArgumentException)
             {
                 var dbSet = await GetDbSetAsync();
-                var query = dbSet
-                    .Include(i => i.DataList);
+                var query = IncludeListData(dbSet);
                 var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
             catch (FormatException)
             {
                 var dbSet = await GetDbSetAsync();
-                var query = dbSet
-                    .Include(i => i.DataList);
+                var query = IncludeListData(dbSet);
                 var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
             catch (Microsoft.EntityFrameworkCore.DbUpdateException)
             {
                 var dbSet = await GetDbSetAsync();
-                var query = dbSet
-                    .Include(i => i.DataList);
+                var query = IncludeListData(dbSet);
                 var filterSpec = new InstanceFilterSpecification(filter);
                 return filterSpec.Apply(query);
             }
         }
 
         var standardDbSet = await GetDbSetAsync();
-        return standardDbSet
-            .Include(i => i.DataList);
+        return IncludeListData(standardDbSet);
     }
 
     public async Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
@@ -519,7 +582,7 @@ public sealed class EfCoreInstanceRepository(
                 aggregations,
                 "Data",
                 currentSchema.Name ?? DefaultSchemaName,
-                query => query.Include(i => i.DataList).AsSplitQuery(),
+                query => IncludeListData(query).AsSplitQuery(),
                 schemaValidator,
                 cancellationToken,
                 schemaContext);
@@ -543,7 +606,7 @@ public sealed class EfCoreInstanceRepository(
                 var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
                 var hasNext = skip + pageSize < totalCount;
 
-                return new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+                return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
             }
 
             // Fallback to empty list
@@ -571,7 +634,7 @@ public sealed class EfCoreInstanceRepository(
             items = items.Take(pageSize).ToList();
         }
 
-        return new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
+        return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
     }
 
     public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
@@ -626,7 +689,7 @@ public sealed class EfCoreInstanceRepository(
                 aggregations,
                 "Data",
                 currentSchema.Name ?? DefaultSchemaName,
-                query => query.Include(i => i.DataList).AsSplitQuery(),
+                query => IncludeListData(query).AsSplitQuery(),
                 schemaValidator,
                 cancellationToken,
                 schemaContext);
@@ -712,7 +775,7 @@ public sealed class EfCoreInstanceRepository(
                 aggregations,
                 "Data",
                 currentSchema.Name ?? DefaultSchemaName,
-                query => query.Include(i => i.DataList).AsSplitQuery(),
+                query => IncludeListData(query).AsSplitQuery(),
                 schemaValidator,
                 cancellationToken,
                 schemaContext);
@@ -726,7 +789,7 @@ public sealed class EfCoreInstanceRepository(
                 var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
                 var hasNext = skip + pageSize < totalCount;
 
-                pagedList = new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
             }
             else
             {
@@ -845,7 +908,7 @@ public sealed class EfCoreInstanceRepository(
                 items = items.Take(pageSize).ToList();
         }
  
-        var normalPagedList = new HateoasPagedList<Instance>(items, page, pageSize, hasNextPage);
+        var normalPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
         return (normalPagedList, null);
     }
 
@@ -868,7 +931,7 @@ public sealed class EfCoreInstanceRepository(
             request ?? new Definitions.GraphQL.GraphQLFilterRequest(),
             "Data",
             schema,
-            query => query.Include(i => i.DataList).AsSplitQuery(),
+            query => IncludeListData(query).AsSplitQuery(),
             applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
             applyOrderByRaw: (ctx, sch, orderBy) =>
             {
@@ -938,7 +1001,7 @@ public sealed class EfCoreInstanceRepository(
                 var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
                 var hasNext = skip + pageSize < totalCount;
 
-                pagedList = new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
             }
             else
             {
@@ -961,7 +1024,7 @@ public sealed class EfCoreInstanceRepository(
             var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
             var hasNext = skip + pageSize < totalCount;
 
-            resultPagedList = new HateoasPagedList<Instance>(pagedData, page, pageSize, hasNext);
+            resultPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
         }
         else
         {
@@ -1186,9 +1249,8 @@ public sealed class EfCoreInstanceRepository(
             return [];
         var ids = orderedInstances.Select(i => i.Id).ToList();
         var dbSet = await GetDbSetAsync();
-        var instancesWithData = await dbSet
-            .Where(i => ids.Contains(i.Id))
-            .Include(i => i.DataList)
+        var instancesWithData = await IncludeListData(
+                dbSet.Where(i => ids.Contains(i.Id)))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
         var byId = instancesWithData.ToDictionary(i => i.Id);
@@ -1267,15 +1329,14 @@ public sealed class EfCoreInstanceRepository(
 
         var dbSet = await GetDbSetAsync();
 
-        return await dbSet
-            .FromSqlRaw(
-                "SELECT * FROM \"" + schema + "\".\"Instances\""
-                + " WHERE \"Status\" IN ({0}, {1})"
-                + " AND \"EffectiveStateSubType\" = {2}"
-                + " AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')"
-                + " ORDER BY \"CreatedAt\" DESC",
-                activeCode, busyCode, subType)
-            .Include(i => i.DataList)
+        return await IncludeListData(dbSet
+                .FromSqlRaw(
+                    "SELECT * FROM \"" + schema + "\".\"Instances\""
+                    + " WHERE \"Status\" IN ({0}, {1})"
+                    + " AND \"EffectiveStateSubType\" = {2}"
+                    + " AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')"
+                    + " ORDER BY \"CreatedAt\" DESC",
+                    activeCode, busyCode, subType))
             .Include(i => i.ChildCorrelations)
             .AsNoTracking()
             .ToListAsync(cancellationToken);

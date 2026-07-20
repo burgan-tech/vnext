@@ -3,6 +3,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Hosting;
+using BBT.Workflow.Infrastructure.Execution.Locks;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Options;
@@ -22,13 +23,28 @@ namespace BBT.Workflow.HostedServices;
 /// scope with the schema established via <c>IcurrentSchema.Change(flowKey)</c> (mirrors
 /// <c>SchemaMigrationRunner</c> / <c>MultiSchemaMigrator</c>). A fresh scope per schema avoids
 /// change-tracker bleed across schemas. Interval is fixed here; promote to options if needed.
+/// <para>
+/// Leader election: this hosted service runs on every orchestration replica, but a full sweep
+/// per replica would multiply the <c>sys_flows</c> discovery and per-flow-schema polling by the
+/// replica count. To avoid that redundancy, each cycle first tries to acquire a single
+/// <c>chain-reaper-leader</c> lease via <see cref="IPostgreSqlDistributedLockService"/>; only the winner
+/// sweeps, the others skip. PostgreSQL grants exactly one winner through an atomic
+/// <c>INSERT … ON CONFLICT</c>. The lease is released as soon as the sweep completes; its TTL
+/// (<c>WorkflowExecutionOptions.ChainReaperLeaderLeaseSeconds</c>) is only a crash-safety net so
+/// another replica can take over on the next cycle if the leader dies mid-sweep. A rare mid-sweep
+/// expiry is harmless because the reaper's re-drive is idempotent (chain-token gate), so no
+/// keep-alive extension is needed.
+/// </para>
 /// </remarks>
 public sealed class ChainReaperHostedService(
     IServiceScopeFactory scopeFactory,
+    IPostgreSqlDistributedLockService lockService,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<ChainReaperHostedService> logger)
     : BackgroundService
 {
+    private const string LeaderLockKey = "chain-reaper-leader";
+
     private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(60);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -44,7 +60,7 @@ public sealed class ChainReaperHostedService(
             {
                 try
                 {
-                    await SweepAllFlowSchemasAsync(stoppingToken);
+                    await RunLeaderSweepAsync(stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -67,6 +83,30 @@ public sealed class ChainReaperHostedService(
         }
 
         logger.LogInformation("Chain Reaper Worker stopped");
+    }
+
+    /// <summary>
+    /// Acquires the singleton <c>chain-reaper-leader</c> lease for this cycle and, only if this
+    /// replica wins it, runs the full multi-schema sweep. Replicas that do not win the lease skip
+    /// the cycle, so the discovery and per-flow polling happen once across the cluster rather than
+    /// once per replica. The lease is released when the sweep completes (or on failure, via the
+    /// handle's disposal).
+    /// </summary>
+    private async Task RunLeaderSweepAsync(CancellationToken stoppingToken)
+    {
+        var leaseSeconds = Math.Max(30, executionOptions.Value.ChainReaperLeaderLeaseSeconds);
+
+        await using var leadership = await lockService.TryAcquireLockAsync(
+            LeaderLockKey, leaseSeconds, stoppingToken);
+
+        if (leadership is null)
+        {
+            logger.ChainReaperLeadershipHeldElsewhere();
+            return;
+        }
+
+        logger.ChainReaperLeadershipAcquired(leaseSeconds);
+        await SweepAllFlowSchemasAsync(stoppingToken);
     }
 
     /// <summary>

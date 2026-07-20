@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Instances;
@@ -23,6 +24,9 @@ public sealed class TransitionInput(
     public Dictionary<string, string?> Headers { get; set; } = new();
     public Dictionary<string, string?> RouteValues { get; set; } = new();
     public bool Sync { get; set; } = sync;
+
+    /// <summary>Typed terminal-cascade context supplied by an internal terminal operation.</summary>
+    public TerminationContext? Termination { get; set; }
 
     /// <summary>
     /// Who is triggering the transition. Defaults to <see cref="ExecutionActor.User"/> for the normal
@@ -60,6 +64,7 @@ public sealed class TransitionInput(
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = Headers,
             RouteValues = RouteValues,
+            Termination = Termination,
             Data = new TransitionDataInfo(Data?.Key, Data?.Attributes)
             {
                 Tags = Data?.Tags,

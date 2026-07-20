@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
@@ -24,6 +26,7 @@ public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
     {
         TransitionId = transitionId;
         TaskId = taskId;
+        ExecutionKey = CreateExecutionKey(transitionId, taskId);
         StartedAt = DateTime.UtcNow;
         CreatedAt = DateTime.UtcNow;
         Status = TaskStatus.Waiting;
@@ -42,6 +45,18 @@ public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
     /// The task definition key/ID.
     /// </summary>
     public string TaskId { get; private set; }
+
+    /// <summary>
+    /// Stable idempotency key for this task definition within the transition.
+    /// Legacy rows remain null; new journal rows are protected by a filtered unique index.
+    /// </summary>
+    public string? ExecutionKey { get; private set; }
+
+    public static string CreateExecutionKey(Guid transitionId, string taskId)
+    {
+        var source = Encoding.UTF8.GetBytes($"{transitionId:N}:{taskId}");
+        return Convert.ToHexString(SHA256.HashData(source));
+    }
 
     /// <summary>
     /// Platform/infrastructure execution status.

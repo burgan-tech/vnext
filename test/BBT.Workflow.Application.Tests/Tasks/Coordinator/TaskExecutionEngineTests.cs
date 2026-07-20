@@ -67,8 +67,29 @@ public sealed class TaskExecutionEngineTests
 
     private void UsePersistenceStrategy(ITaskPersistenceStrategy strategy)
     {
-        _persistenceStrategyFactory.GetStrategy(Arg.Any<TaskTrigger>())
+        _persistenceStrategyFactory.GetStrategy(Arg.Any<TaskExecutionOrigin>())
             .Returns(Result<ITaskPersistenceStrategy>.Ok(strategy));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenFlowHasNoTransitionId_FailsBeforeRemoteExecution()
+    {
+        var engine = CreateEngine();
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await engine.ExecuteAsync(
+            onExecute,
+            null,
+            TaskTrigger.OnExecute,
+            TaskExecutionOrigin.Flow,
+            CreateScriptContext(),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
+        await _taskFactory.DidNotReceiveWithAnyArgs()
+            .CreateExecutionTaskAsync(default!, default);
     }
 
     /// <summary>
@@ -94,12 +115,48 @@ public sealed class TaskExecutionEngineTests
         var engine = CreateEngine();
 
         // Act
-        await engine.ExecuteAsync(onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, CreateScriptContext(), CancellationToken.None);
+        await engine.ExecuteAsync(onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow, CreateScriptContext(), CancellationToken.None);
 
         // Assert: the failure persist finished before ExecuteAsync returned (no fire-and-forget).
         strategy.CompletionFinished.ShouldBeTrue(
             "the failure-path completion persist must be awaited before ExecuteAsync returns");
         strategy.CompletionCallCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenFailurePersistFails_ReturnsInfrastructureFailure()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Fail(new Error("500", "no executor registered")));
+
+        var strategy = Substitute.For<ITaskPersistenceStrategy>();
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => callInfo.Arg<InstanceTask>());
+        strategy.HandleCompletionAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("journal write failed")));
+        UsePersistenceStrategy(strategy);
+
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Ignore,
+            ErrorCodes = ["*"],
+            Priority = 1,
+            LogOnly = true
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute,
+            Guid.NewGuid(),
+            TaskTrigger.OnExecute,
+            TaskExecutionOrigin.Flow,
+            CreateScriptContext(),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse("a failed journal write must not be reported as a persisted task failure");
     }
 
     /// <summary>
@@ -145,7 +202,7 @@ public sealed class TaskExecutionEngineTests
         var engine = CreateEngine();
 
         // Act
-        var result = await engine.ExecuteAsync(onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, CreateScriptContext(), CancellationToken.None);
+        var result = await engine.ExecuteAsync(onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow, CreateScriptContext(), CancellationToken.None);
 
         // Assert: Ignore resolution => pipeline continues (not a hard failure/fault) with zero retries.
         result.IsSuccess.ShouldBeTrue();
@@ -164,10 +221,10 @@ public sealed class TaskExecutionEngineTests
         public bool CompletionFinished { get; private set; }
         public int CompletionCallCount { get; private set; }
 
-        public bool CanHandle(TaskTrigger taskTrigger) => true;
+        public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+            => Task.FromResult(instanceTask);
 
         public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
         {

@@ -198,6 +198,28 @@ public static partial class WorkflowLogs
         string flowKey);
 
     /// <summary>
+    /// Logs when this replica won the chain-reaper leader lease and will run the sweep this cycle.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10128,
+        Level = LogLevel.Debug,
+        Message = "Chain reaper acquired leader lease ({LeaseSeconds}s); sweeping this cycle")]
+    public static partial void ChainReaperLeadershipAcquired(
+        this ILogger logger,
+        int leaseSeconds);
+
+    /// <summary>
+    /// Logs when another replica holds the chain-reaper leader lease, so this replica skips the
+    /// sweep this cycle (avoids redundant sys_flows discovery and per-flow polling across pods).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10129,
+        Level = LogLevel.Debug,
+        Message = "Chain reaper leader lease held by another replica; skipping sweep this cycle")]
+    public static partial void ChainReaperLeadershipHeldElsewhere(
+        this ILogger logger);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>
@@ -536,12 +558,12 @@ public static partial class WorkflowLogs
         string transitionKeys);
 
     /// <summary>
-    /// Logs when state-specific scheduled jobs are successfully canceled.
+    /// Logs when state-specific scheduled jobs are successfully processed.
     /// </summary>
     [LoggerMessage(
         EventId = 10058,
         Level = LogLevel.Information,
-        Message = "Canceled {Count} scheduled jobs for instance {InstanceId}, transitions: {TransitionKeys}")]
+        Message = "Processed {Count} scheduled jobs for instance {InstanceId}, transitions: {TransitionKeys}")]
     public static partial void StateTransitionsJobsCanceled(
         this ILogger logger,
         int count,
@@ -832,6 +854,46 @@ public static partial class WorkflowLogs
     public static partial void SubFlowCorrelationNotFound(
         this ILogger logger,
         Guid subInstanceId);
+
+    [LoggerMessage(
+        EventId = 40031,
+        Level = LogLevel.Debug,
+        Message = "Duplicate {Outcome} SubItem terminal outcome for parent {ParentInstanceId}, child {SubInstanceId}")]
+    public static partial void SubItemTerminalDuplicate(
+        this ILogger logger,
+        string outcome,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    [LoggerMessage(
+        EventId = 40053,
+        Level = LogLevel.Warning,
+        Message = "SubItem terminal outcome conflict for parent {ParentInstanceId}, child {SubInstanceId}: existing {ExistingOutcome}, incoming {IncomingOutcome}")]
+    public static partial void SubItemTerminalConflict(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        string existingOutcome,
+        string incomingOutcome);
+
+    [LoggerMessage(
+        EventId = 40054,
+        Level = LogLevel.Warning,
+        Message = "Failed to revert terminal SubItem correlation for parent {ParentInstanceId}, child {SubInstanceId}")]
+    public static partial void SubItemCorrelationRevertFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    [LoggerMessage(
+        EventId = 40055,
+        Level = LogLevel.Warning,
+        Message = "Parent terminal lock {LockKey} could not be acquired for {Outcome} outcome")]
+    public static partial void SubItemTerminalLockNotAcquired(
+        this ILogger logger,
+        string lockKey,
+        string outcome);
 
     /// <summary>
     /// Logs when a correlation is marked as completed.
@@ -1288,6 +1350,19 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
+    /// Logs when the chain lock lease could not be extended between chained transitions;
+    /// the chain stops instead of continuing without a held lease.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40052,
+        Level = LogLevel.Warning,
+        Message = "Failed to extend chain lock lease for instance {InstanceId} before chained transition {TransitionKey}; stopping chain")]
+    public static partial void TransitionLockExtendFailed(
+        this ILogger logger,
+        string instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when start transition validation fails.
     /// </summary>
     [LoggerMessage(
@@ -1423,7 +1498,7 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 40019,
         Level = LogLevel.Information,
-        Message = "Instance cancellation jobs processed for instance {InstanceId}, {JobCount} jobs canceled")]
+        Message = "Processed {JobCount} instance cancellation jobs for instance {InstanceId}")]
     public static partial void InstanceCanceledJobsProcessed(
         this ILogger logger,
         Guid instanceId,
@@ -1451,6 +1526,18 @@ public static partial class WorkflowLogs
     public static partial void InstanceJobDeletionFailed(
         this ILogger logger,
         Exception exception,
+        Guid jobId,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when cleanup leaves a running background job to its dispatcher.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40104,
+        Level = LogLevel.Information,
+        Message = "Background job {JobId} is already running for instance {InstanceId}; cleanup left it to the dispatcher")]
+    public static partial void InstanceJobCleanupSkippedRunning(
+        this ILogger logger,
         Guid jobId,
         Guid instanceId);
 

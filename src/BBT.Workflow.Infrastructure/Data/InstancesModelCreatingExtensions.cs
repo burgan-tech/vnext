@@ -99,6 +99,10 @@ public static class InstancesModelCreatingExtensions
 
             b.Ignore(p => p.HasActiveIncident);
 
+            // Runtime-only marker set by the repository after a latest-only materialization;
+            // never persisted.
+            b.Ignore(p => p.IsDataPartiallyLoaded);
+
             b.HasMany(m => m.DataList)
                 .WithOne()
                 .HasForeignKey(p => p.InstanceId)
@@ -189,6 +193,10 @@ public static class InstancesModelCreatingExtensions
 
             b.Property(p => p.SubFlowCurrentState)
                 .HasMaxLength(StateConstants.MaxKeyLength);
+
+            b.Property(p => p.TerminalOutcome)
+                .HasConversion<int?>()
+                .HasComment("Completed=1, Faulted=2, Canceled=3; null for legacy rows");
 
             // Partial covering index for the runtime hot-path. The WithDetailsAsync
             // include now filters c => !c.IsCompleted, so this partial set matches the
@@ -406,6 +414,14 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(p => new { p.TransitionId, p.Status })
                 .IncludeProperties(p => new { p.TaskId, p.BusinessStatus, p.StartedAt })
                 .HasDatabaseName("IX_InstanceTasks_Transition_Status_Covering");
+
+            b.Property(p => p.ExecutionKey)
+                .HasMaxLength(64);
+
+            b.HasIndex(p => p.ExecutionKey)
+                .IsUnique()
+                .HasFilter("\"ExecutionKey\" IS NOT NULL")
+                .HasDatabaseName("UX_InstanceTasks_ExecutionKey");
         });
 
         builder.Entity<InstanceAction>(b =>

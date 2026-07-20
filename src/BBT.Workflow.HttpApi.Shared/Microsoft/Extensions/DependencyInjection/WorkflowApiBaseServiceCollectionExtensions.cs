@@ -242,7 +242,12 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddDistributedLock(this IServiceCollection services, IConfiguration configuration)
     {
         var lockStoreName = configuration["DAPR_LOCK_STORE_NAME"]!;
+
         services.AddDaprDistributedLock(lockStoreName);
+        services.AddSingleton<
+            BBT.Workflow.Infrastructure.Execution.Locks.IPostgreSqlDistributedLockService,
+            BBT.Workflow.Infrastructure.Execution.Locks.NpgsqlDistributedLockService>();
+
         services.AddResourceLock(lockStoreName);
         return services;
     }

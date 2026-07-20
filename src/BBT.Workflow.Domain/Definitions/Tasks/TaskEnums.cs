@@ -41,6 +41,17 @@ public enum TaskTrigger
 }
 
 /// <summary>
+/// Identifies the component that initiated task execution. Unlike <see cref="TaskTrigger"/>,
+/// this value controls whether an execution is part of the durable Flow task journal.
+/// </summary>
+public enum TaskExecutionOrigin
+{
+    Flow = 1,
+    Function = 2,
+    Extension = 3
+}
+
+/// <summary>
 /// Task statuses
 /// </summary>
 public enum TaskStatus

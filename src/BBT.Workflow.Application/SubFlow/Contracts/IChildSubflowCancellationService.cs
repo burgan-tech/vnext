@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Instances.Events;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -15,6 +16,7 @@ public interface IChildSubflowCancellationService
     /// <param name="domain">The domain of the child subflow.</param>
     /// <param name="flow">The flow key of the child subflow.</param>
     /// <param name="version">The version of the child subflow. Can be null for version-agnostic cancellation.</param>
+    /// <param name="termination">The terminal cascade context from the parent.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A result indicating success or failure of the cancellation.</returns>
     Task<Result> CancelChildSubflowAsync(
@@ -22,6 +24,6 @@ public interface IChildSubflowCancellationService
         string domain,
         string flow,
         string? version,
+        TerminationContext termination,
         CancellationToken cancellationToken = default);
 }
-

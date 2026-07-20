@@ -32,6 +32,7 @@ public interface ITaskCoordinator : ITaskConditionService, ITaskTimerService
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken = default);
 }

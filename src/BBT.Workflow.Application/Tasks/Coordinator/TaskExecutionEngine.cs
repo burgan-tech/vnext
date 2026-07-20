@@ -67,9 +67,17 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken)
     {
+        if (origin == TaskExecutionOrigin.Flow && instanceTransitionId is null)
+        {
+            return Result<TasksExecutionResult>.Fail(Error.Validation(
+                WorkflowErrorCodes.TaskExecution,
+                $"Flow task '{onExecuteTask.Task.Key}' requires a persisted instance transition id."));
+        }
+
         // 1. Build boundary chain upfront (Task -> State -> Global)
         var boundaryChain = CompiledBoundaryChain.Compile(
             onExecuteTask.ErrorBoundary,
@@ -91,7 +99,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // 2. Execute with error-aware retry (retry policy resolved per failure from matching rule)
         return await ExecuteWithErrorAwareRetryAsync(
-            onExecuteTask, instanceTransitionId, taskTrigger, context,
+            onExecuteTask, instanceTransitionId, taskTrigger, origin, context,
             boundaryChain, cancellationToken);
     }
 
@@ -111,6 +119,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CompiledBoundaryChain boundaryChain,
         CancellationToken cancellationToken)
@@ -125,7 +134,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
             while (true)
             {
-                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, context, boundaryChain, cancellationToken);
+                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, origin, context, boundaryChain, cancellationToken);
 
                 // Success - return directly
                 if (result is { IsSuccess: true, Value.IsSuccess: true })
@@ -386,14 +395,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Gets the persistence strategy for the given task trigger.
     /// </summary>
-    private ITaskPersistenceStrategy? GetPersistenceStrategy(TaskTrigger taskTrigger)
+    private ITaskPersistenceStrategy? GetPersistenceStrategy(TaskExecutionOrigin origin)
     {
-        var strategyResult = _persistenceStrategyFactory.GetStrategy(taskTrigger);
+        var strategyResult = _persistenceStrategyFactory.GetStrategy(origin);
         if (!strategyResult.IsSuccess)
         {
             _logger.LogDebug(
-                "No persistence strategy found for trigger {TaskTrigger}, skipping persistence",
-                taskTrigger);
+                "No persistence strategy found for origin {TaskExecutionOrigin}, skipping persistence",
+                origin);
             return null;
         }
 
@@ -403,14 +412,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Persists task creation.
     /// </summary>
-    private static async Task PersistCreationAsync(
+    private static async Task<InstanceTask> PersistCreationAsync(
         ITaskPersistenceStrategy? strategy,
         InstanceTask instanceTask,
         CancellationToken cancellationToken)
     {
         if (strategy == null)
-            return;
-        await strategy.HandleCreationAsync(instanceTask, cancellationToken);
+            return instanceTask;
+        return await strategy.HandleCreationAsync(instanceTask, cancellationToken);
     }
 
     /// <summary>
@@ -433,8 +442,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// The completion persist is awaited (not fire-and-forget) so its SaveChanges cannot race the
     /// pipeline's next write on the shared request-scoped DbContext, which previously tripped EF Core's
     /// ConcurrencyDetector and faulted the instance even when an Ignore boundary should have handled the
-    /// failure (issue #807). Persistence errors are caught and logged so recording a failure never throws
-    /// an unhandled exception into the boundary-resolution path.
+    /// failure (issue #807). Persistence errors are allowed to propagate so a task failure is never
+    /// reported as durably recorded when its journal update did not commit.
     /// </remarks>
     private async Task RecordFailureAsync(
         InstanceTask instanceTask,
@@ -448,17 +457,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         instanceTask.Faulted(errorMessage ?? "Unknown error");
 
         if (strategy != null)
-        {
-            try
-            {
-                await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogError(ex,
-                    "Failed to persist task failure for {TaskKey}", instanceTask.TaskId);
-            }
-        }
+            await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
 
         _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
         _workflowMetrics.FinishTaskExecution(taskType, workflowKey);
@@ -492,6 +491,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CompiledBoundaryChain boundaryChain,
         CancellationToken cancellationToken)
@@ -524,11 +524,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // 2. Create instance task for tracking
         var instanceTask = new InstanceTask(
             _guidGenerator.Create(),
-            instanceTransitionId ?? _guidGenerator.Create(),
+            instanceTransitionId ?? Guid.Empty,
             task.Key);
 
         // 3. Get persistence strategy
-        var persistenceStrategy = GetPersistenceStrategy(taskTrigger);
+        var persistenceStrategy = GetPersistenceStrategy(origin);
 
         // 4. Record metrics start
         _workflowMetrics.RecordTaskExecuted(taskTypeStr, workflowKey);
@@ -539,7 +539,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task.Key, taskType, context.Instance?.Id);
 
         // 5. Persist creation
-        await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
+        instanceTask = await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);
@@ -682,4 +682,3 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             [summary], stopwatch.ElapsedMilliseconds));
     }
 }
-

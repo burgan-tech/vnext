@@ -219,6 +219,7 @@ public sealed class InstanceExtensionService(
             tasks,
             null,
             TaskTrigger.Extension,
+            TaskExecutionOrigin.Extension,
             scriptContext,
             cancellationToken);
 

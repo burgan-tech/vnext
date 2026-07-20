@@ -12,6 +12,7 @@ using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +32,7 @@ public sealed class InstanceController(
     ISubflowCompletionService subflowCompletionService,
     ISubflowStateService subflowStateService,
     ISubflowFaultService subflowFaultService,
+    ISubflowCancellationService subflowCancellationService,
     IInstanceCancellationService cancellationService,
     IChildSubflowCancellationService childSubflowCancellationService,
     IChildSubflowFaultService childSubflowFaultService,
@@ -185,6 +187,23 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Propagates a canceled SubItem outcome to its parent instance.
+    /// Internal endpoint for cross-domain cancellation propagation.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/sub/cancel")]
+    public async Task<IActionResult> CancelSubAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromBody] SubItemCanceledInput request,
+        CancellationToken cancellationToken = default)
+    {
+        await subflowCancellationService.CancellationAsync(request, cancellationToken);
+        return Ok();
+    }
+
+    /// <summary>
     /// Marks an instance Busy and recursively propagates to nested SubFlows.
     /// Internal endpoint for cross-domain SubFlow busy propagation.
     /// </summary>
@@ -242,11 +261,11 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] Guid instance,
-        [FromQuery] string? version = null,
+        [FromBody] ChildSubflowCancelInput request,
         CancellationToken cancellationToken = default)
     {
         var result = await childSubflowCancellationService.CancelChildSubflowAsync(
-            instance, domain, workflow, version, cancellationToken);
+            instance, domain, workflow, request.Version, request.Termination, cancellationToken);
         return FromResult(result);
     }
 
@@ -260,11 +279,11 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] Guid instance,
-        [FromQuery] Guid parentInstanceId,
+        [FromBody] ChildSubflowFaultInput request,
         CancellationToken cancellationToken = default)
     {
         var result = await childSubflowFaultService.FaultChildAsync(
-            instance, domain, workflow, parentInstanceId, cancellationToken);
+            instance, domain, workflow, request.ParentInstanceId, request.Termination, cancellationToken);
         return FromResult(result);
     }
 
@@ -670,3 +689,7 @@ public sealed class InstanceController(
         return FromResult(result.Result);
     }
 }
+
+public sealed record ChildSubflowFaultInput(
+    Guid ParentInstanceId,
+    TerminationContext Termination);

@@ -84,6 +84,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
+        services.AddScoped<ISubflowCancellationService, SubflowCancellationService>();
         services.AddScoped<ISubflowFaultService, SubflowFaultService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();

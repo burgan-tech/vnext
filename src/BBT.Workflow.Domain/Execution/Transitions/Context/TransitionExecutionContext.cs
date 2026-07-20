@@ -3,6 +3,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Aether.Aspects;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Shared;
 
@@ -120,6 +121,9 @@ public sealed class TransitionExecutionContext
     /// <c>BeginChain</c> and propagated to subsequent continuations so the gate admits them.
     /// </summary>
     public Guid? ChainToken { get; set; }
+
+    /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
+    public TerminationContext? Termination { get; set; }
 
     // Telemetry & Headers & Temporary storage
     /// <summary>Gets the distributed tracing trace identifier.</summary>
