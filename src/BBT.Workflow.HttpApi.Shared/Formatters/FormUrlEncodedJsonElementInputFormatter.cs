@@ -21,6 +21,14 @@ public sealed class FormUrlEncodedJsonElementInputFormatter : TextInputFormatter
 {
     private const string PayloadModeHeader = "x-vnext-payload-mode";
 
+    /// <summary>
+    /// Upper bound for a bracket array index. Arrays must use contiguous indices and cannot exceed
+    /// this size, so any index above the limit is guaranteed invalid. Rejecting it during parsing
+    /// prevents an attacker from forcing large intermediate allocations (e.g. <c>items[2000000000]=1</c>)
+    /// before the sparse-array validation would reject it.
+    /// </summary>
+    private const int MaxArrayIndex = 1024;
+
     public FormUrlEncodedJsonElementInputFormatter()
     {
         SupportedMediaTypes.Add(MediaTypeHeaderValue.Parse("application/x-www-form-urlencoded"));
@@ -142,6 +150,13 @@ public sealed class FormUrlEncodedJsonElementInputFormatter : TextInputFormatter
                 if (!int.TryParse(inner, NumberStyles.None, CultureInfo.InvariantCulture, out var index))
                 {
                     throw InvalidPath(key, "The array index is too large.");
+                }
+
+                if (index > MaxArrayIndex)
+                {
+                    throw InvalidPath(
+                        key,
+                        $"The array index exceeds the maximum supported value ({MaxArrayIndex}).");
                 }
 
                 segments.Add(new IndexSegment(index));
@@ -271,7 +286,7 @@ public sealed class FormUrlEncodedJsonElementInputFormatter : TextInputFormatter
                 collection.Values.Add(value);
                 break;
             default:
-                throw Collision(originalKey, originalKey);
+                throw Collision(originalKey, path[position].ToString());
         }
     }
 

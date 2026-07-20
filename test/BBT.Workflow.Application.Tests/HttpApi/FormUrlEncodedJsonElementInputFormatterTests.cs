@@ -239,6 +239,8 @@ public class FormUrlEncodedJsonElementInputFormatterTests
     [InlineData("a=x&a[b]=y")]
     [InlineData("a[b=x")]
     [InlineData("items[-1]=A")]
+    [InlineData("items[1025]=A")] // index above MaxArrayIndex — rejected at parse, no padding allocation
+    [InlineData("items[2000000000]=A")] // guards against large sparse-array memory allocation
     [InlineData("payload=%7B%22x%22%3A1%7D")]
     public async Task ReadRequestBodyAsync_InvalidOrAmbiguousShape_ReturnsFormatterFailure(string body)
     {

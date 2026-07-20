@@ -142,6 +142,7 @@ Invalid or ambiguous shapes return HTTP 400 with a model-binding error. Rejected
 - Unindexed arrays of objects: `items[][name]=A`
 - Negative indices: `items[-1]=A`
 - Sparse indices: `items[1]=B` without `items[0]`
+- Array indices above the supported maximum (1024): `items[1025]=A`
 - Scalar/container collisions: `value=x&value[name]=y`
 - JSON object or array embedded as a scalar value
 
