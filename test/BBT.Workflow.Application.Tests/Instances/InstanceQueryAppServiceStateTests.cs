@@ -215,6 +215,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         SetupSubFlowGateway(InstanceStatus.Active, "sub-review", new InstanceInteractionOutput
         {
             TerminateLongPoll = true,
+            FallbackTimeoutSeconds = 90,
             Ack = new BBT.Workflow.Shared.AckHref { Href = "/child/longpoll/ack" }
         });
         _urlTemplateBuilder
@@ -226,11 +227,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Act
         var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
 
-        // Assert — bubbled up, ack href rewritten to the parent's endpoint
+        // Assert — bubbled up, ack href rewritten to the parent's endpoint, fallback carried through
         result.Result.IsSuccess.ShouldBeTrue();
         var output = result.Result.Value!;
         output.Interaction.ShouldNotBeNull();
         output.Interaction!.TerminateLongPoll.ShouldBeTrue();
+        output.Interaction.FallbackTimeoutSeconds.ShouldBe(90);
         output.Interaction.Ack.ShouldNotBeNull();
         output.Interaction.Ack!.Href.ShouldBe("/parent/longpoll/ack");
     }
@@ -245,6 +247,107 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var (instance, workflow) = CreateParentWithActiveSubFlow();
         SetupCommonMocks(instance, workflow);
         SetupSubFlowGateway(InstanceStatus.Active, "sub-review");
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// When the current state declares interaction.longPoll with terminate=true, the interaction block is
+    /// emitted with the terminate flag, the configured fallback window, and the acknowledge href.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateDeclaresLongPollTerminate_EmitsInteractionWithAck()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 45);
+        SetupCommonMocks(instance, workflow);
+        _urlTemplateBuilder
+            .BuildLongPollAckUrl(TestDomain, TestWorkflow, instance.Id.ToString(), Arg.Any<string?>())
+            .Returns("/longpoll/ack");
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var interaction = result.Result.Value!.Interaction;
+        interaction.ShouldNotBeNull();
+        interaction!.TerminateLongPoll.ShouldBeTrue();
+        interaction.FallbackTimeoutSeconds.ShouldBe(45);
+        interaction.Ack.ShouldNotBeNull();
+        interaction.Ack!.Href.ShouldBe("/longpoll/ack");
+    }
+
+    /// <summary>
+    /// When the current state declares interaction.longPoll with terminate=false, the interaction block is
+    /// still emitted (terminate flag false, fallback window present) but without an acknowledge href.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateDeclaresLongPollWithoutTerminate_EmitsInteractionWithoutAck()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: false, fallbackSeconds: 120);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var interaction = result.Result.Value!.Interaction;
+        interaction.ShouldNotBeNull();
+        interaction!.TerminateLongPoll.ShouldBeFalse();
+        interaction.FallbackTimeoutSeconds.ShouldBe(120);
+        interaction.Ack.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// When the current state does not declare interaction.longPoll, no interaction block is emitted.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateHasNoLongPollDeclaration_NoInteraction()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// When the state declares interaction.longPoll.roles and the caller's role is not granted,
+    /// no interaction block is emitted (role filtering preserved).
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenLongPollRolesDenyCaller_NoInteraction()
+    {
+        // Arrange — role grants present; IsAnyRoleAllowedForGrantsAsync defaults to false (caller not allowed)
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 30, withRoles: true);
+        SetupCommonMocks(instance, workflow);
 
         var input = CreateInput(instance.Id.ToString());
 
@@ -895,6 +998,47 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceQueryGateway
             .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
             .Returns(ConditionalResult<GetInstanceStateOutput>.Success(subFlowOutput));
+    }
+
+    /// <summary>
+    /// Builds an instance whose current state ("review") declares interaction.longPoll, deserialized from
+    /// JSON since the interaction value objects expose only private (JSON) constructors.
+    /// </summary>
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithLongPollState(
+        bool terminate, int fallbackSeconds, bool withRoles = false)
+    {
+        var roles = withRoles
+            ? """, "roles": [ { "role": "FullAuthorized", "grant": "allow" } ]"""
+            : "";
+        var terminateLiteral = terminate ? "true" : "false";
+        var json = $$"""
+                   {
+                       "type": "F",
+                       "timeout": null,
+                       "labels": [],
+                       "functions": [],
+                       "features": [],
+                       "states": [
+                           { "key": "review", "stateType": "Intermediate", "transitions": [],
+                             "interaction": { "longPoll": { "terminate": {{terminateLiteral}}, "fallbackTimeoutSeconds": {{fallbackSeconds}}{{roles}} } } }
+                       ],
+                       "sharedTransitions": [],
+                       "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+                   }
+                   """;
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
+
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var reviewState = workflow.States.First(s => s.Key == "review");
+        instance.ChangeState(reviewState);
+        return (instance, workflow);
     }
 
     private static GetInstanceStateInput CreateInput(string instanceId) => new()
