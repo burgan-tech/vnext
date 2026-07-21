@@ -281,18 +281,17 @@ public sealed class SubflowFaultServiceTests
         var reloaded = CloneParentWithCompletedCorrelation(parentInstance, subInstanceId);
         _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parentInstance);
-        _instanceRepository
-            .SetupSequence(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parentInstance)
             .ReturnsAsync(reloaded);
 
         await Should.ThrowAsync<SubflowCompletionException>(
             () => CreateService().FaultAsync(input, CancellationToken.None));
 
         _instanceRepository.Verify(
+            x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
-            Times.Exactly(2));
+            Times.Once);
         reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         _instanceRepository.Verify(
             x => x.UpdateAsync(reloaded, true, It.IsAny<CancellationToken>()),
@@ -317,9 +316,13 @@ public sealed class SubflowFaultServiceTests
             .ReturnsAsync(_lockScope.Object);
         var loadCall = 0;
         _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"load-{++loadCall}"))
+            .ReturnsAsync(parent);
+        _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"load-{++loadCall}"))
-            .ReturnsAsync(() => loadCall == 1 ? parent : terminalReload);
+            .ReturnsAsync(terminalReload);
         _instanceRepository
             .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
             .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
@@ -683,6 +686,11 @@ public sealed class SubflowFaultServiceTests
 
     private void SetupParentInstance(Instance parentInstance)
     {
+        // Main load (correlations + data) and compensation reload (correlations only)
+        // both resolve to the same entity unless a test overrides the revert path.
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
         _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);
