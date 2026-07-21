@@ -164,6 +164,20 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindWithAllCorrelationsAndDataAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await IncludeListData(dbSet.AsQueryable())
+            .Include(i => i.ChildCorrelations)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+
+        return MarkIfPartiallyLoaded(instance);
+    }
+
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>
