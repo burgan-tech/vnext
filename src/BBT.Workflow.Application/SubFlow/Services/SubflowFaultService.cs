@@ -87,7 +87,9 @@ public sealed class SubflowFaultService(
 
                     await using var uow = uowManager.Begin(
                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
-                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
+                    // Data must be loaded here: output mapping appends a new data version via
+                    // Instance.AddData, whose version/IsLatest math reads the in-memory data list.
+                    parentInstance = await instanceRepository.FindWithAllCorrelationsAndDataAsync(
                         input.InstanceId, cancellationToken);
 
                     if (parentInstance == null)

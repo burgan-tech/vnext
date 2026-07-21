@@ -144,6 +144,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds an instance including ALL child correlations (completed and active) AND instance data
+    /// as a tracked entity. Required by subflow terminal handlers that run output mapping:
+    /// <c>Instance.AddData</c> derives the next version and moves the <c>IsLatest</c> flag from the
+    /// in-memory data list, so merging onto an aggregate loaded without data would restart
+    /// versioning at the default version and leave duplicate latest rows.
+    /// </summary>
+    /// <param name="instanceId">The instance identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The instance with all correlations and data, or null when not found.</returns>
+    Task<Instance?> FindWithAllCorrelationsAndDataAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns active instances with Human state subtype.
     /// Includes DataList for JSON data extraction.
     /// </summary>
