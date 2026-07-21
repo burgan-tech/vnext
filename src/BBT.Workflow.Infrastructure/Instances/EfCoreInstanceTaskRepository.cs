@@ -27,12 +27,20 @@ public class EfCoreInstanceTaskRepository(
     {
         var dbSet = await GetDbSetAsync();
         var executionKey = InstanceTask.CreateExecutionKey(transitionId, taskId);
+
+        // ExecutionKey is the deterministic hash of (TransitionId, TaskId), so any row matching
+        // the pair either carries exactly this key or a NULL key (row created before the
+        // ExecutionKey migration). Filtering on the key lets the planner resolve the common case
+        // through UX_InstanceTasks_ExecutionKey as a point lookup; the OR arm keeps legacy rows
+        // reachable via the (TransitionId, ...) prefix of the covering index.
         return await dbSet
+            .Where(task => task.ExecutionKey == executionKey ||
+                           (task.TransitionId == transitionId &&
+                            task.TaskId == taskId &&
+                            task.ExecutionKey == null))
             .OrderByDescending(task => task.ExecutionKey == executionKey)
             .ThenByDescending(task => task.StartedAt)
-            .FirstOrDefaultAsync(
-                task => task.TransitionId == transitionId && task.TaskId == taskId,
-                cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <summary>
