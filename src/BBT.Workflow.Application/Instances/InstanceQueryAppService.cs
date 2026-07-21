@@ -1086,24 +1086,28 @@ public sealed class InstanceQueryAppService(
                 displayedState = aliasDisplay;
         }
 
-        // Declarative long-poll termination: when the instance is paused on a state that terminates
-        // long polling and the caller's role is granted the signal, tell the client to stop polling,
-        // render the entered-state screen, and acknowledge via the ack href. Role-filtered so only the
-        // intended roles are told to stop. The awaiting instance may be THIS instance (leaf) or a
-        // nested subflow whose signal bubbled up via SubFlowStateInfo — in the subflow case the ack
-        // href is rewritten to THIS level so the client always acknowledges the instance it polls; the
-        // acknowledge endpoint then descends the chain. The two are mutually exclusive (a parent in a
-        // SubFlow state is not itself in a terminate state). Role filtering for the bubbled case was
-        // already applied at the child level (caller role forwarded via headers).
-        var interaction = subFlowStateInfo.Interaction?.TerminateLongPoll == true
+        // Declarative long-poll interaction: emitted whenever the current state declares
+        // interaction.longPoll (subject to role grants), carrying the terminate flag and fallback window.
+        // When terminate is true the client is told to stop polling, render the entered-state screen,
+        // and acknowledge via the ack href. Role-filtered so only the intended roles receive it. The
+        // interaction may originate at THIS instance (leaf) or at a nested subflow whose signal bubbled
+        // up via SubFlowStateInfo — in the subflow case the ack href is rewritten to THIS level so the
+        // client always acknowledges the instance it polls; the acknowledge endpoint then descends the
+        // chain. The two are mutually exclusive (a parent in a SubFlow state does not itself declare
+        // long-poll interaction). Role filtering for the bubbled case was already applied at the child
+        // level (caller role forwarded via headers).
+        var interaction = subFlowStateInfo.Interaction is { } childInteraction
             ? new InstanceInteractionOutput
             {
-                TerminateLongPoll = true,
-                Ack = new AckHref
-                {
-                    Href = urlTemplateBuilder.BuildLongPollAckUrl(
-                        input.Domain, input.Workflow, instance.Id.ToString())
-                }
+                TerminateLongPoll = childInteraction.TerminateLongPoll,
+                FallbackTimeoutSeconds = childInteraction.FallbackTimeoutSeconds,
+                Ack = childInteraction.Ack is not null
+                    ? new AckHref
+                    {
+                        Href = urlTemplateBuilder.BuildLongPollAckUrl(
+                            input.Domain, input.Workflow, instance.Id.ToString())
+                    }
+                    : null
             }
             : await ResolveInteractionAsync(
                 input, instance, currentStateValue, displayedState, cancellationToken);
@@ -1126,9 +1130,11 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
-    /// apply. Today this is long-poll termination: emitted only on the main-flow current state, when the
-    /// instance is awaiting acknowledge, the state declares <c>interaction.longPoll.terminate</c>, and the
-    /// caller's role is granted by <c>interaction.longPoll.roles</c> (default-allow when no roles configured).
+    /// apply. Today this is the long-poll directive: emitted on the main-flow current state whenever the
+    /// state declares <c>interaction.longPoll</c> and the caller's role is granted by
+    /// <c>interaction.longPoll.roles</c> (default-allow when no roles configured). The <c>terminate</c>
+    /// flag and <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only
+    /// when <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -1137,7 +1143,7 @@ public sealed class InstanceQueryAppService(
         string? displayedState,
         CancellationToken cancellationToken)
     {
-        if (!instance.IsAwaitingLongPollAck || !currentStateValue.TerminatesLongPollOnEntry)
+        if (currentStateValue.Interaction?.LongPoll is null)
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
@@ -1160,12 +1166,18 @@ public sealed class InstanceQueryAppService(
                 return null;
         }
 
-        var ackHref = urlTemplateBuilder.BuildLongPollAckUrl(
-            input.Domain, input.Workflow, instance.Id.ToString());
+        var terminate = currentStateValue.TerminatesLongPollOnEntry;
         return new InstanceInteractionOutput
         {
-            TerminateLongPoll = true,
-            Ack = new AckHref { Href = ackHref }
+            TerminateLongPoll = terminate,
+            FallbackTimeoutSeconds = currentStateValue.LongPollFallbackTimeoutSeconds,
+            Ack = terminate
+                ? new AckHref
+                {
+                    Href = urlTemplateBuilder.BuildLongPollAckUrl(
+                        input.Domain, input.Workflow, instance.Id.ToString())
+                }
+                : null
         };
     }
 
