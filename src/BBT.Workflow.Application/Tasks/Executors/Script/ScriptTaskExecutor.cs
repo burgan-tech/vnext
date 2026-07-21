@@ -53,7 +53,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"Script input handler failed: {ex.Message}"));
+            $"Script input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {
@@ -96,7 +96,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
                 taskType: TaskType.ToString());
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"Script output handler failed: {ex.Message}"));
+            $"Script output handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {

@@ -24,7 +24,9 @@ public enum TaskType
     SubProcess = 14,
     GetInstances = 15,
     Soap = 16,
-    StateStore = 17
+    StateStore = 17,
+    CacheAside = 18,
+    GetInstance = 19
 }
 
 /// <summary>
@@ -38,6 +40,17 @@ public enum TaskTrigger
     Manual = 4,
     OnExecute = 5,
     Extension = 6
+}
+
+/// <summary>
+/// Identifies the component that initiated task execution. Unlike <see cref="TaskTrigger"/>,
+/// this value controls whether an execution is part of the durable Flow task journal.
+/// </summary>
+public enum TaskExecutionOrigin
+{
+    Flow = 1,
+    Function = 2,
+    Extension = 3
 }
 
 /// <summary>

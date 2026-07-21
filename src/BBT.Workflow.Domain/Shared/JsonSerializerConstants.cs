@@ -34,5 +34,7 @@ public static class JsonSerializerConstants
         JsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         JsonOptions.Converters.Add(new ExpandoObjectJsonConverter());
         JsonOptions.Converters.Add(new BBT.Workflow.Definitions.ScriptCodeJsonConverter());
+        // Tolerate Undefined JsonElement (default) on write — emit null instead of throwing.
+        JsonOptions.Converters.Add(new SafeJsonElementConverter());
     }
 }

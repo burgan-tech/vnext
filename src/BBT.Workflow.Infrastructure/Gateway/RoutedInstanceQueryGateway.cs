@@ -113,5 +113,15 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
             ? _local.GetFunctionWithExtensionsAsync(input, cancellationToken)
             : _remote.GetFunctionWithExtensionsAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result<GetSchemaOutput>> GetFunctionWithMasterAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.GetFunctionWithMasterAsync(input, cancellationToken)
+            : _remote.GetFunctionWithMasterAsync(input, cancellationToken);
+    }
 }
 

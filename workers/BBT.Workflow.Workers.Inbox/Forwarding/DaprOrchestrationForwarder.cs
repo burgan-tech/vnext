@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared;
 using Dapr.Client;
 using Microsoft.AspNetCore.Http;
 
@@ -113,7 +114,7 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
             var statusCode = (int)response.StatusCode;
             var responseBody = await ReadBodySafelyAsync(response, cancellationToken);
 
-            if (IsTransientStatus(response.StatusCode))
+            if (TransientHttpStatus.IsTransient(response.StatusCode))
             {
                 // Transient server-side failure — rethrow so the inbox processor re-delivers.
                 _logger.LogError(
@@ -132,15 +133,6 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
                 statusCode, method, route, _orchestrationAppId, instanceId, responseBody);
         }
     }
-
-    /// <summary>
-    /// Transient HTTP statuses worth retrying: any 5xx (server error / unavailable), 408 Request
-    /// Timeout, and 429 Too Many Requests.
-    /// </summary>
-    private static bool IsTransientStatus(HttpStatusCode status) =>
-        (int)status > 500
-        || status == HttpStatusCode.RequestTimeout
-        || status == HttpStatusCode.TooManyRequests;
 
     /// <summary>
     /// Best-effort read of the error response body for diagnostics; never throws.

@@ -274,6 +274,28 @@ namespace BBT.Workflow.Migrations.MessagingDb
 
                     b.ToTable("OutboxMessages", "sys_queues");
                 });
+
+            modelBuilder.Entity("BBT.Workflow.Infrastructure.Execution.Locks.DistributedLockRecord", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("Fence")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Owner")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("DistributedLocks", "sys_queues");
+                });
 #pragma warning restore 612, 618
         }
     }

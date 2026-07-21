@@ -1,5 +1,6 @@
 using System;
 using BBT.Workflow.Definitions;
+using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
@@ -277,17 +278,44 @@ public class InstanceCorrelationTests : DomainTestBase<DomainEntryPoint>
         // Act
         correlation.Completed();
         var firstCompletedAt = correlation.CompletedAt;
-        
-        // Wait a tiny bit to ensure time changes
-        System.Threading.Thread.Sleep(10);
-        
+
         correlation.Completed();
         var secondCompletedAt = correlation.CompletedAt;
 
         // Assert
         Assert.True(correlation.IsCompleted);
-        // CompletedAt gets updated each time Completed() is called
-        Assert.NotEqual(firstCompletedAt, secondCompletedAt);
+        Assert.Equal(firstCompletedAt, secondCompletedAt);
+        Assert.Equal(SubItemTerminalOutcome.Completed, correlation.TerminalOutcome);
+    }
+
+    [Fact]
+    public void ApplyTerminalOutcome_ShouldPersistFirstOutcome_AndRejectConflict()
+    {
+        var correlation = CreateCorrelation("S");
+        var completedAt = DateTime.UtcNow;
+
+        correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Faulted, completedAt)
+            .ShouldBe(TerminalOutcomeApplyResult.Applied);
+        correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Faulted, completedAt.AddSeconds(1))
+            .ShouldBe(TerminalOutcomeApplyResult.Duplicate);
+        correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Canceled, completedAt.AddSeconds(2))
+            .ShouldBe(TerminalOutcomeApplyResult.Conflict);
+
+        correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Faulted);
+        correlation.CompletedAt.ShouldBe(completedAt);
+    }
+
+    [Fact]
+    public void Revert_ShouldClearTerminalOutcome()
+    {
+        var correlation = CreateCorrelation("S");
+        correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Canceled, DateTime.UtcNow);
+
+        correlation.Revert();
+
+        correlation.IsCompleted.ShouldBeFalse();
+        correlation.CompletedAt.ShouldBeNull();
+        correlation.TerminalOutcome.ShouldBeNull();
     }
 
     [Fact]
@@ -329,5 +357,9 @@ public class InstanceCorrelationTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal(SubFlowType.SubProcess, correlation.SubFlowType);
         Assert.Equal("P", correlation.SubFlowType.Code);
     }
-}
 
+    private static InstanceCorrelation CreateCorrelation(string typeCode) =>
+        InstanceCorrelation.Create(
+            Guid.NewGuid(), Guid.NewGuid(), "state", Guid.NewGuid(), typeCode,
+            "domain", "flow", "1.0.0");
+}

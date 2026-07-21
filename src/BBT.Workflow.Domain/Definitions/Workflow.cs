@@ -269,6 +269,15 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         Type = WorkflowType.FromCode(type);
     }
 
+    /// <summary>
+    /// Sets the flow-level master schema reference. In production this is populated via JSON
+    /// deserialization of the <c>schema</c> property; exposed here for programmatic construction.
+    /// </summary>
+    public void SetSchema(Reference reference)
+    {
+        Schema = reference;
+    }
+
     public void AddLanguage(string label, string language)
     {
         if (labels.All(l => l.Language != language))

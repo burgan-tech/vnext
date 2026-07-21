@@ -18,16 +18,16 @@ public interface ITaskPersistenceStrategy
     /// <summary>
     /// Determines if this strategy should handle the given task execution context.
     /// </summary>
-    /// <param name="taskTrigger">The trigger type that initiated the task execution.</param>
+    /// <param name="origin">The component that initiated task execution.</param>
     /// <returns>True if this strategy should handle the task, false otherwise.</returns>
-    bool CanHandle(TaskTrigger taskTrigger);
+    bool CanHandle(TaskExecutionOrigin origin);
 
     /// <summary>
     /// Handles the creation and initial persistence of an InstanceTask if required.
     /// </summary>
     /// <param name="instanceTask">The InstanceTask to be persisted.</param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
-    Task HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+    Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Handles the completion and final persistence of an InstanceTask if required.

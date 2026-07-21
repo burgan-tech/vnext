@@ -12,6 +12,7 @@ using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +32,7 @@ public sealed class InstanceController(
     ISubflowCompletionService subflowCompletionService,
     ISubflowStateService subflowStateService,
     ISubflowFaultService subflowFaultService,
+    ISubflowCancellationService subflowCancellationService,
     IInstanceCancellationService cancellationService,
     IChildSubflowCancellationService childSubflowCancellationService,
     IChildSubflowFaultService childSubflowFaultService,
@@ -41,12 +43,14 @@ public sealed class InstanceController(
     /// <summary>
     /// Starts a new workflow instance.
     /// </summary>
-    /// <response code="200">Instance started successfully</response>
+    /// <response code="200">Instance started synchronously (sync=true)</response>
+    /// <response code="202">Instance accepted for durable background processing (sync=false)</response>
     /// <response code="400">Validation failed</response>
     /// <response code="404">Workflow or state not found</response>
     /// <response code="409">Instance with same key already exists</response>
     [HttpPost("{domain}/workflows/{workflow}/instances/start")]
     [ProducesResponseType(typeof(StartInstanceOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(StartInstanceOutput), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
@@ -93,7 +97,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -185,6 +189,23 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Propagates a canceled SubItem outcome to its parent instance.
+    /// Internal endpoint for cross-domain cancellation propagation.
+    /// </summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/sub/cancel")]
+    public async Task<IActionResult> CancelSubAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromBody] SubItemCanceledInput request,
+        CancellationToken cancellationToken = default)
+    {
+        await subflowCancellationService.CancellationAsync(request, cancellationToken);
+        return Ok();
+    }
+
+    /// <summary>
     /// Marks an instance Busy and recursively propagates to nested SubFlows.
     /// Internal endpoint for cross-domain SubFlow busy propagation.
     /// </summary>
@@ -242,11 +263,11 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] Guid instance,
-        [FromQuery] string? version = null,
+        [FromBody] ChildSubflowCancelInput request,
         CancellationToken cancellationToken = default)
     {
         var result = await childSubflowCancellationService.CancelChildSubflowAsync(
-            instance, domain, workflow, version, cancellationToken);
+            instance, domain, workflow, request.Version, request.Termination, cancellationToken);
         return FromResult(result);
     }
 
@@ -260,11 +281,11 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] Guid instance,
-        [FromQuery] Guid parentInstanceId,
+        [FromBody] ChildSubflowFaultInput request,
         CancellationToken cancellationToken = default)
     {
         var result = await childSubflowFaultService.FaultChildAsync(
-            instance, domain, workflow, parentInstanceId, cancellationToken);
+            instance, domain, workflow, request.ParentInstanceId, request.Termination, cancellationToken);
         return FromResult(result);
     }
 
@@ -316,7 +337,8 @@ public sealed class InstanceController(
     /// <summary>
     /// Executes a transition on a workflow instance.
     /// </summary>
-    /// <response code="200">Transition executed successfully</response>
+    /// <response code="200">Transition executed synchronously (sync=true)</response>
+    /// <response code="202">Transition accepted for durable background processing (sync=false)</response>
     /// <response code="400">Validation or state transition rule failed</response>
     /// <response code="403">Transition not authorized for current context</response>
     /// <response code="404">Instance, workflow, or transition not found</response>
@@ -324,6 +346,7 @@ public sealed class InstanceController(
     /// <response code="503">Service temporarily unavailable</response>
     [HttpPatch("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}")]
     [ProducesResponseType(typeof(TransitionOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(TransitionOutput), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -373,7 +396,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
     }
 
     /// <summary>
@@ -670,3 +693,7 @@ public sealed class InstanceController(
         return FromResult(result.Result);
     }
 }
+
+public sealed record ChildSubflowFaultInput(
+    Guid ParentInstanceId,
+    TerminationContext Termination);

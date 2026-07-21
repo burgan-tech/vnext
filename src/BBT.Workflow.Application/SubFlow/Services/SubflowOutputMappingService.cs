@@ -85,7 +85,7 @@ public sealed class SubflowOutputMappingService(
             logger.SubFlowOutputMappingFailed(ex, parentInstance.Id);
             return Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
                 parentInstance.Id,
-                ex.Message,
+                ScriptDiagnostics.Explain(ex),
                 stackTrace: ex.ToString()));
         }
     }

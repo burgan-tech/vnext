@@ -1044,6 +1044,12 @@ public sealed class InstanceQueryAppService(
             HasView = subFlowStateInfo.SubFlowView?.HasView ?? stateHasView,
             LoadData = subFlowStateInfo.SubFlowView?.LoadData ?? viewLoadData
         };
+        // Master schema endpoint href. The endpoint itself forwards to the active subflow when present,
+        // so the link always points to this instance regardless of subflow state.
+        var masterHref = new MasterHref
+        {
+            Href = urlTemplateBuilder.BuildMasterUrl(input.Domain, input.Workflow, instance.Id.ToString())
+        };
         var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations.Select(correlation =>
             new ActiveCorrelationHref
             {
@@ -1080,24 +1086,28 @@ public sealed class InstanceQueryAppService(
                 displayedState = aliasDisplay;
         }
 
-        // Declarative long-poll termination: when the instance is paused on a state that terminates
-        // long polling and the caller's role is granted the signal, tell the client to stop polling,
-        // render the entered-state screen, and acknowledge via the ack href. Role-filtered so only the
-        // intended roles are told to stop. The awaiting instance may be THIS instance (leaf) or a
-        // nested subflow whose signal bubbled up via SubFlowStateInfo — in the subflow case the ack
-        // href is rewritten to THIS level so the client always acknowledges the instance it polls; the
-        // acknowledge endpoint then descends the chain. The two are mutually exclusive (a parent in a
-        // SubFlow state is not itself in a terminate state). Role filtering for the bubbled case was
-        // already applied at the child level (caller role forwarded via headers).
-        var interaction = subFlowStateInfo.Interaction?.TerminateLongPoll == true
+        // Declarative long-poll interaction: emitted whenever the current state declares
+        // interaction.longPoll (subject to role grants), carrying the terminate flag and fallback window.
+        // When terminate is true the client is told to stop polling, render the entered-state screen,
+        // and acknowledge via the ack href. Role-filtered so only the intended roles receive it. The
+        // interaction may originate at THIS instance (leaf) or at a nested subflow whose signal bubbled
+        // up via SubFlowStateInfo — in the subflow case the ack href is rewritten to THIS level so the
+        // client always acknowledges the instance it polls; the acknowledge endpoint then descends the
+        // chain. The two are mutually exclusive (a parent in a SubFlow state does not itself declare
+        // long-poll interaction). Role filtering for the bubbled case was already applied at the child
+        // level (caller role forwarded via headers).
+        var interaction = subFlowStateInfo.Interaction is { } childInteraction
             ? new InstanceInteractionOutput
             {
-                TerminateLongPoll = true,
-                Ack = new AckHref
-                {
-                    Href = urlTemplateBuilder.BuildLongPollAckUrl(
-                        input.Domain, input.Workflow, instance.Id.ToString())
-                }
+                TerminateLongPoll = childInteraction.TerminateLongPoll,
+                FallbackTimeoutSeconds = childInteraction.FallbackTimeoutSeconds,
+                Ack = childInteraction.Ack is not null
+                    ? new AckHref
+                    {
+                        Href = urlTemplateBuilder.BuildLongPollAckUrl(
+                            input.Domain, input.Workflow, instance.Id.ToString())
+                    }
+                    : null
             }
             : await ResolveInteractionAsync(
                 input, instance, currentStateValue, displayedState, cancellationToken);
@@ -1106,6 +1116,7 @@ public sealed class InstanceQueryAppService(
         {
             Data = dataHref,
             View = viewHref,
+            Master = masterHref,
             State = displayedState ?? string.Empty,
             StateType = subFlowStateInfo.StateType.IsNullOrWhiteSpace()
                 ? ToCamelCaseName(currentStateValue.StateType)
@@ -1119,9 +1130,11 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
-    /// apply. Today this is long-poll termination: emitted only on the main-flow current state, when the
-    /// instance is awaiting acknowledge, the state declares <c>interaction.longPoll.terminate</c>, and the
-    /// caller's role is granted by <c>interaction.longPoll.roles</c> (default-allow when no roles configured).
+    /// apply. Today this is the long-poll directive: emitted on the main-flow current state whenever the
+    /// state declares <c>interaction.longPoll</c> and the caller's role is granted by
+    /// <c>interaction.longPoll.roles</c> (default-allow when no roles configured). The <c>terminate</c>
+    /// flag and <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only
+    /// when <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -1130,7 +1143,7 @@ public sealed class InstanceQueryAppService(
         string? displayedState,
         CancellationToken cancellationToken)
     {
-        if (!instance.IsAwaitingLongPollAck || !currentStateValue.TerminatesLongPollOnEntry)
+        if (currentStateValue.Interaction?.LongPoll is null)
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
@@ -1153,12 +1166,18 @@ public sealed class InstanceQueryAppService(
                 return null;
         }
 
-        var ackHref = urlTemplateBuilder.BuildLongPollAckUrl(
-            input.Domain, input.Workflow, instance.Id.ToString());
+        var terminate = currentStateValue.TerminatesLongPollOnEntry;
         return new InstanceInteractionOutput
         {
-            TerminateLongPoll = true,
-            Ack = new AckHref { Href = ackHref }
+            TerminateLongPoll = terminate,
+            FallbackTimeoutSeconds = currentStateValue.LongPollFallbackTimeoutSeconds,
+            Ack = terminate
+                ? new AckHref
+                {
+                    Href = urlTemplateBuilder.BuildLongPollAckUrl(
+                        input.Domain, input.Workflow, instance.Id.ToString())
+                }
+                : null
         };
     }
 
@@ -1295,6 +1314,86 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .ThenAsync(data =>
                 BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Retrieves the flow-level master schema an instance is bound to.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow instance.
+    /// </summary>
+    public async Task<Result<GetSchemaOutput>> GetMasterAsync(
+        GetMasterInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        // Railway chain: Get Instance → Get Workflow → Build Master Schema Output
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .ThenAsync(data =>
+                BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Builds the flow-level master schema output.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow instance.
+    /// </summary>
+    private async Task<Result<GetSchemaOutput>> BuildMasterOutputAsync(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        GetMasterInput input,
+        CancellationToken cancellationToken)
+    {
+        // TODO: Need?
+        // if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+        //     return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
+
+        // Check if there's an active SubFlow - if so, forward the request to SubFlow
+        // instance.Subflow returns the first active subflow (Type: S and not completed)
+        if (instance.Subflow != null)
+        {
+            return await GetSubFlowMasterAsync(instance.Subflow, input, cancellationToken);
+        }
+
+        // No active SubFlow - resolve the flow-level master schema reference
+        if (currentWorkflow.Schema == null)
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"Master schema not found for workflow {input.Workflow}"));
+        }
+
+        return await componentCacheStore.GetSchemaAsync(currentWorkflow.Schema, cancellationToken)
+            .MapAsync(schema => new GetSchemaOutput
+            {
+                Key = schema.Key,
+                Type = schema.Type,
+                Schema = schema.Schema
+            });
+    }
+
+    /// <summary>
+    /// Gets the master schema from a remote SubFlow instance.
+    /// </summary>
+    private async Task<Result<GetSchemaOutput>> GetSubFlowMasterAsync(
+        InstanceCorrelation subflow,
+        GetMasterInput input,
+        CancellationToken cancellationToken)
+    {
+        var subFlowInput = new GetFunctionWithInstanceInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            Version = subflow.SubFlowVersion,
+            Instance = subflow.SubFlowInstanceId.ToString(),
+            Headers = input.Headers ?? new Dictionary<string, string?>(),
+            QueryParams = input.QueryParameters ?? new Dictionary<string, string?>(),
+            Role = currentUser.ResolveCallerRole(input.Headers),
+            Roles = currentUser.ResolveCallerRoles(input.Headers)
+        };
+
+        return await instanceQueryGateway.GetFunctionWithMasterAsync(subFlowInput, cancellationToken);
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using BBT.Aether.Events;
+using BBT.Aether.Uow;
 using BBT.Workflow.Infrastructure.EventBus;
 using Microsoft.Extensions.Logging;
 
@@ -66,8 +67,9 @@ public static class EventBusHookServiceCollectionExtensions
         // We need to replace the IDistributedEventBus registration with our decorator
         services.Decorate<IDistributedEventBus>((inner, serviceProvider) =>
         {
+            var uowManager = serviceProvider.GetRequiredService<IUnitOfWorkManager>();
             var logger = serviceProvider.GetRequiredService<ILogger<HookedDistributedEventBus>>();
-            return new HookedDistributedEventBus(inner, serviceProvider, logger);
+            return new HookedDistributedEventBus(inner, serviceProvider, uowManager, logger);
         });
 
         return services;
@@ -147,4 +149,3 @@ public static class EventBusHookServiceCollectionExtensions
         return services;
     }
 }
-

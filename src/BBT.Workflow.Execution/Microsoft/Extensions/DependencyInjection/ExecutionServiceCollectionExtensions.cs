@@ -44,6 +44,10 @@ public static class ExecutionServiceCollectionExtensions
         
         // Register null metrics as default (can be overridden)
         services.TryAddSingleton<ITaskMetrics>(NullTaskMetrics.Instance);
+
+        // Shared Dapr state-store gateway used by the StateStore and CacheAside invokers.
+        services.TryAddSingleton<BBT.Workflow.Execution.StateStores.IStateStoreClient,
+            BBT.Workflow.Execution.StateStores.DaprStateStoreClient>();
         
         // Register all built-in remote execution invokers
         services.AddSingleton<ITaskInvoker, HttpTaskInvoker>();
@@ -53,6 +57,7 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, DaprHttpEndpointTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprPubSubTaskInvoker>();
         services.AddSingleton<ITaskInvoker, StateStoreTaskInvoker>();
+        services.AddSingleton<ITaskInvoker, CacheAsideTaskInvoker>();
         
         // Register trigger task remote invokers (for cross-domain execution)
         services.AddSingleton<ITaskInvoker, StartTriggerRemoteInvoker>();
@@ -60,6 +65,7 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, SubProcessRemoteInvoker>();
         services.AddSingleton<ITaskInvoker, GetInstanceDataRemoteInvoker>();
         services.AddSingleton<ITaskInvoker, GetInstancesRemoteInvoker>();
+        services.AddSingleton<ITaskInvoker, GetInstanceRemoteInvoker>();
         
         return services;
     }

@@ -18,5 +18,7 @@ namespace BBT.Workflow.Definitions.Functions
         public const string Hierarchy = "hierarchy";
         /// <summary>System function: returns active instances with Human subtype assigned to the current user.</summary>
         public const string HumanTask = "human-task";
+        /// <summary>System function: returns the flow-level master schema the instance is bound to (forwards to the active subflow when present).</summary>
+        public const string Master = "master";
     }
 }

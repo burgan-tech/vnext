@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
@@ -13,7 +14,10 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Evaluators;
+using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -41,6 +45,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     private readonly IInstanceRepository _instanceRepository;
     private readonly IComponentCacheStore _componentCacheStore;
     private readonly ITaskCoordinator _taskCoordinator;
+    private readonly IStateStoreCacheGateway _cacheGateway;
     private readonly FunctionAppService _service;
 
     private readonly IServiceProvider _ambientServiceProvider;
@@ -51,6 +56,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         _instanceRepository = Substitute.For<IInstanceRepository>();
         _componentCacheStore = Substitute.For<IComponentCacheStore>();
         _taskCoordinator = Substitute.For<ITaskCoordinator>();
+        _cacheGateway = Substitute.For<IStateStoreCacheGateway>();
 
         // Ambient provider needed by PostSharp UnitOfWork interception.
         var mockUoW = Substitute.For<IUnitOfWork>();
@@ -83,6 +89,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
                 Arg.Any<IEnumerable<OnExecuteTask>>(),
                 Arg.Any<Guid?>(),
                 Arg.Any<TaskTrigger>(),
+                Arg.Any<TaskExecutionOrigin>(),
                 Arg.Any<ScriptContext>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
@@ -97,7 +104,10 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             taskCoordinator: _taskCoordinator,
             scriptEngine: Substitute.For<IScriptEngine>(),
             currentUser: Substitute.For<ICurrentUser>(),
-            transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>());
+            transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
+            keyEvaluator: Substitute.For<IDynamicExpressoValueEvaluator>(),
+            cacheGateway: _cacheGateway,
+            remoteInvoker: Substitute.For<IRemoteInvokerService>());
     }
 
     public void Dispose()
@@ -209,7 +219,97 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         result.Error.Code.ShouldBe(WorkflowErrorCodes.NotFoundInstanceData);
     }
 
+    // ─── Read-through cache ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetFunctionByKeyAsync_CacheHit_ReturnsCached_WithoutExecutingTasks()
+    {
+        SetupCachedFunction();
+        var cached = JsonSerializer.SerializeToElement(
+            new FunctionResponseOutput { Data = new Dictionary<string, object?> { ["v"] = 1 }, StatusCode = 200 },
+            JsonSerializerConstants.JsonOptions);
+        _cacheGateway
+            .GetAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: true, Value: cached));
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.StatusCode.ShouldBe(200);
+        // On a hit the tasks are not executed and nothing is written back.
+        await _taskCoordinator.DidNotReceive().ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+        await _cacheGateway.DidNotReceive().SetAsync(
+            Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+            Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetFunctionByKeyAsync_CacheMiss_ExecutesTasks_AndWritesBack()
+    {
+        SetupCachedFunction();
+        _cacheGateway
+            .GetAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: false, Value: default));
+        _cacheGateway
+            .SetAsync(Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _taskCoordinator.Received(1).ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+        await _cacheGateway.Received(1).SetAsync(
+            "fn:test", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+            Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetFunctionByKeyAsync_WithGeneration_FoldsStampIntoKey()
+    {
+        SetupCachedFunction(generationKey: "dcs:gen");
+        // Generation stamp read = 8 → cache key becomes "fn:test:g:8".
+        _cacheGateway
+            .GetAsync("dcs:gen", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: true, Value: JsonSerializer.SerializeToElement(8)));
+        _cacheGateway
+            .GetAsync("fn:test:g:8", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: false, Value: default));
+        _cacheGateway
+            .SetAsync(Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        // The response is cached under the generation-folded key.
+        await _cacheGateway.Received(1).SetAsync(
+            "fn:test:g:8", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+            Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────────
+
+    private void SetupCachedFunction(string? generationKey = null)
+    {
+        var task = OnExecuteTask.Create(
+            1,
+            new Reference("my-task", TestDomain, "sys-tasks", TestVersion),
+            ScriptCode.FromNative(string.Empty));
+        var function = new Function(
+            TaskScope.Domain, task,
+            cache: new FunctionCache(key: "fn:test", ttlInSeconds: 300, generationKey: generationKey));
+        function.SetReference(new Reference(FunctionKey, TestDomain, "sys-functions", TestVersion));
+
+        _componentCacheStore
+            .GetFunctionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Function>.Ok(function));
+    }
 
     private void SetupFunction(TaskScope scope)
     {

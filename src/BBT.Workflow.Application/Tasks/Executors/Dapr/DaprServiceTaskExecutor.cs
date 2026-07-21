@@ -56,7 +56,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"DaprService task input handler failed: {ex.Message}"));
+            $"DaprService task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {
@@ -134,7 +134,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"DaprService task output handler failed: {ex.Message}"));
+            $"DaprService task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {

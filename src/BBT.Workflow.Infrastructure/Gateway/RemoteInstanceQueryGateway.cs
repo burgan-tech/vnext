@@ -88,5 +88,13 @@ public sealed class RemoteInstanceQueryGateway : IInstanceQueryGateway
     {
         return _remoteService.GetFunctionWithExtensionsAsync(input, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<Result<GetSchemaOutput>> GetFunctionWithMasterAsync(
+        GetFunctionWithInstanceInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.GetFunctionWithMasterAsync(input, cancellationToken);
+    }
 }
 

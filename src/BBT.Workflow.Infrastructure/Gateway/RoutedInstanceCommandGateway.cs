@@ -65,6 +65,19 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result> CancelChildAsync(
+        Guid instanceId,
+        string domain,
+        string flow,
+        ChildSubflowCancelInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(domain)
+            ? _local.CancelChildAsync(instanceId, domain, flow, input, cancellationToken)
+            : _remote.CancelChildAsync(instanceId, domain, flow, input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> CompleteAsync(
         FlowCompletedInput input,
         CancellationToken cancellationToken = default)
@@ -95,6 +108,16 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result> CancelAsync(
+        SubItemCanceledInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.CancelAsync(input, cancellationToken)
+            : _remote.CancelAsync(input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default)
@@ -114,4 +137,3 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
             : _remote.AcknowledgeLongPollAsync(input, cancellationToken);
     }
 }
-

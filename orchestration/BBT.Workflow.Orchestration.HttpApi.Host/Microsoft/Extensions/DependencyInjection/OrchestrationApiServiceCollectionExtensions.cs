@@ -1,9 +1,11 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Controllers.Instances;
+using BBT.Workflow.Formatters;
 using BBT.Workflow.HostedServices;
 using BBT.Workflow.HttpApi.Shared.HealthChecks;
 using BBT.Workflow.Orchestration.Services;
 using HealthChecks.NpgSql;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
@@ -30,6 +32,7 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddApplicationModule()
             .AddInfrastructureModule(configuration) // Infrastructure manages its own dependencies including URL templates
             .AddAspNetCoreModules(configuration)
+            .AddFormUrlEncodedJsonElementInput()
             .AddResultResilience(configuration)
             .AddDaprClients()
             .AddEventBus(configuration)
@@ -53,6 +56,17 @@ public static class OrchestrationApiServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Enables form-urlencoded binding only for the public Orchestration API. Other hosts share
+    /// <c>AddAspNetCoreModules</c> but must not expose this additional request media type.
+    /// </summary>
+    internal static IServiceCollection AddFormUrlEncodedJsonElementInput(this IServiceCollection services)
+    {
+        services.Configure<MvcOptions>(options =>
+            options.InputFormatters.Insert(0, new FormUrlEncodedJsonElementInputFormatter()));
+        return services;
+    }
+
     private static IServiceCollection AddFunctionHandlers(this IServiceCollection services)
     {
         services.AddScoped<IInstanceFunctionHandler, StateFunctionHandler>();
@@ -63,6 +77,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, AuthorizeFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, AuthorizationMatrixFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, HierarchyFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, MasterFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
 
         services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();

@@ -1,0 +1,38 @@
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: vnext-orchestration-resiliency
+spec:
+  policies:
+    circuitBreakers:
+      # Fast-fail when the Execution host is down instead of burning the 60s per-task
+      # invocation timeout N times inside the 300s job budget: 5 consecutive failures open
+      # the circuit for 30s, then a single probe request decides whether to close it.
+      # The breaker trips on connection failures and error responses alike, which is safe
+      # (it only short-circuits; it never re-invokes a task).
+      invocationBreaker:
+        maxRequests: 1
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+  targets:
+    apps:
+      # Orchestration → Execution task invocation (RemoteInvokerService).
+      #
+      # NO retry policy on purpose. Dapr's service-invocation retry cannot distinguish an app
+      # response (the task ran and returned e.g. 500/4xx — which may already have produced side
+      # effects) from a transport failure (the sidecar never reached the app): both surface as
+      # an HTTP status with no reliable marker, and `matching.httpStatusCodes` filters by code,
+      # not by origin. A blanket retry would therefore re-invoke side-effecting tasks, and an
+      # empty/absent matching set retries ALL HTTP errors (>= 400) — the opposite of what a task
+      # invocation wants. So retry is owned entirely by the app layer: RemoteInvokerService turns
+      # a transport failure into a task failure that the user-defined error boundary decides on.
+      #
+      # No timeout policy on purpose: legitimate task calls run for tens of seconds; the
+      # app-level linked CTS (ExecutionApi:InvocationTimeoutSeconds, 60s) owns the per-call
+      # budget inside the hierarchy: 60s invocation ⊂ 300s job budget ⊂ 330s chain lock lease
+      # (validated at startup by WorkflowExecutionOptionsValidator).
+      #
+      # Cross-domain DirectTrigger targets have per-domain app-ids and cannot be enumerated
+      # here; add a circuitBreaker target entry per known remote domain when deploying multi-domain.
+      vnext-execution-app:
+        circuitBreaker: invocationBreaker

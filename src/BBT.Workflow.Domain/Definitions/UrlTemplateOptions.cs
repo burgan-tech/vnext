@@ -64,4 +64,10 @@ public sealed class UrlTemplateOptions
     /// Parameters: {0}=domain, {1}=workflow, {2}=instanceId, {3}=transitionKey
     /// </summary>
     public string Schema { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/schema?transitionKey={3}";
+
+    /// <summary>
+    /// Template for instance master schema endpoint (GET)
+    /// Parameters: {0}=domain, {1}=workflow, {2}=instance
+    /// </summary>
+    public string Master { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/master";
 }

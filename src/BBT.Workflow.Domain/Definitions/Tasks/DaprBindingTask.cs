@@ -32,6 +32,7 @@ public sealed class DaprBindingTask : WorkflowTask
     /// <summary>
     /// Mete data
     /// </summary>
+    [JsonConverter(typeof(SafeJsonElementConverter))]
     public JsonElement Metadata { get; private set; }
 
     /// <summary>

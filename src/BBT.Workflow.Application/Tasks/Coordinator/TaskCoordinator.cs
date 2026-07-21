@@ -66,6 +66,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
@@ -73,6 +74,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             onExecuteTasks,
             instanceTransitionId,
             taskTrigger,
+            origin,
             context,
             cancellationToken);
 
@@ -112,6 +114,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
@@ -119,6 +122,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             onExecuteTasks,
             instanceTransitionId,
             taskTrigger,
+            origin,
             context,
             completedTaskIds: [],
             cancellationToken);
@@ -130,6 +134,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
         CancellationToken cancellationToken = default)
@@ -180,7 +185,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             {
                 // Single task - execute directly
                 var result = await _executionEngine.ExecuteAsync(
-                    groupTasks[0], instanceTransitionId, taskTrigger, context, cancellationToken);
+                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, cancellationToken);
 
                 var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStopwatch);
                 if (processResult.HasValue)
@@ -190,7 +195,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             {
                 // Multiple tasks with same Order - execute in parallel with cancellation
                 var parallelResult = await ExecuteTaskGroupInParallelAsync(
-                    groupTasks, instanceTransitionId, taskTrigger, context, cancellationToken);
+                    groupTasks, instanceTransitionId, taskTrigger, origin, context, cancellationToken);
 
                 if (!parallelResult.IsSuccess)
                 {
@@ -286,6 +291,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         List<OnExecuteTask> tasks,
         Guid? instanceTransitionId,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken)
     {
@@ -304,6 +310,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
         var executionTasks = tasks.Select(async task =>
         {
+            var branchContext = context.CreateParallelBranch();
             try
             {
                 // Each parallel task gets its own DI scope with an isolated DbContext.
@@ -313,9 +320,23 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 
                 var result = await scopedEngine.ExecuteAsync(
-                    task, instanceTransitionId, taskTrigger, context, linkedToken);
+                    task, instanceTransitionId, taskTrigger, origin, branchContext, linkedToken);
 
-                if (!result.IsSuccess || !result.Value!.IsSuccess)
+                if (!result.IsSuccess)
+                {
+                    var infrastructureError = _errorFactory.CreateFromError(
+                        result.Error,
+                        task.Task.Key,
+                        "Unknown",
+                        stopwatch.ElapsedMilliseconds);
+                    result = Result<TasksExecutionResult>.Ok(
+                        TasksExecutionResult.Failure(
+                            task,
+                            infrastructureError,
+                            totalDurationMs: stopwatch.ElapsedMilliseconds));
+                }
+
+                if (!result.Value!.IsSuccess)
                 {
                     lock (_parallelTaskLock)
                     {
@@ -328,12 +349,12 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                     }
                 }
 
-                return (Task: task, Result: result);
+                return (Task: task, Result: result, Context: branchContext);
             }
             catch (OperationCanceledException)
             {
                 return (Task: task, Result: Result<TasksExecutionResult>.Fail(
-                    Error.Failure("TaskCancelled", $"Task {task.Task.Key} was cancelled")));
+                    Error.Failure("TaskCancelled", $"Task {task.Task.Key} was cancelled")), Context: branchContext);
             }
         }).ToList();
 
@@ -341,13 +362,16 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         {
             var results = await Task.WhenAll(executionTasks);
 
+            foreach (var outcome in results)
+                context.MergeParallelBranch(outcome.Context);
+
             stopwatch.Stop();
 
             // If there was a failure, return it with error boundary info
             if (firstFailure != null && firstFailedTask != null)
             {
                 // Collect successful tasks before failure
-                foreach (var (_, result) in results)
+                foreach (var (_, result, _) in results)
                 {
                     if (result.IsSuccess && result.Value != null && result.Value.IsSuccess)
                     {
@@ -369,7 +393,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             }
 
             // All succeeded
-            foreach (var (_, result) in results)
+            foreach (var (_, result, _) in results)
             {
                 if (result.IsSuccess && result.Value != null)
                 {

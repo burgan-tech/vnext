@@ -188,6 +188,10 @@ public static class PoolableTaskRegistry
             StateStoreTask.CreateEmpty,
             (source, target) => ((StateStoreTask)target).CopyFromInternal((StateStoreTask)source));
 
+        RegisterPoolableTask<CacheAsideTask>(
+            CacheAsideTask.CreateEmpty,
+            (source, target) => ((CacheAsideTask)target).CopyFromInternal((CacheAsideTask)source));
+
         RegisterPoolableTask<DaprHttpEndpointTask>(
             DaprHttpEndpointTask.CreateEmpty,
             (source, target) => ((DaprHttpEndpointTask)target).CopyFromInternal((DaprHttpEndpointTask)source));
@@ -210,6 +214,9 @@ public static class PoolableTaskRegistry
         RegisterPoolableTask<SubProcessTask>(
             SubProcessTask.CreateEmpty,
             (source, target) => ((SubProcessTask)target).CopyFromInternal((SubProcessTask)source));
+        RegisterPoolableTask<GetInstanceTask>(
+            GetInstanceTask.CreateEmpty,
+            (source, target) => ((GetInstanceTask)target).CopyFromInternal((GetInstanceTask)source));
     }
 
     public static void RegisterPoolableTask<T>(

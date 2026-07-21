@@ -56,7 +56,7 @@ public sealed class DaprHttpEndpointTaskExecutor : TaskExecutorBase<DaprHttpEndp
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"DaprHttpEndpoint task input handler failed: {ex.Message}"));
+            $"DaprHttpEndpoint task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {
@@ -134,7 +134,7 @@ public sealed class DaprHttpEndpointTaskExecutor : TaskExecutorBase<DaprHttpEndp
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"DaprHttpEndpoint task output handler failed: {ex.Message}"));
+            $"DaprHttpEndpoint task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {

@@ -72,6 +72,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
+        services.AddScoped<IStateStoreCacheGateway, StateStoreCacheGateway>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
@@ -84,6 +85,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
+        services.AddScoped<ISubflowCancellationService, SubflowCancellationService>();
         services.AddScoped<ISubflowFaultService, SubflowFaultService>();
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();

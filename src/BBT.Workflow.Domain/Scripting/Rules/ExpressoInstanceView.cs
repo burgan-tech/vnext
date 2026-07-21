@@ -14,6 +14,9 @@ public sealed class ExpressoInstanceView
     /// <summary>Flow key.</summary>
     public string Flow { get; init; } = string.Empty;
 
+    /// <summary>Flow version the instance was started with (e.g. for versioned cache keys).</summary>
+    public string? Version { get; init; }
+
     /// <summary>Engine current state key.</summary>
     public string? CurrentState { get; init; }
 

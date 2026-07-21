@@ -56,11 +56,17 @@ public sealed class DaprResourceLockService(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The Dapr lock API has no native extend, and its Redis component uses <c>SET NX</c>,
+    /// which rejects re-acquire attempts even from the same owner. Consequently this call
+    /// FAILS while the lock is still held and only "succeeds" after the TTL has already
+    /// expired — at which point it is a fresh acquisition race, not an extension (another
+    /// owner may win in between). Size <c>ttlSeconds</c> to cover the whole protected
+    /// operation instead of relying on extension.
+    /// </remarks>
     public async Task<bool> ExtendAsync(
         string resourceKey, string owner, int ttlSeconds, CancellationToken cancellationToken)
     {
-        // Dapr lock API does not have a native extend; re-acquire with the same owner.
-        // Redis-backed lock components allow the same owner to refresh the TTL.
         var response = await daprClient.Lock(
             lockStoreName, resourceKey, owner, ttlSeconds, cancellationToken);
 
