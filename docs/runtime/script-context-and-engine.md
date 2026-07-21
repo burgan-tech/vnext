@@ -40,6 +40,39 @@ entire runtime. Side effects should remain explicit through approved helpers.
 - Script mutations not applied back to transition context will not affect instance data.
 - Long-running or side-effect-heavy scripts can make synchronous transitions slow.
 
+## Pitfalls
+
+### `dynamic` values inside anonymous types
+
+`ScriptContext.Body` (and property accesses on it, e.g. `context.Body?.kkbScore`) is
+`dynamic`. Feeding a `dynamic` value into an **anonymous type initializer** turns the
+`new { … }` into a runtime (DLR) construction and leaves the anonymous type as an *open
+generic*, which cannot be instantiated:
+
+```csharp
+// ❌ throws: Cannot create an instance of <>f__AnonymousType0`1[<creditBureau>j__TPar]
+//    because Type.ContainsGenericParameters is true.
+Data = new { creditBureau = new { kkbScore = result?.kkbScore } };
+```
+
+Fix it by keeping initializer values statically typed, or by not using anonymous types:
+
+```csharp
+// ✅ cast each dynamic leaf to a concrete type / object
+Data = new { creditBureau = new { kkbScore = (object?)result?.kkbScore } };
+
+// ✅ or build with the ScriptBase helpers (no anonymous types)
+var creditBureau = CreateObject();
+SetProperty(creditBureau, "kkbScore", result?.kkbScore);
+var data = CreateObject();
+SetProperty(data, "creditBureau", creditBureau);
+Data = data;
+```
+
+When the runtime detects this specific failure it rewrites the error message with this
+guidance (`ScriptDiagnostics.Explain`), so the surfaced error points at the fix instead of
+the raw DLR text.
+
 ## Observability
 
 Scripts can log through approved helper functions. Pipeline telemetry should identify the

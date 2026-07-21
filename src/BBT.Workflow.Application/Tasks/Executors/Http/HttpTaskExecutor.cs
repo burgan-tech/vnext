@@ -55,7 +55,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"Http task input handler failed: {ex.Message}"));
+            $"Http task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {
@@ -134,7 +134,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"Http task output handler failed: {ex.Message}"));
+            $"Http task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {

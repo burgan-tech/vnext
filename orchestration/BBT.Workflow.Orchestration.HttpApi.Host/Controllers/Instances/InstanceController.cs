@@ -43,12 +43,14 @@ public sealed class InstanceController(
     /// <summary>
     /// Starts a new workflow instance.
     /// </summary>
-    /// <response code="200">Instance started successfully</response>
+    /// <response code="200">Instance started synchronously (sync=true)</response>
+    /// <response code="202">Instance accepted for durable background processing (sync=false)</response>
     /// <response code="400">Validation failed</response>
     /// <response code="404">Workflow or state not found</response>
     /// <response code="409">Instance with same key already exists</response>
     [HttpPost("{domain}/workflows/{workflow}/instances/start")]
     [ProducesResponseType(typeof(StartInstanceOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(StartInstanceOutput), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
@@ -95,7 +97,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -335,7 +337,8 @@ public sealed class InstanceController(
     /// <summary>
     /// Executes a transition on a workflow instance.
     /// </summary>
-    /// <response code="200">Transition executed successfully</response>
+    /// <response code="200">Transition executed synchronously (sync=true)</response>
+    /// <response code="202">Transition accepted for durable background processing (sync=false)</response>
     /// <response code="400">Validation or state transition rule failed</response>
     /// <response code="403">Transition not authorized for current context</response>
     /// <response code="404">Instance, workflow, or transition not found</response>
@@ -343,6 +346,7 @@ public sealed class InstanceController(
     /// <response code="503">Service temporarily unavailable</response>
     [HttpPatch("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}")]
     [ProducesResponseType(typeof(TransitionOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(TransitionOutput), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -392,7 +396,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
     }
 
     /// <summary>

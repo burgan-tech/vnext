@@ -417,7 +417,7 @@ public sealed class FunctionAppService(
 
                 return Result<FunctionResponseOutput>.Fail(Error.Failure(
                     WorkflowErrorCodes.ExtensionExecutionFailed,
-                    $"Function '{function.Key}' output ScriptMapping failed: {ex.Message}"));
+                    $"Function '{function.Key}' output ScriptMapping failed: {ScriptDiagnostics.Explain(ex)}"));
             }
         }
 
