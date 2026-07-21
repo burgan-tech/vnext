@@ -25,13 +25,13 @@ internal static class ResponseOutputWriter
     {
         "connection",
         "content-length",
-        ContentTypeHeader,      // applied via ObjectResult.ContentTypes, never as a raw header
-        "date",                 // server writes its own
-        "host",                 // upstream internal hostname must not leak
+        ContentTypeHeader, // applied via ObjectResult.ContentTypes, never as a raw header
+        "date", // server writes its own
+        "host", // upstream internal hostname must not leak
         "keep-alive",
         "proxy-authenticate",
         "proxy-authorization",
-        "server",               // orchestrator sets its own Server header
+        "server", // orchestrator sets its own Server header
         "te",
         "trailer",
         "transfer-encoding",
@@ -48,7 +48,7 @@ internal static class ResponseOutputWriter
 
         foreach (var (key, value) in headers)
         {
-            if (RestrictedResponseHeaders.Contains(key))
+            if (string.IsNullOrWhiteSpace(key) || RestrictedResponseHeaders.Contains(key))
                 continue;
 
             httpContext.Response.Headers[key] = value;
@@ -68,7 +68,7 @@ internal static class ResponseOutputWriter
                 if (string.Equals(key, ContentTypeHeader, StringComparison.OrdinalIgnoreCase) &&
                     !string.IsNullOrWhiteSpace(value))
                 {
-                    return value;
+                    return value.Trim();
                 }
             }
         }

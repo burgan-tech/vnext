@@ -40,7 +40,7 @@ public static class ScriptDiagnostics
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
-            if (current.Message.Contains(OpenGenericAnonymousMarker, StringComparison.Ordinal))
+            if (current.Message?.Contains(OpenGenericAnonymousMarker, StringComparison.Ordinal) == true)
                 return true;
         }
 
