@@ -117,6 +117,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

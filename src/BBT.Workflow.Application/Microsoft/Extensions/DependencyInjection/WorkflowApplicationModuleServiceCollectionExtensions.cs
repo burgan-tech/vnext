@@ -5,6 +5,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Caching;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
@@ -66,6 +67,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
     {
            services.AddOptions<InstanceFilteringOptions>()
             .BindConfiguration(InstanceFilteringOptions.SectionName);
+        services.AddOptions<StateFunctionCacheOptions>()
+            .BindConfiguration(StateFunctionCacheOptions.SectionName);
+        services.AddScoped<IStateFunctionCache, StateFunctionCache>();
         // Application Services
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();

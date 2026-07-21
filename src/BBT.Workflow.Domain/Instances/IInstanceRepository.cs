@@ -32,6 +32,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<Instance?> FindByIdentifierSlimAsync(string identifier, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Projects the state-function validation fingerprint (effective state, status, flow version,
+    /// active-subflow flag) for the instance matching the identifier (GUID or key) in a single
+    /// projection query — no includes, no aggregate materialization. Identifier resolution mirrors
+    /// <see cref="FindByIdentifierAsReadOnlyAsync"/> (id first, then most recent row by key).
+    /// Returns null when no instance matches.
+    /// </summary>
+    Task<InstanceStateFingerprint?> GetStateFingerprintAsync(string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
     /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
     /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,

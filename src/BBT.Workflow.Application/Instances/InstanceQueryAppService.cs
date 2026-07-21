@@ -48,6 +48,7 @@ public sealed class InstanceQueryAppService(
     ICurrentUser currentUser,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
+    Caching.IStateFunctionCache stateFunctionCache,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -786,6 +787,20 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Long-poll fast path: the ETag is a deterministic hash of the state fingerprint
+        // (instance id + effective state + status + flow version) plus the caller scope, so an
+        // If-None-Match match can be answered with 304 from a single projection query — no cache
+        // entry, aggregate load or response build needed. The body cache only serves callers
+        // without a current ETag.
+        string? stateCacheKey = null;
+        if (stateFunctionCache.Enabled)
+        {
+            var fastResult = await TryServeStateFromFingerprintAsync(input, cancellationToken);
+            if (fastResult.HasValue)
+                return fastResult.Value;
+            stateCacheKey = stateFunctionCache.BuildKey(input);
+        }
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
@@ -804,15 +819,86 @@ public sealed class InstanceQueryAppService(
                     var output = buildResult.Value!;
                     var entityEtag = data.instance.LatestData?.ETag ?? string.Empty;
                     output.EntityEtag = entityEtag;
-                    var representationEtag = representationEtagService.Generate(output);
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    // Same fingerprint-ETag the fast path computes from the projection query.
+                    // Active-subflow responses fold the live displayed state/status into the hash:
+                    // the parent row alone cannot see subflow-internal Busy/Active flips.
+                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance);
+                    var etag = data.instance.HasActiveSubFlow
+                        ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
+                        : stateFunctionCache.ComputeEtag(input, fingerprint);
+
+                    // Warm the cache before the 304 decision so a Not-Modified outcome still
+                    // stores the entry. Active-subflow responses are built from a live subflow
+                    // call and cannot be validated by the local fingerprint — never cache them.
+                    if (stateCacheKey is not null && !data.instance.HasActiveSubFlow)
+                    {
+                        await stateFunctionCache.SetAsync(stateCacheKey, new Caching.StateFunctionCacheEntry
+                        {
+                            Etag = etag,
+                            EntityEtag = entityEtag,
+                            Output = output
+                        }, cancellationToken);
+                    }
+
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
                         return ConditionalResult<GetInstanceStateOutput>.NotModified();
 
-                    output.ETag = representationEtag;
+                    output.ETag = etag;
                     return ConditionalResult<GetInstanceStateOutput>.Success(output);
                 },
                 onFailure: error => ConditionalResult<GetInstanceStateOutput>.Fail(error));
+    }
+
+    /// <summary>
+    /// Long-poll fast path over the state fingerprint. Loads the lightweight projection, computes
+    /// the deterministic fingerprint ETag and answers: 304 when the caller's If-None-Match matches
+    /// (no cache access, no build), or the cached response when the stored entry carries the same
+    /// ETag. Returns null when the full build path must run: instance not found (proper error
+    /// comes from the full path), active subflow (live evaluation required), cache miss, or a
+    /// stale cache entry.
+    /// </summary>
+    private async Task<ConditionalResult<GetInstanceStateOutput>?> TryServeStateFromFingerprintAsync(
+        GetInstanceStateInput input,
+        CancellationToken cancellationToken)
+    {
+        var fingerprint = await instanceRepository.GetStateFingerprintAsync(input.Instance, cancellationToken);
+        if (fingerprint is null)
+            return null;
+
+        if (fingerprint.HasActiveSubFlow)
+        {
+            logger.StateFunctionCacheBypassedForSubFlow(input.Instance);
+            return null;
+        }
+
+        var etag = stateFunctionCache.ComputeEtag(input, fingerprint);
+
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        {
+            logger.StateFunctionEtagNotModified(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
+            return ConditionalResult<GetInstanceStateOutput>.NotModified();
+        }
+
+        var entry = await stateFunctionCache.GetAsync(stateFunctionCache.BuildKey(input), cancellationToken);
+        if (entry is null)
+        {
+            logger.StateFunctionCacheMiss(input.Instance);
+            return null;
+        }
+
+        if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
+        {
+            logger.StateFunctionCacheInvalidated(input.Instance, entry.Etag, etag);
+            return null;
+        }
+
+        logger.StateFunctionCacheHit(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
+
+        var output = entry.Output;
+        output.EntityEtag = entry.EntityEtag;
+        output.ETag = entry.Etag;
+        return ConditionalResult<GetInstanceStateOutput>.Success(output);
     }
 
     /// <summary>

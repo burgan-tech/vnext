@@ -325,7 +325,15 @@ public sealed class RemoteInstanceQueryAppService(
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            // If-None-Match must come only from the typed input.IfNoneMatch below. input.Headers
+            // carries the caller's full header set, and the caller's own If-None-Match (an ETag
+            // for a DIFFERENT resource, e.g. the parent instance in the subflow window) must not
+            // leak into this request — a false 304 here would leave the consumer with no body.
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                requestMessage,
+                forwardHeaders,
+                input.Headers,
+                static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrEmpty(input.IfNoneMatch))
                 requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
