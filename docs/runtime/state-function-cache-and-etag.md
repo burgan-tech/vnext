@@ -1,4 +1,4 @@
-# State Function Cache and Fingerprint ETag
+# State and Data Function Cache and Fingerprint ETag
 
 ## Purpose
 
@@ -116,19 +116,85 @@ call), and the remote path (`RemoteInstanceQueryAppService.GetFunctionWithStateA
 explicitly strips `If-None-Match` from the forwarded caller headers — the caller's ETag belongs
 to a different resource (the parent), and a false 304 would leave the composer with no body.
 
+## Data function
+
+The data function (`GET .../instances/{instance}/data` and `functions/data`) uses the same
+mechanism with a data-centric material — the design principle is that the data function
+signals **data change points**, not state or extension flux:
+
+```
+etag = h(instanceId | latestDataEtag | flowVersion | callerHash)
+key  = data-fn:{domain}:{workflow}:{instance}:{callerHash}
+callerHash = h(roles | actor identity | culture | version)   # extensions deliberately EXCLUDED
+```
+
+- **Change signal is `InstanceData.ETag`** of the IsLatest row — a fresh ULID on every
+  latest-line data write. It is read index-only via `UX_InstancesData_Instance_IsLatest`
+  (ETag is in the INCLUDE list) by `IInstanceRepository.GetDataFingerprintAsync`.
+- **`flowVersion` is in the material** because a flow migration can change `x-roles` field
+  filtering and extension definitions without a data write.
+- **Extensions are outside the key and the ETag.** The ETag signals the data change point
+  only; requests differing only in the requested extension list share one key and one ETag.
+- **Latest-data requests only.** Pinned-version requests (`?version=X`) bypass the fast path
+  and the cache: a write into an *older* version line (`AddDataWithVersion`) creates a new row
+  without touching the IsLatest row's ETag, so the latest-based material cannot see it. On the
+  full path, pinned requests hash the **resolved** row's ETag instead — correct, because a
+  write into that line produces a new row with a new ULID.
+- **No subflow bypass**: the data body is always the parent's own `FindData` result; an active
+  subflow only contributes extension output — which is never cached (below).
+- A 304 answered from the fingerprint skips the aggregate load, the authorization gate, field
+  filtering **and the extension run** — including always-on Global extensions, which are the
+  most expensive part of a data read.
+
+**The cache stores pure instance data — extension output is never cached:**
+
+- An entry holds only the caller-scoped, field-filtered `Data` payload.
+- A validated entry does **not** short-circuit the request: it feeds the **data portion** of
+  the build (skipping the x-roles field filtering step — which may evaluate dynamic role
+  scripts) while the extension pipeline **always runs fresh** against the raw instance data.
+  This holds for every 200: whether or not the caller requested extensions, data comes from
+  the cache when valid and extension output is never stale.
+- Every latest-data 200 with a resolved data row warms the cache (data-only entry), including
+  responses that carried extension output.
+- Responses with no resolved data row are never cached.
+- The heavy wins remain on the 304 fast path (no aggregate, no auth, no filtering, no
+  extension run — including always-on Global extensions); the body cache additionally removes
+  the field-filtering cost from every 200.
+
+Accepted staleness (by design — "the critical thing is the data change point"): the ETag does
+not track extension output, so an ETag-holding client receives 304 until the next data write
+or flow migration even if extension output changed in the meantime; clients that need fresh
+extension output call without `If-None-Match` and always get a freshly computed response.
+Similarly, state-dependent `queryRoles` outcomes are only re-evaluated when data or flow
+version changes (transitions usually write data, which re-triggers everything).
+
 ## Configuration
 
 ```json
 "StateFunctionCache": {
   "Enabled": true,
   "TtlSeconds": 60
+},
+"InstanceFunctionCache": {
+  "Enabled": true,
+  "DefaultTtlSeconds": 60
 }
 ```
 
 Orchestration host `appsettings.json`. `Enabled=false` is the kill switch (full evaluation on
-every poll); `TtlSeconds` bounds only the residual staleness of parts not covered by the
-fingerprint (e.g. `X-Entity-ETag`) — state/status changes are detected on every request via
-the projection query.
+every request); TTL bounds only the residual staleness of parts not covered by the fingerprint
+— fingerprint-covered changes are detected on every request via the projection query.
+
+**Workflow-author TTL** (data/view/schema family — not the state function): the flow
+definition may declare
+
+```json
+"functionCache": { "ttlSeconds": 120 }
+```
+
+(`Definitions.FunctionCacheDefinition`, bound to `Workflow.FunctionCache`). When present and
+positive it overrides `InstanceFunctionCache:DefaultTtlSeconds` for that workflow's built-in
+function cache entries; the single value covers all built-in functions of the workflow.
 
 ## Observability
 
@@ -140,9 +206,10 @@ the projection query.
 | 20403 | `StateFunctionCacheBypassedForSubFlow` | Active subflow — live evaluation |
 | 20404 | `StateFunctionCacheError` | Cache operation failed; degraded to miss |
 | 20405 | `StateFunctionEtagNotModified` | 304 answered from the fingerprint alone |
+| 20410-20414 | `DataFunctionCache*` / `DataFunctionEtagNotModified` | Data-function counterparts of the above |
 
 Cache operations are traced under the `BBT.Workflow.Cache` activity source
-(component type `state-fn`).
+(component types `state-fn` and `data-fn`).
 
 ## Key implementation files
 

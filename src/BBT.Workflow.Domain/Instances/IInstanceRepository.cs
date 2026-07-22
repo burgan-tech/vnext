@@ -42,6 +42,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Projects the data-function validation fingerprint (latest data row's ETag + flow version)
+    /// for the instance matching the identifier (GUID or key) in a single projection query.
+    /// The latest ETag read is an index-only probe (<c>UX_InstancesData_Instance_IsLatest</c>
+    /// includes ETag). Identifier resolution mirrors <see cref="FindByIdentifierAsReadOnlyAsync"/>.
+    /// Returns null when no instance matches.
+    /// </summary>
+    Task<InstanceDataFingerprint?> GetDataFingerprintAsync(string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
     /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
     /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,

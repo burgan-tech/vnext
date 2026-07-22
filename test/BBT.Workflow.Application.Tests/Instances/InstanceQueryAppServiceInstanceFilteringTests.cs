@@ -276,6 +276,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: instanceFilteringOptions,
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
+            dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

@@ -103,6 +103,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: _stateFunctionCache,
+            dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

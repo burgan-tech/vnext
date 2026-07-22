@@ -49,6 +49,7 @@ public sealed class InstanceQueryAppService(
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     Caching.IStateFunctionCache stateFunctionCache,
+    Caching.IDataFunctionCache dataFunctionCache,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -601,6 +602,27 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Fast path for latest-data requests only: the ETag is a deterministic hash of the data
+        // fingerprint (instance id + latest data ETag + flow version) plus the caller scope, so
+        // an If-None-Match match is answered with 304 from a single projection query — no
+        // aggregate load, no extension run, no response build. Pinned-version requests stay on
+        // the full path: an older-line write changes their body without moving the latest ETag.
+        //
+        // A validated cache entry does NOT short-circuit the build: it supplies the DATA portion
+        // (skipping the x-roles field filtering) while extensions are ALWAYS computed fresh —
+        // the cache holds pure instance data, never extension output.
+        var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
+        string? dataCacheKey = null;
+        Caching.DataFunctionCacheEntry? validatedEntry = null;
+        if (dataFunctionCache.Enabled && isLatestRequest)
+        {
+            var fastPath = await TryServeDataFromFingerprintAsync(input, cancellationToken);
+            if (fastPath.NotModified.HasValue)
+                return fastPath.NotModified.Value;
+            validatedEntry = fastPath.ValidatedEntry;
+            dataCacheKey = dataFunctionCache.BuildKey(input);
+        }
+
         // Railway chain: Get Instance → Load Flow (using instance.FlowVersion) → Match to ConditionalResult
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
             .BindAsync(instance =>
@@ -617,13 +639,21 @@ public sealed class InstanceQueryAppService(
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
 
-                    var result = new GetInstanceDataOutput
-                    {
-                        Data = instanceData?.Data.JsonElement
-                    };
+                    var result = new GetInstanceDataOutput();
 
-                    result.Data = await schemaFieldFilterService.ApplyAsync(flow, result.Data, instance, cancellationToken) ??
-                                  result.Data;
+                    // Data portion: reuse the validated cache entry (already field-filtered for
+                    // this caller scope) when available; otherwise filter the resolved row.
+                    // Extensions below always run fresh against the RAW instance data.
+                    if (validatedEntry is not null)
+                    {
+                        result.Data = validatedEntry.Data;
+                    }
+                    else
+                    {
+                        result.Data = instanceData?.Data.JsonElement;
+                        result.Data = await schemaFieldFilterService.ApplyAsync(flow, result.Data, instance, cancellationToken) ??
+                                      result.Data;
+                    }
 
                     // If there's an active SubFlow and extensions are requested, fetch from SubFlow
                     if (instance.Subflow != null)
@@ -665,17 +695,82 @@ public sealed class InstanceQueryAppService(
                     }
 
                     result.EntityEtag = entityEtag;
-                    var representationEtag = representationEtagService.Generate(result);
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && representationEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    // Same fingerprint-ETag the fast path computes from the projection query.
+                    // Pinned-version requests hash the RESOLVED row's ETag instead of the latest
+                    // one (a write into that version line creates a new row with a new ULID).
+                    var etag = dataFunctionCache.ComputeEtag(input, isLatestRequest
+                        ? InstanceDataFingerprint.FromInstance(instance)
+                        : new InstanceDataFingerprint(instance.Id, instance.Key, instanceData?.ETag, instance.FlowVersion));
+
+                    // Warm the cache before the 304 decision so a Not-Modified outcome still
+                    // stores the entry. Only latest-data responses with an existing data row are
+                    // cacheable; the entry holds ONLY the field-filtered data — extension output
+                    // is never cached. No re-write when the data came from a validated entry.
+                    // TTL is workflow-author-controlled with a host default.
+                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null)
+                    {
+                        await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
+                        {
+                            Etag = etag,
+                            EntityEtag = entityEtag,
+                            Data = result.Data
+                        }, dataFunctionCache.ResolveTtlSeconds(flow.FunctionCache), cancellationToken);
+                    }
+
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.ETag = representationEtag;
+                    result.ETag = etag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
+    }
+
+    /// <summary>
+    /// Fast path for latest-data requests over the data fingerprint. Loads the lightweight
+    /// projection, computes the deterministic fingerprint ETag and answers 304 when the
+    /// caller's If-None-Match matches (no cache access, no extension run, no build).
+    /// Otherwise consults the body cache and returns the entry whose ETag matches the current
+    /// fingerprint ETag — the build path then reuses its DATA portion (skipping field
+    /// filtering) while always computing extensions fresh. Both results are null when the
+    /// instance was not found (the full path produces the proper error), on a cache miss,
+    /// or when the stored entry is stale.
+    /// </summary>
+    private async Task<(ConditionalResult<GetInstanceDataOutput>? NotModified, Caching.DataFunctionCacheEntry? ValidatedEntry)>
+        TryServeDataFromFingerprintAsync(
+            GetInstanceDataInput input,
+            CancellationToken cancellationToken)
+    {
+        var fingerprint = await instanceRepository.GetDataFingerprintAsync(input.Instance, cancellationToken);
+        if (fingerprint is null)
+            return (null, null);
+
+        var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
+
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        {
+            logger.DataFunctionEtagNotModified(input.Instance);
+            return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null);
+        }
+
+        var entry = await dataFunctionCache.GetAsync(dataFunctionCache.BuildKey(input), cancellationToken);
+        if (entry is null)
+        {
+            logger.DataFunctionCacheMiss(input.Instance);
+            return (null, null);
+        }
+
+        if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
+        {
+            logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, etag);
+            return (null, null);
+        }
+
+        logger.DataFunctionCacheHit(input.Instance);
+        return (null, entry);
     }
 
     /// Gets the view definition for rule-based view selection.

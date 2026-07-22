@@ -26,11 +26,6 @@ public sealed class StateFunctionCache(
     private const string KeyPrefix = "state-fn:";
 
     /// <summary>
-    /// Length of the caller-scope hash segment in the cache key (hex chars of the SHA-256 digest).
-    /// </summary>
-    private const int CallerHashLength = 16;
-
-    /// <summary>
     /// Length of the fingerprint ETag (hex chars of the SHA-256 digest — 128 bits).
     /// </summary>
     private const int EtagLength = 32;
@@ -70,34 +65,8 @@ public sealed class StateFunctionCache(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
     }
 
-    /// <summary>
-    /// Hashes the caller scope: role/roles, actor identity ($InstanceStarter/$PreviousUser
-    /// pseudo-roles are matched against ICurrentUser — see TransitionAuthorizationManager, so two
-    /// callers with identical role headers can receive different transition lists), resolved
-    /// culture (state alias labels are localized), requested extensions and workflow version.
-    /// </summary>
-    private string BuildCallerHash(GetInstanceStateInput input)
-    {
-        var roles = input.Roles is { Count: > 0 }
-            ? string.Join(',', input.Roles.Order(StringComparer.Ordinal))
-            : string.Empty;
-        var extensions = input.Extensions is { Length: > 0 }
-            ? string.Join(',', input.Extensions.Order(StringComparer.Ordinal))
-            : string.Empty;
-        var culture = LanguageResolver.ResolveCulture(input.Headers);
-
-        var callerScope = string.Join('|',
-            input.Role ?? string.Empty,
-            roles,
-            currentUser.Id ?? string.Empty,
-            currentUser.ActorUserName ?? string.Empty,
-            culture,
-            extensions,
-            input.Version ?? string.Empty);
-
-        return Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes(callerScope)))[..CallerHashLength];
-    }
+    private string BuildCallerHash(GetInstanceStateInput input) =>
+        CallerScopeHash.Compute(currentUser, input.Role, input.Roles, input.Extensions, input.Headers, input.Version);
 
     /// <inheritdoc />
     public async Task<StateFunctionCacheEntry?> GetAsync(string key, CancellationToken cancellationToken = default)

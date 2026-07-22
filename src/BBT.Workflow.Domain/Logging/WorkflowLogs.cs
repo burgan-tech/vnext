@@ -2524,6 +2524,72 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Data Function Cache
+
+    /// <summary>
+    /// Logs when a data-function response is served from cache (fingerprint ETag validated).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20410,
+        Level = LogLevel.Debug,
+        Message = "Data function cache hit for instance {Instance}")]
+    public static partial void DataFunctionCacheHit(
+        this ILogger logger,
+        string instance);
+
+    /// <summary>
+    /// Logs when no cached data-function response exists for the caller scope.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20411,
+        Level = LogLevel.Debug,
+        Message = "Data function cache miss for instance {Instance}")]
+    public static partial void DataFunctionCacheMiss(
+        this ILogger logger,
+        string instance);
+
+    /// <summary>
+    /// Logs when a cached data-function response is discarded because its fingerprint ETag
+    /// no longer matches the ETag computed from the current projection.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20412,
+        Level = LogLevel.Debug,
+        Message = "Data function cache invalidated for instance {Instance}: etag {CachedEtag} -> {CurrentEtag}")]
+    public static partial void DataFunctionCacheInvalidated(
+        this ILogger logger,
+        string instance,
+        string? cachedEtag,
+        string currentEtag);
+
+    /// <summary>
+    /// Logs when a data-function cache operation fails; the failure degrades to a miss.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20413,
+        Level = LogLevel.Warning,
+        Message = "Data function cache {Operation} failed for key {CacheKey}; treating as miss")]
+    public static partial void DataFunctionCacheError(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    /// <summary>
+    /// Logs when the data fingerprint ETag matched the caller's If-None-Match and 304 was
+    /// returned from the projection query — no cache access, aggregate load, extension run
+    /// or response build.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20414,
+        Level = LogLevel.Debug,
+        Message = "Data function ETag unchanged for instance {Instance}; returning 304 from fingerprint")]
+    public static partial void DataFunctionEtagNotModified(
+        this ILogger logger,
+        string instance);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>

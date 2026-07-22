@@ -70,6 +70,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddOptions<StateFunctionCacheOptions>()
             .BindConfiguration(StateFunctionCacheOptions.SectionName);
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();
+        services.AddOptions<InstanceFunctionCacheOptions>()
+            .BindConfiguration(InstanceFunctionCacheOptions.SectionName);
+        services.AddScoped<IDataFunctionCache, DataFunctionCache>();
         // Application Services
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
