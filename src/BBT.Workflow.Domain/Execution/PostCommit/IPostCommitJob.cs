@@ -11,6 +11,17 @@ public interface IPostCommitJob
 {
 }
 
+public enum PostCommitContinuationBehavior
+{
+    HandoffToChild = 0,
+    ContinueParent = 1
+}
+
+public interface IPostCommitContinuationJob : IPostCommitJob
+{
+    PostCommitContinuationBehavior ContinuationBehavior { get; }
+}
+
 /// <summary>
 /// Interface for post-commit jobs that support idempotency.
 /// Jobs implementing this interface will be tracked by the idempotency store
@@ -32,9 +43,11 @@ public interface IIdempotentPostCommitJob : IPostCommitJob
 /// </summary>
 /// <param name="CorrelationId">The correlation ID linking parent and subflow instances.</param>
 /// <param name="TargetStateKey">The key of the target state containing subflow configuration.</param>
+/// <param name="ContinuationBehavior">Whether the parent continuation is handed to the child or continues independently.</param>
 public sealed record StartSubflowJob(
     Guid CorrelationId,
-    string TargetStateKey) : IIdempotentPostCommitJob
+    string TargetStateKey,
+    PostCommitContinuationBehavior ContinuationBehavior) : IIdempotentPostCommitJob, IPostCommitContinuationJob
 {
     /// <inheritdoc />
     public string IdempotencyKey => $"subflow:{CorrelationId}";
@@ -68,7 +81,7 @@ public sealed record ForwardToSubflowJob(
     string[]? Tags,
     JsonElement? DataElement,
     Dictionary<string, string?> Headers,
-    Dictionary<string, string?> RouteValues) : IPostCommitJob
+    Dictionary<string, string?> RouteValues) : IPostCommitContinuationJob
 {
+    public PostCommitContinuationBehavior ContinuationBehavior => PostCommitContinuationBehavior.HandoffToChild;
 }
-

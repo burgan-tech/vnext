@@ -37,7 +37,8 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
         }
 
-        // Enqueue post-commit job - actual forward happens after lock release
+        // Enqueue post-commit job - actual forward happens after lock release.
+        // ForwardToSubflowJob hands continuation ownership to the active blocking SubFlow.
         context.Directives.EnqueuePostCommit(new ForwardToSubflowJob(
             context.Instance.Subflow!.SubFlowInstanceId,
             context.InstanceId,
