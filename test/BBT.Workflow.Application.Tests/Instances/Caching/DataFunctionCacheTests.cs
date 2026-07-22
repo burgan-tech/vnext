@@ -52,7 +52,7 @@ public class DataFunctionCacheTests
 
     private static InstanceDataFingerprint CreateFingerprint() =>
         new(Guid.Parse("22222222-2222-2222-2222-222222222222"), "test-key",
-            "01JD2G4YV0EXAMPLEULID0000A", "1.0.0");
+            "01JD2G4YV0EXAMPLEULID0000A", "1.0.0", "review", HasActiveSubFlow: false);
 
     [Fact]
     public void Options_Defaults_AreEnabledWith60SecondDefaultTtl()

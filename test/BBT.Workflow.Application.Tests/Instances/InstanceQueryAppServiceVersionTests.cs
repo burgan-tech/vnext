@@ -119,6 +119,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
+            instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

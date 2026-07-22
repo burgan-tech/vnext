@@ -50,6 +50,7 @@ public sealed class InstanceQueryAppService(
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     Caching.IStateFunctionCache stateFunctionCache,
     Caching.IDataFunctionCache dataFunctionCache,
+    Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -701,7 +702,8 @@ public sealed class InstanceQueryAppService(
                     // one (a write into that version line creates a new row with a new ULID).
                     var etag = dataFunctionCache.ComputeEtag(input, isLatestRequest
                         ? InstanceDataFingerprint.FromInstance(instance)
-                        : new InstanceDataFingerprint(instance.Id, instance.Key, instanceData?.ETag, instance.FlowVersion));
+                        : new InstanceDataFingerprint(instance.Id, instance.Key, instanceData?.ETag,
+                            instance.FlowVersion, instance.EffectiveState, instance.HasActiveSubFlow));
 
                     // Warm the cache before the 304 decision so a Not-Modified outcome still
                     // stores the entry. Only latest-data responses with an existing data row are
@@ -1460,20 +1462,138 @@ public sealed class InstanceQueryAppService(
     /// <param name="transitionKey">Optional transition key to get schema for</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Result containing the schema output or error information</returns>
-    public async Task<Result<GetSchemaOutput>> GetSchemaAsync(
+    public async Task<ConditionalResult<GetSchemaOutput>> GetSchemaAsync(
         GetSchemaInput input,
         string? transitionKey,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Fast path: the ETag is a deterministic hash of the data fingerprint (instance id +
+        // latest data ETag + effective state + flow version) plus caller scope and transition
+        // key — transition resolution is state-dependent. An If-None-Match match is answered
+        // with 304 from a single projection query.
+        string? schemaCacheKey = null;
+        if (instanceSchemaFunctionCache.Enabled && !string.IsNullOrEmpty(transitionKey))
+        {
+            var fastResult = await TryServeSchemaFromFingerprintAsync(input, transitionKey, cancellationToken);
+            if (fastResult.HasValue)
+                return fastResult.Value;
+            schemaCacheKey = instanceSchemaFunctionCache.BuildKey(input, transitionKey);
+        }
+
         // Railway chain: Get Instance → Get Workflow → Build Schema Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data =>
-                BuildSchemaOutputAsync(data.instance, data.workflow, input, transitionKey, cancellationToken));
+            .MatchAsync(
+                onSuccess: async data =>
+                {
+                    var buildResult = await BuildSchemaOutputAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
+                    if (!buildResult.IsSuccess)
+                        return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
+
+                    return await FinalizeSchemaFunctionResultAsync(
+                        "schema",
+                        buildResult.Value!,
+                        data.instance,
+                        data.workflow,
+                        schemaCacheKey,
+                        instanceSchemaFunctionCache.ComputeEtag(input, InstanceDataFingerprint.FromInstance(data.instance), transitionKey!),
+                        input.IfNoneMatch,
+                        cancellationToken);
+                },
+                onFailure: error => ConditionalResult<GetSchemaOutput>.Fail(error));
+    }
+
+    /// <summary>
+    /// Shared epilogue for the master/schema full paths: subflow-forwarded responses are
+    /// returned as-is (never cached, never 304 — the body came from a live subflow call and
+    /// its embedded ETag must not leak into the parent response); locally resolved responses
+    /// are cached under the fingerprint ETag (warm before the 304 decision) and answered
+    /// conditionally.
+    /// </summary>
+    private async Task<ConditionalResult<GetSchemaOutput>> FinalizeSchemaFunctionResultAsync(
+        string function,
+        GetSchemaOutput output,
+        Instance instance,
+        Definitions.Workflow flow,
+        string? cacheKey,
+        string etag,
+        string? ifNoneMatch,
+        CancellationToken cancellationToken)
+    {
+        if (instance.HasActiveSubFlow)
+        {
+            output.ETag = null;
+            return ConditionalResult<GetSchemaOutput>.Success(output);
+        }
+
+        if (cacheKey is not null)
+        {
+            await instanceSchemaFunctionCache.SetAsync(cacheKey, new Caching.SchemaFunctionCacheEntry
+            {
+                Etag = etag,
+                Output = output
+            }, instanceSchemaFunctionCache.ResolveTtlSeconds(flow.FunctionCache), cancellationToken);
+        }
+
+        if (!string.IsNullOrEmpty(ifNoneMatch) && etag.MatchesIfNoneMatch(ifNoneMatch))
+            return ConditionalResult<GetSchemaOutput>.NotModified();
+
+        output.ETag = etag;
+        return ConditionalResult<GetSchemaOutput>.Success(output);
+    }
+
+    /// <summary>
+    /// Fast path for the schema function over the data fingerprint: 304 when If-None-Match
+    /// matches the fingerprint ETag, cached response when the stored entry carries the same
+    /// ETag. Bypassed entirely when the instance has an active SubFlow (live evaluation).
+    /// Returns null when the full build path must run.
+    /// </summary>
+    private async Task<ConditionalResult<GetSchemaOutput>?> TryServeSchemaFromFingerprintAsync(
+        GetSchemaInput input,
+        string transitionKey,
+        CancellationToken cancellationToken)
+    {
+        var fingerprint = await instanceRepository.GetDataFingerprintAsync(input.Instance, cancellationToken);
+        if (fingerprint is null)
+            return null;
+
+        if (fingerprint.HasActiveSubFlow)
+        {
+            logger.InstanceSchemaFunctionCacheBypassedForSubFlow("schema", input.Instance);
+            return null;
+        }
+
+        var etag = instanceSchemaFunctionCache.ComputeEtag(input, fingerprint, transitionKey);
+
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        {
+            logger.InstanceSchemaFunctionEtagNotModified("schema", input.Instance);
+            return ConditionalResult<GetSchemaOutput>.NotModified();
+        }
+
+        var entry = await instanceSchemaFunctionCache.GetAsync(
+            instanceSchemaFunctionCache.BuildKey(input, transitionKey), cancellationToken);
+        if (entry is null)
+        {
+            logger.InstanceSchemaFunctionCacheMiss("schema", input.Instance);
+            return null;
+        }
+
+        if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
+        {
+            logger.InstanceSchemaFunctionCacheInvalidated("schema", input.Instance, entry.Etag, etag);
+            return null;
+        }
+
+        logger.InstanceSchemaFunctionCacheHit("schema", input.Instance);
+
+        var output = entry.Output;
+        output.ETag = entry.Etag;
+        return ConditionalResult<GetSchemaOutput>.Success(output);
     }
 
     /// <summary>
@@ -1501,19 +1621,97 @@ public sealed class InstanceQueryAppService(
     /// Retrieves the flow-level master schema an instance is bound to.
     /// If the instance has an active SubFlow, forwards the request to the SubFlow instance.
     /// </summary>
-    public async Task<Result<GetSchemaOutput>> GetMasterAsync(
+    public async Task<ConditionalResult<GetSchemaOutput>> GetMasterAsync(
         GetMasterInput input,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        // Fast path: the master ETag is a deterministic hash of the data fingerprint
+        // (instance id + latest data ETag + flow version) plus the caller scope — the
+        // flow-level master schema is state-independent. An If-None-Match match is answered
+        // with 304 from a single projection query.
+        string? masterCacheKey = null;
+        if (instanceSchemaFunctionCache.Enabled)
+        {
+            var fastResult = await TryServeMasterFromFingerprintAsync(input, cancellationToken);
+            if (fastResult.HasValue)
+                return fastResult.Value;
+            masterCacheKey = instanceSchemaFunctionCache.BuildKey(input);
+        }
 
         // Railway chain: Get Instance → Get Workflow → Build Master Schema Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data =>
-                BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken));
+            .MatchAsync(
+                onSuccess: async data =>
+                {
+                    var buildResult = await BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken);
+                    if (!buildResult.IsSuccess)
+                        return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
+
+                    return await FinalizeSchemaFunctionResultAsync(
+                        "master",
+                        buildResult.Value!,
+                        data.instance,
+                        data.workflow,
+                        masterCacheKey,
+                        instanceSchemaFunctionCache.ComputeEtag(input, InstanceDataFingerprint.FromInstance(data.instance)),
+                        input.IfNoneMatch,
+                        cancellationToken);
+                },
+                onFailure: error => ConditionalResult<GetSchemaOutput>.Fail(error));
+    }
+
+    /// <summary>
+    /// Fast path for the master function over the data fingerprint: 304 when If-None-Match
+    /// matches the fingerprint ETag, cached response when the stored entry carries the same
+    /// ETag. Bypassed entirely when the instance has an active SubFlow (live evaluation).
+    /// Returns null when the full build path must run.
+    /// </summary>
+    private async Task<ConditionalResult<GetSchemaOutput>?> TryServeMasterFromFingerprintAsync(
+        GetMasterInput input,
+        CancellationToken cancellationToken)
+    {
+        var fingerprint = await instanceRepository.GetDataFingerprintAsync(input.Instance, cancellationToken);
+        if (fingerprint is null)
+            return null;
+
+        if (fingerprint.HasActiveSubFlow)
+        {
+            logger.InstanceSchemaFunctionCacheBypassedForSubFlow("master", input.Instance);
+            return null;
+        }
+
+        var etag = instanceSchemaFunctionCache.ComputeEtag(input, fingerprint);
+
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        {
+            logger.InstanceSchemaFunctionEtagNotModified("master", input.Instance);
+            return ConditionalResult<GetSchemaOutput>.NotModified();
+        }
+
+        var entry = await instanceSchemaFunctionCache.GetAsync(
+            instanceSchemaFunctionCache.BuildKey(input), cancellationToken);
+        if (entry is null)
+        {
+            logger.InstanceSchemaFunctionCacheMiss("master", input.Instance);
+            return null;
+        }
+
+        if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
+        {
+            logger.InstanceSchemaFunctionCacheInvalidated("master", input.Instance, entry.Etag, etag);
+            return null;
+        }
+
+        logger.InstanceSchemaFunctionCacheHit("master", input.Instance);
+
+        var output = entry.Output;
+        output.ETag = entry.Etag;
+        return ConditionalResult<GetSchemaOutput>.Success(output);
     }
 
     /// <summary>
@@ -1526,9 +1724,8 @@ public sealed class InstanceQueryAppService(
         GetMasterInput input,
         CancellationToken cancellationToken)
     {
-        // TODO: Need?
-        // if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-        //     return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
+        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+            return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         // Check if there's an active SubFlow - if so, forward the request to SubFlow
         // instance.Subflow returns the first active subflow (Type: S and not completed)

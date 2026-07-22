@@ -448,7 +448,14 @@ public sealed class RemoteInstanceQueryAppService(
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            // If-None-Match must never be forwarded downstream: this is a subflow composition
+            // call whose caller ETag belongs to a DIFFERENT resource (the parent instance),
+            // and the composer always needs a body.
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                requestMessage,
+                forwardHeaders,
+                input.Headers,
+                static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
@@ -550,7 +557,14 @@ public sealed class RemoteInstanceQueryAppService(
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            // If-None-Match must never be forwarded downstream: this is a subflow composition
+            // call whose caller ETag belongs to a DIFFERENT resource (the parent instance),
+            // and the composer always needs a body.
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                requestMessage,
+                forwardHeaders,
+                input.Headers,
+                static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)

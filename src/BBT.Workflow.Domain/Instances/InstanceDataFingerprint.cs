@@ -13,11 +13,17 @@ namespace BBT.Workflow.Instances;
 /// <param name="LatestDataEtag">ETag of the IsLatest instance-data row; null when the instance
 /// has no data rows yet.</param>
 /// <param name="FlowVersion">Bound flow version.</param>
+/// <param name="EffectiveState">Externally exposed state column — the schema function's
+/// transition resolution is state-dependent (equals CurrentState when no active subflow).</param>
+/// <param name="HasActiveSubFlow">True when an open SubFlow-type correlation exists. Master and
+/// schema responses are then composed from a live subflow call and must not be served from cache.</param>
 public sealed record InstanceDataFingerprint(
     Guid Id,
     string? Key,
     string? LatestDataEtag,
-    string? FlowVersion)
+    string? FlowVersion,
+    string? EffectiveState,
+    bool HasActiveSubFlow)
 {
     /// <summary>
     /// Builds the fingerprint from an already-loaded aggregate — the full-build path uses this
@@ -27,5 +33,7 @@ public sealed record InstanceDataFingerprint(
         new(instance.Id,
             instance.Key,
             instance.LatestData?.ETag,
-            instance.FlowVersion);
+            instance.FlowVersion,
+            instance.EffectiveState,
+            instance.HasActiveSubFlow);
 }

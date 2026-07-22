@@ -407,7 +407,9 @@ public sealed class EfCoreInstanceRepository(
             i.Id,
             i.Key,
             i.DataList.Where(d => d.IsLatest).Select(d => d.ETag).FirstOrDefault(),
-            i.FlowVersion));
+            i.FlowVersion,
+            i.EffectiveState,
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
 
     /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,

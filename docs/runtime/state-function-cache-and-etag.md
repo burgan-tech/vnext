@@ -1,4 +1,4 @@
-# State and Data Function Cache and Fingerprint ETag
+# Instance Function Cache and Fingerprint ETag (state, data, master, schema)
 
 ## Purpose
 
@@ -168,6 +168,38 @@ extension output call without `If-None-Match` and always get a freshly computed 
 Similarly, state-dependent `queryRoles` outcomes are only re-evaluated when data or flow
 version changes (transitions usually write data, which re-triggers everything).
 
+## Master and schema functions
+
+Both return a resolved schema document (`GetSchemaOutput`) — the flow-level master schema for
+`master`, the transition's schema for `schema` — and share one cache service
+(`IInstanceSchemaFunctionCache`) and, by user decision, the data-centric change signal:
+
+```
+master etag = h(instanceId | latestDataEtag | flowVersion | callerHash)
+schema etag = h(instanceId | latestDataEtag | effectiveState | flowVersion | callerHash | transitionKey)
+master key  = master-fn:{domain}:{workflow}:{instance}:{callerHash}
+schema key  = schema-fn:{domain}:{workflow}:{instance}:{callerHash}:{transitionKey}
+callerHash  = h(roles | actor identity | culture | version)   # no extensions dimension
+```
+
+- `effectiveState` is only in the **schema** material: transition resolution
+  (`ResolveTransition(transitionKey, currentState)`) is state-dependent, and
+  `EffectiveState == CurrentState` whenever no active subflow exists.
+- **Active subflow → full bypass** (both functions forward to the subflow's own function via
+  the gateway). The subflow's body-embedded `ETag` is nulled on the forwarded response — it
+  belongs to a different resource. Subflow calls never carry `If-None-Match` (the remote
+  master/schema calls strip it from forwarded headers, like the state path).
+- Only **successful** outcomes are cached (missing transition key, unresolvable transition,
+  or missing schema reference are never written).
+- A validated hit short-circuits fully (no aggregate load); the queryRoles gate is skipped on
+  hits with the same justification as state/data — and note the master function's gate,
+  previously disabled by a commented-out block, is now enabled (consistent with schema).
+- Accepted staleness: republishing a schema component under the same version does not move the
+  ETag (same class as a flow redeploy); data writes over-invalidate master/schema (harmless
+  rebuilds, never staleness).
+- Observability: shared EventIds 20420-20425 with a `{Function}` parameter
+  (`InstanceSchemaFunctionCache*`), component types `master-fn` / `schema-fn`.
+
 ## Configuration
 
 ```json
@@ -207,9 +239,10 @@ function cache entries; the single value covers all built-in functions of the wo
 | 20404 | `StateFunctionCacheError` | Cache operation failed; degraded to miss |
 | 20405 | `StateFunctionEtagNotModified` | 304 answered from the fingerprint alone |
 | 20410-20414 | `DataFunctionCache*` / `DataFunctionEtagNotModified` | Data-function counterparts of the above |
+| 20420-20425 | `InstanceSchemaFunctionCache*` | Master/schema counterparts (shared quintet + subflow bypass, `{Function}` = master/schema) |
 
 Cache operations are traced under the `BBT.Workflow.Cache` activity source
-(component types `state-fn` and `data-fn`).
+(component types `state-fn`, `data-fn`, `master-fn`, `schema-fn`).
 
 ## Key implementation files
 

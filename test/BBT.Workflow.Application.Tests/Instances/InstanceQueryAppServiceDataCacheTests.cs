@@ -128,6 +128,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: _dataFunctionCache,
+            instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -399,7 +400,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     private void SetupFingerprint(Guid instanceId, string? latestDataEtag = "01JD2G4YV0EXAMPLEULID0000A") =>
         _instanceRepository
             .GetDataFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(new InstanceDataFingerprint(instanceId, "test-key", latestDataEtag, TestVersion));
+            .Returns(new InstanceDataFingerprint(instanceId, "test-key", latestDataEtag, TestVersion, "review", HasActiveSubFlow: false));
 
     private void SetupCachedEntry(out Caching.DataFunctionCacheEntry entry, string etag = "etag-current")
     {

@@ -277,6 +277,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             instanceFilteringOptions: instanceFilteringOptions,
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
+            instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

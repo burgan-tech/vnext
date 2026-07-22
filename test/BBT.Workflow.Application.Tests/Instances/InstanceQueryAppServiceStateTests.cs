@@ -104,6 +104,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: _stateFunctionCache,
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
+            instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -884,8 +885,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         }, transitionKey: "approve", CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
 
     [Fact]

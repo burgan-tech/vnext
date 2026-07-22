@@ -37,6 +37,7 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
     private readonly IComponentCacheStore _componentCacheStore;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IInstanceQueryGateway _instanceQueryGateway;
+    private readonly Caching.IInstanceSchemaFunctionCache _instanceSchemaFunctionCache;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
@@ -54,6 +55,8 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         _componentCacheStore = Substitute.For<IComponentCacheStore>();
         _instanceRepository = Substitute.For<IInstanceRepository>();
         _instanceQueryGateway = Substitute.For<IInstanceQueryGateway>();
+        // Enabled defaults to false so existing tests exercise the full build path.
+        _instanceSchemaFunctionCache = Substitute.For<Caching.IInstanceSchemaFunctionCache>();
         _transitionAuthorizationManager = Substitute.For<ITransitionAuthorizationManager>();
 
         var mockUoW = Substitute.For<IUnitOfWork>();
@@ -91,6 +94,7 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
+            instanceSchemaFunctionCache: _instanceSchemaFunctionCache,
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -113,9 +117,9 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.Key.ShouldBe(MasterSchemaKey);
-        result.Value.Type.ShouldBe("JSON");
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe(MasterSchemaKey);
+        result.Result.Value.Type.ShouldBe("JSON");
 
         // No forwarding when there is no active subflow.
         await _instanceQueryGateway.DidNotReceive()
@@ -142,8 +146,8 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
         // Assert — subflow's master schema is returned, parent's own schema is NOT resolved
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.Key.ShouldBe("subflow-master");
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("subflow-master");
         await _componentCacheStore.DidNotReceive()
             .GetSchemaAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
@@ -166,8 +170,8 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
 
     [Fact]
@@ -182,11 +186,134 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe("notfound");
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe("notfound");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    // ── Master function cache ────────────────────────────────────────────────
+
+    private const string TestCacheKey = "master-fn:test-domain:test-flow:key-under-test";
+
+    private void EnableCache()
+    {
+        _instanceSchemaFunctionCache.Enabled.Returns(true);
+        _instanceSchemaFunctionCache.BuildKey(Arg.Any<GetMasterInput>()).Returns(TestCacheKey);
+        _instanceSchemaFunctionCache
+            .ComputeEtag(Arg.Any<GetMasterInput>(), Arg.Any<InstanceDataFingerprint>())
+            .Returns("etag-current");
+    }
+
+    private void SetupFingerprint(Guid instanceId, bool hasActiveSubFlow = false) =>
+        _instanceRepository
+            .GetDataFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns(new InstanceDataFingerprint(instanceId, "test-key",
+                "01JD2G4YV0EXAMPLEULID0000A", "1.0.0", "review", hasActiveSubFlow));
+
+    [Fact]
+    public async Task GetMasterAsync_WhenIfNoneMatchMatchesFingerprintEtag_Returns304WithoutBuild()
+    {
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+
+        var input = CreateInput(instanceId.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetMasterAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+        await _instanceSchemaFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetMasterAsync_WhenCachedEtagMatchesCurrent_ServesFromCacheWithoutAggregateLoad()
+    {
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+        _instanceSchemaFunctionCache.GetAsync(TestCacheKey, Arg.Any<CancellationToken>())
+            .Returns(new Caching.SchemaFunctionCacheEntry
+            {
+                Etag = "etag-current",
+                Output = new GetSchemaOutput { Key = MasterSchemaKey, Type = "JSON" }
+            });
+
+        var result = await _service.GetMasterAsync(CreateInput(instanceId.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe(MasterSchemaKey);
+        result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetMasterAsync_WhenCacheMiss_BuildsAndWarmsCache()
+    {
+        var instance = CreateInstance();
+        var workflow = BuildWorkflow(withMasterSchema: true);
+        SetupCommonMocks(instance, workflow);
+        SetupMasterSchema();
+        EnableCache();
+        SetupFingerprint(instance.Id);
+
+        var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
+        await _instanceSchemaFunctionCache.Received(1).SetAsync(
+            TestCacheKey,
+            Arg.Is<Caching.SchemaFunctionCacheEntry>(e => e.Etag == "etag-current"),
+            Arg.Any<int>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetMasterAsync_WhenActiveSubFlow_BypassesCacheAndClearsForwardedEtag()
+    {
+        var instance = CreateInstanceWithActiveSubFlow();
+        var workflow = BuildWorkflow(withMasterSchema: true);
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        _instanceQueryGateway
+            .GetFunctionWithMasterAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<GetSchemaOutput>.Ok(new GetSchemaOutput
+            {
+                Key = "sub-master",
+                Type = "JSON",
+                ETag = "sub-etag-should-not-leak"
+            }));
+
+        var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("sub-master");
+        result.Result.Value!.ETag.ShouldBeNull();
+        await _instanceSchemaFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceSchemaFunctionCache.DidNotReceive()
+            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.SchemaFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetMasterAsync_WhenNoMasterSchema_DoesNotCacheFailure()
+    {
+        var instance = CreateInstance();
+        var workflow = BuildWorkflow(withMasterSchema: false);
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+
+        var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeFalse();
+        await _instanceSchemaFunctionCache.DidNotReceive()
+            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.SchemaFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
 
     private static Instance CreateInstance()
     {

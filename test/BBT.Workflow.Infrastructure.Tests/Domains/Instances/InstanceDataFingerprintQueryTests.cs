@@ -45,9 +45,10 @@ public sealed class InstanceDataFingerprintQueryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ById_ProjectsLatestDataEtagAndFlowVersion()
+    public async Task ById_ProjectsLatestDataEtagFlowVersionAndEffectiveState()
     {
         var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "dfp-by-id");
+        instance.SetEffectiveState("review");
         await SeedAsync(instance);
         var latestEtag = await SeedDataRowAsync(instance.Id, version: "1.0.1", isLatest: true);
         await SeedDataRowAsync(instance.Id, version: "1.0.0", isLatest: false);
@@ -60,6 +61,30 @@ public sealed class InstanceDataFingerprintQueryTests : IAsyncLifetime
         fingerprint.Key.ShouldBe("dfp-by-id");
         fingerprint.LatestDataEtag.ShouldBe(latestEtag);
         fingerprint.FlowVersion.ShouldBe(FlowVersion);
+        fingerprint.EffectiveState.ShouldBe("review");
+        fingerprint.HasActiveSubFlow.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task WithActiveSubFlowCorrelation_SetsHasActiveSubFlow()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "dfp-subflow");
+        instance.AddCorrelation(InstanceCorrelation.Create(
+            id: Guid.NewGuid(),
+            instanceId: instance.Id,
+            parentState: "review",
+            subFlowInstanceId: Guid.NewGuid(),
+            subFlowType: "S",
+            subFlowDomain: "sub-domain",
+            subFlowName: "sub-flow",
+            subFlowVersion: "1.0.0"));
+        await SeedAsync(instance);
+
+        await using var ctx = CreateContext();
+        var fingerprint = await QueryAsync(ctx, instance.Id.ToString());
+
+        fingerprint.ShouldNotBeNull();
+        fingerprint!.HasActiveSubFlow.ShouldBeTrue();
     }
 
     [Fact]
