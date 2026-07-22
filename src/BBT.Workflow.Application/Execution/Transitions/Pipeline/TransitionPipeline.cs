@@ -223,14 +223,15 @@ public class TransitionPipeline
                 // No further in-process work (chain complete or continuation enqueued) —
                 // apply deferred status and release chain ownership if requested
                 // (inside lock, no re-acquire needed).
-                await ApplyResolvedStatusAsync(context, cancellationToken);
-                await ApplyChainOwnershipAsync(context, cancellationToken);
-
-                // State settled (state + status finalized): fire the state-level notification if the
-                // resting state declares one. Skipped when a continuation was enqueued — the chain is
-                // not yet at rest and the settle hook fires again when the final hop completes.
-                if (!hadNextTransition)
-                    await MaybeScheduleStateNotificationAsync(context, cancellationToken);
+                await TransitionSettlement.ApplyAsync(
+                    context,
+                    context.Directives.ConsumeResolvedStatus(),
+                    context.Directives.ConsumeEndChain(),
+                    scheduleNotification: !hadNextTransition,
+                    _instanceRepository,
+                    _stateNotificationScheduler,
+                    _logger,
+                    cancellationToken);
 
                 return Result<TransitionExecutionContext>.Ok(context);
             }
@@ -327,77 +328,4 @@ public class TransitionPipeline
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }
 
-    /// <summary>
-    /// Applies the deferred resolved status to the instance.
-    /// Already within lock scope — no re-acquisition needed.
-    /// </summary>
-    private async Task ApplyResolvedStatusAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        var resolvedStatus = context.Directives.ConsumeResolvedStatus();
-        if (resolvedStatus is null)
-            return;
-
-        if (context.Instance.IsCompleted)
-            return;
-
-        if (context.Target?.SubType == StateSubType.Busy)
-            return;
-
-        if (context.Instance.ActiveCorrelations.Any(c =>
-                c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted))
-            return;
-
-        context.Instance.Active();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-
-        _logger.LogDebug(
-            "Instance {InstanceId} resolved to Active after chain completion",
-            context.InstanceId);
-    }
-
-    /// <summary>
-    /// Releases the durable chain-ownership token when the pipeline has come to rest while the
-    /// instance stays Busy (e.g. a Busy-subtype state). The auto-chain has finished, so the token
-    /// must be cleared — otherwise the chain-token gate would reject legitimate foreign transitions
-    /// and the ChainReaper would treat the resting instance as stuck. The instance status is left
-    /// unchanged (still Busy). Already within lock scope — no re-acquisition needed.
-    /// </summary>
-    private async Task ApplyChainOwnershipAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        if (!context.Directives.ConsumeEndChain())
-            return;
-
-        if (context.Instance.IsCompleted || !context.Instance.ChainToken.HasValue)
-            return;
-
-        context.Instance.EndChain();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-
-        _logger.LogDebug(
-            "Instance {InstanceId} released chain ownership at rest (stays Busy)",
-            context.InstanceId);
-    }
-
-    /// <summary>
-    /// Schedules a state-level notification job when the settled target state declares at least one
-    /// <c>state</c> notification entry. Runs at the chain's rest point — the instance state and status
-    /// are finalized and committed with the ambient UoW — so the durable job's dispatch (off the
-    /// request thread) observes the committed state. Rule evaluation and per-entry dispatch happen in
-    /// the job. Already within lock scope.
-    /// </summary>
-    private async Task MaybeScheduleStateNotificationAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        if (context.Target?.HasStateNotifications != true)
-            return;
-
-        await _stateNotificationScheduler.ScheduleAsync(context, cancellationToken);
-
-        _logger.StateNotificationScheduled(context.InstanceId, context.Target.Key);
-    }
 }

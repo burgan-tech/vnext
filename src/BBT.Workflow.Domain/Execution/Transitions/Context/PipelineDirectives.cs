@@ -289,7 +289,8 @@ public sealed class PipelineDirectives
             ResolvedStatus,
             ResumeFromOrder,
             TerminalReached,
-            Epilogue);
+            Epilogue,
+            EndChainRequested);
 
     /// <summary>
     /// Gets a value indicating whether there are deferred events waiting to be published.

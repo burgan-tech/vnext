@@ -106,6 +106,7 @@ public static class PipelineServiceCollectionExtensions
         // Post-Commit Execution (runner coordinates jobs after the lock/UoW barrier)
         services.AddScoped<IPostCommitExecutor, PostCommitExecutor>();
         services.AddScoped<IPostCommitTransitionCoordinator, PostCommitTransitionCoordinator>();
+        services.AddScoped<IPostCommitParentMutationService, PostCommitParentMutationService>();
         services.AddScoped<IPostCommitHandler<StartSubflowJob>, StartSubflowJobHandler>();
         services.AddScoped<IPostCommitHandler<ForwardToSubflowJob>, ForwardToSubflowJobHandler>();
         services.AddSingleton<IPostCommitFailurePolicy, DefaultPostCommitFailurePolicy>();
