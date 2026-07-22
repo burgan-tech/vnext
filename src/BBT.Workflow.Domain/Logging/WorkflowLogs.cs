@@ -1350,6 +1350,19 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
+    /// Logs when a lock acquisition is satisfied reentrantly because the current execution
+    /// chain already holds the same key (e.g. sync subflow completion inside the parent's
+    /// post-commit phase).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40123,
+        Level = LogLevel.Debug,
+        Message = "Transition lock {LockKey} already held by the current execution chain; acquired reentrantly")]
+    public static partial void TransitionLockReentrantAcquired(
+        this ILogger logger,
+        string lockKey);
+
+    /// <summary>
     /// Logs when the chain lock lease could not be extended between chained transitions;
     /// the chain stops instead of continuing without a held lease.
     /// </summary>

@@ -189,6 +189,73 @@ public class TransitionPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_ShouldRegisterChainLockKeyForPostCommitExecution()
+    {
+        // The sync subflow completion callback runs inside the post-commit phase and needs to
+        // see the parent chain lock as held-by-own-chain (reentrant) instead of failing acquisition.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
+
+        bool? heldDuringPostCommit = null;
+        _mockPostCommitExecutor.ExecuteAsync(
+            Arg.Any<IReadOnlyList<IPostCommitJob>>(),
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                heldDuringPostCommit = ChainLockRegistry.IsHeld(context.LockKey);
+                return PostCommitResult.Ok();
+            });
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        heldDuringPostCommit.ShouldBe(true);
+        // The registration must not leak out of the pipeline run.
+        ChainLockRegistry.IsHeld(context.LockKey).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenReservedTransition_ShouldRegisterOwnLockKeyForPostCommitExecution()
+    {
+        var context = CreateTransitionExecutionContext("cancel");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var expectedOwnKey = context.LockKey + ":reserved";
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
+
+        _mockReservedResolver
+            .IsReserved(Arg.Any<TransitionExecutionContext>())
+            .Returns(true);
+
+        bool? ownKeyHeld = null;
+        bool? mainKeyHeld = null;
+        _mockPostCommitExecutor.ExecuteAsync(
+            Arg.Any<IReadOnlyList<IPostCommitJob>>(),
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                ownKeyHeld = ChainLockRegistry.IsHeld(expectedOwnKey);
+                mainKeyHeld = ChainLockRegistry.IsHeld(context.LockKey);
+                return PostCommitResult.Ok();
+            });
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        ownKeyHeld.ShouldBe(true);
+        // The reserved path holds only its own type-specific key, never the main flow key.
+        mainKeyHeld.ShouldBe(false);
+    }
+
+    [Fact]
     public async Task RunAsync_ShouldMarkBusyImmediatelyAfterLockAcquisition()
     {
         // Arrange
