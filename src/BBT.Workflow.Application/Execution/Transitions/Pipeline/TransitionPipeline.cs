@@ -110,6 +110,11 @@ public class TransitionPipeline
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
 
+            // Mark the reserved key as held by this chain so nested acquisitions of the same
+            // key (deeper sync subflow callbacks) resolve reentrantly. AsyncLocal-scoped:
+            // expires automatically when this method returns.
+            ChainLockRegistry.Register(reservedKey);
+
             // A durable S8 checkpoint always belongs to the interrupted MAIN transition.
             // Reserved transitions (cancel/exit/update-data/timeout/long-poll ack) must never
             // resume from a foreign checkpoint — clear it in-memory so the executor builds
@@ -137,6 +142,12 @@ public class TransitionPipeline
             return Result<TransitionExecutionContext>.Fail(
                 WorkflowErrors.InstanceLockConflict(context.InstanceId));
         }
+
+        // Mark the chain lock key as held by this chain so a sync subflow completion callback
+        // running inside the post-commit phase can acquire the parent's terminal lock
+        // reentrantly instead of falling back to async Inbox delivery. AsyncLocal-scoped:
+        // expires automatically when this method returns.
+        ChainLockRegistry.Register(context.LockKey);
 
         // 4) Mark instance Busy immediately after lock acquisition
         await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
