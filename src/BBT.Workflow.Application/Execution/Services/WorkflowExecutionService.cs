@@ -80,7 +80,11 @@ public sealed class WorkflowExecutionService(
         var continuations = executionContext.Directives.ToContinuations();
         var deferredEvents = executionContext.Directives.ConsumeDeferredEvents();
         return Task.FromResult(
-            Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(outputResult.Value!, deferredEvents, continuations)));
+            Result<TransitionCoreOutput>.Ok(new TransitionCoreOutput(
+                outputResult.Value!,
+                deferredEvents,
+                continuations,
+                executionContext)));
     }
 
     /// <summary>

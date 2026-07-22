@@ -4,7 +4,6 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
-using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -26,7 +25,6 @@ public class TransitionPipeline
     private readonly IReservedTransitionResolver _reservedTransitionResolver;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
-    private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IUnitOfWorkManager _uowManager;
     private readonly ITransitionValidationService _validationService;
@@ -51,7 +49,6 @@ public class TransitionPipeline
         IReservedTransitionResolver reservedTransitionResolver,
         IInstanceBusyManager busyMarker,
         ITransitionContextFactory contextFactory,
-        IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
         IUnitOfWorkManager uowManager,
         ITransitionValidationService validationService,
@@ -66,7 +63,6 @@ public class TransitionPipeline
         _reservedTransitionResolver = reservedTransitionResolver;
         _busyMarker = busyMarker;
         _contextFactory = contextFactory;
-        _postCommitExecutor = postCommitExecutor;
         _instanceRepository = instanceRepository;
         _uowManager = uowManager;
         _validationService = validationService;
@@ -188,23 +184,23 @@ public class TransitionPipeline
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
-            // Execute post-commit jobs (inside lock scope)
-            var postCommitJobs = context.Directives.ConsumePostCommitJobs();
-            if (postCommitJobs.Count > 0)
+            // A post-commit job marks the handoff boundary. The runner owns executing this
+            // remote work after the originating UoW has committed and this lock scope ends.
+            // Do not consume the jobs: it returns the intact directives to the runner.
+            if (context.Directives.PostCommitJobs.Count > 0)
             {
-                var postCommitResult = await _postCommitExecutor.ExecuteAsync(postCommitJobs, context, cancellationToken);
-                if (!postCommitResult.IsSuccess)
+                // Enqueued continuations must still be persisted in the originating UoW before
+                // we return the barrier. Inline continuations remain in directives so the runner
+                // can orchestrate them after the handoff.
+                if (context.EnqueueContinuations)
                 {
-                    if (postCommitResult.FaultRequest is not null)
-                    {
-                        await MarkInstanceFaultedFromPostCommitAsync(context, postCommitResult.FaultRequest, cancellationToken);
-                        return Result<TransitionExecutionContext>.Ok(context);
-                    }
-
-                    var error = postCommitResult.Error
-                        ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed without error details");
-                    return Result<TransitionExecutionContext>.Fail(error);
+                    var enqueueResult = await _continuationDispatcher.DispatchAsync(
+                        ContinuationMode.Enqueue, context, cancellationToken);
+                    if (!enqueueResult.IsSuccess)
+                        return Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
                 }
+
+                return Result<TransitionExecutionContext>.Ok(context);
             }
 
             // Realize the continuation. Inline = in-process auto-chain (sync); Enqueue =
@@ -331,44 +327,6 @@ public class TransitionPipeline
         await faultUow.CommitAsync(cancellationToken);
 
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
-    }
-
-    /// <summary>
-    /// Marks the workflow instance as faulted due to a post-commit failure.
-    /// Already within lock scope — no re-acquisition needed.
-    /// Uses the context's instance directly since we never released the lock.
-    /// </summary>
-    private async Task MarkInstanceFaultedFromPostCommitAsync(
-        TransitionExecutionContext context,
-        PostCommitFaultRequest faultRequest,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogWarning(
-            "Marking instance {InstanceId} as faulted due to post-commit failure: {ErrorCode} - {ErrorMessage}",
-            context.InstanceId, faultRequest.ErrorCode, faultRequest.ErrorMessage);
-
-        if (!context.Instance.HasActiveIncident)
-        {
-            var incident = InstanceIncidentFactory.Create(
-                state: context.Instance.GetCurrentState,
-                transition: context.TransitionKey,
-                taskKey: null,
-                message: faultRequest.ErrorMessage ?? "Post-commit execution failed",
-                errorCode: faultRequest.ErrorCode,
-                errorLayer: "PostCommit",
-                stackTrace: faultRequest.StackTrace,
-                traceId: context.TraceId);
-
-            context.Instance.AddIncident(incident);
-        }
-
-        context.Instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
-        context.ExtractAndDeferInstanceEvents();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-
-        _logger.LogInformation(
-            "Instance {InstanceId} marked as faulted successfully",
-            context.InstanceId);
     }
 
     /// <summary>
