@@ -175,23 +175,25 @@ public sealed class PipelineDirectives
     }
 
     /// <summary>
-    /// Gets the deferred instance status to be applied after all pipeline work
-    /// (including post-commit jobs) completes.
-    /// When set, the actual status update is deferred until the pipeline
-    /// returns control to the caller.
+    /// Gets the deferred instance status for chain settlement. When no post-commit jobs are
+    /// pending, the pipeline settles it at the in-lock rest point. When a post-commit barrier is
+    /// present, it remains in the preserved directives snapshot for runner-owned settlement after
+    /// the handoff.
     /// </summary>
     public InstanceStatus? ResolvedStatus { get; private set; }
 
     /// <summary>
     /// Sets the deferred resolved status.
-    /// The status will be applied after post-commit jobs complete.
+    /// It is settled by the pipeline on the no-post-commit path, or by runner-owned orchestration
+    /// from the preserved snapshot after a post-commit barrier.
     /// </summary>
     /// <param name="status">The status to defer.</param>
     public void SetResolvedStatus(InstanceStatus status) => ResolvedStatus = status;
 
     /// <summary>
     /// Consumes and clears the resolved status.
-    /// Called by the pipeline after post-commit jobs complete.
+    /// Called by the pipeline only on the no-post-commit path; after a post-commit barrier, the
+    /// runner consumes the preserved snapshot during post-handoff settlement.
     /// </summary>
     /// <returns>The deferred status, or null if none was set.</returns>
     public InstanceStatus? ConsumeResolvedStatus()
