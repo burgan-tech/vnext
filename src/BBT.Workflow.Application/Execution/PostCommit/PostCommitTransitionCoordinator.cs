@@ -80,7 +80,15 @@ public sealed class PostCommitTransitionCoordinator(
                 CreateOwnershipError("Post-commit jobs cannot mix parent and child continuation ownership."));
         }
 
-        return Result<PostCommitContinuationBehavior>.Ok(ownership[0]);
+        return ownership[0] switch
+        {
+            PostCommitContinuationBehavior.HandoffToChild =>
+                Result<PostCommitContinuationBehavior>.Ok(PostCommitContinuationBehavior.HandoffToChild),
+            PostCommitContinuationBehavior.ContinueParent =>
+                Result<PostCommitContinuationBehavior>.Ok(PostCommitContinuationBehavior.ContinueParent),
+            var invalid => Result<PostCommitContinuationBehavior>.Fail(
+                CreateOwnershipError($"Undefined post-commit continuation ownership value: {(int)invalid}."))
+        };
     }
 
     private static Error CreateOwnershipError(string message) =>

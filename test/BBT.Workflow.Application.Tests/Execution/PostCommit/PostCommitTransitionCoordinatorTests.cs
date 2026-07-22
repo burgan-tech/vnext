@@ -164,6 +164,28 @@ public sealed class PostCommitTransitionCoordinatorTests
             .ExecuteAsync(default!, default!, default);
     }
 
+    [Fact]
+    public async Task CoordinateAsync_WhenJobHasUndefinedContinuationOwnership_ShouldRejectBeforeExecution()
+    {
+        var source = CreateContext();
+        source.Directives.EnqueuePostCommit(
+            new TestContinuationJob((PostCommitContinuationBehavior)99));
+        source.Directives.RequestNextTransition(new NextTransitionRequest("must-not-dispatch", "automatic"));
+        _executor.ExecuteAsync(
+                Arg.Any<IReadOnlyList<IPostCommitJob>>(),
+                source,
+                Arg.Any<CancellationToken>())
+            .Returns(PostCommitResult.Ok());
+        var coordinator = CreateCoordinator(new RecordingInlineStrategy());
+
+        var result = await coordinator.CoordinateAsync(source, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConfigInvalid);
+        await _executor.DidNotReceiveWithAnyArgs()
+            .ExecuteAsync(default!, default!, default);
+    }
+
     private PostCommitTransitionCoordinator CreateCoordinator(IContinuationStrategy inlineStrategy) =>
         new(_executor, new ContinuationDispatcher([inlineStrategy]));
 
