@@ -33,7 +33,6 @@ public class TransitionPipelineTests
     private readonly IReservedTransitionResolver _mockReservedResolver;
     private readonly IInstanceBusyManager _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
-    private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
     private readonly IUnitOfWorkManager _mockUowManager;
     private readonly ITransitionValidationService _mockValidationService;
@@ -48,7 +47,6 @@ public class TransitionPipelineTests
         _mockReservedResolver = Substitute.For<IReservedTransitionResolver>();
         _mockBusyMarker = Substitute.For<IInstanceBusyManager>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
-        _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
         _mockUowManager = Substitute.For<IUnitOfWorkManager>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
@@ -200,8 +198,6 @@ public class TransitionPipelineTests
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        await _mockPostCommitExecutor.DidNotReceiveWithAnyArgs()
-            .ExecuteAsync(default!, default!, default);
         result.Value!.Directives.PostCommitJobs.Count.ShouldBe(1);
         result.Value.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
         result.Value.Directives.NextTransition.ShouldBeSameAs(next);

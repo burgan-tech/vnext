@@ -91,9 +91,9 @@ public class TransitionPipeline
         if (context.SkipImmediateExecution)
             return Result<TransitionExecutionContext>.Ok(context);
 
-        // 2) Reserved transitions — each acquires its own type-specific lock that is independent
-        //    of the main flow lock, so they can run even while a normal transition holds L1
-        //    (e.g., sync subflow resume triggered inside the parent's post-commit phase).
+        // 2) Reserved transitions acquire their own type-specific lock independently of the main
+        //    flow lock. Post-commit work begins only after this pipeline returns and lock
+        //    registration ends, so this path does not depend on nested callback reentrancy.
         if (_reservedTransitionResolver.IsReserved(context))
         {
             var reservedKey = _reservedTransitionResolver.GetOwnLockKey(context);
@@ -106,9 +106,8 @@ public class TransitionPipeline
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
 
-            // Mark the reserved key as held by this chain so nested acquisitions of the same
-            // key (deeper sync subflow callbacks) resolve reentrantly. AsyncLocal-scoped:
-            // expires automatically when this method returns.
+            // Mark the reserved key as held only for this pipeline invocation. AsyncLocal-scoped:
+            // it expires when this method returns, before runner-owned post-commit work begins.
             ChainLockRegistry.Register(reservedKey);
 
             // A durable S8 checkpoint always belongs to the interrupted MAIN transition.
@@ -139,10 +138,9 @@ public class TransitionPipeline
                 WorkflowErrors.InstanceLockConflict(context.InstanceId));
         }
 
-        // Mark the chain lock key as held by this chain so a sync subflow completion callback
-        // running inside the post-commit phase can acquire the parent's terminal lock
-        // reentrantly instead of falling back to async Inbox delivery. AsyncLocal-scoped:
-        // expires automatically when this method returns.
+        // Mark the chain lock key as held for work within this pipeline invocation. AsyncLocal-
+        // scoped registration expires when this method returns; runner-owned post-commit work
+        // starts only after that handoff, once the lock registration has ended.
         ChainLockRegistry.Register(context.LockKey);
 
         // 4) Mark instance Busy immediately after lock acquisition
