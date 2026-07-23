@@ -279,6 +279,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     private readonly List<InstanceData> _dataList = new();
     private readonly Lock _dataListLock = new(); // Thread-safe lock for data operations
+    private InstanceDataChangeTracker? _dataChangeTracker;
 
     /// <summary>
     /// Child Correlations
@@ -350,7 +351,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             CreatedByBehalfOf = CreatedByBehalfOf,
             ModifiedBy = ModifiedBy,
             ModifiedByBehalfOf = ModifiedByBehalfOf,
-            ExtraProperties = new ExtraPropertyDictionary(ExtraProperties)
+            ExtraProperties = new ExtraPropertyDictionary(ExtraProperties),
+            IsDataPartiallyLoaded = IsDataPartiallyLoaded
         };
 
         foreach (var data in _dataList)
@@ -366,6 +368,42 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         snapshot._incidents = _incidents.ToList();
 
         return snapshot;
+    }
+
+    public Instance CreateTrackedDataSnapshot()
+    {
+        var snapshot = CreateSnapshot();
+        snapshot._dataChangeTracker = new InstanceDataChangeTracker(snapshot.LatestData);
+        return snapshot;
+    }
+
+    public InstanceDataChangeSet? GetPendingDataChangeSet() =>
+        _dataChangeTracker?.GetChangeSet(Id);
+
+    public void AcknowledgeDataChanges(InstanceData latestData) =>
+        _dataChangeTracker?.Acknowledge(latestData);
+
+    internal Instance CreateReconciliationSnapshot(InstanceDataHead? head)
+    {
+        var snapshot = CreateSnapshot();
+        snapshot._dataList.Clear();
+        if (head is not null)
+            snapshot._dataList.Add(InstanceData.Rehydrate(Id, head));
+        snapshot.IsDataPartiallyLoaded = true;
+        return snapshot;
+    }
+
+    internal void SynchronizePartiallyLoadedData(IReadOnlyList<InstanceData> persistedData)
+    {
+        if (!IsDataPartiallyLoaded)
+            throw new InvalidOperationException("Reconciliation synchronization requires a latest-only aggregate.");
+
+        lock (_dataListLock)
+        {
+            _dataList.Clear();
+            foreach (var data in persistedData.OrderBy(x => x.VersionNo))
+                _dataList.Add(data);
+        }
     }
 
     /// <summary>
@@ -1009,6 +1047,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     {
         lock (_dataListLock)
         {
+            var resolvedStrategy = versionStrategy ?? VersionStrategy.None;
             var lastData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
 
             // If we have existing data, check if the new data is different
@@ -1034,12 +1073,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 newData = lastData.NewVersion(
                     id,
                     inputData,
-                    versionStrategy ?? VersionStrategy.None,
+                    resolvedStrategy,
                     GetNextHistorySequence(lastData.Version)
                 );
             }
 
             _dataList.Add(newData);
+            _dataChangeTracker?.Record(id, inputData, resolvedStrategy);
             return newData;
         }
     }

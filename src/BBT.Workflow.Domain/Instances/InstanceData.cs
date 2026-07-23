@@ -141,6 +141,20 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         return snapshot;
     }
 
+    internal static InstanceData Rehydrate(Guid instanceId, InstanceDataHead head) => new()
+    {
+        Id = head.DataId,
+        InstanceId = instanceId,
+        Version = head.Version,
+        HistorySequence = head.HistorySequence,
+        VersionNo = head.VersionNo,
+        IsLatest = true,
+        ETag = head.ETag,
+        DataHash = head.DataHash,
+        Data = new JsonData(head.Data.Json),
+        EnteredAt = head.EnteredAt
+    };
+
 
     /// <summary>
     /// Checks if the provided JSON data has the same content as this instance's data
