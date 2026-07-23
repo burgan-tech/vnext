@@ -400,9 +400,28 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
         lock (_dataListLock)
         {
-            _dataList.Clear();
             foreach (var data in persistedData.OrderBy(x => x.VersionNo))
-                _dataList.Add(data);
+            {
+                var existingData = _dataList.FirstOrDefault(x => x.Id == data.Id);
+                if (existingData is null)
+                {
+                    _dataList.Add(data);
+                }
+                else if (!data.IsLatest)
+                {
+                    existingData.MarkAsNotLatest();
+                }
+            }
+
+            var latestData = _dataList
+                .Where(x => x.IsLatest)
+                .OrderByDescending(x => x, InstanceDataVersionComparer.Instance)
+                .FirstOrDefault();
+            if (latestData is not null)
+            {
+                foreach (var data in _dataList.Where(x => x.IsLatest && x.Id != latestData.Id))
+                    data.MarkAsNotLatest();
+            }
         }
     }
 

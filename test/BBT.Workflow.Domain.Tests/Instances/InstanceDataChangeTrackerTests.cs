@@ -78,6 +78,46 @@ public sealed class InstanceDataChangeTrackerTests : DomainTestBase<DomainEntryP
         Assert.Single(changes.Contributions);
     }
 
+    [Fact]
+    public void SynchronizePartiallyLoadedData_should_preserve_the_loaded_head_and_add_each_persisted_row_once()
+    {
+        var instance = CreateWithData("{\"value\":1}");
+        instance.MarkDataPartiallyLoaded();
+        var snapshot = instance.CreateTrackedDataSnapshot();
+        var loadedHead = snapshot.LatestData!;
+        var persistedLoadedHead = InstanceData.Rehydrate(snapshot.Id, new InstanceDataHead(
+            loadedHead.Id,
+            loadedHead.ETag,
+            loadedHead.Version,
+            loadedHead.VersionNo,
+            loadedHead.HistorySequence,
+            loadedHead.DataHash,
+            loadedHead.Data,
+            loadedHead.EnteredAt));
+        persistedLoadedHead.MarkAsNotLatest();
+        var persistedLatest = new InstanceData(
+            Guid.NewGuid(),
+            snapshot.Id,
+            "1.0.1",
+            JsonData.CreateFrom("{\"value\":2}"),
+            true,
+            loadedHead.HistorySequence + 1)
+        {
+            VersionNo = loadedHead.VersionNo + 1
+        };
+        var persistedData = new[] { persistedLoadedHead, persistedLatest };
+
+        snapshot.SynchronizePartiallyLoadedData(persistedData);
+        snapshot.SynchronizePartiallyLoadedData(persistedData);
+
+        Assert.Same(loadedHead, Assert.Single(snapshot.DataList, x => x.Id == loadedHead.Id));
+        Assert.False(loadedHead.IsLatest);
+        Assert.Single(snapshot.DataList, x => x.Id == persistedLatest.Id);
+        Assert.Single(snapshot.DataList, x => x.IsLatest);
+        Assert.Same(persistedLatest, snapshot.LatestData);
+        Assert.True(snapshot.IsDataPartiallyLoaded);
+    }
+
     private static Instance CreateWithData(string json)
     {
         var instance = InstanceFactory.CreateDefault();
