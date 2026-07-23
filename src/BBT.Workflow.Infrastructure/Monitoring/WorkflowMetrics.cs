@@ -716,4 +716,70 @@ public static class WorkflowMetrics
         .CreateCounter("workflow_subflow_error_propagation_total",
             "SubFlow error propagation events",
             new[] { "parent_workflow", "child_workflow", "propagated" });
+
+    // Instance data reconciliation metrics
+    /// <summary>
+    /// Total instance data reconciliation operations counter with flow, pipeline_step,
+    /// result, and rebased labels.
+    /// </summary>
+    public static readonly Counter InstanceDataReconciliations = Metrics
+        .CreateCounter("workflow_instance_data_reconciliation_total",
+            "Total instance data reconciliation operations",
+            new[] { "flow", "pipeline_step", "result", "rebased" });
+
+    /// <summary>
+    /// Total optimistic-append conflicts encountered during instance data reconciliation
+    /// with flow and pipeline_step labels.
+    /// </summary>
+    public static readonly Counter InstanceDataReconciliationConflicts = Metrics
+        .CreateCounter("workflow_instance_data_reconciliation_conflicts_total",
+            "Total optimistic-append conflicts during instance data reconciliation",
+            new[] { "flow", "pipeline_step" });
+
+    /// <summary>
+    /// Total instance data reconciliation operations that exhausted the bounded retry
+    /// budget with flow and pipeline_step labels.
+    /// </summary>
+    public static readonly Counter InstanceDataReconciliationExhausted = Metrics
+        .CreateCounter("workflow_instance_data_reconciliation_exhausted_total",
+            "Total instance data reconciliation operations that exhausted retries",
+            new[] { "flow", "pipeline_step" });
+
+    /// <summary>
+    /// Attempts consumed per instance data reconciliation operation histogram with flow
+    /// and pipeline_step labels. Buckets match the bounded retry budget (max 5).
+    /// </summary>
+    public static readonly Histogram InstanceDataReconciliationAttempts = Metrics
+        .CreateHistogram("workflow_instance_data_reconciliation_attempts",
+            "Attempts consumed per instance data reconciliation operation",
+            new[] { "flow", "pipeline_step" },
+            new HistogramConfiguration
+            {
+                Buckets = new[] { 1.0, 2, 3, 4, 5 }
+            });
+
+    /// <summary>
+    /// Instance data reconciliation duration histogram with flow and pipeline_step labels.
+    /// </summary>
+    public static readonly Histogram InstanceDataReconciliationDuration = Metrics
+        .CreateHistogram("workflow_instance_data_reconciliation_duration_seconds",
+            "Instance data reconciliation duration",
+            new[] { "flow", "pipeline_step" },
+            new HistogramConfiguration
+            {
+                Buckets = new[] { 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 }
+            });
+
+    /// <summary>
+    /// Journaled contributions per instance data reconciliation operation histogram with
+    /// flow and pipeline_step labels.
+    /// </summary>
+    public static readonly Histogram InstanceDataReconciliationContributions = Metrics
+        .CreateHistogram("workflow_instance_data_reconciliation_contributions",
+            "Journaled contributions per instance data reconciliation operation",
+            new[] { "flow", "pipeline_step" },
+            new HistogramConfiguration
+            {
+                Buckets = new[] { 1.0, 2, 3, 5, 8, 13, 21 }
+            });
 }

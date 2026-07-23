@@ -1,11 +1,16 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Transitions.Services;
 
 public sealed class InstanceDataReconciliationService(
-    IInstanceDataConcurrencyRepository repository) : IInstanceDataReconciliationService
+    IInstanceDataConcurrencyRepository repository,
+    ILogger<InstanceDataReconciliationService> logger,
+    IWorkflowMetrics metrics) : IInstanceDataReconciliationService
 {
     internal const int MaxAttempts = 5;
 
@@ -23,6 +28,25 @@ public sealed class InstanceDataReconciliationService(
         var contributions = changeSet.Contributions.OrderBy(x => x.Order).ToArray();
         var head = GetValidatedInitialHead(instance, changeSet);
 
+        // Observability context: the pipeline step and transition key are read from the
+        // ambient Activity tags so the approved reconciliation interface stays unchanged;
+        // "unknown" is the documented fallback when the tags are not set.
+        var pipelineStep = Activity.Current?.GetTagItem("workflow.pipeline.step")?.ToString() ?? "unknown";
+        var transitionKey = Activity.Current?.GetTagItem("workflow.transition.key")?.ToString() ?? "unknown";
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var conflictCount = 0;
+
+        void RecordMetric(string result, bool rebased, int attempts) =>
+            metrics.RecordInstanceDataReconciliation(
+                instance.Flow,
+                pipelineStep,
+                result,
+                rebased,
+                attempts,
+                Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds,
+                contributions.Length,
+                conflictCount);
+
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             if (attempt > 1)
@@ -31,6 +55,7 @@ public sealed class InstanceDataReconciliationService(
             var working = instance.CreateReconciliationSnapshot(head);
             if (attempt > 1 && IsCompleteBatchAlreadyApplied(head, contributions))
             {
+                RecordMetric("applied", rebased: true, attempt);
                 return Result<InstanceDataReconciliationResult>.Ok(
                     new InstanceDataReconciliationResult(
                         working.LatestData!,
@@ -42,6 +67,7 @@ public sealed class InstanceDataReconciliationService(
             var appended = Replay(working, contributions);
             if (appended.Count == 0)
             {
+                RecordMetric("no_change", rebased: attempt > 1, attempt);
                 return Result<InstanceDataReconciliationResult>.Ok(
                     new InstanceDataReconciliationResult(
                         working.LatestData!,
@@ -58,12 +84,19 @@ public sealed class InstanceDataReconciliationService(
                 cancellationToken);
 
             if (appendResult.Error is not null)
+            {
+                RecordMetric("failed", rebased: attempt > 1, attempt);
                 return Result<InstanceDataReconciliationResult>.Fail(appendResult.Error.Value);
+            }
 
             if (appendResult.Status is ConditionalAppendStatus.Applied or ConditionalAppendStatus.NoChange)
             {
                 var latestData = appendResult.LatestData ?? throw new InvalidOperationException(
                     $"Conditional append status '{appendResult.Status}' requires a latest data row.");
+                RecordMetric(
+                    appendResult.Status == ConditionalAppendStatus.Applied ? "applied" : "no_change",
+                    rebased: attempt > 1,
+                    attempt);
                 return Result<InstanceDataReconciliationResult>.Ok(
                     new InstanceDataReconciliationResult(
                         latestData,
@@ -77,7 +110,25 @@ public sealed class InstanceDataReconciliationService(
                 throw new InvalidOperationException(
                     $"Unsupported conditional append status '{appendResult.Status}'.");
             }
+
+            conflictCount++;
+            logger.InstanceDataReconciliationConflict(
+                instance.Id,
+                head?.DataId ?? Guid.Empty,
+                appendResult.ObservedHead?.DataId,
+                attempt,
+                contributions.Length,
+                pipelineStep,
+                transitionKey);
         }
+
+        logger.InstanceDataReconciliationExhausted(
+            instance.Id,
+            MaxAttempts,
+            contributions.Length,
+            pipelineStep,
+            transitionKey);
+        RecordMetric("exhausted", rebased: true, MaxAttempts);
 
         return Result<InstanceDataReconciliationResult>.Fail(
             WorkflowErrors.InstanceDataConcurrencyConflict(instance.Id, MaxAttempts));

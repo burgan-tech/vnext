@@ -634,4 +634,49 @@ public sealed class PrometheusWorkflowMetrics : IWorkflowMetrics
     }
 
     #endregion
+
+    #region Instance Data Reconciliation Metrics
+
+    public void RecordInstanceDataReconciliation(
+        string flow,
+        string pipelineStep,
+        string result,
+        bool rebased,
+        int attempts,
+        double durationSeconds,
+        int contributions,
+        int conflicts)
+    {
+        WorkflowMetrics.InstanceDataReconciliations
+            .WithLabels(flow, pipelineStep, result, rebased ? "true" : "false")
+            .Inc();
+
+        if (conflicts > 0)
+        {
+            WorkflowMetrics.InstanceDataReconciliationConflicts
+                .WithLabels(flow, pipelineStep)
+                .Inc(conflicts);
+        }
+
+        if (result == "exhausted")
+        {
+            WorkflowMetrics.InstanceDataReconciliationExhausted
+                .WithLabels(flow, pipelineStep)
+                .Inc();
+        }
+
+        WorkflowMetrics.InstanceDataReconciliationAttempts
+            .WithLabels(flow, pipelineStep)
+            .Observe(attempts);
+
+        WorkflowMetrics.InstanceDataReconciliationDuration
+            .WithLabels(flow, pipelineStep)
+            .Observe(durationSeconds);
+
+        WorkflowMetrics.InstanceDataReconciliationContributions
+            .WithLabels(flow, pipelineStep)
+            .Observe(contributions);
+    }
+
+    #endregion
 }

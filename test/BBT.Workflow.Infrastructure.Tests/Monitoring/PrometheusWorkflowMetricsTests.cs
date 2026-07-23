@@ -441,6 +441,39 @@ public sealed class PrometheusWorkflowMetricsTests
 
     #endregion
 
+    #region Instance Data Reconciliation Metrics Tests
+
+    [Fact]
+    public void Reconciliation_metrics_should_accept_only_approved_labels()
+    {
+        // Act & Assert - labels are flow, pipeline_step, result, rebased only;
+        // attempts/duration/contributions are histogram observations.
+        Should.NotThrow(() => _metrics.RecordInstanceDataReconciliation(
+            "flow-a", "OnExecute", "applied", rebased: true,
+            attempts: 2, durationSeconds: 0.01, contributions: 1, conflicts: 1));
+    }
+
+    [Fact]
+    public void Reconciliation_metrics_exhausted_result_should_not_throw()
+    {
+        Should.NotThrow(() => _metrics.RecordInstanceDataReconciliation(
+            "flow-a", "OnEntry", "exhausted", rebased: true,
+            attempts: 5, durationSeconds: 0.5, contributions: 2, conflicts: 5));
+    }
+
+    [Fact]
+    public void Reconciliation_metrics_repeated_calls_should_not_register_duplicate_collectors()
+    {
+        // prometheus-net collectors are static; a second metrics instance must reuse them.
+        var second = new PrometheusWorkflowMetrics();
+
+        Should.NotThrow(() => second.RecordInstanceDataReconciliation(
+            "flow-b", "OnExit", "failed", rebased: false,
+            attempts: 1, durationSeconds: 0.001, contributions: 3, conflicts: 0));
+    }
+
+    #endregion
+
     #region Error Metrics Tests
 
     [Fact]

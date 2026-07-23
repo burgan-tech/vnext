@@ -6,6 +6,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
 using BBT.Workflow.Logging;
+using Microsoft.Extensions.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Tasks.Coordinator;
@@ -25,7 +26,8 @@ public sealed class RunOnExitTasksStep(
     IInstanceRepository instanceRepository,
     IInstanceTaskRepository instanceTaskRepository,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IScriptDataChangeApplicator scriptDataChangeApplicator) : ITransitionStep
+    IScriptDataChangeApplicator scriptDataChangeApplicator,
+    ILogger<RunOnExitTasksStep> logger) : ITransitionStep
 {
     /// <summary>
     /// Context key for storing failed OnExecuteTask for Error Boundary.
@@ -79,7 +81,21 @@ public sealed class RunOnExitTasksStep(
             // Apply script context changes before handling boundary
             var boundaryApplyResult = await scriptDataChangeApplicator.ApplyAsync(context, scriptContext, cancellationToken);
             if (!boundaryApplyResult.IsSuccess)
+            {
+                // The apply failure preempts BoundaryOutcomeHandler and replaces the original
+                // task error — surface it before returning (codes/ids only, no payloads).
+                if (tasksResult.TaskError is { } suppressedError)
+                {
+                    logger.BoundaryPathTaskErrorSuppressed(
+                        context.InstanceId,
+                        context.TransitionKey,
+                        "OnExit",
+                        suppressedError.ToError().Code,
+                        suppressedError.ErrorMessage);
+                }
+
                 return Result<StepOutcome>.Fail(boundaryApplyResult.Error);
+            }
             await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
             return BoundaryOutcomeHandler.Handle(context, tasksResult);

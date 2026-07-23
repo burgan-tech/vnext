@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.Transitions.Services;
@@ -12,6 +15,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -66,28 +70,80 @@ public sealed class TaskStepDataReconciliationTests
             .UpdateAsync(default!, default, default);
     }
 
+    [Theory]
+    [InlineData(typeof(RunOnExecuteTasksStep))]
+    [InlineData(typeof(RunOnExitTasksStep))]
+    [InlineData(typeof(RunOnEntryTasksStep))]
+    public async Task Boundary_path_applicator_failure_should_surface_applicator_error_and_log_suppressed_task_error(
+        Type stepType)
+    {
+        var fixture = TaskStepFixture.Create(stepType, taskFailsWithBoundary: true);
+        fixture.Applicator.ApplyAsync(default!, default!, default)
+            .ReturnsForAnyArgs(Result.Fail(
+                WorkflowErrors.InstanceDataConcurrencyConflict(fixture.Instance.Id, 5)));
+
+        var result = await fixture.ExecuteAsync();
+
+        // The applicator failure preempts BoundaryOutcomeHandler and replaces the task error.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceDataConcurrencyConflict);
+        fixture.TaskCoordinatorExecutionCount.ShouldBe(1);
+        await fixture.InstanceRepository.DidNotReceiveWithAnyArgs()
+            .UpdateAsync(default!, default, default);
+
+        // The suppressed original task error must be logged (WorkflowLogs EventId 10112).
+        fixture.LoggedEventIds.ShouldContain(10112);
+    }
+
     private sealed class TaskStepFixture
     {
         private int _taskCoordinatorExecutionCount;
+
+        private readonly List<int> _loggedEventIds;
 
         private TaskStepFixture(
             ITransitionStep step,
             TransitionExecutionContext context,
             ITaskCoordinatorExtended taskCoordinator,
             IInstanceRepository instanceRepository,
-            IScriptDataChangeApplicator applicator)
+            IScriptDataChangeApplicator applicator,
+            OnExecuteTask task,
+            bool taskFailsWithBoundary,
+            List<int> loggedEventIds)
         {
             Step = step;
             Context = context;
             InstanceRepository = instanceRepository;
             Applicator = applicator;
+            _loggedEventIds = loggedEventIds;
 
             taskCoordinator.ExecuteWithDetailsAsync(
                     default!, default, default, default, default!, default!, default)
                 .ReturnsForAnyArgs(_ =>
                 {
                     Interlocked.Increment(ref _taskCoordinatorExecutionCount);
-                    return Result<TasksExecutionResult>.Ok(new TasksExecutionResult { IsSuccess = true });
+                    return Result<TasksExecutionResult>.Ok(taskFailsWithBoundary
+                        ? new TasksExecutionResult
+                        {
+                            IsSuccess = false,
+                            HasFailedTasks = true,
+                            FailedTaskKeys = ["task-1"],
+                            FailedTask = task,
+                            TaskError = new ExecutionError
+                            {
+                                TaskKey = "task-1",
+                                TaskType = "Http",
+                                StatusCode = 500,
+                                ErrorMessage = "upstream failed",
+                                NormalizedError = new NormalizedError { Code = "500" }
+                            },
+                            BoundaryAction = new BoundaryActionResult
+                            {
+                                Action = ErrorAction.Abort,
+                                TransitionKey = "on-error"
+                            }
+                        }
+                        : new TasksExecutionResult { IsSuccess = true });
                 });
         }
 
@@ -97,11 +153,12 @@ public sealed class TaskStepDataReconciliationTests
         public IScriptDataChangeApplicator Applicator { get; }
         public Instance Instance => Context.Instance;
         public int TaskCoordinatorExecutionCount => _taskCoordinatorExecutionCount;
+        public IReadOnlyList<int> LoggedEventIds => _loggedEventIds;
 
         public Task<Result<StepOutcome>> ExecuteAsync() =>
             Step.ExecuteAsync(Context, CancellationToken.None);
 
-        public static TaskStepFixture Create(Type stepType)
+        public static TaskStepFixture Create(Type stepType, bool taskFailsWithBoundary = false)
         {
             var taskCoordinator = Substitute.For<ITaskCoordinatorExtended>();
             var scriptContextFactory = Substitute.For<IScriptContextFactory>();
@@ -148,21 +205,50 @@ public sealed class TaskStepDataReconciliationTests
                 .SetInstance(instance.CreateTrackedDataSnapshot())
                 .Build();
 
+            var loggedEventIds = new List<int>();
             ITransitionStep step = stepType switch
             {
                 _ when stepType == typeof(RunOnExecuteTasksStep) => new RunOnExecuteTasksStep(
                     taskCoordinator, scriptContextFactory, instanceRepository,
-                    instanceTaskRepository, runtimeInfoProvider, applicator),
+                    instanceTaskRepository, runtimeInfoProvider, applicator,
+                    new CapturingLogger<RunOnExecuteTasksStep>(loggedEventIds)),
                 _ when stepType == typeof(RunOnExitTasksStep) => new RunOnExitTasksStep(
                     taskCoordinator, scriptContextFactory, instanceRepository,
-                    instanceTaskRepository, runtimeInfoProvider, applicator),
+                    instanceTaskRepository, runtimeInfoProvider, applicator,
+                    new CapturingLogger<RunOnExitTasksStep>(loggedEventIds)),
                 _ when stepType == typeof(RunOnEntryTasksStep) => new RunOnEntryTasksStep(
                     taskCoordinator, scriptContextFactory, instanceRepository,
-                    instanceTaskRepository, runtimeInfoProvider, applicator),
+                    instanceTaskRepository, runtimeInfoProvider, applicator,
+                    new CapturingLogger<RunOnEntryTasksStep>(loggedEventIds)),
                 _ => throw new ArgumentOutOfRangeException(nameof(stepType), stepType, "Unsupported step type.")
             };
 
-            return new TaskStepFixture(step, context, taskCoordinator, instanceRepository, applicator);
+            return new TaskStepFixture(
+                step, context, taskCoordinator, instanceRepository, applicator,
+                task, taskFailsWithBoundary, loggedEventIds);
+        }
+    }
+
+    /// <summary>
+    /// Minimal logger that records emitted EventIds for log-path assertions.
+    /// </summary>
+    private sealed class CapturingLogger<T>(List<int> sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (sink)
+            {
+                sink.Add(eventId.Id);
+            }
         }
     }
 }

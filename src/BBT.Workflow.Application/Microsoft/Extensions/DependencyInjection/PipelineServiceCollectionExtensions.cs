@@ -45,6 +45,11 @@ public static class PipelineServiceCollectionExtensions
         // Transition Data Mapping Service
         services.AddScoped<ITransitionDataMapper, TransitionDataMapper>();
 
+        // Instance Data Reconciliation (optimistic conditional append + bounded rebase retries)
+        // consumed by the task steps through IScriptDataChangeApplicator.
+        services.AddScoped<IInstanceDataReconciliationService, InstanceDataReconciliationService>();
+        services.AddScoped<IScriptDataChangeApplicator, ScriptDataChangeApplicator>();
+
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
 

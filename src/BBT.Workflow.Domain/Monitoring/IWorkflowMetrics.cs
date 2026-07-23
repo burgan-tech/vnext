@@ -609,4 +609,32 @@ public interface IWorkflowMetrics
     void RecordSubFlowErrorPropagation(string parentWorkflow, string childWorkflow, bool propagated);
 
     #endregion
+
+    #region Instance Data Reconciliation Metrics
+
+    /// <summary>
+    /// Records one completed instance data reconciliation operation (optimistic conditional
+    /// append with bounded rebase retries). Labels are limited to low-cardinality values
+    /// (flow, pipeline step, result, rebased); attempts, duration, and contribution count
+    /// are observed as histogram values, never labels.
+    /// </summary>
+    /// <param name="flow">Workflow (flow) identifier</param>
+    /// <param name="pipelineStep">Pipeline task phase (e.g. OnExecute/OnExit/OnEntry) or "unknown"</param>
+    /// <param name="result">Operation result (applied, no_change, failed, exhausted)</param>
+    /// <param name="rebased">Whether the operation needed at least one rebase retry</param>
+    /// <param name="attempts">Total attempts consumed (observed on the attempts histogram)</param>
+    /// <param name="durationSeconds">Total reconciliation duration in seconds (histogram observation)</param>
+    /// <param name="contributions">Number of journaled contributions in the change set (histogram observation)</param>
+    /// <param name="conflicts">Number of optimistic-append conflicts encountered (conflict counter increments)</param>
+    void RecordInstanceDataReconciliation(
+        string flow,
+        string pipelineStep,
+        string result,
+        bool rebased,
+        int attempts,
+        double durationSeconds,
+        int contributions,
+        int conflicts);
+
+    #endregion
 }

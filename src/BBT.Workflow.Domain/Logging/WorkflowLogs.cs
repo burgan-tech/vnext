@@ -2026,6 +2026,61 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Instance Data Reconciliation
+
+    /// <summary>
+    /// Logs a single optimistic-append conflict during instance data reconciliation;
+    /// the service rebases onto the fresh head and retries. Payload-free (IDs only).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10110,
+        Level = LogLevel.Warning,
+        Message = "InstanceData reconciliation conflict. InstanceId={InstanceId} ExpectedDataId={ExpectedDataId} ObservedDataId={ObservedDataId} Attempt={Attempt} ContributionCount={ContributionCount} PipelineStep={PipelineStep} TransitionKey={TransitionKey}")]
+    public static partial void InstanceDataReconciliationConflict(
+        this ILogger logger,
+        Guid instanceId,
+        Guid expectedDataId,
+        Guid? observedDataId,
+        int attempt,
+        int contributionCount,
+        string pipelineStep,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when instance data reconciliation exhausted its bounded retry budget and the
+    /// transition fails with a concurrency conflict. Payload-free (IDs only).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10111,
+        Level = LogLevel.Error,
+        Message = "InstanceData reconciliation exhausted. InstanceId={InstanceId} Attempts={Attempts} ContributionCount={ContributionCount} PipelineStep={PipelineStep} TransitionKey={TransitionKey}")]
+    public static partial void InstanceDataReconciliationExhausted(
+        this ILogger logger,
+        Guid instanceId,
+        int attempts,
+        int contributionCount,
+        string pipelineStep,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when the boundary-path script data apply fails and preempts
+    /// error-boundary handling, replacing the original task error with the apply
+    /// failure. Records the suppressed task error code/message (no payloads).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10112,
+        Level = LogLevel.Warning,
+        Message = "Boundary-path data apply failed; original task error suppressed. InstanceId={InstanceId} TransitionKey={TransitionKey} Phase={Phase} TaskErrorCode={TaskErrorCode} TaskErrorMessage={TaskErrorMessage}")]
+    public static partial void BoundaryPathTaskErrorSuppressed(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string phase,
+        string taskErrorCode,
+        string? taskErrorMessage);
+
+    #endregion
+
     #region Instance Retry
  
     /// <summary>

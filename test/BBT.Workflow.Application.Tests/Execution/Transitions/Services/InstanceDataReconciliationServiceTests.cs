@@ -10,7 +10,10 @@ using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -433,7 +436,10 @@ public sealed class InstanceDataReconciliationServiceTests
             ChangeSet = changeSet;
             ContributionIds = contributionIds;
             Repository = new ScriptedInstanceDataRepository();
-            Service = new InstanceDataReconciliationService(Repository);
+            Service = new InstanceDataReconciliationService(
+                Repository,
+                NullLogger<InstanceDataReconciliationService>.Instance,
+                Substitute.For<IWorkflowMetrics>());
         }
 
         public Instance Live { get; }
