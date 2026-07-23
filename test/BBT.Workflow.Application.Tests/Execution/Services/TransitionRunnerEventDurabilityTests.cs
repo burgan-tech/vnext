@@ -95,7 +95,8 @@ public sealed class TransitionRunnerEventDurabilityTests
         var coreOutput = new TransitionCoreOutput(
             new TransitionOutput { Id = Guid.NewGuid(), Status = InstanceStatus.Active },
             [envelope],
-            ContinuationSet.Empty);
+            ContinuationSet.Empty,
+            new TransitionExecutionContext());
         core.ExecuteTransitionCoreAsync(
                 Arg.Any<WorkflowExecutionContext>(),
                 Arg.Any<CancellationToken>())

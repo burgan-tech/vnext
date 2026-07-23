@@ -341,6 +341,91 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<InstanceStateFingerprint?> GetStateFingerprintAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await QueryStateFingerprintAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+    }
+
+    /// <summary>
+    /// Core state-fingerprint projection over an instance queryable. Internal so integration tests
+    /// can run the exact production query against a real database without composing the repository.
+    /// </summary>
+    internal static async Task<InstanceStateFingerprint?> QueryStateFingerprintAsync(
+        IQueryable<Instance> query,
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await ProjectStateFingerprint(query.Where(i => i.Id == instanceId))
+                .FirstOrDefaultAsync(cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic, mirroring FindByIdentifierAsReadOnlyAsync.
+        return await ProjectStateFingerprint(
+                query.Where(i => i.Key == identifier).OrderByDescending(i => i.CreatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static IQueryable<InstanceStateFingerprint> ProjectStateFingerprint(IQueryable<Instance> query) =>
+        query.Select(i => new InstanceStateFingerprint(
+            i.Id,
+            i.Key,
+            i.EffectiveState,
+            i.Status,
+            i.FlowVersion,
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
+
+    /// <inheritdoc />
+    public async Task<InstanceDataFingerprint?> GetDataFingerprintAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await QueryDataFingerprintAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+    }
+
+    /// <summary>
+    /// Core data-fingerprint projection over an instance queryable. Internal so integration tests
+    /// can run the exact production query against a real database without composing the repository.
+    /// The latest-data ETag subquery is served index-only by UX_InstancesData_Instance_IsLatest.
+    /// </summary>
+    internal static async Task<InstanceDataFingerprint?> QueryDataFingerprintAsync(
+        IQueryable<Instance> query,
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await ProjectDataFingerprint(query.Where(i => i.Id == instanceId))
+                .FirstOrDefaultAsync(cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic, mirroring FindByIdentifierAsReadOnlyAsync.
+        return await ProjectDataFingerprint(
+                query.Where(i => i.Key == identifier).OrderByDescending(i => i.CreatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static IQueryable<InstanceDataFingerprint> ProjectDataFingerprint(IQueryable<Instance> query) =>
+        query.Select(i => new InstanceDataFingerprint(
+            i.Id,
+            i.Key,
+            i.DataList.Where(d => d.IsLatest).Select(d => d.ETag).FirstOrDefault(),
+            i.FlowVersion,
+            i.EffectiveState,
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
+
+    /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,
         CancellationToken cancellationToken = default)
     {

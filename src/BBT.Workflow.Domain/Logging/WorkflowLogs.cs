@@ -2456,6 +2456,239 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region State Function Cache
+
+    /// <summary>
+    /// Logs when a state-function response is served from cache (fingerprint validated as unchanged).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20400,
+        Level = LogLevel.Debug,
+        Message = "State function cache hit for instance {Instance} (state {State}, status {Status})")]
+    public static partial void StateFunctionCacheHit(
+        this ILogger logger,
+        string instance,
+        string? state,
+        string status);
+
+    /// <summary>
+    /// Logs when no cached state-function response exists for the caller scope.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20401,
+        Level = LogLevel.Debug,
+        Message = "State function cache miss for instance {Instance}")]
+    public static partial void StateFunctionCacheMiss(
+        this ILogger logger,
+        string instance);
+
+    /// <summary>
+    /// Logs when a cached state-function response is discarded because its fingerprint ETag
+    /// no longer matches the ETag computed from the current projection.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20402,
+        Level = LogLevel.Debug,
+        Message = "State function cache invalidated for instance {Instance}: etag {CachedEtag} -> {CurrentEtag}")]
+    public static partial void StateFunctionCacheInvalidated(
+        this ILogger logger,
+        string instance,
+        string? cachedEtag,
+        string currentEtag);
+
+    /// <summary>
+    /// Logs when the cache is bypassed because the instance has an active SubFlow —
+    /// the state response is built from a live subflow call and cannot be validated locally.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20403,
+        Level = LogLevel.Debug,
+        Message = "State function cache bypassed for instance {Instance}: active SubFlow requires live evaluation")]
+    public static partial void StateFunctionCacheBypassedForSubFlow(
+        this ILogger logger,
+        string instance);
+
+    /// <summary>
+    /// Logs when a state-function cache operation fails; the failure degrades to a miss.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20404,
+        Level = LogLevel.Warning,
+        Message = "State function cache {Operation} failed for key {CacheKey}; treating as miss")]
+    public static partial void StateFunctionCacheError(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    /// <summary>
+    /// Logs when the fingerprint ETag matched the caller's If-None-Match and 304 was returned
+    /// directly from the projection query — no cache access, aggregate load or response build.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20405,
+        Level = LogLevel.Debug,
+        Message = "State function ETag unchanged for instance {Instance} (state {State}, status {Status}); returning 304 from fingerprint")]
+    public static partial void StateFunctionEtagNotModified(
+        this ILogger logger,
+        string instance,
+        string? state,
+        string status);
+
+    #endregion
+
+    #region Data Function Cache
+
+    /// <summary>
+    /// Logs when a data-function response is served from cache (fingerprint ETag validated).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20410,
+        Level = LogLevel.Debug,
+        Message = "Data function cache hit for instance {Instance}")]
+    public static partial void DataFunctionCacheHit(
+        this ILogger logger,
+        string instance);
+
+    /// <summary>
+    /// Logs when no cached data-function response exists for the caller scope.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20411,
+        Level = LogLevel.Debug,
+        Message = "Data function cache miss for instance {Instance}")]
+    public static partial void DataFunctionCacheMiss(
+        this ILogger logger,
+        string instance);
+
+    /// <summary>
+    /// Logs when a cached data-function response is discarded because its fingerprint ETag
+    /// no longer matches the ETag computed from the current projection.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20412,
+        Level = LogLevel.Debug,
+        Message = "Data function cache invalidated for instance {Instance}: etag {CachedEtag} -> {CurrentEtag}")]
+    public static partial void DataFunctionCacheInvalidated(
+        this ILogger logger,
+        string instance,
+        string? cachedEtag,
+        string currentEtag);
+
+    /// <summary>
+    /// Logs when a data-function cache operation fails; the failure degrades to a miss.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20413,
+        Level = LogLevel.Warning,
+        Message = "Data function cache {Operation} failed for key {CacheKey}; treating as miss")]
+    public static partial void DataFunctionCacheError(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    /// <summary>
+    /// Logs when the data fingerprint ETag matched the caller's If-None-Match and 304 was
+    /// returned from the projection query — no cache access, aggregate load, extension run
+    /// or response build.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20414,
+        Level = LogLevel.Debug,
+        Message = "Data function ETag unchanged for instance {Instance}; returning 304 from fingerprint")]
+    public static partial void DataFunctionEtagNotModified(
+        this ILogger logger,
+        string instance);
+
+    #endregion
+
+    #region Master/Schema Function Cache
+
+    // One shared quintet serves both the master and the schema function ({Function} parameter
+    // is "master" or "schema") — they share the cache service and the response body shape.
+
+    /// <summary>
+    /// Logs when a master/schema response is served from cache (fingerprint ETag validated).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20420,
+        Level = LogLevel.Debug,
+        Message = "{Function} function cache hit for instance {Instance}")]
+    public static partial void InstanceSchemaFunctionCacheHit(
+        this ILogger logger,
+        string function,
+        string instance);
+
+    /// <summary>
+    /// Logs when no cached master/schema response exists for the caller scope.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20421,
+        Level = LogLevel.Debug,
+        Message = "{Function} function cache miss for instance {Instance}")]
+    public static partial void InstanceSchemaFunctionCacheMiss(
+        this ILogger logger,
+        string function,
+        string instance);
+
+    /// <summary>
+    /// Logs when a cached master/schema response is discarded because its fingerprint ETag
+    /// no longer matches the ETag computed from the current projection.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20422,
+        Level = LogLevel.Debug,
+        Message = "{Function} function cache invalidated for instance {Instance}: etag {CachedEtag} -> {CurrentEtag}")]
+    public static partial void InstanceSchemaFunctionCacheInvalidated(
+        this ILogger logger,
+        string function,
+        string instance,
+        string? cachedEtag,
+        string currentEtag);
+
+    /// <summary>
+    /// Logs when a master/schema cache operation fails; the failure degrades to a miss.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20423,
+        Level = LogLevel.Warning,
+        Message = "{Function} function cache {Operation} failed for key {CacheKey}; treating as miss")]
+    public static partial void InstanceSchemaFunctionCacheError(
+        this ILogger logger,
+        Exception exception,
+        string function,
+        string operation,
+        string cacheKey);
+
+    /// <summary>
+    /// Logs when the fingerprint ETag matched the caller's If-None-Match and 304 was returned
+    /// from the projection query — no cache access, aggregate load or response build.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20424,
+        Level = LogLevel.Debug,
+        Message = "{Function} function ETag unchanged for instance {Instance}; returning 304 from fingerprint")]
+    public static partial void InstanceSchemaFunctionEtagNotModified(
+        this ILogger logger,
+        string function,
+        string instance);
+
+    /// <summary>
+    /// Logs when the fast path and cache are bypassed because the instance has an active
+    /// SubFlow — the master/schema response is composed from a live subflow call.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20425,
+        Level = LogLevel.Debug,
+        Message = "{Function} function cache bypassed for instance {Instance}: active SubFlow requires live evaluation")]
+    public static partial void InstanceSchemaFunctionCacheBypassedForSubFlow(
+        this ILogger logger,
+        string function,
+        string instance);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>
