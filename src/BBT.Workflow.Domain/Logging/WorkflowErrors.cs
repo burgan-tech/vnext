@@ -44,6 +44,12 @@ public static class WorkflowErrors
             $"Instance data not found for key {key} and version {version}",
             target: $"{key}@{version}");
 
+    public static Error InstanceDataConcurrencyConflict(Guid instanceId, int attempts) =>
+        Error.Conflict(
+            WorkflowErrorCodes.InstanceDataConcurrencyConflict,
+            $"Instance data changed concurrently and could not be reconciled after {attempts} attempts.",
+            target: instanceId.ToString());
+
     #endregion
 
     #region Workflow Definition Errors
@@ -533,4 +539,3 @@ public static class WorkflowErrors
 
     #endregion
 }
-
