@@ -116,7 +116,10 @@ public sealed class HandleSubFlowStep(
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
         // Enqueue post-commit job - actual subflow start happens after lock release
-        context.Directives.EnqueuePostCommit(new StartSubflowJob(correlation.Id, context.Target!.Key));
+        var behavior = context.Target!.SubFlow!.Type.Equals(SubFlowType.SubProcess)
+            ? PostCommitContinuationBehavior.ContinueParent
+            : PostCommitContinuationBehavior.HandoffToChild;
+        context.Directives.EnqueuePostCommit(new StartSubflowJob(correlation.Id, context.Target.Key, behavior));
 
         logger.LogDebug(
             "Subflow job enqueued for instance {InstanceId}, correlation {CorrelationId}, target {TargetStateKey}",
