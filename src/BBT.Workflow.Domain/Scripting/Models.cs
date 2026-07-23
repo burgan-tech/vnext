@@ -507,7 +507,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// Used after a state change within the same transition so that downstream steps
     /// (e.g. OnEntry tasks and state-level error boundary resolution) observe the new
     /// <c>CurrentState</c> instead of the stale snapshot captured before the change.
-    /// Mirrors <c>Builder.SetInstance</c>: takes a fresh snapshot and recomputes the
+    /// Takes a fresh tracked snapshot and recomputes the
     /// <see cref="Incident"/> projection. Accumulated <see cref="TaskResponse"/>,
     /// <see cref="OutputResponse"/> and <see cref="MetaData"/> are intentionally preserved.
     /// </summary>
@@ -517,7 +517,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(instance);
 
-        var snapshot = instance.CreateSnapshot();
+        var snapshot = instance.CreateTrackedDataSnapshot();
         Instance = snapshot;
         Incident = new ScriptIncidentInfo
         {
@@ -619,7 +619,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             QueryParameters = CloneDynamic(QueryParameters),
             EventPayload = CloneDynamic(EventPayload),
             RawBody = RawBody,
-            Instance = Instance?.CreateSnapshot(),
+            Instance = Instance?.CreateTrackedDataSnapshot(),
             Workflow = Workflow,
             Runtime = Runtime,
             Transition = Transition,

@@ -1,18 +1,77 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
+using BBT.Aether.DependencyInjection;
+using BBT.Workflow.Caching;
+using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using NSubstitute;
+using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Scripting;
 
 public class ScriptContextTests
 {
+    public ScriptContextTests()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IWorkflowContext>(new NullWorkflowContext());
+        AmbientServiceProvider.Current = services.BuildServiceProvider();
+    }
+
+    [Fact]
+    public async Task Builder_should_freeze_a_tracked_snapshot_without_mutating_live_instance()
+    {
+        var live = CreateInstanceWithData("{\"value\":1}");
+        var context = await CreateBuilder().WithInstance(live).BuildAsync();
+        var snapshot = context.Instance!;
+        snapshot.AddData(Guid.NewGuid(), new JsonData("{\"value\":2}"));
+        snapshot.GetPendingDataChangeSet().ShouldNotBeNull();
+        live.GetPendingDataChangeSet().ShouldBeNull();
+        live.LatestData!.Data.Json.ShouldBe("{\"value\":1}");
+    }
+
+    [Fact]
+    public void Refresh_should_discard_only_acknowledged_history_and_start_a_new_baseline()
+    {
+        var live = CreateInstanceWithData("{\"value\":2}");
+        var context = CreateScriptContext(CreateInstanceWithData("{\"value\":1}").CreateTrackedDataSnapshot());
+        var snapshot = context.Instance!;
+        snapshot.AddData(Guid.NewGuid(), new JsonData("{\"local\":true}"));
+        snapshot.AcknowledgeDataChanges(snapshot.LatestData!);
+        context.RefreshInstance(live);
+        var refreshed = context.Instance!;
+        refreshed.GetPendingDataChangeSet().ShouldBeNull();
+        refreshed.LatestData!.Data.Json.ShouldBe("{\"value\":2}");
+        refreshed.AddData(Guid.NewGuid(), new JsonData("{\"refreshed\":true}"));
+        refreshed.GetPendingDataChangeSet()!.Baseline!.DataId.ShouldBe(live.LatestData!.Id);
+    }
+
+    [Fact]
+    public void Parallel_branch_merge_should_create_one_parent_contribution_in_merge_order()
+    {
+        var parent = CreateScriptContext(CreateInstanceWithData("{\"base\":1}").CreateTrackedDataSnapshot());
+        var first = parent.CreateParallelBranch();
+        var second = parent.CreateParallelBranch();
+        first.Instance!.AddData(Guid.NewGuid(), new JsonData("{\"first\":1}"));
+        second.Instance!.AddData(Guid.NewGuid(), new JsonData("{\"second\":2}"));
+        first.Instance.GetPendingDataChangeSet()!.Contributions.Count.ShouldBe(1);
+        second.Instance.GetPendingDataChangeSet()!.Contributions.Count.ShouldBe(1);
+        parent.MergeParallelBranch(first);
+        parent.MergeParallelBranch(second);
+        var merged = parent.Instance!;
+        merged.GetPendingDataChangeSet()!.Contributions.Count.ShouldBe(2);
+        merged.LatestData!.Data.Json.ShouldBe("{\"base\":1,\"first\":1,\"second\":2}");
+    }
+
     [Fact]
     public void Builder_ShouldCreateScriptContext()
     {
@@ -503,5 +562,33 @@ public class ScriptContextTests
         Assert.DoesNotContain("FirstName", json);
         Assert.DoesNotContain("LastName", json);
     }
-}
 
+    private static IScriptContextBuilder CreateBuilder() =>
+        new ScriptContextFactory(
+                Substitute.For<IComponentCacheStore>(),
+                Mock.Of<ILogger<ScriptContext>>())
+            .NewBuilder(Substitute.For<IInstanceRepository>())
+            .WithRuntime(Substitute.For<IRuntimeInfoProvider>());
+
+    private static ScriptContext CreateScriptContext(Instance instance) =>
+        new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetInstance(instance)
+            .Build();
+
+    private static Instance CreateInstanceWithData(string json)
+    {
+        var instance = InstanceFactory.CreateDefault();
+        instance.AddData(Guid.NewGuid(), new JsonData(json));
+        return instance;
+    }
+
+    private sealed class NullWorkflowContext : IWorkflowContext
+    {
+        public Definitions.Workflow? Workflow => null;
+        public bool HasWorkflow => false;
+
+        public void SetWorkflow(Definitions.Workflow workflow)
+        {
+        }
+    }
+}

@@ -94,7 +94,7 @@ internal sealed class ScriptContextBuilder(
         {
             return this;
         }
-        _instance = instance.CreateSnapshot();
+        _instance = instance.CreateTrackedDataSnapshot();
         _instanceId = null; // Clear async retrieval property
         return this;
     }
@@ -304,7 +304,7 @@ internal sealed class ScriptContextBuilder(
             if (instance == null)
                 throw new InvalidOperationException($"Instance with ID {_instanceId.Value} not found.");
             
-            _instance = instance.CreateSnapshot();
+            _instance = instance.CreateTrackedDataSnapshot();
             return _instance;
         }
 
