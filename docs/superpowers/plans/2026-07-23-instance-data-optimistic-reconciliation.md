@@ -128,7 +128,7 @@ public sealed record InstanceDataContribution(
 
 public sealed record InstanceDataChangeSet(
     Guid InstanceId,
-    InstanceDataBaseline Baseline,
+    InstanceDataBaseline? Baseline,
     IReadOnlyList<InstanceDataContribution> Contributions);
 
 public sealed record InstanceDataHead(
@@ -166,8 +166,8 @@ public interface IInstanceDataConcurrencyRepository
 
     Task<ConditionalAppendResult> TryAppendDataAsync(
         Guid instanceId,
-        Guid expectedLatestDataId,
-        string expectedLatestEtag,
+        Guid? expectedLatestDataId,
+        string? expectedLatestEtag,
         IReadOnlyList<PreparedInstanceData> data,
         CancellationToken cancellationToken);
 }
@@ -176,10 +176,10 @@ public interface IInstanceDataConcurrencyRepository
 - [ ] **Step 4: Implement the tracker and wire it into `Instance.AddData` after deduplication**
 
 ```csharp
-internal sealed class InstanceDataChangeTracker(InstanceData baseline)
+internal sealed class InstanceDataChangeTracker(InstanceData? baseline)
 {
     private readonly List<InstanceDataContribution> _contributions = [];
-    private InstanceDataBaseline _baseline = ToBaseline(baseline);
+    private InstanceDataBaseline? _baseline = baseline is null ? null : ToBaseline(baseline);
 
     public void Record(Guid id, JsonData input, VersionStrategy strategy) =>
         _contributions.Add(new(id, new JsonData(input.Json), strategy, _contributions.Count));
@@ -204,9 +204,7 @@ Add `_dataChangeTracker`, copy `IsDataPartiallyLoaded` in `CreateSnapshot`, and 
 public Instance CreateTrackedDataSnapshot()
 {
     var snapshot = CreateSnapshot();
-    var latest = snapshot.LatestData
-        ?? throw new InvalidOperationException($"Instance '{Id}' has no data baseline for tracked execution.");
-    snapshot._dataChangeTracker = new InstanceDataChangeTracker(latest);
+    snapshot._dataChangeTracker = new InstanceDataChangeTracker(snapshot.LatestData);
     return snapshot;
 }
 
@@ -216,11 +214,12 @@ public InstanceDataChangeSet? GetPendingDataChangeSet() =>
 public void AcknowledgeDataChanges(InstanceData latestData) =>
     _dataChangeTracker?.Acknowledge(latestData);
 
-internal Instance CreateReconciliationSnapshot(InstanceDataHead head)
+internal Instance CreateReconciliationSnapshot(InstanceDataHead? head)
 {
     var snapshot = CreateSnapshot();
     snapshot._dataList.Clear();
-    snapshot._dataList.Add(InstanceData.Rehydrate(Id, head));
+    if (head is not null)
+        snapshot._dataList.Add(InstanceData.Rehydrate(Id, head));
     snapshot.IsDataPartiallyLoaded = true;
     return snapshot;
 }
@@ -234,6 +233,11 @@ internal void SynchronizePartiallyLoadedData(IReadOnlyList<InstanceData> persist
         _dataList.Add(data);
 }
 ```
+
+Add a test for an instance created without attributes: `CreateTrackedDataSnapshot()` must succeed,
+`GetPendingDataChangeSet()` must remain `null`, and no persistence is requested. If a later task
+calls `AddData`, the resulting change set has `Baseline == null`; this represents a compare-and-set
+whose expected database head is also null, not a synthetic initial row.
 
 Add an exact rehydration factory inside `InstanceData`; this prevents a fresh ETag or timestamp from
 being invented when a conflict refresh deduplicates to the already-persisted head:
@@ -487,13 +491,12 @@ public sealed class InstanceDataReconciliationService(
         InstanceDataChangeSet changeSet,
         CancellationToken cancellationToken)
     {
-        InstanceDataHead head = ToHead(instance.LatestData!);
+        InstanceDataHead? head = changeSet.Baseline is null ? null : ToHead(instance.LatestData!);
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             if (attempt > 1)
             {
-                head = await repository.GetLatestDataHeadAsync(instance.Id, cancellationToken)
-                    ?? throw new InvalidOperationException($"Latest data was not found for instance '{instance.Id}'.");
+                head = await repository.GetLatestDataHeadAsync(instance.Id, cancellationToken);
             }
 
             var working = instance.CreateReconciliationSnapshot(head);
@@ -515,8 +518,8 @@ public sealed class InstanceDataReconciliationService(
 
             var appendResult = await repository.TryAppendDataAsync(
                 instance.Id,
-                head.DataId,
-                head.ETag,
+                head?.DataId,
+                head?.ETag,
                 appended.Select(ToPrepared).ToArray(),
                 cancellationToken);
 
@@ -806,8 +809,8 @@ public async Task<InstanceDataHead?> GetLatestDataHeadAsync(Guid instanceId, Can
 
 public async Task<ConditionalAppendResult> TryAppendDataAsync(
     Guid instanceId,
-    Guid expectedLatestDataId,
-    string expectedLatestEtag,
+    Guid? expectedLatestDataId,
+    string? expectedLatestEtag,
     IReadOnlyList<PreparedInstanceData> data,
     CancellationToken cancellationToken)
 {
