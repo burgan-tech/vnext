@@ -37,6 +37,11 @@ public sealed class GetSchemaInput: IHasDomain
     /// Caller roles, used to enforce state/workflow queryRoles visibility.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
+
+    /// <summary>
+    /// ETag value for conditional requests (If-None-Match header).
+    /// </summary>
+    public string? IfNoneMatch { get; set; }
 }
 
 public sealed class GetSchemaOutput
@@ -52,5 +57,21 @@ public sealed class GetSchemaOutput
     public string Type { get; set; }
 
     public JsonElement Schema { get; set; }
+
+    /// <summary>
+    /// Fingerprint ETag (RFC 7232 quoted) for cache validation.
+    /// </summary>
+    public string? ETag
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_etag))
+                return null;
+            var unquoted = _etag.Replace("\"", "");
+            return $"\"{unquoted}\"";
+        }
+        set => _etag = value;
+    }
+    private string? _etag = string.Empty;
 }
 

@@ -54,9 +54,10 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
     
     /// <summary>
-    /// Retrieves schema for an instance
+    /// Retrieves schema for an instance. Supports conditional reads (If-None-Match → 304)
+    /// via the fingerprint ETag.
     /// </summary>
-    Task<Result<GetSchemaOutput>> GetSchemaAsync(
+    Task<ConditionalResult<GetSchemaOutput>> GetSchemaAsync(
         GetSchemaInput input,
         string? transitionKey,
         CancellationToken cancellationToken = default);
@@ -71,8 +72,9 @@ public interface IInstanceQueryAppService : IApplicationService
     /// <summary>
     /// Retrieves the flow-level master schema an instance is bound to.
     /// If the instance has an active SubFlow, the request is forwarded to the SubFlow instance.
+    /// Supports conditional reads (If-None-Match → 304) via the fingerprint ETag.
     /// </summary>
-    Task<Result<GetSchemaOutput>> GetMasterAsync(
+    Task<ConditionalResult<GetSchemaOutput>> GetMasterAsync(
         GetMasterInput input,
         CancellationToken cancellationToken = default);
 
