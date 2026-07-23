@@ -35,7 +35,9 @@ public sealed class TransitionRunner(
     {
         var stageContext = context;
 
-        for (var stage = 1; stage <= MaxRunnerStages; stage++)
+        // ChainDepth is zero-based, so the configured depth of 50 permits stages 0 through 50.
+        // The next continuation (depth 51) is rejected after the final allowed stage commits.
+        for (var stage = 0; stage <= MaxRunnerStages; stage++)
         {
             // ExecuteWithScopeAsync does not return until the stage UoW and workflow DI scope
             // have both disposed. TransitionPipeline's own lock already ended when core returned.

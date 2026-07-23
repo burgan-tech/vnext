@@ -32,13 +32,16 @@ public sealed class PostCommitParentMutationService(
         return await MutateFreshAsync(source, async (instance, ct) =>
         {
             var context = CreateFreshContext(source, instance);
+            // A synchronous child callback may already have settled the same parent state and
+            // scheduled its notification. The outer barrier only owns a notification when it
+            // changes a freshly reloaded Busy parent to its resting Active state.
+            var shouldScheduleNotification =
+                continuations.ResolvedStatus == InstanceStatus.Active && instance.IsBusy;
             await TransitionSettlement.ApplyAsync(
                 context,
                 continuations.ResolvedStatus,
                 continuations.EndChainRequested,
-                // A terminal callback ran its own resting pipeline and notification path. Do not
-                // enqueue the same terminal-state notification again from the stale outer barrier.
-                scheduleNotification: !instance.IsCompleted,
+                scheduleNotification: shouldScheduleNotification,
                 instanceRepository,
                 stateNotificationScheduler,
                 logger,

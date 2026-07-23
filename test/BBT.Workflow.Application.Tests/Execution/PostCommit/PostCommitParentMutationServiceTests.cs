@@ -29,7 +29,7 @@ public sealed class PostCommitParentMutationServiceTests
     [Fact]
     public void PostCommitParentSnapshot_ClonesRequestDataAndNeverCarriesTrackedInstance()
     {
-        var headers = new Dictionary<string, string?> { ["x-user"] = "42" };
+        var headers = new Dictionary<string, string?> { ["userId"] = "42" };
         var routes = new Dictionary<string, string?> { ["route"] = "original" };
 
         var snapshot = new PostCommitParentSnapshot(
@@ -43,10 +43,10 @@ public sealed class PostCommitParentMutationServiceTests
             headers,
             routes,
             null);
-        headers["x-user"] = "mutated";
+        headers["userId"] = "mutated";
         routes["route"] = "mutated";
 
-        snapshot.Headers["x-user"].ShouldBe("42");
+        snapshot.Headers["userId"].ShouldBe("42");
         snapshot.RouteValues["route"].ShouldBe("original");
         typeof(PostCommitParentSnapshot).GetProperties()
             .ShouldNotContain(property => property.PropertyType == typeof(Instance));
@@ -148,7 +148,30 @@ public sealed class PostCommitParentMutationServiceTests
     }
 
     [Fact]
-    public async Task SettleAsync_ReleasesFreshChainOwnershipAndSchedulesNotificationForFreshRestingState()
+    public async Task SettleAsync_WhenCallbackAlreadySettledActiveNotifyingState_DoesNotScheduleNotificationAgain()
+    {
+        var authoritative = CreateBusyInstance();
+        authoritative.ChangeState(CreateNotifyingState("callback-settled", StateSubType.None));
+        authoritative.Active();
+        var fixture = CreateFixture(
+            authoritative,
+            workflow: CreateWorkflow(CreateNotifyingState("callback-settled", StateSubType.None)));
+
+        var result = await fixture.Service.SettleAsync(
+            CreateSnapshot(authoritative.Id),
+            CreateContinuations(resolvedStatus: InstanceStatus.Active),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Status.ShouldBe(InstanceStatus.Active);
+        await fixture.Repository.DidNotReceiveWithAnyArgs()
+            .UpdateAsync(default!, default, default);
+        await fixture.NotificationScheduler.DidNotReceiveWithAnyArgs()
+            .ScheduleAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task SettleAsync_ReleasesFreshChainOwnershipWithoutDuplicatingStateNotification()
     {
         var authoritative = CreateBusyInstance();
         authoritative.ChangeState(CreateNotifyingState("fresh-resting-state"));
@@ -162,11 +185,35 @@ public sealed class PostCommitParentMutationServiceTests
         result.IsSuccess.ShouldBeTrue();
         authoritative.Status.ShouldBe(InstanceStatus.Busy);
         authoritative.ChainToken.ShouldBeNull();
+        await fixture.Repository.Received(1).UpdateAsync(
+            authoritative,
+            true,
+            Arg.Any<CancellationToken>());
+        await fixture.NotificationScheduler.DidNotReceiveWithAnyArgs()
+            .ScheduleAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task SettleAsync_WhenFreshBusyParentResolvesToActive_SchedulesNotification()
+    {
+        var authoritative = CreateBusyInstance();
+        authoritative.ChangeState(CreateNotifyingState("freshly-resolved", StateSubType.None));
+        var fixture = CreateFixture(
+            authoritative,
+            workflow: CreateWorkflow(CreateNotifyingState("freshly-resolved", StateSubType.None)));
+
+        var result = await fixture.Service.SettleAsync(
+            CreateSnapshot(authoritative.Id),
+            CreateContinuations(resolvedStatus: InstanceStatus.Active),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        authoritative.Status.ShouldBe(InstanceStatus.Active);
         await fixture.NotificationScheduler.Received(1).ScheduleAsync(
             Arg.Is<TransitionExecutionContext>(context =>
                 ReferenceEquals(context.Instance, authoritative) &&
                 context.Target != null &&
-                context.Target.Key == "fresh-resting-state"),
+                context.Target.Key == "freshly-resolved"),
             Arg.Any<CancellationToken>());
     }
 
@@ -309,7 +356,7 @@ public sealed class PostCommitParentMutationServiceTests
         "source-transition",
         ExecMode.Sync,
         "trace-id",
-        new Dictionary<string, string?> { ["x-user"] = "42" },
+        new Dictionary<string, string?> { ["userId"] = "42" },
         new Dictionary<string, string?> { ["route"] = "value" },
         null);
 
@@ -332,13 +379,13 @@ public sealed class PostCommitParentMutationServiceTests
         return workflow;
     }
 
-    private static State CreateNotifyingState(string key)
+    private static State CreateNotifyingState(string key, StateSubType subType = StateSubType.Busy)
     {
         var json = $$"""
         {
             "key": "{{key}}",
             "stateType": "Intermediate",
-            "subType": "Busy",
+            "subType": "{{subType}}",
             "versionStrategy": "Patch",
             "notifications": [
                 { "type": "state", "mapping": { "code": "Y29kZQ==", "encoding": "Base64" } }

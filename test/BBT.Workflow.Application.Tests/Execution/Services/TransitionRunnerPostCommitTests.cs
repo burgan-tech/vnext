@@ -64,19 +64,8 @@ public sealed class TransitionRunnerPostCommitTests
         }
         harness.PostCommitObservedDisposedStage.ShouldBeTrue();
         harness.PostCommitObservedReleasedTransitionLock.ShouldBeTrue();
-        foreach (var stage in harness.StageScopes)
-        {
-            stage.CurrentUser.ShouldNotBeNull();
-            stage.CurrentUser!.Received(1).Change(
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Any<string[]?>(),
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Any<string?>());
-        }
+        harness.CurrentUserScopes.Count.ShouldBe(3); // first stage, post-commit, fresh continuation
+        harness.CurrentUserScopes.Select(scope => scope.UserId).ShouldBe(["42", "42", "42"]);
     }
 
     [Fact]
@@ -251,6 +240,7 @@ public sealed class TransitionRunnerPostCommitTests
         public List<IWorkflowExecutionCore> CoreInstances { get; } = [];
         public List<IUnitOfWorkManager> UowManagers { get; } = [];
         public List<ITransitionLockScopeFactory> TransitionLockFactories { get; } = [];
+        public List<CurrentUserScopeProbe> CurrentUserScopes { get; } = [];
         public List<string> CoreTransitionKeys { get; } = [];
         public List<int> CoreChainDepths { get; } = [];
         public int TransitionLocksAcquired { get; private set; }
@@ -271,7 +261,7 @@ public sealed class TransitionRunnerPostCommitTests
             TransitionKey = transitionKey,
             Mode = ExecMode.Sync,
             CallerMode = ExecMode.Sync,
-            Headers = new Dictionary<string, string?> { ["x-user"] = "42" }
+            Headers = new Dictionary<string, string?> { ["userId"] = "42" }
         };
 
         private void ConfigureWorkflowScope(IServiceCollection services)
@@ -291,6 +281,7 @@ public sealed class TransitionRunnerPostCommitTests
             services.AddScoped(_ => Substitute.For<IWorkflowContext>());
             services.AddScoped(_ =>
             {
+                var probe = new CurrentUserScopeProbe();
                 var currentUser = Substitute.For<ICurrentUser>();
                 currentUser.Change(
                         Arg.Any<string?>(),
@@ -301,7 +292,12 @@ public sealed class TransitionRunnerPostCommitTests
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>())
-                    .Returns(Substitute.For<IDisposable>());
+                    .Returns(call =>
+                    {
+                        probe.UserId = call.ArgAt<string?>(0);
+                        return Substitute.For<IDisposable>();
+                    });
+                CurrentUserScopes.Add(probe);
                 return currentUser;
             });
         }
@@ -324,7 +320,6 @@ public sealed class TransitionRunnerPostCommitTests
             services.AddScoped<IWorkflowExecutionCore>(sp =>
             {
                 var probe = sp.GetRequiredService<StageScopeProbe>();
-                probe.CurrentUser = sp.GetRequiredService<ICurrentUser>();
                 var core = new RecordingCore(
                     this,
                     sp.GetRequiredService<ITransitionLockScopeFactory>(),
@@ -517,8 +512,12 @@ public sealed class TransitionRunnerPostCommitTests
         public int Id { get; } = id;
         public bool UowDisposed { get; set; }
         public bool IsDisposed { get; private set; }
-        public ICurrentUser? CurrentUser { get; set; }
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class CurrentUserScopeProbe
+    {
+        public string? UserId { get; set; }
     }
 
     private sealed record StagePlan(

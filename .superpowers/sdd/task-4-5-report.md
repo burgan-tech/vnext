@@ -86,3 +86,25 @@ The pre-existing `TransitionRunnerEventDurabilityTests` already covered event st
 - The focused build/test run emitted existing `NU1903`, `NU1510`, nullability, XML documentation, and EF raw-SQL analysis warnings. No new compiler errors or task-specific warnings were introduced.
 - The full solution test suite was not run; verification was deliberately limited to the requested focused serial test set and affected production builds.
 - The four unrelated pre-existing dirty files were preserved and excluded from staging.
+
+## Follow-up Review Fixes (2026-07-23)
+
+### RED
+
+- `dotnet test test/BBT.Workflow.Application.Tests --filter "FullyQualifiedName~TransitionRunnerPostCommitTests.RunAsync_AllowsDepthFiftyStageAndRejectsOnlyDepthFiftyOneContinuation" --no-restore` against the pre-fix runner: 0 passed, 1 failed. The test expected 51 cores for depths 0 through 50, but observed 50.
+- `dotnet test test/BBT.Workflow.Application.Tests --filter "FullyQualifiedName~PostCommitParentMutationServiceTests" --no-restore` after adding the duplicate-notification assertions and before the settlement changes: 9 passed, 2 failed. A fresh Busy parent incorrectly scheduled in the chain-release case, and an already Active callback parent was unnecessarily updated.
+
+### GREEN
+
+- The depth boundary test passed after changing the runner loop to accept zero-based depths 0 through 50: 1 passed, 0 failed.
+- `PostCommitParentMutationServiceTests` passed after making fresh Busy-to-Active settlement the only post-commit notification owner: 11 passed, 0 failed. This covers an already-settled Active callback (no update/no notification), a fresh Busy-to-Active transition (one notification), and independent Busy chain release (one persistence update/no notification).
+- Added `PostCommitParentMutationEventDurabilityTests` using the actual `CompositeUnitOfWork`, event buffer, transactional SQLite outbox staging, and the production `Instance.Fault` event. It verifies the generated `InstanceFaultedCleanupEvent` reaches outbox staging, and a forced second save rolls back to zero durable outbox rows with no direct publication: 2 passed, 0 failed.
+- The continuation user propagation test now uses `userId: 42` and asserts the exact value in all three fresh current-user scopes (initial stage, post-commit coordinator, continuation stage): 1 passed, 0 failed.
+- Final focused test set (the requested seven existing groups plus the new durability group): 47 passed, 0 failed, 0 skipped.
+- `dotnet build src/BBT.Workflow.Domain/BBT.Workflow.Domain.csproj --no-restore`: succeeded, 0 warnings, 0 errors.
+- `dotnet build src/BBT.Workflow.Application/BBT.Workflow.Application.csproj --no-restore`: succeeded, 1 existing NU1510 warning, 0 errors.
+
+### Scope Audit
+
+- No Task 3 redesign was introduced. The post-commit coordinator/executor path was inspected; this follow-up adds no new access to a disposed `sourceContext.Instance`.
+- Only runner/settlement runtime code and application tests were changed. Existing configuration and orchestration files were not modified.

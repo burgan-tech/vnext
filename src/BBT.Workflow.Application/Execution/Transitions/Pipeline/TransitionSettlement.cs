@@ -22,7 +22,7 @@ internal static class TransitionSettlement
         CancellationToken cancellationToken)
     {
         var updated = false;
-        if (!context.Instance.IsCompleted &&
+        if (context.Instance.IsBusy &&
             resolvedStatus is not null &&
             context.Target?.SubType != StateSubType.Busy &&
             !context.Instance.ActiveCorrelations.Any(c =>
