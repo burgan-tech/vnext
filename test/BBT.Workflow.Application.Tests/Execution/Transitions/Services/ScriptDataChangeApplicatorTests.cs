@@ -47,13 +47,56 @@ public sealed class ScriptDataChangeApplicatorTests
 
         result.IsSuccess.ShouldBeTrue();
         ((JsonData)fixture.Transition.Data!).Json.ShouldBe(fixture.Success.LatestData.Data.Json);
-        fixture.Transition.Instance.LatestData!.Id.ShouldBe(fixture.Success.LatestData.Id);
         fixture.Transition.Instance.Stage.ShouldBe("review");
         fixture.ScriptContext.Instance!.GetPendingDataChangeSet().ShouldBeNull();
         await fixture.Reconciler.Received(1).ApplyAsync(
             fixture.Transition.Instance,
             Arg.Any<InstanceDataChangeSet>(),
             Arg.Any<CancellationToken>());
+
+        // Tracked-aggregate row synchronization is owned by the repository append (mocked out
+        // here), so the applicator must not have touched the aggregate's data list itself.
+        fixture.Transition.Instance.DataList.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Enabled_rebase_already_applied_should_not_attach_detached_latest_row()
+    {
+        var fixture = ApplicatorFixture.Create(enabled: true);
+
+        // Short-circuit shape from InstanceDataReconciliationService: a competing writer already
+        // persisted the batch, so AppendedData is empty and LatestData is a DETACHED rehydrated
+        // head whose Id does not exist in the tracked partially loaded aggregate.
+        var detached = fixture.Success.LatestData;
+        fixture.Reconciler.ApplyAsync(default!, default!, default)
+            .ReturnsForAnyArgs(Result<InstanceDataReconciliationResult>.Ok(
+                new InstanceDataReconciliationResult(detached, [], 2, true)));
+
+        var result = await fixture.Applicator.ApplyAsync(fixture.Transition, fixture.ScriptContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        ((JsonData)fixture.Transition.Data!).Json.ShouldBe(detached.Data.Json);
+
+        // The detached row must NOT be pushed into the tracked aggregate — EF would mark it
+        // Added and re-insert an already persisted row (duplicate primary key).
+        fixture.Transition.Instance.DataList.ShouldNotContain(x => x.Id == detached.Id);
+        fixture.Transition.Instance.DataList.Count.ShouldBe(1);
+        fixture.ScriptContext.Instance!.GetPendingDataChangeSet().ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Enabled_with_null_script_instance_should_no_op_like_legacy()
+    {
+        var fixture = ApplicatorFixture.Create(enabled: true, withScriptInstance: false);
+        fixture.ScriptContext.Mutations.SetStage("review");
+
+        var result = await fixture.Applicator.ApplyAsync(fixture.Transition, fixture.ScriptContext, CancellationToken.None);
+
+        // Legacy ApplyScriptContextChanges skips everything (rows AND mutations) when the
+        // script instance is null; the flag-ON path must not silently differ.
+        result.IsSuccess.ShouldBeTrue();
+        fixture.Transition.Instance.Stage.ShouldNotBe("review");
+        await fixture.Reconciler.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default!, default);
     }
 
     [Fact]
@@ -125,18 +168,25 @@ public sealed class ScriptDataChangeApplicatorTests
         public ScriptDataChangeApplicator Applicator { get; }
         public InstanceDataReconciliationResult Success { get; }
 
-        public static ApplicatorFixture Create(bool enabled, bool withPendingChanges = true)
+        public static ApplicatorFixture Create(
+            bool enabled,
+            bool withPendingChanges = true,
+            bool withScriptInstance = true)
         {
             var live = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0", "fixture-key");
             live.AddData(Guid.NewGuid(), new JsonData("{\"base\":1}"));
             live.MarkDataPartiallyLoaded();
 
-            var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
-                .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
-                .SetInstance(live.CreateTrackedDataSnapshot())
-                .Build();
+            var scriptContextBuilder = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+                .SetRuntime(Substitute.For<IRuntimeInfoProvider>());
+            if (withScriptInstance)
+            {
+                scriptContextBuilder = scriptContextBuilder.SetInstance(live.CreateTrackedDataSnapshot());
+            }
 
-            if (withPendingChanges)
+            var scriptContext = scriptContextBuilder.Build();
+
+            if (withScriptInstance && withPendingChanges)
             {
                 scriptContext.Instance!.AddData(Guid.NewGuid(), new JsonData("{\"local\":2}"));
             }
