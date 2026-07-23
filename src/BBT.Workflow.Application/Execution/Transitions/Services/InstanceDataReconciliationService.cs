@@ -14,6 +14,13 @@ public sealed class InstanceDataReconciliationService(
         InstanceDataChangeSet changeSet,
         CancellationToken cancellationToken)
     {
+        if (changeSet.Contributions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Instance data reconciliation requires at least one contribution.");
+        }
+
+        var contributions = changeSet.Contributions.OrderBy(x => x.Order).ToArray();
         var head = GetValidatedInitialHead(instance, changeSet);
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
@@ -22,7 +29,17 @@ public sealed class InstanceDataReconciliationService(
                 head = await repository.GetLatestDataHeadAsync(instance.Id, cancellationToken);
 
             var working = instance.CreateReconciliationSnapshot(head);
-            var appended = Replay(working, changeSet.Contributions);
+            if (attempt > 1 && IsCompleteBatchAlreadyApplied(head, contributions))
+            {
+                return Result<InstanceDataReconciliationResult>.Ok(
+                    new InstanceDataReconciliationResult(
+                        working.LatestData!,
+                        [],
+                        attempt,
+                        true));
+            }
+
+            var appended = Replay(working, contributions);
             if (appended.Count == 0)
             {
                 return Result<InstanceDataReconciliationResult>.Ok(
@@ -45,9 +62,11 @@ public sealed class InstanceDataReconciliationService(
 
             if (appendResult.Status is ConditionalAppendStatus.Applied or ConditionalAppendStatus.NoChange)
             {
+                var latestData = appendResult.LatestData ?? throw new InvalidOperationException(
+                    $"Conditional append status '{appendResult.Status}' requires a latest data row.");
                 return Result<InstanceDataReconciliationResult>.Ok(
                     new InstanceDataReconciliationResult(
-                        appendResult.LatestData!,
+                        latestData,
                         appendResult.AppendedData,
                         attempt,
                         attempt > 1));
@@ -81,6 +100,22 @@ public sealed class InstanceDataReconciliationService(
         }
 
         return appended;
+    }
+
+    private static bool IsCompleteBatchAlreadyApplied(
+        InstanceDataHead? head,
+        IReadOnlyList<InstanceDataContribution> orderedContributions)
+    {
+        if (head is null)
+            return false;
+
+        var last = orderedContributions[^1];
+        return head.DataId == last.DataId &&
+               string.Equals(head.Version, last.Version, StringComparison.Ordinal) &&
+               head.HistorySequence == last.HistorySequence &&
+               string.Equals(head.ETag, last.ETag, StringComparison.Ordinal) &&
+               string.Equals(head.DataHash, last.DataHash, StringComparison.Ordinal) &&
+               head.EnteredAt == last.EnteredAt;
     }
 
     private static InstanceDataHead? GetValidatedInitialHead(

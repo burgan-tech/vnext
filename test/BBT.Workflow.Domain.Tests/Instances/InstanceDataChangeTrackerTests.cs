@@ -43,6 +43,27 @@ public sealed class InstanceDataChangeTrackerTests : DomainTestBase<DomainEntryP
     }
 
     [Fact]
+    public void Tracked_contribution_should_copy_input_and_capture_original_result_identity()
+    {
+        var snapshot = CreateWithData("{\"base\":1}").CreateTrackedDataSnapshot();
+        var input = JsonData.CreateFrom("{\"local\":2}");
+
+        var originalResult = snapshot.AddData(
+            Guid.NewGuid(),
+            input,
+            VersionStrategy.IncreasePatch);
+
+        var contribution = Assert.Single(snapshot.GetPendingDataChangeSet()!.Contributions);
+        Assert.NotSame(input, contribution.Input);
+        Assert.Equal(input.Json, contribution.Input.Json);
+        Assert.Equal(originalResult.Version, contribution.Version);
+        Assert.Equal(originalResult.HistorySequence, contribution.HistorySequence);
+        Assert.Equal(originalResult.ETag, contribution.ETag);
+        Assert.Equal(originalResult.DataHash, contribution.DataHash);
+        Assert.Equal(originalResult.EnteredAt, contribution.EnteredAt);
+    }
+
+    [Fact]
     public void Ordinary_snapshot_should_not_create_a_change_set()
     {
         var snapshot = CreateWithData("{\"value\":1}").CreateSnapshot();

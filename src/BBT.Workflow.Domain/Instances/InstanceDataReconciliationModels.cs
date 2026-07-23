@@ -8,6 +8,11 @@ public sealed record InstanceDataContribution(
     Guid DataId,
     JsonData Input,
     VersionStrategy VersionStrategy,
+    string Version,
+    int HistorySequence,
+    string ETag,
+    string DataHash,
+    DateTime EnteredAt,
     int Order);
 
 public sealed record InstanceDataChangeSet(

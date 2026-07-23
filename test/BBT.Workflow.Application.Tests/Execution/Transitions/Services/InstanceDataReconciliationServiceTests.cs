@@ -128,9 +128,13 @@ public sealed class InstanceDataReconciliationServiceTests
     public async Task Stable_contribution_id_on_fresh_head_should_still_append_and_surface_repository_error()
     {
         var fixture = ReconciliationFixture.Create(localInput: "{\"local\":2}");
+        var mismatchedHead = fixture.ExactAppliedHead("{\"base\":1,\"local\":2}") with
+        {
+            ETag = "different-etag"
+        };
         var idempotencyError = Error.Conflict(
             "InstanceData:IdempotencyConflict",
-            "The contribution ID already exists with different content.");
+            "The contribution ID already exists with different identity.");
         fixture.Repository.EnqueueAppend(
             _ => Conflict(),
             _ => new ConditionalAppendResult(
@@ -138,9 +142,7 @@ public sealed class InstanceDataReconciliationServiceTests
                 null,
                 [],
                 idempotencyError));
-        fixture.Repository.EnqueueHead(fixture.Head(
-            "{\"remote\":1}",
-            fixture.ContributionIds[0]));
+        fixture.Repository.EnqueueHead(mismatchedHead);
 
         var result = await fixture.Service.ApplyAsync(
             fixture.Live,
@@ -153,7 +155,56 @@ public sealed class InstanceDataReconciliationServiceTests
         fixture.Repository.FreshReadCount.ShouldBe(1);
         var prepared = fixture.Repository.AppendCalls[1].Data.ShouldHaveSingleItem();
         prepared.DataId.ShouldBe(fixture.ContributionIds[0]);
-        prepared.Data.Json.ShouldBe("{\"remote\":1,\"local\":2}");
+        prepared.Data.Json.ShouldBe("{\"base\":1,\"local\":2}");
+    }
+
+    [Fact]
+    public async Task Exact_original_result_head_should_recognize_already_applied_batch()
+    {
+        var fixture = ReconciliationFixture.Create(localInput: "{\"local\":2}");
+        var appliedHead = fixture.ExactAppliedHead("{\"base\":1,\"local\":2}");
+        fixture.Repository.EnqueueAppend(_ => Conflict());
+        fixture.Repository.EnqueueHead(appliedHead);
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live,
+            fixture.ChangeSet,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.AttemptCount.ShouldBe(2);
+        result.Value.WasRebased.ShouldBeTrue();
+        result.Value.AppendedData.ShouldBeEmpty();
+        result.Value.LatestData.Id.ShouldBe(appliedHead.DataId);
+        result.Value.LatestData.ETag.ShouldBe(appliedHead.ETag);
+        result.Value.LatestData.Data.Json.ShouldBe(appliedHead.Data.Json);
+        fixture.Repository.AppendCalls.Count.ShouldBe(1);
+        fixture.Repository.FreshReadCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Exact_last_result_head_should_recognize_already_applied_atomic_batch()
+    {
+        var fixture = ReconciliationFixture.Create(
+            ("{\"first\":1}", VersionStrategy.IncreasePatch),
+            ("{\"second\":2}", VersionStrategy.IncreaseMinor));
+        var appliedHead = fixture.ExactAppliedHead(
+            "{\"base\":1,\"first\":1,\"second\":2}");
+        fixture.Repository.EnqueueAppend(_ => Conflict());
+        fixture.Repository.EnqueueHead(appliedHead);
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live,
+            fixture.ChangeSet,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.AttemptCount.ShouldBe(2);
+        result.Value.WasRebased.ShouldBeTrue();
+        result.Value.LatestData.Id.ShouldBe(fixture.ContributionIds[1]);
+        result.Value.LatestData.Data.Json.ShouldBe(appliedHead.Data.Json);
+        fixture.Repository.AppendCalls.Count.ShouldBe(1);
+        fixture.Repository.FreshReadCount.ShouldBe(1);
     }
 
     [Fact]
@@ -235,6 +286,42 @@ public sealed class InstanceDataReconciliationServiceTests
             fixture.Service.ApplyAsync(fixture.Live, fixture.ChangeSet, CancellationToken.None));
 
         exception.Message.ShouldBe("Unsupported conditional append status '999'.");
+        fixture.Repository.AppendCalls.Count.ShouldBe(1);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Empty_contribution_change_set_should_throw_without_repository_calls()
+    {
+        var fixture = ReconciliationFixture.CreateWithoutBaseline("{\"local\":2}");
+        var empty = fixture.ChangeSet with { Contributions = [] };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, empty, CancellationToken.None));
+
+        exception.Message.ShouldBe(
+            "Instance data reconciliation requires at least one contribution.");
+        fixture.Repository.AppendCalls.Count.ShouldBe(0);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData(ConditionalAppendStatus.Applied)]
+    [InlineData(ConditionalAppendStatus.NoChange)]
+    public async Task Successful_repository_status_without_latest_data_should_throw(
+        ConditionalAppendStatus status)
+    {
+        var fixture = ReconciliationFixture.Create();
+        fixture.Repository.EnqueueAppend(_ => new ConditionalAppendResult(
+            status,
+            null,
+            []));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, fixture.ChangeSet, CancellationToken.None));
+
+        exception.Message.ShouldBe(
+            $"Conditional append status '{status}' requires a latest data row.");
         fixture.Repository.AppendCalls.Count.ShouldBe(1);
         fixture.Repository.FreshReadCount.ShouldBe(0);
     }
@@ -407,6 +494,20 @@ public sealed class InstanceDataReconciliationServiceTests
                 fingerprintSource.DataHash,
                 data,
                 DateTime.UtcNow);
+        }
+
+        public InstanceDataHead ExactAppliedHead(string json)
+        {
+            var contribution = ChangeSet.Contributions.OrderBy(x => x.Order).Last();
+            return new InstanceDataHead(
+                contribution.DataId,
+                contribution.ETag,
+                contribution.Version,
+                101,
+                contribution.HistorySequence,
+                contribution.DataHash,
+                new JsonData(json),
+                contribution.EnteredAt);
         }
     }
 

@@ -1098,7 +1098,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             }
 
             _dataList.Add(newData);
-            _dataChangeTracker?.Record(id, inputData, resolvedStrategy);
+            _dataChangeTracker?.Record(newData, inputData, resolvedStrategy);
             return newData;
         }
     }
