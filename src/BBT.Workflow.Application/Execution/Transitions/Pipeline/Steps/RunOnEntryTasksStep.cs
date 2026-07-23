@@ -6,6 +6,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Tasks.Coordinator;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -22,7 +23,8 @@ public sealed class RunOnEntryTasksStep(
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     IInstanceTaskRepository instanceTaskRepository,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IScriptDataChangeApplicator scriptDataChangeApplicator) : ITransitionStep
 {
     /// <summary>
     /// Context key for storing failed OnExecuteTask for Error Boundary.
@@ -73,7 +75,9 @@ public sealed class RunOnEntryTasksStep(
                 context.Items[TaskExecutionErrorKey] = tasksResult.TaskError;
 
             // Apply script context changes before handling boundary
-            context.ApplyScriptContextChanges(scriptContext);
+            var boundaryApplyResult = await scriptDataChangeApplicator.ApplyAsync(context, scriptContext, cancellationToken);
+            if (!boundaryApplyResult.IsSuccess)
+                return Result<StepOutcome>.Fail(boundaryApplyResult.Error);
             await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
             return BoundaryOutcomeHandler.Handle(context, tasksResult);
@@ -117,9 +121,11 @@ public sealed class RunOnEntryTasksStep(
             }
         }
         
-        context.ApplyScriptContextChanges(scriptContext);
+        var applyResult = await scriptDataChangeApplicator.ApplyAsync(context, scriptContext, cancellationToken);
+        if (!applyResult.IsSuccess)
+            return Result<StepOutcome>.Fail(applyResult.Error);
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-        
+
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 

@@ -254,6 +254,25 @@ public sealed class TransitionExecutionContext
             Data = Instance.Data;
         }
 
+        ApplyScriptContextMutations(scriptContext);
+    }
+
+    /// <summary>
+    /// Applies only the accumulated <see cref="ScriptContext.Mutations"/> (e.g. Stage) to the
+    /// live <see cref="Instance"/>, without replaying script data rows. Used by the
+    /// reconciliation-aware applicator, which persists data rows through the reconciliation
+    /// service instead of the legacy row replay in <see cref="ApplyScriptContextChanges"/>.
+    /// </summary>
+    /// <param name="scriptContext">The script context containing accumulated mutations.</param>
+    public void ApplyScriptContextMutations(ScriptContext scriptContext)
+    {
+        ArgumentNullException.ThrowIfNull(scriptContext);
+
+        if (Instance == null)
+        {
+            return;
+        }
+
         if (scriptContext.Mutations.HasChanges)
         {
             scriptContext.Mutations.ApplyTo(Instance);

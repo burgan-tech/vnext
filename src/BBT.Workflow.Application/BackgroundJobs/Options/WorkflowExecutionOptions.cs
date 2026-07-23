@@ -126,6 +126,16 @@ public sealed class WorkflowExecutionOptions
     public bool InProcessSameDomainForwarding { get; set; }
 
     /// <summary>
+    /// When enabled, task-phase script data changes are persisted through the optimistic
+    /// instance-data reconciliation service (journaled contributions + conditional atomic append
+    /// with bounded rebase retries) instead of the legacy fail-fast row replay. Requires the
+    /// latest-only aggregate loading model (<see cref="LatestOnlyInstanceLoading"/>) because
+    /// reconciled rows are synchronized onto a partially loaded aggregate.
+    /// Default: false (canary rollout — enable per environment).
+    /// </summary>
+    public bool EnableInstanceDataReconciliation { get; set; }
+
+    /// <summary>
     /// In-handler retry policy for transient instance-lock conflicts inside transition jobs.
     /// The Dapr job can fire while a competing holder (e.g. the enqueue accept lock or a
     /// finishing chain) still holds the instance execution lock for a few milliseconds;
