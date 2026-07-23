@@ -1509,8 +1509,9 @@ public sealed class EfCoreInstanceRepository(
     /// <c>try_append_instance_data_batch</c> compare-and-swap function, inside the ambient
     /// transition transaction. Returned rows carry the database-assigned <c>VersionNo</c> and are
     /// attached to the change tracker as <see cref="EntityState.Unchanged"/> (never re-inserted);
-    /// stale tracked rows of the instance are detached so their outdated <c>IsLatest</c> flag can
-    /// neither be written back nor trigger orphan/delete detection.
+    /// already-tracked rows are reused, demoted heads are aligned in place, and a tracked
+    /// <see cref="Instance"/> aggregate has its data list synchronized so a subsequent
+    /// <c>SaveChanges</c> can neither duplicate-insert nor orphan-delete instance data rows.
     /// </summary>
     /// <param name="instanceId">The owning instance.</param>
     /// <param name="expectedLatestDataId">Expected latest data id (<c>null</c> = data-less instance).</param>
@@ -1562,17 +1563,18 @@ public sealed class EfCoreInstanceRepository(
         {
             rows = await ReadConditionalRowsAsync(command, cancellationToken);
         }
-        catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.SerializationFailure
-                                               or PostgresErrorCodes.DeadlockDetected)
-        {
-            // Transient serialization/deadlock loss: surface as a retryable CAS conflict.
-            return new ConditionalAppendResult(ConditionalAppendStatus.Conflict, null, []);
-        }
+        // DELIBERATE deviation from the plan sketch: serialization failures (40001) and
+        // deadlocks (40P01) are NOT converted into a retryable Conflict status. Either error
+        // aborts the ambient transaction, so an in-place retry by the reconciliation service
+        // would immediately fail with 25P02 (in_failed_sql_transaction) on the same connection,
+        // masking the root cause. They propagate instead — like any other infrastructure
+        // failure — and the pipeline's error handling deals with the aborted transaction.
+        // Cancellation and connectivity exceptions equally propagate untouched.
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException)
         {
             // Custom P0001 contract violations (e.g. instance_data_idempotency_violation) are
             // NON-retryable: the batch content itself breaks the append contract, so retrying
-            // with the same rows can never succeed. Cancellation/connectivity errors propagate.
+            // with the same rows can never succeed.
             return new ConditionalAppendResult(
                 ConditionalAppendStatus.Conflict,
                 null,
@@ -1581,6 +1583,13 @@ public sealed class EfCoreInstanceRepository(
                     WorkflowErrorCodes.InstanceDataConcurrencyConflict,
                     $"Instance data batch violated the conditional append contract: {ex.MessageText}.",
                     target: instanceId.ToString()));
+        }
+
+        if (rows.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"try_append_instance_data_batch returned no rows for instance '{instanceId}'; " +
+                "the function contract guarantees at least one applied/no_change/conflict row.");
         }
 
         if (rows.Count == 1 && rows[0].Status == "conflict")
@@ -1593,30 +1602,69 @@ public sealed class EfCoreInstanceRepository(
                 ObservedHead: observed.Id is null ? null : ToHead(observed));
         }
 
-        var entities = rows.Select(row => ToInstanceData(instanceId, row)).ToArray();
+        // Synchronize the change tracker with the database-authoritative rows WITHOUT ever
+        // leaving a detached entity reachable from a tracked aggregate: a detached row still
+        // referenced by a tracked Instance.DataList would be re-marked Added by DetectChanges
+        // and re-inserted (PK violation). Already-tracked rows are therefore reused as-is
+        // (their persisted fields are identical per the function's idempotency contract), new
+        // rows are attached as Unchanged so SaveChanges never re-inserts them, and demoted
+        // heads are aligned in place (writing IsLatest = false idempotently matches the value
+        // the function already persisted).
+        var trackedById = context.ChangeTracker.Entries<InstanceData>()
+            .Where(x => x.Entity.InstanceId == instanceId)
+            .ToDictionary(x => x.Entity.Id, x => x.Entity);
 
-        // Synchronize the change tracker with the database-authoritative rows: every tracked
-        // InstancesData entry of this instance is stale now (the previous head was demoted by
-        // the function). Detaching is mandatory — it prevents EF orphan/delete detection when
-        // the aggregate's data list is replaced and stops the stale IsLatest=true value from
-        // being written back. The returned rows are then attached as Unchanged so a subsequent
-        // SaveChanges never re-inserts them (they already exist in the database).
-        foreach (var stale in context.ChangeTracker.Entries<InstanceData>()
-                     .Where(x => x.Entity.InstanceId == instanceId)
-                     .ToArray())
+        var entities = new InstanceData[rows.Count];
+        for (var i = 0; i < rows.Count; i++)
         {
-            stale.State = EntityState.Detached;
+            var row = rows[i];
+            if (trackedById.TryGetValue(row.Id!.Value, out var tracked))
+            {
+                entities[i] = tracked;
+                if (row.IsLatest != true && tracked.IsLatest)
+                {
+                    tracked.MarkAsNotLatest();
+                }
+            }
+            else
+            {
+                entities[i] = ToInstanceData(instanceId, row);
+                context.Attach(entities[i]);
+            }
         }
 
-        foreach (var entity in entities)
+        var returnedIds = rows.Select(x => x.Id!.Value).ToHashSet();
+        foreach (var staleHead in trackedById.Values
+                     .Where(x => x.IsLatest && !returnedIds.Contains(x.Id)))
         {
-            context.Attach(entity);
+            // The function demoted this head inside the database; align the tracked entity in
+            // place instead of detaching it (see the reachability note above).
+            staleHead.MarkAsNotLatest();
         }
 
-        var latest = entities.Single(x => x.IsLatest);
+        // If the Instance aggregate itself is tracked (production pipeline shape: loaded via
+        // WithDetailsAsync), reconcile its data list through the Task 1 domain synchronization
+        // helper. EF relationship fixup has already injected the newly attached rows into the
+        // tracked collection; the helper additively fills any gap and restores the
+        // single-latest invariant on latest-only aggregates.
+        var trackedInstance = context.ChangeTracker.Entries<Instance>()
+            .SingleOrDefault(x => x.Entity.Id == instanceId)?.Entity;
+        if (trackedInstance is not null && trackedInstance.IsDataPartiallyLoaded)
+        {
+            trackedInstance.SynchronizePartiallyLoadedData(entities);
+        }
+
+        var latestRows = entities.Where(x => x.IsLatest).ToArray();
+        if (latestRows.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"try_append_instance_data_batch returned {latestRows.Length} latest rows for " +
+                $"instance '{instanceId}'; exactly one returned row must be the latest head.");
+        }
+
         return new ConditionalAppendResult(
             rows[0].Status == "no_change" ? ConditionalAppendStatus.NoChange : ConditionalAppendStatus.Applied,
-            latest,
+            latestRows[0],
             entities);
     }
 

@@ -96,9 +96,12 @@ public sealed class EfCoreInstanceDataConcurrencyRepositoryTests : IAsyncLifetim
         context.ChangeTracker.Entries<InstanceData>()
             .Count(x => x.State == EntityState.Added).ShouldBe(0);
 
-        // The stale tracked head still claims IsLatest = true; it must be detached so it can
-        // neither trigger orphan/delete detection nor write its stale flag back.
-        context.Entry(trackedStaleHead).State.ShouldBe(EntityState.Detached);
+        // The stale tracked head must be demoted in place, never detached: a detached row
+        // still referenced from a tracked Instance.DataList would be re-marked Added by
+        // DetectChanges and re-inserted. Writing IsLatest = false matches the value the
+        // database function already persisted.
+        trackedStaleHead.IsLatest.ShouldBeFalse();
+        context.Entry(trackedStaleHead).State.ShouldBe(EntityState.Modified);
 
         // Database-assigned VersionNo must be preserved on the synchronized entity.
         result.LatestData.ShouldNotBeNull();
@@ -112,6 +115,58 @@ public sealed class EfCoreInstanceDataConcurrencyRepositoryTests : IAsyncLifetim
 
         await transaction.RollbackAsync();
         (await ReadRowCountInNewContextAsync(baseline.InstanceId)).ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Append_with_tracked_instance_aggregate_should_keep_data_list_save_safe(
+        bool markPartiallyLoaded)
+    {
+        var baseline = await SeedBaselineAsync();
+        await using var context = CreateContext();
+        await using var transaction = await context.Database.BeginTransactionAsync();
+
+        // Production shape: the pipeline loads the aggregate tracked WITH DataList included
+        // (WithDetailsAsync). Latest-only loading additionally marks it partially loaded.
+        var instance = await context.Instances
+            .Include(x => x.DataList)
+            .SingleAsync(x => x.Id == baseline.InstanceId);
+        if (markPartiallyLoaded)
+        {
+            instance.MarkDataPartiallyLoaded();
+        }
+
+        var repository = CreateRepository(context);
+
+        var result = await repository.TryAppendDataAsync(
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            new[] { PreparedAfterBaseline("""{"local":1}""") },
+            CancellationToken.None);
+
+        result.Status.ShouldBe(ConditionalAppendStatus.Applied);
+
+        // Flushing the tracked aggregate must neither re-insert the stale old head (PK
+        // violation via re-Added detached entries) nor duplicate the appended rows.
+        await context.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        instance.DataList.Count.ShouldBe(2);
+        instance.DataList.Count(x => x.IsLatest).ShouldBe(1);
+        instance.DataList.Single(x => x.IsLatest).Id.ShouldBe(result.LatestData!.Id);
+
+        await using var verification = CreateContext();
+        var persisted = await verification.InstancesData.AsNoTracking()
+            .Where(x => x.InstanceId == baseline.InstanceId)
+            .OrderBy(x => x.VersionNo)
+            .ToListAsync();
+        persisted.Count.ShouldBe(2);
+        persisted.Count(x => x.IsLatest).ShouldBe(1);
+        persisted.Single(x => x.IsLatest).Id.ShouldBe(result.LatestData.Id);
+        persisted.Select(x => x.Id)
+            .ShouldBe(instance.DataList.OrderBy(d => d.VersionNo).Select(d => d.Id));
     }
 
     [Fact]
