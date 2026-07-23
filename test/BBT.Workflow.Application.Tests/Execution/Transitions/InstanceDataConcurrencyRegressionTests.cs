@@ -41,22 +41,35 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions;
 /// the concurrency repository is faked (with call counters and genuine CAS semantics).
 /// </para>
 /// </summary>
-public sealed class InstanceDataConcurrencyRegressionTests
+public sealed class InstanceDataConcurrencyRegressionTests : IDisposable
 {
     private const string StaleBaselineJson = "{\"base\":1}";
     private const string RemoteHeadJson = "{\"base\":1,\"remote\":3}";
     private const string LocalContributionJson = "{\"local\":2}";
     private const string ExpectedMergedJson = "{\"base\":1,\"remote\":3,\"local\":2}";
 
+    private readonly IServiceProvider? _previousAmbient;
+    private readonly ServiceProvider _ambientProvider;
+
     private int _taskExecutionCount;
     private int _pipelineExecutionCount;
 
     public InstanceDataConcurrencyRegressionTests()
     {
+        // Ambient provider needed by PostSharp aspect interception ([SchemaValidation] on
+        // Instance data appends resolves IWorkflowContext from it).
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IWorkflowContext>(new NullWorkflowContext());
-        AmbientServiceProvider.Current = services.BuildServiceProvider();
+        _ambientProvider = services.BuildServiceProvider();
+        _previousAmbient = AmbientServiceProvider.Current;
+        AmbientServiceProvider.Current = _ambientProvider;
+    }
+
+    public void Dispose()
+    {
+        AmbientServiceProvider.Current = _previousAmbient;
+        _ambientProvider.Dispose();
     }
 
     [Fact]
@@ -232,6 +245,11 @@ public sealed class InstanceDataConcurrencyRegressionTests
             "MarkAsNotLatest",
             BindingFlags.Instance | BindingFlags.NonPublic)!;
 
+        // The head the database currently holds; starts at the competing writer's head and
+        // advances after every Applied append, so a subsequent stale append would conflict
+        // exactly as the real conditional-append function behaves.
+        private InstanceDataHead _currentHead = remoteHead;
+
         public InstanceDataHead RemoteHead { get; } = remoteHead;
         public int FreshHeadReadCount { get; private set; }
         public int ConditionalAppendCount { get; private set; }
@@ -242,7 +260,7 @@ public sealed class InstanceDataConcurrencyRegressionTests
             CancellationToken cancellationToken)
         {
             FreshHeadReadCount++;
-            return Task.FromResult<InstanceDataHead?>(RemoteHead);
+            return Task.FromResult<InstanceDataHead?>(_currentHead);
         }
 
         public Task<ConditionalAppendResult> TryAppendDataAsync(
@@ -255,18 +273,19 @@ public sealed class InstanceDataConcurrencyRegressionTests
             ConditionalAppendCount++;
             AppendCalls.Add(new AppendCall(expectedLatestDataId, expectedLatestEtag, data.ToArray()));
 
-            if (expectedLatestDataId != RemoteHead.DataId ||
-                !string.Equals(expectedLatestEtag, RemoteHead.ETag, StringComparison.Ordinal))
+            if (expectedLatestDataId != _currentHead.DataId ||
+                !string.Equals(expectedLatestEtag, _currentHead.ETag, StringComparison.Ordinal))
             {
                 return Task.FromResult(new ConditionalAppendResult(
                     ConditionalAppendStatus.Conflict,
                     null,
                     [],
                     null,
-                    RemoteHead));
+                    _currentHead));
             }
 
-            var versionNo = RemoteHead.VersionNo;
+            var versionNo = _currentHead.VersionNo;
+            InstanceDataHead? appendedHead = null;
             var persisted = data.Select(item =>
             {
                 var head = new InstanceDataHead(
@@ -278,11 +297,15 @@ public sealed class InstanceDataConcurrencyRegressionTests
                     item.DataHash,
                     new JsonData(item.Data.Json),
                     item.EnteredAt);
+                if (item.IsLatest)
+                    appendedHead = head;
                 var rehydrated = (InstanceData)RehydrateMethod.Invoke(null, [instanceId, head])!;
                 if (!item.IsLatest)
                     MarkAsNotLatestMethod.Invoke(rehydrated, null);
                 return rehydrated;
             }).ToArray();
+
+            _currentHead = appendedHead ?? _currentHead;
 
             return Task.FromResult(new ConditionalAppendResult(
                 ConditionalAppendStatus.Applied,

@@ -297,7 +297,7 @@ public sealed class InstanceDataConditionalAppendFunctionTests : IAsyncLifetime
             baseline.InstanceId,
             baseline.DataId,
             baseline.ETag,
-            Rows((MergeJson("""{"counter":1}""", """{"counter":2}"""), true)));
+            [Row(MergeJson("""{"counter":1}""", """{"counter":2}"""), true, "1.0.1")]);
         writerAResult.ShouldHaveSingleItem().Status.ShouldBe("applied");
 
         // Writer B conflicts from the stale baseline with counter=5, then rebases onto the
@@ -317,7 +317,7 @@ public sealed class InstanceDataConditionalAppendFunctionTests : IAsyncLifetime
             baseline.InstanceId,
             observedHead.Id,
             observedHead.ETag,
-            Rows((MergeJson(observedHead.Data!, """{"counter":5}"""), true)));
+            [Row(MergeJson(observedHead.Data!, """{"counter":5}"""), true, "1.0.2")]);
         retry.ShouldHaveSingleItem().Status.ShouldBe("applied");
 
         // The writer whose atomic append occurred LAST wins the scalar path.
@@ -340,7 +340,7 @@ public sealed class InstanceDataConditionalAppendFunctionTests : IAsyncLifetime
             baseline.InstanceId,
             baseline.DataId,
             baseline.ETag,
-            Rows((MergeJson("""{"items":[1,2]}""", """{"items":[3]}"""), true)));
+            [Row(MergeJson("""{"items":[1,2]}""", """{"items":[3]}"""), true, "1.0.1")]);
         writerAResult.ShouldHaveSingleItem().Status.ShouldBe("applied");
 
         // Writer B conflicts from the stale baseline with [4,5,6], rebases onto the observed
@@ -360,7 +360,7 @@ public sealed class InstanceDataConditionalAppendFunctionTests : IAsyncLifetime
             baseline.InstanceId,
             observedHead.Id,
             observedHead.ETag,
-            Rows((MergeJson(observedHead.Data!, """{"items":[4,5,6]}"""), true)));
+            [Row(MergeJson(observedHead.Data!, """{"items":[4,5,6]}"""), true, "1.0.2")]);
         retry.ShouldHaveSingleItem().Status.ShouldBe("applied");
 
         var latest = await ReadLatestAsync(TenantA, baseline.InstanceId);
