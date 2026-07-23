@@ -620,7 +620,7 @@ public interface IWorkflowMetrics
     /// </summary>
     /// <param name="flow">Workflow (flow) identifier</param>
     /// <param name="pipelineStep">Pipeline task phase (e.g. OnExecute/OnExit/OnEntry) or "unknown"</param>
-    /// <param name="result">Operation result (applied, no_change, failed, exhausted)</param>
+    /// <param name="result">Operation result (applied, no_change, failed, exhausted, error)</param>
     /// <param name="rebased">Whether the operation needed at least one rebase retry</param>
     /// <param name="attempts">Total attempts consumed (observed on the attempts histogram)</param>
     /// <param name="durationSeconds">Total reconciliation duration in seconds (histogram observation)</param>
