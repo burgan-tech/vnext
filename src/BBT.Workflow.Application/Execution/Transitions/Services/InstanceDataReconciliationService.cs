@@ -14,9 +14,7 @@ public sealed class InstanceDataReconciliationService(
         InstanceDataChangeSet changeSet,
         CancellationToken cancellationToken)
     {
-        InstanceDataHead? head = changeSet.Baseline is null
-            ? null
-            : ToHead(instance.LatestData!);
+        var head = GetValidatedInitialHead(instance, changeSet);
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -54,6 +52,12 @@ public sealed class InstanceDataReconciliationService(
                         attempt,
                         attempt > 1));
             }
+
+            if (appendResult.Status != ConditionalAppendStatus.Conflict)
+            {
+                throw new InvalidOperationException(
+                    $"Unsupported conditional append status '{appendResult.Status}'.");
+            }
         }
 
         return Result<InstanceDataReconciliationResult>.Fail(
@@ -72,11 +76,47 @@ public sealed class InstanceDataReconciliationService(
                 contribution.DataId,
                 new JsonData(contribution.Input.Json),
                 contribution.VersionStrategy);
-            if (after.Id != before?.Id)
+            if (!ReferenceEquals(after, before))
                 appended.Add(after);
         }
 
         return appended;
+    }
+
+    private static InstanceDataHead? GetValidatedInitialHead(
+        Instance instance,
+        InstanceDataChangeSet changeSet)
+    {
+        if (changeSet.InstanceId != instance.Id)
+        {
+            throw new InvalidOperationException(
+                $"Instance data change set '{changeSet.InstanceId}' does not belong to instance '{instance.Id}'.");
+        }
+
+        var latestData = instance.LatestData;
+        if (changeSet.Baseline is null)
+        {
+            if (latestData is not null)
+            {
+                throw new InvalidOperationException(
+                    "Instance data reconciliation expected the supplied instance to have no latest data.");
+            }
+
+            return null;
+        }
+
+        var baseline = changeSet.Baseline;
+        if (latestData is null ||
+            latestData.Id != baseline.DataId ||
+            !string.Equals(latestData.ETag, baseline.ETag, StringComparison.Ordinal) ||
+            !string.Equals(latestData.Version, baseline.Version, StringComparison.Ordinal) ||
+            latestData.VersionNo != baseline.VersionNo)
+        {
+            throw new InvalidOperationException(
+                "Instance data reconciliation baseline does not match the supplied instance latest data.");
+        }
+
+        return ToHead(latestData);
     }
 
     private static InstanceDataHead ToHead(InstanceData data) =>

@@ -47,6 +47,54 @@ public sealed class InstanceDataReconciliationServiceTests
     }
 
     [Fact]
+    public async Task Instance_id_mismatch_should_throw_without_repository_calls()
+    {
+        var fixture = ReconciliationFixture.Create();
+        var mismatched = fixture.ChangeSet with { InstanceId = Guid.NewGuid() };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, mismatched, CancellationToken.None));
+
+        exception.Message.ShouldBe(
+            $"Instance data change set '{mismatched.InstanceId}' does not belong to instance '{fixture.Live.Id}'.");
+        fixture.Repository.AppendCalls.Count.ShouldBe(0);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Baseline_mismatch_should_throw_without_repository_calls()
+    {
+        var fixture = ReconciliationFixture.Create();
+        var mismatched = fixture.ChangeSet with
+        {
+            Baseline = fixture.ChangeSet.Baseline! with { ETag = "different-etag" }
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, mismatched, CancellationToken.None));
+
+        exception.Message.ShouldBe(
+            "Instance data reconciliation baseline does not match the supplied instance latest data.");
+        fixture.Repository.AppendCalls.Count.ShouldBe(0);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Null_baseline_with_live_data_should_throw_without_repository_calls()
+    {
+        var fixture = ReconciliationFixture.CreateWithoutBaseline("{\"local\":2}");
+        fixture.Live.AddData(Guid.NewGuid(), JsonData.CreateFrom("{\"unexpected\":1}"));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, fixture.ChangeSet, CancellationToken.None));
+
+        exception.Message.ShouldBe(
+            "Instance data reconciliation expected the supplied instance to have no latest data.");
+        fixture.Repository.AppendCalls.Count.ShouldBe(0);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task One_conflict_should_refresh_and_replay_original_contribution()
     {
         var fixture = ReconciliationFixture.Create(localInput: "{\"local\":2}");
@@ -74,6 +122,121 @@ public sealed class InstanceDataReconciliationServiceTests
         rebasedCall.Data[0].DataId.ShouldBe(fixture.ContributionIds[0]);
         rebasedCall.Data[0].Version.ShouldBe("1.0.2");
         rebasedCall.Data[0].Data.Json.ShouldBe("{\"base\":1,\"remote\":1,\"local\":2}");
+    }
+
+    [Fact]
+    public async Task Stable_contribution_id_on_fresh_head_should_still_append_and_surface_repository_error()
+    {
+        var fixture = ReconciliationFixture.Create(localInput: "{\"local\":2}");
+        var idempotencyError = Error.Conflict(
+            "InstanceData:IdempotencyConflict",
+            "The contribution ID already exists with different content.");
+        fixture.Repository.EnqueueAppend(
+            _ => Conflict(),
+            _ => new ConditionalAppendResult(
+                ConditionalAppendStatus.Conflict,
+                null,
+                [],
+                idempotencyError));
+        fixture.Repository.EnqueueHead(fixture.Head(
+            "{\"remote\":1}",
+            fixture.ContributionIds[0]));
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live,
+            fixture.ChangeSet,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.ShouldBe(idempotencyError);
+        fixture.Repository.AppendCalls.Count.ShouldBe(2);
+        fixture.Repository.FreshReadCount.ShouldBe(1);
+        var prepared = fixture.Repository.AppendCalls[1].Data.ShouldHaveSingleItem();
+        prepared.DataId.ShouldBe(fixture.ContributionIds[0]);
+        prepared.Data.Json.ShouldBe("{\"remote\":1,\"local\":2}");
+    }
+
+    [Fact]
+    public async Task Conflict_followed_by_missing_fresh_head_should_replay_against_empty_data()
+    {
+        var fixture = ReconciliationFixture.Create(localInput: "{\"local\":2}");
+        fixture.Repository.EnqueueAppend(
+            _ => Conflict(),
+            fixture.Repository.Applied);
+        fixture.Repository.EnqueueHead((InstanceDataHead?)null);
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live,
+            fixture.ChangeSet,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.AttemptCount.ShouldBe(2);
+        result.Value.WasRebased.ShouldBeTrue();
+        fixture.Repository.FreshReadCount.ShouldBe(1);
+        var retry = fixture.Repository.AppendCalls[1];
+        retry.ExpectedLatestDataId.ShouldBeNull();
+        retry.ExpectedLatestEtag.ShouldBeNull();
+        retry.Data.ShouldHaveSingleItem().Data.Json.ShouldBe("{\"local\":2}");
+        retry.Data[0].Version.ShouldBe(WorkflowConstants.DefaultVersion);
+    }
+
+    [Fact]
+    public async Task Conflict_followed_by_replay_dedup_should_succeed_without_second_append()
+    {
+        var fixture = ReconciliationFixture.Create(localInput: "{\"same\":1}");
+        var freshHead = fixture.Head("{\"same\":1}");
+        fixture.Repository.EnqueueAppend(_ => Conflict());
+        fixture.Repository.EnqueueHead(freshHead);
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live,
+            fixture.ChangeSet,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.AttemptCount.ShouldBe(2);
+        result.Value.WasRebased.ShouldBeTrue();
+        result.Value.LatestData.Id.ShouldBe(freshHead.DataId);
+        fixture.Repository.AppendCalls.Count.ShouldBe(1);
+        fixture.Repository.FreshReadCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Repository_no_change_should_succeed_without_retry()
+    {
+        var fixture = ReconciliationFixture.Create();
+        fixture.Repository.EnqueueAppend(fixture.Repository.NoChange);
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live,
+            fixture.ChangeSet,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.AttemptCount.ShouldBe(1);
+        result.Value.WasRebased.ShouldBeFalse();
+        result.Value.AppendedData.ShouldBeEmpty();
+        fixture.Repository.AppendCalls.Count.ShouldBe(1);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Unknown_repository_status_should_throw_without_retry()
+    {
+        var fixture = ReconciliationFixture.Create();
+        const ConditionalAppendStatus unknownStatus = (ConditionalAppendStatus)999;
+        fixture.Repository.EnqueueAppend(_ => new ConditionalAppendResult(
+            unknownStatus,
+            null,
+            []));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, fixture.ChangeSet, CancellationToken.None));
+
+        exception.Message.ShouldBe("Unsupported conditional append status '999'.");
+        fixture.Repository.AppendCalls.Count.ShouldBe(1);
+        fixture.Repository.FreshReadCount.ShouldBe(0);
     }
 
     [Fact]
@@ -230,15 +393,21 @@ public sealed class InstanceDataReconciliationServiceTests
                 ids);
         }
 
-        public InstanceDataHead Head(string json) => new(
-            Guid.NewGuid(),
-            $"etag-{Guid.NewGuid():N}",
-            "1.0.1",
-            41,
-            1,
-            $"hash-{Guid.NewGuid():N}",
-            new JsonData(json),
-            DateTime.UtcNow);
+        public InstanceDataHead Head(string json, Guid? dataId = null)
+        {
+            var data = new JsonData(json);
+            var fingerprintSource = InstanceFactory.CreateDefault()
+                .AddData(Guid.NewGuid(), data);
+            return new InstanceDataHead(
+                dataId ?? Guid.NewGuid(),
+                $"etag-{Guid.NewGuid():N}",
+                "1.0.1",
+                41,
+                1,
+                fingerprintSource.DataHash,
+                data,
+                DateTime.UtcNow);
+        }
     }
 
     private sealed class ScriptedInstanceDataRepository : IInstanceDataConcurrencyRepository
@@ -317,6 +486,16 @@ public sealed class InstanceDataReconciliationServiceTests
                 ConditionalAppendStatus.Applied,
                 persisted.Last(),
                 persisted);
+        }
+
+        public ConditionalAppendResult NoChange(AppendCall call)
+        {
+            var applied = Applied(call);
+            return applied with
+            {
+                Status = ConditionalAppendStatus.NoChange,
+                AppendedData = []
+            };
         }
     }
 
