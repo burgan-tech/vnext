@@ -609,3 +609,85 @@ dispatch, definition publishing, full-history queries, or the existing merge str
 - Exactly one latest row and monotonically increasing `VersionNo` values are preserved.
 - The tracked EF aggregate is synchronized without duplicate inserts or accidental deletes.
 - Multi-schema isolation is preserved.
+
+## Implementation Verification
+
+Verified on 2026-07-23 at commit `7473841682a7ef255fc48c81d79d9864cc21d3e4`
+(branch `codex/instance-data-reconciliation`).
+
+### Formatting
+
+```text
+dotnet format BBT.Workflow.slnx --no-restore --include src/BBT.Workflow.Domain/Instances \
+  src/BBT.Workflow.Domain/Scripting src/BBT.Workflow.Domain/Execution/Transitions/Context \
+  src/BBT.Workflow.Application/Execution/Transitions src/BBT.Workflow.Application/BackgroundJobs/Options \
+  src/BBT.Workflow.Infrastructure/Instances src/BBT.Workflow.Infrastructure/Monitoring \
+  test/BBT.Workflow.Domain.Tests/Instances test/BBT.Workflow.Domain.Tests/Scripting \
+  test/BBT.Workflow.Application.Tests/Execution/Transitions \
+  test/BBT.Workflow.Infrastructure.Tests/Domains/Instances
+```
+
+Exit code 0; `git diff --stat` empty — no formatting changes were required.
+
+### Test Evidence
+
+```text
+dotnet test test/BBT.Workflow.Domain.Tests --no-restore \
+  --filter "FullyQualifiedName~InstanceData|FullyQualifiedName~ScriptContext"
+Failed: 94, Passed: 97, Skipped: 0, Total: 191
+```
+
+All 94 failures are pre-existing harness failures (`AmbientServiceProvider.Current` not
+initialized by the old Domain test harness) in `InstanceDataVersionComparerTests` (55),
+`InstanceDataTests` (36), and `InstanceTests` (3). The count is unchanged from the plan-start
+baseline (88 passed / 94 failed); the plan added 9 passing tests and introduced zero new
+failures, so the plan expectation "zero failed" is met for all reconciliation tests added or
+modified by this plan.
+
+```text
+dotnet test test/BBT.Workflow.Application.Tests --no-restore \
+  --filter "FullyQualifiedName~InstanceData|FullyQualifiedName~TaskStepDataReconciliation|FullyQualifiedName~ScriptDataChangeApplicator"
+Failed: 2, Passed: 59, Skipped: 0, Total: 61
+```
+
+The 2 failures (`InstanceQueryAppServiceVersionTests.GetInstanceDataAsync_WithNullVersion_UsesReadOnlyPath`,
+`InstanceQueryAppServiceVersionTests.GetInstanceDataAsync_WithSpecificVersion_UsesFullHistoryPath`)
+are pre-existing: the same tests fail identically at the branch merge-base `ae487872`, and no
+file they exercise was modified by this plan. Zero new failures.
+
+```text
+dotnet test test/BBT.Workflow.Infrastructure.Tests --no-restore \
+  --filter "FullyQualifiedName~InstanceDataConditionalAppendFunctionTests|FullyQualifiedName~EfCoreInstanceDataConcurrencyRepositoryTests|FullyQualifiedName~InstanceDataVersioningTests"
+Failed: 0, Passed: 22, Skipped: 0, Total: 22
+```
+
+Real-PostgreSQL suite fully green.
+
+```text
+dotnet build BBT.Workflow.slnx --no-restore
+0 Error(s), 15 Warning(s)
+```
+
+All 15 warnings are pre-existing and outside the reconciliation change surface (NU1903
+`Microsoft.OpenApi` advisory, NU1510 prune hints, and XML-doc/nullable warnings in
+`monitoring/BBT.Workflow.Monitor.Application`).
+
+### Canary Activation Sequence
+
+```text
+1. Apply migration 20260723120000 to every flow schema.
+2. Deploy application with WorkflowExecution:EnableInstanceDataReconciliation=false.
+3. Enable only for canary orchestration deployments/flows handling parallel notifications.
+4. Watch fast-path ratio, conflicts, attempts, exhausted count, duration, and task execution counters.
+5. Roll back callers by setting the flag false; do not drop the database function during rollback.
+```
+
+Flag prerequisite: `EnableInstanceDataReconciliation=true` requires
+`LatestOnlyInstanceLoading=true`; the combination is validated at startup.
+
+### Deviations
+
+- PostgreSQL serialization/deadlock errors (`40001`/`40P01`) propagate as infrastructure
+  failures instead of a retryable `Conflict` result (plan errata recorded in the plan document).
+- `ScriptDataChangeApplicator` does not call `SynchronizePartiallyLoadedData`; the repository
+  conditional-append path owns tracked-aggregate synchronization.
