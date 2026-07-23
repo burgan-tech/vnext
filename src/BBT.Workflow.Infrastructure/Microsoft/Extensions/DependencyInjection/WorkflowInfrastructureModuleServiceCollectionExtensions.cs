@@ -86,7 +86,12 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<ISchemaValidator, SchemaValidator>();
         
         // You can register your repositories here.
-        services.AddScoped<IInstanceRepository, EfCoreInstanceRepository>();
+        // One scoped concrete instance serves both instance contracts so the reconciliation
+        // path shares the exact same schema-aware DbContext and change tracker as the
+        // aggregate repository within a request scope.
+        services.AddScoped<EfCoreInstanceRepository>();
+        services.AddScoped<IInstanceRepository>(sp => sp.GetRequiredService<EfCoreInstanceRepository>());
+        services.AddScoped<IInstanceDataConcurrencyRepository>(sp => sp.GetRequiredService<EfCoreInstanceRepository>());
         services.AddScoped<IInstanceCorrelationRepository, EfCoreInstanceCorrelationRepository>();
         services.AddScoped<IInstanceTransitionRepository, EfCoreInstanceTransitionRepository>();
         services.AddScoped<IInstanceTaskRepository, EfCoreInstanceTaskRepository>();

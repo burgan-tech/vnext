@@ -15,9 +15,12 @@ using BBT.Workflow.Security;
 using BBT.Workflow.BackgroundJobs.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
+using Npgsql;
+using NpgsqlTypes;
 namespace BBT.Workflow.Instances;
 
 public sealed class EfCoreInstanceRepository(
@@ -31,7 +34,8 @@ public sealed class EfCoreInstanceRepository(
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<EfCoreInstanceRepository> logger)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
-        IInstanceRepository
+        IInstanceRepository,
+        IInstanceDataConcurrencyRepository
 {
     private const string DefaultSchemaName = "public";
 
@@ -1478,6 +1482,217 @@ public sealed class EfCoreInstanceRepository(
                 .ToListAsync(cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Reads the current latest <c>InstancesData</c> head as a no-tracking projection, bypassing
+    /// any (possibly stale) tracked entity so optimistic reconciliation always observes the
+    /// database-authoritative head.
+    /// </summary>
+    /// <param name="instanceId">The instance whose latest data head is read.</param>
+    /// <param name="cancellationToken">Token to cancel the read.</param>
+    /// <returns>The latest head, or <c>null</c> for a data-less instance.</returns>
+    public async Task<InstanceDataHead?> GetLatestDataHeadAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken)
+    {
+        var context = await GetDbContextAsync();
+        return await context.InstancesData.AsNoTracking()
+            .Where(x => x.InstanceId == instanceId && x.IsLatest)
+            .Select(x => new InstanceDataHead(
+                x.Id, x.ETag, x.Version, x.VersionNo, x.HistorySequence,
+                x.DataHash, new JsonData(x.Data.Json), x.EnteredAt))
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Appends a prepared <c>InstancesData</c> batch through the schema-local
+    /// <c>try_append_instance_data_batch</c> compare-and-swap function, inside the ambient
+    /// transition transaction. Returned rows carry the database-assigned <c>VersionNo</c> and are
+    /// attached to the change tracker as <see cref="EntityState.Unchanged"/> (never re-inserted);
+    /// stale tracked rows of the instance are detached so their outdated <c>IsLatest</c> flag can
+    /// neither be written back nor trigger orphan/delete detection.
+    /// </summary>
+    /// <param name="instanceId">The owning instance.</param>
+    /// <param name="expectedLatestDataId">Expected latest data id (<c>null</c> = data-less instance).</param>
+    /// <param name="expectedLatestEtag">Expected latest ETag (<c>null</c> = data-less instance).</param>
+    /// <param name="data">The ordered prepared rows to append atomically.</param>
+    /// <param name="cancellationToken">Token to cancel the append.</param>
+    /// <returns>The conditional append outcome (applied, no-change, or conflict).</returns>
+    /// <exception cref="InvalidOperationException">No ambient transaction is active.</exception>
+    public async Task<ConditionalAppendResult> TryAppendDataAsync(
+        Guid instanceId,
+        Guid? expectedLatestDataId,
+        string? expectedLatestEtag,
+        IReadOnlyList<PreparedInstanceData> data,
+        CancellationToken cancellationToken)
+    {
+        var context = await GetDbContextAsync();
+        var transaction = context.Database.CurrentTransaction
+            ?? throw new InvalidOperationException(
+                "InstanceData reconciliation requires the ambient transition transaction.");
+
+        var schema = SanitizeIdentifier(currentSchema.Name ?? DefaultSchemaName);
+
+        // The function reads PascalCase members ('DataId', 'ETag', ...) and the raw JSON body
+        // under 'Data', so the payload is serialized with default (as-declared) property names.
+        var payload = JsonSerializer.Serialize(data
+            .Select(x => new ConditionalAppendInputRow(
+                x.DataId, x.Version, x.HistorySequence, x.ETag, x.DataHash,
+                x.Data.JsonElement, x.EnteredAt, x.IsLatest))
+            .ToArray());
+
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        await using var command = connection.CreateCommand();
+        command.Transaction = (NpgsqlTransaction)transaction.GetDbTransaction();
+        command.CommandText =
+            $"SELECT * FROM \"{schema}\".try_append_instance_data_batch(@instanceId, @expectedId, @expectedEtag, @rows)";
+        command.Parameters.Add(new NpgsqlParameter("instanceId", NpgsqlDbType.Uuid) { Value = instanceId });
+        command.Parameters.Add(new NpgsqlParameter("expectedId", NpgsqlDbType.Uuid)
+        {
+            Value = (object?)expectedLatestDataId ?? DBNull.Value
+        });
+        command.Parameters.Add(new NpgsqlParameter("expectedEtag", NpgsqlDbType.Text)
+        {
+            Value = (object?)expectedLatestEtag ?? DBNull.Value
+        });
+        command.Parameters.Add(new NpgsqlParameter("rows", NpgsqlDbType.Jsonb) { Value = payload });
+
+        IReadOnlyList<ConditionalAppendRow> rows;
+        try
+        {
+            rows = await ReadConditionalRowsAsync(command, cancellationToken);
+        }
+        catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.SerializationFailure
+                                               or PostgresErrorCodes.DeadlockDetected)
+        {
+            // Transient serialization/deadlock loss: surface as a retryable CAS conflict.
+            return new ConditionalAppendResult(ConditionalAppendStatus.Conflict, null, []);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            // Custom P0001 contract violations (e.g. instance_data_idempotency_violation) are
+            // NON-retryable: the batch content itself breaks the append contract, so retrying
+            // with the same rows can never succeed. Cancellation/connectivity errors propagate.
+            return new ConditionalAppendResult(
+                ConditionalAppendStatus.Conflict,
+                null,
+                [],
+                Error.Conflict(
+                    WorkflowErrorCodes.InstanceDataConcurrencyConflict,
+                    $"Instance data batch violated the conditional append contract: {ex.MessageText}.",
+                    target: instanceId.ToString()));
+        }
+
+        if (rows.Count == 1 && rows[0].Status == "conflict")
+        {
+            var observed = rows[0];
+            return new ConditionalAppendResult(
+                ConditionalAppendStatus.Conflict,
+                null,
+                [],
+                ObservedHead: observed.Id is null ? null : ToHead(observed));
+        }
+
+        var entities = rows.Select(row => ToInstanceData(instanceId, row)).ToArray();
+
+        // Synchronize the change tracker with the database-authoritative rows: every tracked
+        // InstancesData entry of this instance is stale now (the previous head was demoted by
+        // the function). Detaching is mandatory — it prevents EF orphan/delete detection when
+        // the aggregate's data list is replaced and stops the stale IsLatest=true value from
+        // being written back. The returned rows are then attached as Unchanged so a subsequent
+        // SaveChanges never re-inserts them (they already exist in the database).
+        foreach (var stale in context.ChangeTracker.Entries<InstanceData>()
+                     .Where(x => x.Entity.InstanceId == instanceId)
+                     .ToArray())
+        {
+            stale.State = EntityState.Detached;
+        }
+
+        foreach (var entity in entities)
+        {
+            context.Attach(entity);
+        }
+
+        var latest = entities.Single(x => x.IsLatest);
+        return new ConditionalAppendResult(
+            rows[0].Status == "no_change" ? ConditionalAppendStatus.NoChange : ConditionalAppendStatus.Applied,
+            latest,
+            entities);
+    }
+
+    /// <summary>
+    /// Materializes every row returned by <c>try_append_instance_data_batch</c>, preserving the
+    /// database-assigned values (notably <c>VersionNo</c>) and the function's input ordering.
+    /// </summary>
+    private static async Task<IReadOnlyList<ConditionalAppendRow>> ReadConditionalRowsAsync(
+        NpgsqlCommand command,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<ConditionalAppendRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add(new ConditionalAppendRow(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetGuid(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetDateTime(8),
+                reader.IsDBNull(9) ? null : reader.GetBoolean(9)));
+        }
+
+        return rows;
+    }
+
+    private static InstanceData ToInstanceData(Guid instanceId, ConditionalAppendRow row)
+    {
+        var entity = InstanceData.Rehydrate(instanceId, ToHead(row));
+        if (row.IsLatest != true)
+        {
+            entity.MarkAsNotLatest();
+        }
+
+        return entity;
+    }
+
+    private static InstanceDataHead ToHead(ConditionalAppendRow row) =>
+        new(
+            row.Id!.Value,
+            row.ETag!,
+            row.Version!,
+            row.VersionNo!.Value,
+            row.HistorySequence!.Value,
+            row.DataHash!,
+            new JsonData(row.Data),
+            row.EnteredAt!.Value);
+
+    /// <summary>Wire shape sent to <c>try_append_instance_data_batch</c> (PascalCase, raw JSON body).</summary>
+    private sealed record ConditionalAppendInputRow(
+        Guid DataId,
+        string Version,
+        int HistorySequence,
+        string ETag,
+        string DataHash,
+        JsonElement Data,
+        DateTime EnteredAt,
+        bool IsLatest);
+
+    /// <summary>One row returned by <c>try_append_instance_data_batch</c>; fields are null on data-less conflicts.</summary>
+    private sealed record ConditionalAppendRow(
+        string Status,
+        Guid? Id,
+        string? Version,
+        long? VersionNo,
+        int? HistorySequence,
+        string? ETag,
+        string? DataHash,
+        string? Data,
+        DateTime? EnteredAt,
+        bool? IsLatest);
 
     private static string SanitizeIdentifier(string identifier)
     {
