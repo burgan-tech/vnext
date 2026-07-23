@@ -196,13 +196,13 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenPostCommitContinuationsExceedStageBound_ReturnsDepthError()
+    public async Task RunAsync_AllowsDepthFiftyStageAndRejectsOnlyDepthFiftyOneContinuation()
     {
-        var plans = Enumerable.Range(1, 50)
-            .Select(stage => new StagePlan(
-                $"pipeline-{stage}",
+        var plans = Enumerable.Range(0, 51)
+            .Select(depth => new StagePlan(
+                $"pipeline-depth-{depth}",
                 PostCommitBehavior: PostCommitContinuationBehavior.ContinueParent,
-                NextTransition: $"next-{stage}"))
+                NextTransition: $"next-depth-{depth + 1}"))
             .ToArray();
         var harness = new RunnerHarness(plans);
 
@@ -210,7 +210,9 @@ public sealed class TransitionRunnerPostCommitTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.TransitionChainDepthExceeded);
-        harness.CoreInstances.Count.ShouldBe(50);
+        harness.CoreInstances.Count.ShouldBe(51);
+        harness.CoreChainDepths.ShouldBe(Enumerable.Range(0, 51));
+        harness.CoreTransitionKeys.ShouldNotContain("next-depth-51");
         harness.StageScopes.ShouldAllBe(scope => scope.IsDisposed && scope.UowDisposed);
     }
 
@@ -250,6 +252,7 @@ public sealed class TransitionRunnerPostCommitTests
         public List<IUnitOfWorkManager> UowManagers { get; } = [];
         public List<ITransitionLockScopeFactory> TransitionLockFactories { get; } = [];
         public List<string> CoreTransitionKeys { get; } = [];
+        public List<int> CoreChainDepths { get; } = [];
         public int TransitionLocksAcquired { get; private set; }
         public int PostCommitExecutions { get; private set; }
         public bool PostCommitObservedDisposedStage { get; private set; }
@@ -415,6 +418,7 @@ public sealed class TransitionRunnerPostCommitTests
                 CancellationToken cancellationToken = default)
             {
                 owner.CoreTransitionKeys.Add(context.TransitionKey);
+                owner.CoreChainDepths.Add(context.Execution?.ChainDepth ?? 0);
                 context.Headers["x-transition"] = context.TransitionKey;
                 owner.BusinessCalls.Add(plan.Label);
 
@@ -433,6 +437,7 @@ public sealed class TransitionRunnerPostCommitTests
                     Headers = context.Headers,
                     CorrelationId = Guid.NewGuid().ToString("N"),
                     ExecutionChainId = Guid.NewGuid().ToString("N"),
+                    ChainDepth = context.Execution?.ChainDepth ?? 0,
                     TraceId = Guid.NewGuid().ToString("N")
                 };
 
