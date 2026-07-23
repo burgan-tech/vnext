@@ -234,6 +234,144 @@ public sealed class InstanceDataConditionalAppendFunctionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Concurrent_object_writers_from_one_baseline_should_merge_keys_via_conflict_rebase()
+    {
+        // Two writers (two separate connections/operations) start from the SAME baseline
+        // snapshot. The database function does NO JSON merging — each writer submits its
+        // full-merge row, and the loser of the CAS race merges its contribution onto the
+        // observed head (mirroring InstanceDataReconciliationService's JsonData.Merge replay)
+        // before retrying against the observed head.
+        var baseline = await SeedBaselineAsync(TenantA, """{"base":1}""");
+
+        // Writer A: baseline + {"writerA":true} → applied against the baseline head.
+        var writerARow = Row(MergeJson("""{"base":1}""", """{"writerA":true}"""), true, "1.0.1");
+        var writerAResult = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            [writerARow]);
+        writerAResult.ShouldHaveSingleItem().Status.ShouldBe("applied");
+
+        // Writer B: same stale baseline + {"writerB":true} → conflict; nothing written.
+        var staleAttempt = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            Rows((MergeJson("""{"base":1}""", """{"writerB":true}"""), true)));
+        var observedHead = staleAttempt.ShouldHaveSingleItem();
+        observedHead.Status.ShouldBe("conflict");
+        observedHead.Id.ShouldBe(writerARow.DataId);
+        (await ReadRowsAsync(TenantA, baseline.InstanceId)).Count.ShouldBe(2);
+
+        // Writer B rebases: original contribution merged onto the OBSERVED head, retried with
+        // the observed head as the expected head → applied.
+        var rebasedRow = Row(MergeJson(observedHead.Data!, """{"writerB":true}"""), true, "1.0.2");
+        var retry = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            observedHead.Id,
+            observedHead.ETag,
+            [rebasedRow]);
+        retry.ShouldHaveSingleItem().Status.ShouldBe("applied");
+
+        var latest = await ReadLatestAsync(TenantA, baseline.InstanceId);
+        latest.Data.ShouldBe("""{"base": 1, "writerA": true, "writerB": true}""");
+
+        var rows = await ReadRowsAsync(TenantA, baseline.InstanceId);
+        rows.Count.ShouldBe(3);
+        rows.Count(x => x.IsLatest).ShouldBe(1);
+        rows.Single(x => x.IsLatest).Id.ShouldBe(rebasedRow.DataId);
+        rows.Select(x => x.VersionNo).ShouldBe(rows.Select(x => x.VersionNo).Order());
+    }
+
+    [Fact]
+    public async Task Concurrent_scalar_writers_on_same_path_should_let_last_atomic_append_win()
+    {
+        var baseline = await SeedBaselineAsync(TenantA, """{"counter":1}""");
+
+        // Writer A wins the race with counter=2.
+        var writerAResult = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            Rows((MergeJson("""{"counter":1}""", """{"counter":2}"""), true)));
+        writerAResult.ShouldHaveSingleItem().Status.ShouldBe("applied");
+
+        // Writer B conflicts from the stale baseline with counter=5, then rebases onto the
+        // observed head: scalar same-path merge is last-writer-wins, so B's value survives.
+        var staleAttempt = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            Rows((MergeJson("""{"counter":1}""", """{"counter":5}"""), true)));
+        var observedHead = staleAttempt.ShouldHaveSingleItem();
+        observedHead.Status.ShouldBe("conflict");
+        observedHead.Data.ShouldBe("""{"counter": 2}""");
+
+        var retry = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            observedHead.Id,
+            observedHead.ETag,
+            Rows((MergeJson(observedHead.Data!, """{"counter":5}"""), true)));
+        retry.ShouldHaveSingleItem().Status.ShouldBe("applied");
+
+        // The writer whose atomic append occurred LAST wins the scalar path.
+        var latest = await ReadLatestAsync(TenantA, baseline.InstanceId);
+        latest.Data.ShouldBe("""{"counter": 5}""");
+
+        var rows = await ReadRowsAsync(TenantA, baseline.InstanceId);
+        rows.Count(x => x.IsLatest).ShouldBe(1);
+        rows.Select(x => x.VersionNo).ShouldBe(rows.Select(x => x.VersionNo).Order());
+    }
+
+    [Fact]
+    public async Task Concurrent_array_writers_should_replace_complete_array_from_last_append()
+    {
+        var baseline = await SeedBaselineAsync(TenantA, """{"items":[1,2]}""");
+
+        // Writer A replaces the array with [3].
+        var writerAResult = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            Rows((MergeJson("""{"items":[1,2]}""", """{"items":[3]}"""), true)));
+        writerAResult.ShouldHaveSingleItem().Status.ShouldBe("applied");
+
+        // Writer B conflicts from the stale baseline with [4,5,6], rebases onto the observed
+        // head: arrays are replaced ENTIRELY by the last append — no element-level merging.
+        var staleAttempt = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            baseline.DataId,
+            baseline.ETag,
+            Rows((MergeJson("""{"items":[1,2]}""", """{"items":[4,5,6]}"""), true)));
+        var observedHead = staleAttempt.ShouldHaveSingleItem();
+        observedHead.Status.ShouldBe("conflict");
+        observedHead.Data.ShouldBe("""{"items": [3]}""");
+
+        var retry = await CallFunctionAsync(
+            TenantA,
+            baseline.InstanceId,
+            observedHead.Id,
+            observedHead.ETag,
+            Rows((MergeJson(observedHead.Data!, """{"items":[4,5,6]}"""), true)));
+        retry.ShouldHaveSingleItem().Status.ShouldBe("applied");
+
+        var latest = await ReadLatestAsync(TenantA, baseline.InstanceId);
+        latest.Data.ShouldBe("""{"items": [4, 5, 6]}""");
+
+        var rows = await ReadRowsAsync(TenantA, baseline.InstanceId);
+        rows.Count(x => x.IsLatest).ShouldBe(1);
+        rows.Select(x => x.VersionNo).ShouldBe(rows.Select(x => x.VersionNo).Order());
+    }
+
+    [Fact]
     public async Task Same_instance_id_in_two_schemas_should_remain_isolated()
     {
         var instanceId = Guid.NewGuid();
@@ -461,6 +599,17 @@ ORDER BY "VersionNo";
             JsonDocument.Parse(data).RootElement.Clone(),
             enteredAt,
             isLatest);
+    }
+
+    /// <summary>
+    /// Full-merge exactly as the reconciliation caller does it: the database function performs
+    /// NO JSON merging, so writers merge their contribution onto a head with the same
+    /// <see cref="JsonData.Merge"/> domain helper used by InstanceData.NewVersion replay
+    /// (object keys deep-merged, scalars last-writer-wins, arrays replaced entirely).
+    /// </summary>
+    private static string MergeJson(string headJson, string contributionJson)
+    {
+        return new JsonData(headJson).Merge(new JsonData(contributionJson)).Json;
     }
 
     private static string NormalizeJson(string json)
