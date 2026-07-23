@@ -755,6 +755,8 @@ public static class WorkflowMetrics
             new[] { "flow", "pipeline_step" },
             new HistogramConfiguration
             {
+                // Coupled to InstanceDataReconciliationService.MaxAttempts (5): one bucket
+                // per possible attempt count — update together if the retry budget changes.
                 Buckets = new[] { 1.0, 2, 3, 4, 5 }
             });
 

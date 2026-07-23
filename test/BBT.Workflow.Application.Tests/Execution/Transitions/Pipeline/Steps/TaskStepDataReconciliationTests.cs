@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -68,6 +69,33 @@ public sealed class TaskStepDataReconciliationTests
         fixture.TaskCoordinatorExecutionCount.ShouldBe(1);
         await fixture.InstanceRepository.DidNotReceiveWithAnyArgs()
             .UpdateAsync(default!, default, default);
+    }
+
+    [Theory]
+    [InlineData(typeof(RunOnExecuteTasksStep), "OnExecute")]
+    [InlineData(typeof(RunOnExitTasksStep), "OnExit")]
+    [InlineData(typeof(RunOnEntryTasksStep), "OnEntry")]
+    public async Task Step_should_tag_current_activity_with_pipeline_step_visible_at_apply_time(
+        Type stepType, string expectedPhase)
+    {
+        var fixture = TaskStepFixture.Create(stepType);
+        string? observedPhase = null;
+        fixture.Applicator.ApplyAsync(default!, default!, default)
+            .ReturnsForAnyArgs(_ =>
+            {
+                // Same-activity proof: the reconciliation service (behind the applicator)
+                // reads Activity.Current — the step's tag must be visible right here.
+                observedPhase = Activity.Current
+                    ?.GetTagItem("workflow.pipeline.step")?.ToString();
+                return Result.Ok();
+            });
+
+        using var activity = new Activity("pipeline-step").Start();
+
+        var result = await fixture.ExecuteAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        observedPhase.ShouldBe(expectedPhase);
     }
 
     [Theory]

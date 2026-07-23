@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -47,6 +48,43 @@ public sealed class InstanceDataReconciliationServiceTests
         fixture.Repository.FreshReadCount.ShouldBe(0);
         fixture.Repository.AppendCalls[0].ExpectedLatestDataId.ShouldBe(fixture.ChangeSet.Baseline!.DataId);
         fixture.Repository.AppendCalls[0].ExpectedLatestEtag.ShouldBe(fixture.ChangeSet.Baseline.ETag);
+    }
+
+    [Fact]
+    public async Task Ambient_activity_tags_should_flow_into_reconciliation_metrics()
+    {
+        var fixture = ReconciliationFixture.Create();
+        fixture.Repository.EnqueueAppend(fixture.Repository.Applied);
+
+        // The steps/applicator set these tags on the same Activity the service reads
+        // (GetTagItem inspects Activity.Current only) — prove the read side here.
+        using var activity = new Activity("transition-step").Start();
+        activity.SetTag("workflow.pipeline.step", "OnExecute");
+        activity.SetTag("workflow.transition.key", "test-transition");
+
+        var result = await fixture.Service.ApplyAsync(
+            fixture.Live, fixture.ChangeSet, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        fixture.Metrics.Received(1).RecordInstanceDataReconciliation(
+            fixture.Live.Flow, "OnExecute", "applied", false,
+            1, Arg.Any<double>(), 1, 0);
+    }
+
+    [Fact]
+    public async Task Repository_exception_should_record_error_metric_and_propagate()
+    {
+        var fixture = ReconciliationFixture.Create();
+        fixture.Repository.EnqueueAppend(_ => throw new TimeoutException("db down"));
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            fixture.Service.ApplyAsync(fixture.Live, fixture.ChangeSet, CancellationToken.None));
+
+        // Infrastructure exceptions are recorded with the distinct "error" result so DB
+        // outages are visible without conflating them with repository Result failures.
+        fixture.Metrics.Received(1).RecordInstanceDataReconciliation(
+            fixture.Live.Flow, "unknown", "error", false,
+            1, Arg.Any<double>(), 1, 0);
     }
 
     [Fact]
@@ -436,16 +474,18 @@ public sealed class InstanceDataReconciliationServiceTests
             ChangeSet = changeSet;
             ContributionIds = contributionIds;
             Repository = new ScriptedInstanceDataRepository();
+            Metrics = Substitute.For<IWorkflowMetrics>();
             Service = new InstanceDataReconciliationService(
                 Repository,
                 NullLogger<InstanceDataReconciliationService>.Instance,
-                Substitute.For<IWorkflowMetrics>());
+                Metrics);
         }
 
         public Instance Live { get; }
         public InstanceDataChangeSet ChangeSet { get; }
         public IReadOnlyList<Guid> ContributionIds { get; }
         public ScriptedInstanceDataRepository Repository { get; }
+        public IWorkflowMetrics Metrics { get; }
         public InstanceDataReconciliationService Service { get; }
 
         public static ReconciliationFixture Create(string localInput = "{\"local\":2}") =>

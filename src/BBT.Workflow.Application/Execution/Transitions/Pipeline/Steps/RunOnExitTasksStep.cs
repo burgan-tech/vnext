@@ -47,6 +47,9 @@ public sealed class RunOnExitTasksStep(
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(RunOnExitTasksStep)}");
+        // Read back by InstanceDataReconciliationService via Activity.Current (same Activity:
+        // no child Activity is started between here and the applicator/service calls).
+        Activity.Current?.SetTag("workflow.pipeline.step", "OnExit");
 
         // Skip if no OnExit tasks
         if (!HasOnExitTasks(context))

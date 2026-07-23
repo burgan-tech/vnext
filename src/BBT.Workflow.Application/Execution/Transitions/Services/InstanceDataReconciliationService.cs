@@ -19,22 +19,17 @@ public sealed class InstanceDataReconciliationService(
         InstanceDataChangeSet changeSet,
         CancellationToken cancellationToken)
     {
-        if (changeSet.Contributions.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Instance data reconciliation requires at least one contribution.");
-        }
-
-        var contributions = changeSet.Contributions.OrderBy(x => x.Order).ToArray();
-        var head = GetValidatedInitialHead(instance, changeSet);
-
         // Observability context: the pipeline step and transition key are read from the
         // ambient Activity tags so the approved reconciliation interface stays unchanged;
-        // "unknown" is the documented fallback when the tags are not set.
+        // "unknown" is the documented fallback when the tags are not set. GetTagItem reads
+        // Activity.Current only — the steps/applicator set the tags on the same Activity
+        // (no child Activity is started in between).
         var pipelineStep = Activity.Current?.GetTagItem("workflow.pipeline.step")?.ToString() ?? "unknown";
         var transitionKey = Activity.Current?.GetTagItem("workflow.transition.key")?.ToString() ?? "unknown";
+        var contributionCount = changeSet.Contributions.Count;
         var startTimestamp = Stopwatch.GetTimestamp();
         var conflictCount = 0;
+        var currentAttempt = 0;
 
         void RecordMetric(string result, bool rebased, int attempts) =>
             metrics.RecordInstanceDataReconciliation(
@@ -44,94 +39,120 @@ public sealed class InstanceDataReconciliationService(
                 rebased,
                 attempts,
                 Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds,
-                contributions.Length,
+                contributionCount,
                 conflictCount);
 
-        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        try
         {
-            if (attempt > 1)
-                head = await repository.GetLatestDataHeadAsync(instance.Id, cancellationToken);
+            return await ApplyCoreAsync();
+        }
+        catch (Exception)
+        {
+            // Exception exits (repository/DB failures, guard violations) must still be
+            // counted: "error" is kept distinct from "failed" (repository-returned Result
+            // error) so infrastructure incidents are not conflated with business failures.
+            RecordMetric("error", rebased: currentAttempt > 1, attempts: currentAttempt);
+            throw;
+        }
 
-            var working = instance.CreateReconciliationSnapshot(head);
-            if (attempt > 1 && IsCompleteBatchAlreadyApplied(head, contributions))
-            {
-                RecordMetric("applied", rebased: true, attempt);
-                return Result<InstanceDataReconciliationResult>.Ok(
-                    new InstanceDataReconciliationResult(
-                        working.LatestData!,
-                        [],
-                        attempt,
-                        true));
-            }
-
-            var appended = Replay(working, contributions);
-            if (appended.Count == 0)
-            {
-                RecordMetric("no_change", rebased: attempt > 1, attempt);
-                return Result<InstanceDataReconciliationResult>.Ok(
-                    new InstanceDataReconciliationResult(
-                        working.LatestData!,
-                        [],
-                        attempt,
-                        attempt > 1));
-            }
-
-            var appendResult = await repository.TryAppendDataAsync(
-                instance.Id,
-                head?.DataId,
-                head?.ETag,
-                appended.Select(ToPrepared).ToArray(),
-                cancellationToken);
-
-            if (appendResult.Error is not null)
-            {
-                RecordMetric("failed", rebased: attempt > 1, attempt);
-                return Result<InstanceDataReconciliationResult>.Fail(appendResult.Error.Value);
-            }
-
-            if (appendResult.Status is ConditionalAppendStatus.Applied or ConditionalAppendStatus.NoChange)
-            {
-                var latestData = appendResult.LatestData ?? throw new InvalidOperationException(
-                    $"Conditional append status '{appendResult.Status}' requires a latest data row.");
-                RecordMetric(
-                    appendResult.Status == ConditionalAppendStatus.Applied ? "applied" : "no_change",
-                    rebased: attempt > 1,
-                    attempt);
-                return Result<InstanceDataReconciliationResult>.Ok(
-                    new InstanceDataReconciliationResult(
-                        latestData,
-                        appendResult.AppendedData,
-                        attempt,
-                        attempt > 1));
-            }
-
-            if (appendResult.Status != ConditionalAppendStatus.Conflict)
+        async Task<Result<InstanceDataReconciliationResult>> ApplyCoreAsync()
+        {
+            if (changeSet.Contributions.Count == 0)
             {
                 throw new InvalidOperationException(
-                    $"Unsupported conditional append status '{appendResult.Status}'.");
+                    "Instance data reconciliation requires at least one contribution.");
             }
 
-            conflictCount++;
-            logger.InstanceDataReconciliationConflict(
+            var contributions = changeSet.Contributions.OrderBy(x => x.Order).ToArray();
+            var head = GetValidatedInitialHead(instance, changeSet);
+
+            for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+            {
+                currentAttempt = attempt;
+                if (attempt > 1)
+                    head = await repository.GetLatestDataHeadAsync(instance.Id, cancellationToken);
+
+                var working = instance.CreateReconciliationSnapshot(head);
+                if (attempt > 1 && IsCompleteBatchAlreadyApplied(head, contributions))
+                {
+                    RecordMetric("applied", rebased: true, attempt);
+                    return Result<InstanceDataReconciliationResult>.Ok(
+                        new InstanceDataReconciliationResult(
+                            working.LatestData!,
+                            [],
+                            attempt,
+                            true));
+                }
+
+                var appended = Replay(working, contributions);
+                if (appended.Count == 0)
+                {
+                    RecordMetric("no_change", rebased: attempt > 1, attempt);
+                    return Result<InstanceDataReconciliationResult>.Ok(
+                        new InstanceDataReconciliationResult(
+                            working.LatestData!,
+                            [],
+                            attempt,
+                            attempt > 1));
+                }
+
+                var appendResult = await repository.TryAppendDataAsync(
+                    instance.Id,
+                    head?.DataId,
+                    head?.ETag,
+                    appended.Select(ToPrepared).ToArray(),
+                    cancellationToken);
+
+                if (appendResult.Error is not null)
+                {
+                    RecordMetric("failed", rebased: attempt > 1, attempt);
+                    return Result<InstanceDataReconciliationResult>.Fail(appendResult.Error.Value);
+                }
+
+                if (appendResult.Status is ConditionalAppendStatus.Applied or ConditionalAppendStatus.NoChange)
+                {
+                    var latestData = appendResult.LatestData ?? throw new InvalidOperationException(
+                        $"Conditional append status '{appendResult.Status}' requires a latest data row.");
+                    RecordMetric(
+                        appendResult.Status == ConditionalAppendStatus.Applied ? "applied" : "no_change",
+                        rebased: attempt > 1,
+                        attempt);
+                    return Result<InstanceDataReconciliationResult>.Ok(
+                        new InstanceDataReconciliationResult(
+                            latestData,
+                            appendResult.AppendedData,
+                            attempt,
+                            attempt > 1));
+                }
+
+                if (appendResult.Status != ConditionalAppendStatus.Conflict)
+                {
+                    throw new InvalidOperationException(
+                        $"Unsupported conditional append status '{appendResult.Status}'.");
+                }
+
+                conflictCount++;
+                logger.InstanceDataReconciliationConflict(
+                    instance.Id,
+                    head?.DataId,
+                    appendResult.ObservedHead?.DataId,
+                    attempt,
+                    contributions.Length,
+                    pipelineStep,
+                    transitionKey);
+            }
+
+            logger.InstanceDataReconciliationExhausted(
                 instance.Id,
-                head?.DataId ?? Guid.Empty,
-                appendResult.ObservedHead?.DataId,
-                attempt,
+                MaxAttempts,
                 contributions.Length,
                 pipelineStep,
                 transitionKey);
+            RecordMetric("exhausted", rebased: true, MaxAttempts);
+
+            return Result<InstanceDataReconciliationResult>.Fail(
+                WorkflowErrors.InstanceDataConcurrencyConflict(instance.Id, MaxAttempts));
         }
-
-        logger.InstanceDataReconciliationExhausted(
-            instance.Id,
-            MaxAttempts,
-            contributions.Length,
-            pipelineStep,
-            transitionKey);
-        RecordMetric("exhausted", rebased: true, MaxAttempts);
-
-        return Result<InstanceDataReconciliationResult>.Fail(
-            WorkflowErrors.InstanceDataConcurrencyConflict(instance.Id, MaxAttempts));
     }
 
     private static IReadOnlyList<InstanceData> Replay(

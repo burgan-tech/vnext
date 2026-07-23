@@ -2039,7 +2039,7 @@ public static partial class WorkflowLogs
     public static partial void InstanceDataReconciliationConflict(
         this ILogger logger,
         Guid instanceId,
-        Guid expectedDataId,
+        Guid? expectedDataId,
         Guid? observedDataId,
         int attempt,
         int contributionCount,

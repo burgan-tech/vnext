@@ -46,6 +46,9 @@ public sealed class RunOnExecuteTasksStep(
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(RunOnExecuteTasksStep)}");
+        // Read back by InstanceDataReconciliationService via Activity.Current (same Activity:
+        // no child Activity is started between here and the applicator/service calls).
+        Activity.Current?.SetTag("workflow.pipeline.step", "OnExecute");
 
         // Skip if no OnExecute tasks
         if (!HasOnExecuteTasks(context))

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Instances;
@@ -49,6 +50,12 @@ public sealed class ScriptDataChangeApplicator(
         var changeSet = scriptContext.Instance.GetPendingDataChangeSet();
         if (changeSet is not null)
         {
+            // Observability: the reconciliation service reads this tag from Activity.Current
+            // (it has no access to the transition context by design). Neither this applicator
+            // nor the service starts a child Activity, so the read happens on the same
+            // Activity instance that receives the tag here.
+            Activity.Current?.SetTag("workflow.transition.key", transitionContext.TransitionKey);
+
             var reconciled = await reconciliationService.ApplyAsync(
                 transitionContext.Instance, changeSet, cancellationToken);
             if (!reconciled.IsSuccess)

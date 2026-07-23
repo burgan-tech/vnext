@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
@@ -33,6 +34,30 @@ public sealed class ScriptDataChangeApplicatorTests
         services.AddLogging();
         services.AddSingleton<IWorkflowContext>(new NullWorkflowContext());
         AmbientServiceProvider.Current = services.BuildServiceProvider();
+    }
+
+    [Fact]
+    public async Task Enabled_apply_should_tag_current_activity_with_transition_key_visible_to_service()
+    {
+        var fixture = ApplicatorFixture.Create(enabled: true);
+        string? observedTransitionKey = null;
+        fixture.Reconciler.ApplyAsync(default!, default!, default)
+            .ReturnsForAnyArgs(_ =>
+            {
+                // Same-activity proof: the service reads Activity.Current at call time —
+                // the tag set by the applicator must be visible on that same Activity.
+                observedTransitionKey = Activity.Current
+                    ?.GetTagItem("workflow.transition.key")?.ToString();
+                return Result<InstanceDataReconciliationResult>.Ok(fixture.Success);
+            });
+
+        using var activity = new Activity("transition-step").Start();
+
+        var result = await fixture.Applicator.ApplyAsync(
+            fixture.Transition, fixture.ScriptContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        observedTransitionKey.ShouldBe("test-transition");
     }
 
     [Fact]
