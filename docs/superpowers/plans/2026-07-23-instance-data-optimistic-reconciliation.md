@@ -848,7 +848,9 @@ public async Task<ConditionalAppendResult> TryAppendDataAsync(
 }
 ```
 
-`ReadConditionalRowsAsync` must map all returned fields, preserve database-assigned `VersionNo`, and map only PostgreSQL `40001`/`40P01` to `Conflict`. Map custom idempotency `P0001` to a non-retryable `Error.Conflict` and allow cancellation/connectivity exceptions to propagate. Detaching the stale loaded head is mandatory before the domain list is replaced; it prevents EF orphan/delete detection and prevents its stale `IsLatest=true` value from being written back. Do not open, begin, commit, or roll back a transaction here.
+`ReadConditionalRowsAsync` must map all returned fields, preserve database-assigned `VersionNo`, and map only PostgreSQL `40001`/`40P01` to `Conflict`. Map custom idempotency `P0001` to a non-retryable `Error.Conflict` and allow cancellation/connectivity exceptions to propagate.
+
+> **Errata (implemented deviation):** `40001`/`40P01` are NOT mapped to a retryable `Conflict`; they propagate as infrastructure failures. Either error aborts the ambient transaction, so an in-place retry would immediately fail with `25P02` on the same connection and mask the root cause. Only the function's `conflict` result row (a normal, non-aborting result) drives the bounded retry loop. Detaching the stale loaded head is mandatory before the domain list is replaced; it prevents EF orphan/delete detection and prevents its stale `IsLatest=true` value from being written back. Do not open, begin, commit, or roll back a transaction here.
 
 - [ ] **Step 4: Register one scoped concrete repository for both interfaces**
 
