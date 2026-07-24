@@ -171,6 +171,15 @@ public sealed class FunctionAppService(
             ? (object)body.Value
             : new JsonData("{}");
 
+        // Carry the domain-supplied cache vary-by config into the script context so the generic
+        // varyKey() key-expression helper can read it (the runtime imposes no header convention itself).
+        var metadata = new Dictionary<string, object>();
+        if (function.Cache is { } cacheConfig)
+        {
+            metadata[DynamicExpressoValueEvaluator.VaryByHeadersMetadataKey] = cacheConfig.VaryByHeaders;
+            metadata[DynamicExpressoValueEvaluator.VaryByPrefixesMetadataKey] = cacheConfig.VaryByHeaderPrefixes;
+        }
+
         var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(workflow)
             .WithInstance(instance)
@@ -178,17 +187,32 @@ public sealed class FunctionAppService(
             .WithBody(scriptBody)
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
+            .WithMetadata(metadata)
             .BuildAsync(cancellationToken);
 
         // Read-through cache: when the function opts in, serve the cached response on a hit (tasks skipped).
         string? cacheKey = null;
         if (function.Cache is { } cache && cache.HasKeySource)
         {
+            if (cache.KeyExpression is not null &&
+                cache.VaryByHeaders.Count == 0 && cache.VaryByHeaderPrefixes.Count == 0)
+                Logger.LogWarning(
+                    "Function {FunctionKey}: cache enabled without varyByHeaders/varyByHeaderPrefixes; a keyExpression using varyKey() falls back to ALL request headers (poor hit rate).",
+                    function.Key);
+
             var keyResult = ResolveCacheKey(cache, scriptContext);
             if (!keyResult.IsSuccess)
-                return Result<FunctionResponseOutput>.Fail(keyResult.Error);
+            {
+                // A key that cannot be computed cannot be cached — never fail the endpoint over it; run uncached.
+                Logger.LogWarning(
+                    "Function {FunctionKey}: cache key expression failed ({Error}); executing without caching.",
+                    function.Key, keyResult.Error.Message ?? "unknown");
+            }
+            else
+            {
+                cacheKey = keyResult.Value;
+            }
 
-            cacheKey = keyResult.Value;
             if (!string.IsNullOrWhiteSpace(cacheKey))
             {
                 var traceContext = remoteInvoker.CreateTraceContext(scriptContext);
