@@ -32,6 +32,26 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<Instance?> FindByIdentifierSlimAsync(string identifier, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Projects the state-function validation fingerprint (effective state, status, flow version,
+    /// active-subflow flag) for the instance matching the identifier (GUID or key) in a single
+    /// projection query — no includes, no aggregate materialization. Identifier resolution mirrors
+    /// <see cref="FindByIdentifierAsReadOnlyAsync"/> (id first, then most recent row by key).
+    /// Returns null when no instance matches.
+    /// </summary>
+    Task<InstanceStateFingerprint?> GetStateFingerprintAsync(string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Projects the data-function validation fingerprint (latest data row's ETag + flow version)
+    /// for the instance matching the identifier (GUID or key) in a single projection query.
+    /// The latest ETag read is an index-only probe (<c>UX_InstancesData_Instance_IsLatest</c>
+    /// includes ETag). Identifier resolution mirrors <see cref="FindByIdentifierAsReadOnlyAsync"/>.
+    /// Returns null when no instance matches.
+    /// </summary>
+    Task<InstanceDataFingerprint?> GetDataFingerprintAsync(string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds the single non-terminal instance (status Active or Busy) for the given key, or null
     /// if none exists. Terminal rows (Completed/Faulted/Passive) are ignored, so this is the
     /// authoritative "is this key currently in use?" lookup — unlike <see cref="FindByIdentifierAsync"/>,
@@ -140,6 +160,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The instance with all correlations, or null when not found.</returns>
     Task<Instance?> FindWithAllCorrelationsAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Finds an instance including ALL child correlations (completed and active) AND instance data
+    /// as a tracked entity. Required by subflow terminal handlers that run output mapping:
+    /// <c>Instance.AddData</c> derives the next version and moves the <c>IsLatest</c> flag from the
+    /// in-memory data list, so merging onto an aggregate loaded without data would restart
+    /// versioning at the default version and leave duplicate latest rows.
+    /// </summary>
+    /// <param name="instanceId">The instance identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The instance with all correlations and data, or null when not found.</returns>
+    Task<Instance?> FindWithAllCorrelationsAndDataAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default);
 

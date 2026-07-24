@@ -96,7 +96,9 @@ public sealed class SubflowCompletionService(
 
                     await using var correlationUow = uowManager.Begin(
                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
-                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(completedInput.InstanceId, cancellationToken);
+                    // Data must be loaded here: output mapping appends a new data version via
+                    // Instance.AddData, whose version/IsLatest math reads the in-memory data list.
+                    parentInstance = await instanceRepository.FindWithAllCorrelationsAndDataAsync(completedInput.InstanceId, cancellationToken);
 
                     if (parentInstance == null)
                     {

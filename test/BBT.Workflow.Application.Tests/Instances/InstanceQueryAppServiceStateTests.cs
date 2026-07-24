@@ -44,6 +44,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IUrlTemplateBuilder _urlTemplateBuilder;
     private readonly IViewContentResolutionService _viewContentResolutionService;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
+    private readonly Caching.IStateFunctionCache _stateFunctionCache;
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -63,6 +64,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
         _viewContentResolutionService = Substitute.For<IViewContentResolutionService>();
         _transitionAuthorizationManager = Substitute.For<ITransitionAuthorizationManager>();
+        // Enabled defaults to false so existing tests exercise the full build path;
+        // cache-specific tests opt in explicitly.
+        _stateFunctionCache = Substitute.For<Caching.IStateFunctionCache>();
 
         // Set up AmbientServiceProvider.Current needed by PostSharp UnitOfWorkAttribute
         var mockUoW = Substitute.For<IUnitOfWork>();
@@ -98,6 +102,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            stateFunctionCache: _stateFunctionCache,
+            dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
+            instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -215,6 +222,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         SetupSubFlowGateway(InstanceStatus.Active, "sub-review", new InstanceInteractionOutput
         {
             TerminateLongPoll = true,
+            FallbackTimeoutSeconds = 90,
             Ack = new BBT.Workflow.Shared.AckHref { Href = "/child/longpoll/ack" }
         });
         _urlTemplateBuilder
@@ -226,11 +234,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Act
         var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
 
-        // Assert — bubbled up, ack href rewritten to the parent's endpoint
+        // Assert — bubbled up, ack href rewritten to the parent's endpoint, fallback carried through
         result.Result.IsSuccess.ShouldBeTrue();
         var output = result.Result.Value!;
         output.Interaction.ShouldNotBeNull();
         output.Interaction!.TerminateLongPoll.ShouldBeTrue();
+        output.Interaction.FallbackTimeoutSeconds.ShouldBe(90);
         output.Interaction.Ack.ShouldNotBeNull();
         output.Interaction.Ack!.Href.ShouldBe("/parent/longpoll/ack");
     }
@@ -245,6 +254,107 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var (instance, workflow) = CreateParentWithActiveSubFlow();
         SetupCommonMocks(instance, workflow);
         SetupSubFlowGateway(InstanceStatus.Active, "sub-review");
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// When the current state declares interaction.longPoll with terminate=true, the interaction block is
+    /// emitted with the terminate flag, the configured fallback window, and the acknowledge href.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateDeclaresLongPollTerminate_EmitsInteractionWithAck()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 45);
+        SetupCommonMocks(instance, workflow);
+        _urlTemplateBuilder
+            .BuildLongPollAckUrl(TestDomain, TestWorkflow, instance.Id.ToString(), Arg.Any<string?>())
+            .Returns("/longpoll/ack");
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var interaction = result.Result.Value!.Interaction;
+        interaction.ShouldNotBeNull();
+        interaction!.TerminateLongPoll.ShouldBeTrue();
+        interaction.FallbackTimeoutSeconds.ShouldBe(45);
+        interaction.Ack.ShouldNotBeNull();
+        interaction.Ack!.Href.ShouldBe("/longpoll/ack");
+    }
+
+    /// <summary>
+    /// When the current state declares interaction.longPoll with terminate=false, the interaction block is
+    /// still emitted (terminate flag false, fallback window present) but without an acknowledge href.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateDeclaresLongPollWithoutTerminate_EmitsInteractionWithoutAck()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: false, fallbackSeconds: 120);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var interaction = result.Result.Value!.Interaction;
+        interaction.ShouldNotBeNull();
+        interaction!.TerminateLongPoll.ShouldBeFalse();
+        interaction.FallbackTimeoutSeconds.ShouldBe(120);
+        interaction.Ack.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// When the current state does not declare interaction.longPoll, no interaction block is emitted.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateHasNoLongPollDeclaration_NoInteraction()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var input = CreateInput(instance.Id.ToString());
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// When the state declares interaction.longPoll.roles and the caller's role is not granted,
+    /// no interaction block is emitted (role filtering preserved).
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenLongPollRolesDenyCaller_NoInteraction()
+    {
+        // Arrange — role grants present; IsAnyRoleAllowedForGrantsAsync defaults to false (caller not allowed)
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 30, withRoles: true);
+        SetupCommonMocks(instance, workflow);
 
         var input = CreateInput(instance.Id.ToString());
 
@@ -313,7 +423,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
-    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasView_ReturnsStateHasViewAndHidesTransitionView()
+    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasView_ReturnsTransitionViewAndNoStateView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -336,16 +446,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Act
         var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
 
-        // Assert
+        // Assert: a wizard state is treated like any other state. The state has no own view,
+        // and the transition exposes its own view. No wizard-specific view borrowing/hiding.
         result.Result.IsSuccess.ShouldBeTrue();
         var output = result.Result.Value!;
-        output.View.HasView.ShouldBeTrue();
-        output.View.LoadData.ShouldBeTrue();
-        output.Transitions.Single().View!.HasView.ShouldBeFalse();
+        output.View.HasView.ShouldBeFalse();
+        output.Transitions.Single().View!.HasView.ShouldBeTrue();
     }
 
     [Fact]
-    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasNoView_FallsBackToStateView()
+    public async Task GetInstanceStateAsync_WhenWizardStateHasOwnView_ReturnsStateView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -376,7 +486,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
-    public async Task GetViewAsync_WhenWizardStateTransitionHasView_ReturnsTransitionView()
+    public async Task GetViewAsync_WhenWizardStateWithTransitionKey_ReturnsTransitionView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -405,7 +515,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Label = string.Empty
             }));
 
-        // Act
+        // Act: the transition's view is requested explicitly — a wizard state gets no special handling.
         var result = await _service.GetViewAsync(new GetViewInput
         {
             Domain = TestDomain,
@@ -413,7 +523,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             Instance = instance.Id.ToString(),
             Headers = new Dictionary<string, string?>(),
             QueryParameters = new Dictionary<string, string?>()
-        }, transitionKey: null, CancellationToken.None);
+        }, transitionKey: "continue", CancellationToken.None);
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
@@ -421,7 +531,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
-    public async Task GetViewAsync_WhenWizardStateTransitionHasNoView_ReturnsStateView()
+    public async Task GetViewAsync_WhenWizardStateWithoutTransitionKey_ReturnsStateView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -775,8 +885,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         }, transitionKey: "approve", CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
 
     [Fact]
@@ -802,7 +912,236 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.Master.Href.ShouldBe("https://master-url");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── State Function Cache ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// When the cache is disabled (default), neither the fingerprint query nor the cache runs;
+    /// the full build path answers.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenCacheDisabled_DoesNotTouchCacheOrFingerprint()
+    {
+        // Arrange — _stateFunctionCache.Enabled defaults to false
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        _stateFunctionCache.DidNotReceive().BuildKey(Arg.Any<GetInstanceStateInput>());
+        await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.DidNotReceive()
+            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .GetStateFingerprintAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A matching If-None-Match is answered with 304 straight from the fingerprint projection:
+    /// no cache access, no aggregate load, no response build — even with an empty cache.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenIfNoneMatchMatchesFingerprintEtag_Returns304WithoutCacheOrBuild()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+
+        var input = CreateInput(instanceId.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        // Assert
+        result.IsNotModified.ShouldBeTrue();
+        await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Without a current If-None-Match, a cache entry carrying the current fingerprint ETag
+    /// serves the cached response without loading the aggregate.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenCachedEtagMatchesCurrent_ServesFromCacheWithoutAggregateLoad()
+    {
+        // Arrange
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+        SetupCachedEntry(out var entry);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instanceId.ToString()), CancellationToken.None);
+
+        // Assert — cached output served, aggregate never loaded
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe(entry.Output.State);
+        result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
+        result.Result.Value!.EntityEtag.ShouldBe("\"entity-1\"");
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A cache miss runs the full build path and warms the cache under the same fingerprint ETag
+    /// the fast path computes.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenCacheMiss_BuildsAndWarmsCacheWithFingerprintEtag()
+    {
+        // Arrange
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — response built normally and stored under the deterministic ETag
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
+        await _stateFunctionCache.Received(1).SetAsync(
+            TestCacheKey,
+            Arg.Is<Caching.StateFunctionCacheEntry>(e => e.Etag == "etag-current"),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A stale cache entry (its ETag no longer matches the fingerprint ETag — state, status,
+    /// version, or resolved row changed) forces a rebuild and refreshes the cache.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenCachedEtagIsStale_RebuildsAndRefreshesCache()
+    {
+        // Arrange — entry was built under an older fingerprint
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        SetupCachedEntry(out _, etag: "etag-old");
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — full rebuild + cache refresh under the current ETag
+        result.Result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.Received(1).SetAsync(
+            TestCacheKey,
+            Arg.Is<Caching.StateFunctionCacheEntry>(e => e.Etag == "etag-current"),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// When the fingerprint reports an active SubFlow, both the 304 fast path and the cache are
+    /// bypassed (live evaluation required) and nothing is written back.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenFingerprintHasActiveSubFlow_BypassesCache()
+    {
+        // Arrange
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        SetupSubFlowGateway(InstanceStatus.Active, "sub-review");
+        EnableCache();
+        _instanceRepository
+            .GetStateFingerprintAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(new InstanceStateFingerprint(instance.Id, "test-key", TestState, InstanceStatus.Busy,
+                TestVersion, HasActiveSubFlow: true));
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — served live from the subflow gateway with the subflow ETag variant, never cached
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("sub-review");
+        result.Result.Value!.ETag.ShouldBe("\"etag-subflow\"");
+        await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.DidNotReceive()
+            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// When the fingerprint query finds no instance, the full path runs and produces its own outcome.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenFingerprintNotFound_FallsThroughToFullPath()
+    {
+        // Arrange
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        _instanceRepository
+            .GetStateFingerprintAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns((InstanceStateFingerprint?)null);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — the full path answered (here: success, since the aggregate is mocked)
+        result.Result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    // ── Cache helpers ────────────────────────────────────────────────────────
+
+    private const string TestCacheKey = "state-fn:test-domain:test-flow:key-under-test";
+
+    private void EnableCache()
+    {
+        _stateFunctionCache.Enabled.Returns(true);
+        _stateFunctionCache.BuildKey(Arg.Any<GetInstanceStateInput>()).Returns(TestCacheKey);
+        _stateFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceStateInput>(), Arg.Any<InstanceStateFingerprint>())
+            .Returns("etag-current");
+        _stateFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceStateInput>(), Arg.Any<InstanceStateFingerprint>(),
+                Arg.Any<GetInstanceStateOutput>())
+            .Returns("etag-subflow");
+    }
+
+    private void SetupFingerprint(Guid instanceId) =>
+        _instanceRepository
+            .GetStateFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
+                TestVersion, HasActiveSubFlow: false));
+
+    private void SetupCachedEntry(out Caching.StateFunctionCacheEntry entry, string etag = "etag-current")
+    {
+        entry = new Caching.StateFunctionCacheEntry
+        {
+            Etag = etag,
+            EntityEtag = "entity-1",
+            Output = new GetInstanceStateOutput
+            {
+                State = TestState,
+                Status = InstanceStatus.Active,
+                Transitions = [],
+                ActiveCorrelations = []
+            }
+        };
+        _stateFunctionCache.GetAsync(TestCacheKey, Arg.Any<CancellationToken>()).Returns(entry);
+    }
+
+    private (Instance instance, Definitions.Workflow workflow) CreateSimpleActiveInstance()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
+        return (instance, workflow);
+    }
 
     private void DenyQueryRoles() =>
         _transitionAuthorizationManager
@@ -920,6 +1259,47 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceQueryGateway
             .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
             .Returns(ConditionalResult<GetInstanceStateOutput>.Success(subFlowOutput));
+    }
+
+    /// <summary>
+    /// Builds an instance whose current state ("review") declares interaction.longPoll, deserialized from
+    /// JSON since the interaction value objects expose only private (JSON) constructors.
+    /// </summary>
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithLongPollState(
+        bool terminate, int fallbackSeconds, bool withRoles = false)
+    {
+        var roles = withRoles
+            ? """, "roles": [ { "role": "FullAuthorized", "grant": "allow" } ]"""
+            : "";
+        var terminateLiteral = terminate ? "true" : "false";
+        var json = $$"""
+                   {
+                       "type": "F",
+                       "timeout": null,
+                       "labels": [],
+                       "functions": [],
+                       "features": [],
+                       "states": [
+                           { "key": "review", "stateType": "Intermediate", "transitions": [],
+                             "interaction": { "longPoll": { "terminate": {{terminateLiteral}}, "fallbackTimeoutSeconds": {{fallbackSeconds}}{{roles}} } } }
+                       ],
+                       "sharedTransitions": [],
+                       "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+                   }
+                   """;
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
+
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var reviewState = workflow.States.First(s => s.Key == "review");
+        instance.ChangeState(reviewState);
+        return (instance, workflow);
     }
 
     private static GetInstanceStateInput CreateInput(string instanceId) => new()

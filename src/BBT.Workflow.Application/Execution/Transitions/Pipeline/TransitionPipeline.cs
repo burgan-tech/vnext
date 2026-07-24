@@ -4,7 +4,6 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
-using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -26,7 +25,6 @@ public class TransitionPipeline
     private readonly IReservedTransitionResolver _reservedTransitionResolver;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
-    private readonly IPostCommitExecutor _postCommitExecutor;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IUnitOfWorkManager _uowManager;
     private readonly ITransitionValidationService _validationService;
@@ -51,7 +49,6 @@ public class TransitionPipeline
         IReservedTransitionResolver reservedTransitionResolver,
         IInstanceBusyManager busyMarker,
         ITransitionContextFactory contextFactory,
-        IPostCommitExecutor postCommitExecutor,
         IInstanceRepository instanceRepository,
         IUnitOfWorkManager uowManager,
         ITransitionValidationService validationService,
@@ -66,7 +63,6 @@ public class TransitionPipeline
         _reservedTransitionResolver = reservedTransitionResolver;
         _busyMarker = busyMarker;
         _contextFactory = contextFactory;
-        _postCommitExecutor = postCommitExecutor;
         _instanceRepository = instanceRepository;
         _uowManager = uowManager;
         _validationService = validationService;
@@ -95,9 +91,9 @@ public class TransitionPipeline
         if (context.SkipImmediateExecution)
             return Result<TransitionExecutionContext>.Ok(context);
 
-        // 2) Reserved transitions — each acquires its own type-specific lock that is independent
-        //    of the main flow lock, so they can run even while a normal transition holds L1
-        //    (e.g., sync subflow resume triggered inside the parent's post-commit phase).
+        // 2) Reserved transitions acquire their own type-specific lock independently of the main
+        //    flow lock. Post-commit work begins only after this pipeline returns and lock
+        //    registration ends, so this path does not depend on nested callback reentrancy.
         if (_reservedTransitionResolver.IsReserved(context))
         {
             var reservedKey = _reservedTransitionResolver.GetOwnLockKey(context);
@@ -109,6 +105,10 @@ public class TransitionPipeline
                 return Result<TransitionExecutionContext>.Fail(
                     WorkflowErrors.InstanceLockConflict(context.InstanceId));
             }
+
+            // Mark the reserved key as held only for this pipeline invocation. AsyncLocal-scoped:
+            // it expires when this method returns, before runner-owned post-commit work begins.
+            ChainLockRegistry.Register(reservedKey);
 
             // A durable S8 checkpoint always belongs to the interrupted MAIN transition.
             // Reserved transitions (cancel/exit/update-data/timeout/long-poll ack) must never
@@ -137,6 +137,11 @@ public class TransitionPipeline
             return Result<TransitionExecutionContext>.Fail(
                 WorkflowErrors.InstanceLockConflict(context.InstanceId));
         }
+
+        // Mark the chain lock key as held for work within this pipeline invocation. AsyncLocal-
+        // scoped registration expires when this method returns; runner-owned post-commit work
+        // starts only after that handoff, once the lock registration has ended.
+        ChainLockRegistry.Register(context.LockKey);
 
         // 4) Mark instance Busy immediately after lock acquisition
         await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
@@ -177,23 +182,23 @@ public class TransitionPipeline
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
-            // Execute post-commit jobs (inside lock scope)
-            var postCommitJobs = context.Directives.ConsumePostCommitJobs();
-            if (postCommitJobs.Count > 0)
+            // A post-commit job marks the handoff boundary. The runner owns executing this
+            // remote work after the originating UoW has committed and this lock scope ends.
+            // Do not consume the jobs: it returns the intact directives to the runner.
+            if (context.Directives.PostCommitJobs.Count > 0)
             {
-                var postCommitResult = await _postCommitExecutor.ExecuteAsync(postCommitJobs, context, cancellationToken);
-                if (!postCommitResult.IsSuccess)
+                // Enqueued continuations must still be persisted in the originating UoW before
+                // we return the barrier. Inline continuations remain in directives so the runner
+                // can orchestrate them after the handoff.
+                if (context.EnqueueContinuations)
                 {
-                    if (postCommitResult.FaultRequest is not null)
-                    {
-                        await MarkInstanceFaultedFromPostCommitAsync(context, postCommitResult.FaultRequest, cancellationToken);
-                        return Result<TransitionExecutionContext>.Ok(context);
-                    }
-
-                    var error = postCommitResult.Error
-                        ?? WorkflowErrors.ConfigInvalid(context.InstanceId, "Post-commit execution failed without error details");
-                    return Result<TransitionExecutionContext>.Fail(error);
+                    var enqueueResult = await _continuationDispatcher.DispatchAsync(
+                        ContinuationMode.Enqueue, context, cancellationToken);
+                    if (!enqueueResult.IsSuccess)
+                        return Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
                 }
+
+                return Result<TransitionExecutionContext>.Ok(context);
             }
 
             // Realize the continuation. Inline = in-process auto-chain (sync); Enqueue =
@@ -218,14 +223,15 @@ public class TransitionPipeline
                 // No further in-process work (chain complete or continuation enqueued) —
                 // apply deferred status and release chain ownership if requested
                 // (inside lock, no re-acquire needed).
-                await ApplyResolvedStatusAsync(context, cancellationToken);
-                await ApplyChainOwnershipAsync(context, cancellationToken);
-
-                // State settled (state + status finalized): fire the state-level notification if the
-                // resting state declares one. Skipped when a continuation was enqueued — the chain is
-                // not yet at rest and the settle hook fires again when the final hop completes.
-                if (!hadNextTransition)
-                    await MaybeScheduleStateNotificationAsync(context, cancellationToken);
+                await TransitionSettlement.ApplyAsync(
+                    context,
+                    context.Directives.ConsumeResolvedStatus(),
+                    context.Directives.ConsumeEndChain(),
+                    scheduleNotification: !hadNextTransition,
+                    _instanceRepository,
+                    _stateNotificationScheduler,
+                    _logger,
+                    cancellationToken);
 
                 return Result<TransitionExecutionContext>.Ok(context);
             }
@@ -322,115 +328,4 @@ public class TransitionPipeline
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }
 
-    /// <summary>
-    /// Marks the workflow instance as faulted due to a post-commit failure.
-    /// Already within lock scope — no re-acquisition needed.
-    /// Uses the context's instance directly since we never released the lock.
-    /// </summary>
-    private async Task MarkInstanceFaultedFromPostCommitAsync(
-        TransitionExecutionContext context,
-        PostCommitFaultRequest faultRequest,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogWarning(
-            "Marking instance {InstanceId} as faulted due to post-commit failure: {ErrorCode} - {ErrorMessage}",
-            context.InstanceId, faultRequest.ErrorCode, faultRequest.ErrorMessage);
-
-        if (!context.Instance.HasActiveIncident)
-        {
-            var incident = InstanceIncidentFactory.Create(
-                state: context.Instance.GetCurrentState,
-                transition: context.TransitionKey,
-                taskKey: null,
-                message: faultRequest.ErrorMessage ?? "Post-commit execution failed",
-                errorCode: faultRequest.ErrorCode,
-                errorLayer: "PostCommit",
-                stackTrace: faultRequest.StackTrace,
-                traceId: context.TraceId);
-
-            context.Instance.AddIncident(incident);
-        }
-
-        context.Instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
-        context.ExtractAndDeferInstanceEvents();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-
-        _logger.LogInformation(
-            "Instance {InstanceId} marked as faulted successfully",
-            context.InstanceId);
-    }
-
-    /// <summary>
-    /// Applies the deferred resolved status to the instance.
-    /// Already within lock scope — no re-acquisition needed.
-    /// </summary>
-    private async Task ApplyResolvedStatusAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        var resolvedStatus = context.Directives.ConsumeResolvedStatus();
-        if (resolvedStatus is null)
-            return;
-
-        if (context.Instance.IsCompleted)
-            return;
-
-        if (context.Target?.SubType == StateSubType.Busy)
-            return;
-
-        if (context.Instance.ActiveCorrelations.Any(c =>
-                c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted))
-            return;
-
-        context.Instance.Active();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-
-        _logger.LogDebug(
-            "Instance {InstanceId} resolved to Active after chain completion",
-            context.InstanceId);
-    }
-
-    /// <summary>
-    /// Releases the durable chain-ownership token when the pipeline has come to rest while the
-    /// instance stays Busy (e.g. a Busy-subtype state). The auto-chain has finished, so the token
-    /// must be cleared — otherwise the chain-token gate would reject legitimate foreign transitions
-    /// and the ChainReaper would treat the resting instance as stuck. The instance status is left
-    /// unchanged (still Busy). Already within lock scope — no re-acquisition needed.
-    /// </summary>
-    private async Task ApplyChainOwnershipAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        if (!context.Directives.ConsumeEndChain())
-            return;
-
-        if (context.Instance.IsCompleted || !context.Instance.ChainToken.HasValue)
-            return;
-
-        context.Instance.EndChain();
-        await _instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-
-        _logger.LogDebug(
-            "Instance {InstanceId} released chain ownership at rest (stays Busy)",
-            context.InstanceId);
-    }
-
-    /// <summary>
-    /// Schedules a state-level notification job when the settled target state declares at least one
-    /// <c>state</c> notification entry. Runs at the chain's rest point — the instance state and status
-    /// are finalized and committed with the ambient UoW — so the durable job's dispatch (off the
-    /// request thread) observes the committed state. Rule evaluation and per-entry dispatch happen in
-    /// the job. Already within lock scope.
-    /// </summary>
-    private async Task MaybeScheduleStateNotificationAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        if (context.Target?.HasStateNotifications != true)
-            return;
-
-        await _stateNotificationScheduler.ScheduleAsync(context, cancellationToken);
-
-        _logger.StateNotificationScheduled(context.InstanceId, context.Target.Key);
-    }
 }

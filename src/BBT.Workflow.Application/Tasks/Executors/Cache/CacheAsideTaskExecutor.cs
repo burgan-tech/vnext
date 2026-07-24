@@ -68,7 +68,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
                 return await scriptRunner.InputHandler(task, context.ScriptContext);
             }, cancellationToken, ex => Error.Failure(
                 WorkflowErrorCodes.TaskExecution,
-                $"CacheAside task input handler failed: {ex.Message}"));
+                $"CacheAside task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
             if (!result.IsSuccess)
             {
@@ -179,6 +179,6 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"CacheAside task source mapping failed: {ex.Message}"));
+            $"CacheAside task source mapping failed: {ScriptDiagnostics.Explain(ex)}"));
     }
 }

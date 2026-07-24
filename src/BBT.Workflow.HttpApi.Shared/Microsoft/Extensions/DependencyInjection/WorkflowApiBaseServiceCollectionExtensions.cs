@@ -108,9 +108,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddDbContext(this IServiceCollection services, IConfiguration configuration)
     {
-        var schemaSwitchingMode = configuration.GetValue("Aether:SchemaSwitchingMode",
-            SchemaSwitchingMode.SessionSearchPath);
-
         services.AddSchemaResolution(options =>
         {
             options.HeaderKey = "X-Workflow";
@@ -121,7 +118,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddAetherNpgsql<WorkflowDbContext>(
             configuration.GetConnectionString("Default")!,
-            schemaSwitchingMode,
+            SchemaSwitchingMode.QualifiedNames,
             (sp, options) =>
             {
                 options.UseNpgsql(configuration.GetConnectionString("Default"),
@@ -147,7 +144,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddAetherNpgsql<MessagingDbContext>(
             configuration.GetConnectionString("Default")!,
-            schemaSwitchingMode,
+            SchemaSwitchingMode.QualifiedNames,
             (_, options) =>
             {
                 options.UseNpgsql(configuration.GetConnectionString("Default"),

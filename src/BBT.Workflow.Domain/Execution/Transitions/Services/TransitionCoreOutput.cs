@@ -10,9 +10,10 @@ namespace BBT.Workflow.Execution.Services;
 /// </summary>
 /// <param name="Output">The transition output containing instance ID and status.</param>
 /// <param name="DeferredEvents">Domain events collected during pipeline execution for post-commit publishing.</param>
-/// <param name="Continuations">Immutable snapshot of pending continuation work (next transition, post-commit jobs, resolved status). Projected from the pipeline directives; currently informational and consumed by the continuation dispatcher in later specs.</param>
+/// <param name="Continuations">Immutable snapshot of pending continuation work (next transition, post-commit jobs, resolved status). Projected from the pipeline directives for runner-owned orchestration after commit.</param>
+/// <param name="ExecutionContext">The originating execution context, retained with its directives intact for runner-owned post-commit orchestration.</param>
 public sealed record TransitionCoreOutput(
     TransitionOutput Output,
     IReadOnlyList<DomainEventEnvelope> DeferredEvents,
-    ContinuationSet Continuations);
-
+    ContinuationSet Continuations,
+    TransitionExecutionContext ExecutionContext);

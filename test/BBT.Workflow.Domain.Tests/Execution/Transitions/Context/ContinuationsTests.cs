@@ -44,7 +44,10 @@ public class ContinuationsTests
     public void ToContinuations_ShouldReflectPostCommitJobs()
     {
         var directives = new PipelineDirectives();
-        var job = new StartSubflowJob(Guid.NewGuid(), "Review");
+        var job = new StartSubflowJob(
+            Guid.NewGuid(),
+            "Review",
+            PostCommitContinuationBehavior.HandoffToChild);
         directives.EnqueuePostCommit(job);
 
         var continuations = directives.ToContinuations();
@@ -55,11 +58,25 @@ public class ContinuationsTests
     }
 
     [Fact]
+    public void StartSubflowJob_ShouldExposeExplicitContinuationBehavior()
+    {
+        var job = new StartSubflowJob(
+            Guid.NewGuid(),
+            "Review",
+            PostCommitContinuationBehavior.HandoffToChild);
+
+        job.ContinuationBehavior.ShouldBe(PostCommitContinuationBehavior.HandoffToChild);
+    }
+
+    [Fact]
     public void ToContinuations_ShouldBePureRead_DoesNotConsumeDirectives()
     {
         var directives = new PipelineDirectives();
         directives.RequestNextTransition(new NextTransitionRequest("approve"));
-        directives.EnqueuePostCommit(new StartSubflowJob(Guid.NewGuid(), "Review"));
+        directives.EnqueuePostCommit(new StartSubflowJob(
+            Guid.NewGuid(),
+            "Review",
+            PostCommitContinuationBehavior.HandoffToChild));
         directives.RequestResumeFrom(79);
 
         // Project twice; directives must be untouched between calls.
@@ -88,13 +105,19 @@ public class ContinuationsTests
     public void ToContinuations_Snapshot_IsStable_AgainstLaterMutation()
     {
         var directives = new PipelineDirectives();
-        directives.EnqueuePostCommit(new StartSubflowJob(Guid.NewGuid(), "First"));
+        directives.EnqueuePostCommit(new StartSubflowJob(
+            Guid.NewGuid(),
+            "First",
+            PostCommitContinuationBehavior.HandoffToChild));
 
         var snapshot = directives.ToContinuations();
         snapshot.PostCommitJobs.Count.ShouldBe(1);
 
         // Mutating the directives after projecting must not change the snapshot.
-        directives.EnqueuePostCommit(new StartSubflowJob(Guid.NewGuid(), "Second"));
+        directives.EnqueuePostCommit(new StartSubflowJob(
+            Guid.NewGuid(),
+            "Second",
+            PostCommitContinuationBehavior.HandoffToChild));
 
         snapshot.PostCommitJobs.Count.ShouldBe(1);
         directives.ToContinuations().PostCommitJobs.Count.ShouldBe(2);

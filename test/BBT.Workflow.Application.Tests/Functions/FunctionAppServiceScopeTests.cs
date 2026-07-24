@@ -244,8 +244,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         result.Value!.StatusCode.ShouldBe(200);
         // On a hit the tasks are not executed and nothing is written back.
         await _taskCoordinator.DidNotReceive().ExecuteAsync(
-            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(), Arg.Any<TaskExecutionOrigin>(),
-            Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
         await _cacheGateway.DidNotReceive().SetAsync(
             Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
@@ -267,8 +267,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
 
         result.IsSuccess.ShouldBeTrue();
         await _taskCoordinator.Received(1).ExecuteAsync(
-            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(), Arg.Any<TaskExecutionOrigin>(),
-            Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
         await _cacheGateway.Received(1).SetAsync(
             "fn:test", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());

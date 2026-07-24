@@ -107,6 +107,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public WorkflowTimeout? Timeout { get; private set; }
 
     /// <summary>
+    /// Optional author-controlled cache tuning for the built-in instance functions
+    /// (data, view, schema, ...). Null means host defaults apply.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("functionCache")]
+    public FunctionCacheDefinition? FunctionCache { get; private set; }
+
+    /// <summary>
     /// Defines the cancellation configuration for this workflow.
     /// When configured, allows the workflow to be canceled via the cancel transition.
     /// </summary>
