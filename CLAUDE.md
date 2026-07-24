@@ -141,7 +141,7 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 
 **StepOutcome**: `Continue()` (next step), `Stop()` (break loop), `SkipTo(order)` (jump + replan), `SkipToFinalize()` (shorthand), `With(Action<PipelineDirectives>)` (mutate directives).
 
-**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/SetBusy/CreateTransition/ResourceLock/ResolveAvailable), Scheduled, Event, ErrorBoundary (`AllowAutoChain=false`, `AllowSubFlow=false`).
+**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/CheckParentUpdateData/ForwardSubflow/SetBusy/ApplyTimeoutState — ResourceLock runs so auto-chained transitions can lock), Scheduled, Event, ErrorBoundary (`AllowAutoChain=false`, `AllowSubFlow=false`).
 
 **TransitionExecutionContext**: Built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`). Same context reference flows through all steps. `Cache` dict cleared at Finalize. `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
 
