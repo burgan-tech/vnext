@@ -34,6 +34,12 @@ public sealed class RuleJsonDynamic : DynamicObject
     public static RuleJsonDynamic FromJsonElement(JsonElement element) => new(element);
 
     /// <summary>
+    /// Returns the underlying (cloned, read-only) <see cref="JsonElement"/> for callers that need to
+    /// enumerate object properties or array items — operations the dynamic surface does not expose.
+    /// </summary>
+    public JsonElement AsJsonElement() => _element;
+
+    /// <summary>
     /// Numeric JSON value as <see cref="double"/> for use in expressions (e.g. comparisons).
     /// </summary>
     public double AsDouble() =>
