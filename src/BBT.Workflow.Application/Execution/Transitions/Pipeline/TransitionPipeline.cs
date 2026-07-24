@@ -40,6 +40,21 @@ public class TransitionPipeline
     private const int MaxChainDepth = 50;
 
     /// <summary>
+    /// Pipeline error codes that represent a caller-actionable condition rather than an internal
+    /// fault. When a step fails with one of these, the instance is still faulted but the failure is
+    /// propagated to the caller so it maps to the intended HTTP status (e.g. 409) instead of being
+    /// swallowed into the default "200 + Status=F" outcome. Extend deliberately — each entry must
+    /// have a matching non-500 mapping in <c>AddExceptionHandling</c>.
+    /// </summary>
+    private static readonly HashSet<string> ClientFacingErrorCodes = new(StringComparer.Ordinal)
+    {
+        WorkflowErrorCodes.ResourceLockConflict,
+    };
+
+    private static bool IsClientFacingError(Error error)
+        => error.Code is not null && ClientFacingErrorCodes.Contains(error.Code);
+
+    /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
     public TransitionPipeline(
@@ -179,6 +194,14 @@ public class TransitionPipeline
             if (!pipelineResult.IsSuccess)
             {
                 await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
+
+                // The instance is now faulted (F) regardless. For caller-actionable errors
+                // (e.g. ResourceLockConflict) propagate the failure so the HTTP layer returns the
+                // mapped status (409) instead of swallowing it into "200 + Status=F". All other
+                // pipeline faults keep the existing 200 + Status=F behavior.
+                if (IsClientFacingError(pipelineResult.Error))
+                    return Result<TransitionExecutionContext>.Fail(pipelineResult.Error);
+
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 

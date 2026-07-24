@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using BBT.Aether;
 using BBT.Workflow.Definitions;
 
@@ -6,6 +7,55 @@ namespace BBT.Workflow.Instances;
 
 public static class InstanceMetadataExtensions
 {
+    /// <summary>
+    /// Records a distributed resource-lock key acquired by this instance so that the instance's
+    /// terminal cleanup can release it automatically (owner = instance ID), regardless of which
+    /// transition path completes/faults the instance. Idempotent: a key already tracked is ignored.
+    /// The key set is stored as a JSON array string under <see cref="DomainConsts.MetaDataKeys.ResourceLocks"/>.
+    /// </summary>
+    public static void TrackResourceLock(this Instance instance, string resourceKey)
+    {
+        if (instance is null)
+            throw new ArgumentNullException(nameof(instance));
+        if (string.IsNullOrWhiteSpace(resourceKey))
+            return;
+
+        var keys = instance.GetTrackedResourceLocks().ToList();
+        if (keys.Contains(resourceKey))
+            return;
+
+        keys.Add(resourceKey);
+
+        var metadata = new ExtraPropertyDictionary(instance.ExtraProperties ?? new ExtraPropertyDictionary())
+        {
+            [DomainConsts.MetaDataKeys.ResourceLocks] = JsonSerializer.Serialize(keys)
+        };
+        instance.SetMetaData(metadata);
+    }
+
+    /// <summary>
+    /// Returns the distributed resource-lock keys currently tracked for this instance
+    /// (see <see cref="TrackResourceLock"/>). Never returns null; tolerates missing or malformed metadata.
+    /// </summary>
+    public static IReadOnlyList<string> GetTrackedResourceLocks(this Instance instance)
+    {
+        if (instance is null)
+            throw new ArgumentNullException(nameof(instance));
+
+        var raw = GetString(instance.ExtraProperties, DomainConsts.MetaDataKeys.ResourceLocks);
+        if (string.IsNullOrWhiteSpace(raw))
+            return Array.Empty<string>();
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(raw) ?? (IReadOnlyList<string>)Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     public static SubFlowContractInfo ToSubFlowContractInfo(this Instance instance)
     {
         if (instance is null)

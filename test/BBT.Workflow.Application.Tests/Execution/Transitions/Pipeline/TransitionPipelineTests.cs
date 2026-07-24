@@ -630,6 +630,39 @@ public class TransitionPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenStepFailsWithClientFacingError_ShouldFaultInstanceAndReturnFailure()
+    {
+        // A caller-actionable failure (ResourceLockConflict) must fault the instance AND surface the
+        // failure so the HTTP layer returns the mapped status (409) instead of "200 + Status=F".
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var error = Error.Conflict(WorkflowErrorCodes.ResourceLockConflict, "Resource is already locked");
+
+        SetupContextFactory(context);
+
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(error)));
+        for (int i = 1; i < _mockSteps.Count; i++)
+        {
+            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert: instance still faulted...
+        await _mockInstanceRepository.Received(1)
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+                true,
+                Arg.Any<CancellationToken>());
+        // ...but the failure is propagated to the caller (→ 409), not swallowed into a success.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+    }
+
+    [Fact]
     public async Task RunAsync_WhenStepReturnsStop_ShouldStopPipeline()
     {
         // Arrange

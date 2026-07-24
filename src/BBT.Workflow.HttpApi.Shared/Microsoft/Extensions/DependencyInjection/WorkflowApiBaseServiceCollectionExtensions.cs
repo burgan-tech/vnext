@@ -313,7 +313,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // Execution errors
             opt.Map(WorkflowErrorCodes.ExecutionStepFailed, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.ResourceLockConflict, HttpStatusCode.Conflict);
-            opt.Map(WorkflowErrorCodes.ResourceLockReleaseFailed, HttpStatusCode.InternalServerError);
 
             // Task errors
             opt.Map(WorkflowErrorCodes.TaskContextCreation, HttpStatusCode.InternalServerError);

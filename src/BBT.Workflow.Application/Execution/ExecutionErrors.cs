@@ -136,15 +136,9 @@ public static class ExecutionErrors
             WorkflowErrorCodes.ResourceLockInvalidAction,
             $"Unknown resource lock action: {action}");
 
-    /// <summary>
-    /// Creates an error when a resource lock release fails because the lock is not held by this owner.
-    /// </summary>
-    /// <param name="resourceKey">The lock key that could not be released.</param>
-    public static Error ResourceLockReleaseFailed(string resourceKey)
-        => Error.Failure(
-            WorkflowErrorCodes.ResourceLockReleaseFailed,
-            $"Failed to release resource lock for key '{resourceKey}'. Lock not held by this owner.",
-            detail: resourceKey);
+    // Note: Release is idempotent, best-effort cleanup and never faults the transition
+    // (see ResourceLockStep.ReleaseAsync / DaprResourceLockService.ReleaseAsync), so there is
+    // deliberately no release-failure Error here — anomalies are logged, not surfaced as failures.
 
     #endregion
 
