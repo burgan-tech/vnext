@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -175,6 +176,49 @@ public class TransitionContextFactoryTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Termination.ShouldBe(termination);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldNormalizeHeadersCaseInsensitively()
+    {
+        const string domain = "test-domain";
+        const string workflowKey = "test-workflow";
+        var workflow = CreateWorkflow(workflowKey, domain);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var parentId = Guid.NewGuid().ToString();
+        var input = new WorkflowExecutionContext
+        {
+            Domain = domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = workflowKey,
+            WorkflowVersion = workflow.Version,
+            TransitionKey = "resume",
+            TriggerType = TriggerType.Manual,
+            Mode = ExecMode.Resume,
+            // Upstream hop lower-cased the header key.
+            Headers = new Dictionary<string, string?> { ["x-parent-instance-id"] = parentId }
+        };
+
+        var instanceRepository = new Mock<IInstanceRepository>();
+        instanceRepository
+            .Setup(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(instance));
+        var componentCacheStore = new Mock<IComponentCacheStore>();
+        componentCacheStore
+            .Setup(x => x.GetFlowAsync(domain, workflowKey, workflow.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        var sut = new TransitionContextFactory(
+            instanceRepository.Object,
+            componentCacheStore.Object,
+            Mock.Of<IRuntimeInfoProvider>());
+
+        var result = await sut.CreateAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        // Canonical (mixed-case) lookup must resolve the lower-cased incoming header.
+        result.Value!.Headers.TryGetValue("X-Parent-Instance-Id", out var resolved).ShouldBeTrue();
+        resolved.ShouldBe(parentId);
     }
 
     private static Definitions.Workflow CreateWorkflow(string key, string domain)

@@ -129,7 +129,7 @@ public sealed class TransitionContextFactory(
             // Telemetry
             TraceId = traceId,
             SpanId = spanId,
-            Headers = input.Headers
+            Headers = ToCaseInsensitiveHeaders(input.Headers)
         };
 
         // Configure pipeline directives
@@ -146,6 +146,26 @@ public sealed class TransitionContextFactory(
             executionContext.Directives.MarkAsTimeoutTransition();
 
         return executionContext;
+    }
+
+    /// <summary>
+    /// Builds a case-insensitive view of the request headers. HTTP headers are case-insensitive,
+    /// but upstream hops may lower-case keys (e.g. <c>x-parent-instance-id</c>) while the runtime
+    /// stamps the canonical form (<c>X-Parent-Instance-Id</c>). A case-insensitive dictionary makes
+    /// both lookups (e.g. <c>TryGetValue</c>) and writes (replace, not duplicate) behave correctly.
+    /// Copy uses last-wins so any case-variant duplicates collapse into a single entry.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string?> ToCaseInsensitiveHeaders(
+        IReadOnlyDictionary<string, string?>? headers)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (headers is null)
+            return result;
+
+        foreach (var kv in headers)
+            result[kv.Key] = kv.Value;
+
+        return result;
     }
 
     /// <inheritdoc />

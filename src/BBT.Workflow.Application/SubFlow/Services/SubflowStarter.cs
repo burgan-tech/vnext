@@ -180,7 +180,10 @@ public sealed class SubflowStarter(
                 }
             }
 
-            var headers = new Dictionary<string, string?>();
+            // HTTP headers are case-insensitive. Use OrdinalIgnoreCase so a parent/root instance-id
+            // supplied by the input mapping (any casing) is REPLACED by the framework-stamped value
+            // below instead of producing a duplicate header entry.
+            var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             if (inputMappingResult?.Headers is IDictionary<string, string?> fromMapping)
             {
                 foreach (var kv in fromMapping)
