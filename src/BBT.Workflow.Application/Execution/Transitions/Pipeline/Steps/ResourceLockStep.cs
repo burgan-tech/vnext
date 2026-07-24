@@ -46,7 +46,7 @@ public sealed class ResourceLockStep(
 
         return lockDef.Action switch
         {
-            ResourceLockAction.Acquire => await AcquireAsync(resourceKey, owner, lockDef, cancellationToken),
+            ResourceLockAction.Acquire => await AcquireAsync(context, resourceKey, owner, lockDef, cancellationToken),
             ResourceLockAction.Release => await ReleaseAsync(resourceKey, owner, cancellationToken),
             ResourceLockAction.Extend  => await ExtendAsync(resourceKey, owner, lockDef, cancellationToken),
             _ => Result<StepOutcome>.Fail(
@@ -85,11 +85,19 @@ public sealed class ResourceLockStep(
     }
 
     private async Task<Result<StepOutcome>> AcquireAsync(
+        TransitionExecutionContext context,
         string resourceKey, string owner, ResourceLockDefinition lockDef, CancellationToken ct)
     {
         var acquired = await resourceLockService.AcquireAsync(resourceKey, owner, lockDef.TtlSeconds, ct);
         if (!acquired)
             return Result<StepOutcome>.Fail(ExecutionErrors.ResourceLockConflict(resourceKey));
+
+        // Record the key on the instance so its terminal cleanup releases the lock automatically,
+        // independent of which transition path completes/faults the instance. The pipeline's normal
+        // persistence flushes this ExtraProperties change; if the transition rolls back before commit
+        // (or the instance snapshot is absent), the lock's TTL remains the safety net — the same
+        // fallback as an un-run explicit Release.
+        context.Instance?.TrackResourceLock(resourceKey);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
@@ -97,10 +105,11 @@ public sealed class ResourceLockStep(
     private async Task<Result<StepOutcome>> ReleaseAsync(
         string resourceKey, string owner, CancellationToken ct)
     {
-        var released = await resourceLockService.ReleaseAsync(resourceKey, owner, ct);
-        if (!released)
-            return Result<StepOutcome>.Fail(ExecutionErrors.ResourceLockReleaseFailed(resourceKey));
-
+        // Release is best-effort cleanup and must NEVER fault an otherwise-successful transition:
+        // an idempotent no-op (TTL expired / already released) is a success, and a genuine anomaly
+        // (lock held by another owner, infra error) is logged/metered by the service but must not
+        // roll back the business outcome. The lock's TTL is the ultimate safety net.
+        await resourceLockService.ReleaseAsync(resourceKey, owner, ct);
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 

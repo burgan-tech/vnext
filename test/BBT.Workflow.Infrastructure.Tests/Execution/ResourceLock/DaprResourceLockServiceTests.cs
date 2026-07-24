@@ -90,11 +90,26 @@ public class DaprResourceLockServiceTests
     }
 
     [Fact]
-    public async Task ReleaseAsync_WhenUnlockFails_ShouldReturnFalse()
+    public async Task ReleaseAsync_WhenLockDoesNotExist_ShouldReturnTrueIdempotently()
     {
+        // TTL already expired or lock was never held: releasing is a no-op, not a failure.
         _mockDaprClient
             .Setup(c => c.Unlock(LockStoreName, ResourceKey, Owner, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new UnlockResponse(LockStatus.LockDoesNotExist));
+
+        var result = await _service.ReleaseAsync(ResourceKey, Owner, CancellationToken.None);
+
+        result.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ReleaseAsync_WhenLockBelongsToOthers_ShouldReturnFalse()
+    {
+        // A genuine anomaly: the lock is held by a different owner. Reported as false (logged/metered),
+        // but the step layer still declines to fault the transition.
+        _mockDaprClient
+            .Setup(c => c.Unlock(LockStoreName, ResourceKey, Owner, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UnlockResponse(LockStatus.LockBelongsToOthers));
 
         var result = await _service.ReleaseAsync(ResourceKey, Owner, CancellationToken.None);
 
