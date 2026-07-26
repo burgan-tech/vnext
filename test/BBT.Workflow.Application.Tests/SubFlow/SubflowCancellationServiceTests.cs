@@ -61,7 +61,7 @@ public sealed class SubflowCancellationServiceTests
 
         exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
     }
@@ -310,7 +310,7 @@ public sealed class SubflowCancellationServiceTests
         var lockCall = 0;
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(
-                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
                 It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"lock-{++lockCall}"))
             .ReturnsAsync(_lockScope.Object);
@@ -330,7 +330,7 @@ public sealed class SubflowCancellationServiceTests
         order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
         terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Exactly(2));
         _instanceRepository.Verify(x => x.UpdateAsync(
             terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }
