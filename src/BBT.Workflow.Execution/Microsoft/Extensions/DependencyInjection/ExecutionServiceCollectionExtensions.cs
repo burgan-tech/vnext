@@ -1,5 +1,6 @@
 using System.Net;
 using BBT.Workflow.Execution;
+using Dapr.AI.Conversation.Extensions;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Invokers;
 using BBT.Workflow.Execution.Metrics;
@@ -45,6 +46,9 @@ public static class ExecutionServiceCollectionExtensions
         // Register null metrics as default (can be overridden)
         services.TryAddSingleton<ITaskMetrics>(NullTaskMetrics.Instance);
 
+        // Dapr Conversation (AI/LLM) client used by the DaprConversation invoker.
+        services.AddDaprConversationClient();
+
         // Shared Dapr state-store gateway used by the StateStore and CacheAside invokers.
         services.TryAddSingleton<BBT.Workflow.Execution.StateStores.IStateStoreClient,
             BBT.Workflow.Execution.StateStores.DaprStateStoreClient>();
@@ -56,6 +60,7 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, DaprBindingTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprHttpEndpointTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprPubSubTaskInvoker>();
+        services.AddSingleton<ITaskInvoker, DaprConversationTaskInvoker>();
         services.AddSingleton<ITaskInvoker, StateStoreTaskInvoker>();
         services.AddSingleton<ITaskInvoker, CacheAsideTaskInvoker>();
         

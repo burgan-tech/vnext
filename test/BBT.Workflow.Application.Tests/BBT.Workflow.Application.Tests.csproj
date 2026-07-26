@@ -6,6 +6,9 @@
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
         <RootNamespace>BBT.Workflow</RootNamespace>
+        <!-- Dapr Conversation building block is Alpha; suppress the [Experimental] diagnostic
+             so the DaprConversation invoker tests can reference the Dapr.AI client. -->
+        <NoWarn>$(NoWarn);DAPR_CONVERSATION</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
