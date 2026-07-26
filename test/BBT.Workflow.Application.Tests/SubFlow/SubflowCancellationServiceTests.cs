@@ -51,15 +51,15 @@ public sealed class SubflowCancellationServiceTests
     }
 
     [Fact]
-    public async Task CancellationAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    public async Task CancellationAsync_WhenParentLockCannotBeAcquired_ShouldThrowRetryableLockException()
     {
         var input = CreateCanceledInput(Guid.NewGuid(), Guid.NewGuid());
         _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
 
-        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+        var exception = await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
             () => CreateService().CancellationAsync(input));
 
-        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
             $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
             It.IsAny<CancellationToken>()), Times.Once);

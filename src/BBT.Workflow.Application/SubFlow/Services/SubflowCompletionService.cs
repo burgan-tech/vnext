@@ -86,12 +86,11 @@ public sealed class SubflowCompletionService(
                     if (!lockScope.IsAcquired)
                     {
                         logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Completed.ToString());
-                        throw new SubflowCompletionException(
+                        throw new SubflowTerminalLockNotAcquiredException(
                             completedInput.Domain,
                             completedInput.Flow,
                             completedInput.InstanceId.ToString(),
-                            WorkflowErrorCodes.ConflictWorkflow,
-                            "Parent instance terminal lock could not be acquired.");
+                            SubItemTerminalOutcome.Completed.ToString());
                     }
 
                     await using var correlationUow = uowManager.Begin(

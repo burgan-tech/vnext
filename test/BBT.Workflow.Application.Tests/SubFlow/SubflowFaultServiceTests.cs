@@ -65,15 +65,15 @@ public sealed class SubflowFaultServiceTests
     }
 
     [Fact]
-    public async Task FaultAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    public async Task FaultAsync_WhenParentLockCannotBeAcquired_ShouldThrowRetryableLockException()
     {
         var input = CreateInput(Guid.NewGuid(), Guid.NewGuid(), CreateJsonElement("{}"));
         _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
 
-        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+        var exception = await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
             () => CreateService().FaultAsync(input));
 
-        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
             $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
             It.IsAny<CancellationToken>()), Times.Once);
