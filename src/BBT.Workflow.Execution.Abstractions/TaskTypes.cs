@@ -12,6 +12,7 @@ public static class TaskTypes
     public const string DaprBinding = "daprbinding";
     public const string DaprHttpEndpoint = "daprhttpendpoint";
     public const string DaprPubSub = "daprpubsub";
+    public const string DaprConversation = "daprconversation";
 
     public const string StateStore = "statestore";
 

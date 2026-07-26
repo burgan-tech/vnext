@@ -45,6 +45,7 @@ public static class TaskBindingMapper
                 DaprBindingTask daprBinding => (TaskTypes.DaprBinding, MapDaprBindingTask(daprBinding)),
                 DaprHttpEndpointTask daprHttpEndpoint => (TaskTypes.DaprHttpEndpoint, MapDaprHttpEndpointTask(daprHttpEndpoint)),
                 DaprPubSubTask daprPubSub => (TaskTypes.DaprPubSub, MapDaprPubSubTask(daprPubSub)),
+                DaprConversationTask daprConversation => (TaskTypes.DaprConversation, (object)MapDaprConversationTask(daprConversation)),
                 StateStoreTask stateStore => (TaskTypes.StateStore, (object)MapStateStoreTask(stateStore)),
 
                 // Trigger tasks (basic mapping - runtime context handled by invokers)
@@ -327,6 +328,80 @@ public static class TaskBindingMapper
             ? task.Metadata.Deserialize<Dictionary<string, string>>()
             : null
     };
+
+    /// <summary>
+    /// Maps DaprConversationTask to DaprConversationBinding.
+    /// Parses the JSON <c>inputs</c> array into typed messages and normalizes
+    /// <c>parameters</c>/<c>metadata</c> objects into string dictionaries.
+    /// </summary>
+    private static DaprConversationBinding MapDaprConversationTask(DaprConversationTask task)
+    {
+        var inputs = new List<ConversationMessageBinding>();
+        if (task.Inputs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in task.Inputs.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var role = element.TryGetProperty("role", out var roleElement)
+                    ? roleElement.GetString()
+                    : null;
+                var content = element.TryGetProperty("content", out var contentElement)
+                    ? contentElement.GetString()
+                    : null;
+                var name = element.TryGetProperty("name", out var nameElement)
+                    ? nameElement.GetString()
+                    : null;
+                bool? scrubPii = element.TryGetProperty("scrubPII", out var scrubElement)
+                    && scrubElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+                        ? scrubElement.GetBoolean()
+                        : null;
+
+                inputs.Add(new ConversationMessageBinding
+                {
+                    Role = string.IsNullOrWhiteSpace(role) ? "user" : role!,
+                    Content = content ?? string.Empty,
+                    Name = name,
+                    ScrubPII = scrubPii
+                });
+            }
+        }
+
+        return new DaprConversationBinding
+        {
+            ComponentName = task.ComponentName,
+            Inputs = inputs,
+            ContextId = string.IsNullOrWhiteSpace(task.ContextId) ? null : task.ContextId,
+            Temperature = task.Temperature,
+            ScrubPII = task.ScrubPII,
+            Metadata = ToStringDictionary(task.Metadata),
+            Parameters = ToStringDictionary(task.Parameters)
+        };
+    }
+
+    /// <summary>
+    /// Converts an optional JSON object into a string dictionary, coercing non-string values to their raw JSON text.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? ToStringDictionary(JsonElement? source)
+    {
+        if (source is not { ValueKind: JsonValueKind.Object } element)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, string>();
+        foreach (var property in element.EnumerateObject())
+        {
+            result[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString() ?? string.Empty
+                : property.Value.GetRawText();
+        }
+
+        return result.Count > 0 ? result : null;
+    }
 
     /// <summary>
     /// Maps StateStoreTask to StateStoreBinding.
