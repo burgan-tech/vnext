@@ -297,6 +297,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // Instance errors
             opt.Map(WorkflowErrorCodes.NotFoundDomain, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.ConflictWorkflow, HttpStatusCode.Conflict);
+            // Subflow terminal-outcome lock contention is expected & retryable, not an internal
+            // error. 503 is transient (TransientHttpStatus) so the inbox relay redelivers.
+            opt.Map(WorkflowErrorCodes.SubflowTerminalLockNotAcquired, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.InstanceBusy, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
