@@ -717,7 +717,7 @@ public sealed class InstanceQueryAppService(
                             Etag = etag,
                             EntityEtag = entityEtag,
                             Data = result.Data
-                        }, dataFunctionCache.ResolveTtlSeconds(flow.FunctionCache), cancellationToken);
+                        }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
                     if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1487,7 +1487,7 @@ public sealed class InstanceQueryAppService(
             {
                 Etag = etag,
                 Output = output
-            }, instanceSchemaFunctionCache.ResolveTtlSeconds(flow.FunctionCache), cancellationToken);
+            }, instanceSchemaFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
         }
 
         if (!string.IsNullOrEmpty(ifNoneMatch) && etag.MatchesIfNoneMatch(ifNoneMatch))

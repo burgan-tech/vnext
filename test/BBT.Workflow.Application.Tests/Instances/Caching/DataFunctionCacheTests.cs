@@ -156,7 +156,7 @@ public class DataFunctionCacheTests
         var json = """
                    {
                        "type": "F",
-                       "functionCache": { "ttlSeconds": 120 },
+                       "config": { "functionCache": { "ttlSeconds": 120 } },
                        "labels": [], "functions": [], "features": [], "states": [],
                        "sharedTransitions": [], "extensions": [],
                        "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
@@ -171,8 +171,9 @@ public class DataFunctionCacheTests
         var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, options);
 
         workflow.ShouldNotBeNull();
-        workflow!.FunctionCache.ShouldNotBeNull();
-        workflow.FunctionCache!.TtlSeconds.ShouldBe(120);
+        workflow!.Config.ShouldNotBeNull();
+        workflow.Config!.FunctionCache.ShouldNotBeNull();
+        workflow.Config.FunctionCache!.TtlSeconds.ShouldBe(120);
     }
 
     [Fact]
