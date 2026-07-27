@@ -1987,7 +1987,21 @@ public static partial class WorkflowLogs
         string owner);
 
     /// <summary>
-    /// Logs when a resource lock release fails (lock not held by this owner).
+    /// Logs when a resource lock release is a no-op because the lock no longer exists
+    /// (TTL already expired or it was never acquired). Treated as an idempotent success.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10102,
+        Level = LogLevel.Debug,
+        Message = "Resource lock release no-op (lock does not exist): Key={ResourceKey}, Owner={Owner}")]
+    public static partial void ResourceLockReleaseNoop(
+        this ILogger logger,
+        string resourceKey,
+        string owner);
+
+    /// <summary>
+    /// Logs when a resource lock release hits a genuine anomaly (lock held by another owner
+    /// or an infrastructure error). Best-effort cleanup: surfaced for metrics, does not fault the caller.
     /// </summary>
     [LoggerMessage(
         EventId = 10104,
@@ -1998,6 +2012,20 @@ public static partial class WorkflowLogs
         string resourceKey,
         string owner,
         string status);
+
+    /// <summary>
+    /// Logs when the automatic terminal-cleanup release of a tracked resource lock throws.
+    /// Best-effort: the failure is swallowed (TTL is the safety net) and only surfaced for metrics.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10105,
+        Level = LogLevel.Warning,
+        Message = "Resource lock auto-release errored: Key={ResourceKey}, InstanceId={InstanceId}")]
+    public static partial void ResourceLockAutoReleaseError(
+        this ILogger logger,
+        Exception exception,
+        string resourceKey,
+        Guid instanceId);
 
     /// <summary>
     /// Logs when a distributed resource lock TTL is successfully extended.

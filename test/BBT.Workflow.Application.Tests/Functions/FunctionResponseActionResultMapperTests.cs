@@ -20,9 +20,9 @@ public sealed class FunctionResponseActionResultMapperTests
 
         var actionResult = FunctionResponseActionResultMapper.ToActionResult(result, new DefaultHttpContext());
 
-        var objectResult = actionResult.ShouldBeOfType<ObjectResult>();
-        objectResult.ContentTypes.ShouldContain("application/json");
-        objectResult.ContentTypes.ShouldNotContain("application/json; charset=utf-8");
+        var contentResult = actionResult.ShouldBeOfType<ContentResult>();
+        // ContentResult preserves the media type verbatim — no "; charset=utf-8" suffix.
+        contentResult.ContentType.ShouldBe("application/json");
     }
 
     [Fact]
@@ -40,8 +40,10 @@ public sealed class FunctionResponseActionResultMapperTests
         var httpContext = new DefaultHttpContext();
         var actionResult = FunctionResponseActionResultMapper.ToActionResult(result, httpContext);
 
-        var objectResult = actionResult.ShouldBeOfType<ObjectResult>();
-        objectResult.ContentTypes.ShouldContain("application/xml");
+        var contentResult = actionResult.ShouldBeOfType<ContentResult>();
+        contentResult.ContentType.ShouldBe("application/xml");
+        // string payloads are written verbatim (no JSON quoting) for custom content types.
+        contentResult.Content.ShouldBe("<root/>");
         // content-type must not be duplicated as a raw response header.
         httpContext.Response.Headers.ContainsKey("Content-Type").ShouldBeFalse();
     }
@@ -75,6 +77,22 @@ public sealed class FunctionResponseActionResultMapperTests
 
         var actionResult = FunctionResponseActionResultMapper.ToActionResult(result, new DefaultHttpContext());
 
-        actionResult.ShouldBeOfType<ObjectResult>().StatusCode.ShouldBe(StatusCodes.Status201Created);
+        actionResult.ShouldBeOfType<ContentResult>().StatusCode.ShouldBe(StatusCodes.Status201Created);
+    }
+
+    [Fact]
+    public void ToActionResult_WithObjectData_SerializesBodyAsJson()
+    {
+        var result = Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput
+        {
+            Data = new { a = 1 }
+        });
+
+        var actionResult = FunctionResponseActionResultMapper.ToActionResult(result, new DefaultHttpContext());
+
+        var contentResult = actionResult.ShouldBeOfType<ContentResult>();
+        contentResult.Content.ShouldNotBeNull();
+        contentResult.Content!.ShouldContain("\"a\"");
+        contentResult.Content!.ShouldContain("1");
     }
 }

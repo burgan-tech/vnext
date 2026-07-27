@@ -26,7 +26,8 @@ public enum TaskType
     Soap = 16,
     StateStore = 17,
     CacheAside = 18,
-    GetInstance = 19
+    GetInstance = 19,
+    DaprConversation = 20
 }
 
 /// <summary>

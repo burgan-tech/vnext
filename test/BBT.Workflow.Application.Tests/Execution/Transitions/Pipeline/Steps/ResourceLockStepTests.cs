@@ -82,10 +82,12 @@ public class ResourceLockStepTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.StopPipeline.ShouldBeFalse();
+        // A successful acquire records the key on the instance so terminal cleanup can auto-release it.
+        context.Instance.GetTrackedResourceLocks().ShouldContain(TestResourceKey);
     }
 
     [Fact]
-    public async Task ExecuteAsync_Acquire_WhenConflict_ShouldFail()
+    public async Task ExecuteAsync_Acquire_WhenConflict_ShouldNotTrackAndShouldFail()
     {
         var context = CreateContext(ResourceLockAction.Acquire);
         SetupScriptEngine(TestResourceKey);
@@ -97,6 +99,8 @@ public class ResourceLockStepTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+        // A failed acquire must not record anything — nothing to release later.
+        context.Instance.GetTrackedResourceLocks().ShouldBeEmpty();
     }
 
     [Fact]
@@ -115,8 +119,10 @@ public class ResourceLockStepTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Release_WhenFailed_ShouldFail()
+    public async Task ExecuteAsync_Release_WhenServiceReportsAnomaly_ShouldStillContinue()
     {
+        // Release is best-effort cleanup: even a false result (lock held by another owner /
+        // infra error) must NOT fault the transition — it only gets logged/metered by the service.
         var context = CreateContext(ResourceLockAction.Release);
         SetupScriptEngine(TestResourceKey);
         _resourceLockService
@@ -125,8 +131,8 @@ public class ResourceLockStepTests
 
         var result = await _step.ExecuteAsync(context, CancellationToken.None);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockReleaseFailed);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.StopPipeline.ShouldBeFalse();
     }
 
     [Fact]

@@ -107,11 +107,12 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public WorkflowTimeout? Timeout { get; private set; }
 
     /// <summary>
-    /// Optional author-controlled cache tuning for the built-in instance functions
-    /// (data, view, schema, ...). Null means host defaults apply.
+    /// Optional flow-level configuration container. Consolidates author-controlled,
+    /// workflow-scoped settings (currently function cache tuning) under a single
+    /// <c>config</c> object. Null means host defaults apply.
     /// </summary>
-    [JsonInclude] [JsonPropertyName("functionCache")]
-    public FunctionCacheDefinition? FunctionCache { get; private set; }
+    [JsonInclude] [JsonPropertyName("config")]
+    public WorkflowConfig? Config { get; private set; }
 
     /// <summary>
     /// Defines the cancellation configuration for this workflow.

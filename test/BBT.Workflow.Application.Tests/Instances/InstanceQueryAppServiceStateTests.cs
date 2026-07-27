@@ -423,7 +423,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
-    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasView_ReturnsStateHasViewAndHidesTransitionView()
+    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasView_ReturnsTransitionViewAndNoStateView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -446,16 +446,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Act
         var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
 
-        // Assert
+        // Assert: a wizard state is treated like any other state. The state has no own view,
+        // and the transition exposes its own view. No wizard-specific view borrowing/hiding.
         result.Result.IsSuccess.ShouldBeTrue();
         var output = result.Result.Value!;
-        output.View.HasView.ShouldBeTrue();
-        output.View.LoadData.ShouldBeTrue();
-        output.Transitions.Single().View!.HasView.ShouldBeFalse();
+        output.View.HasView.ShouldBeFalse();
+        output.Transitions.Single().View!.HasView.ShouldBeTrue();
     }
 
     [Fact]
-    public async Task GetInstanceStateAsync_WhenWizardStateTransitionHasNoView_FallsBackToStateView()
+    public async Task GetInstanceStateAsync_WhenWizardStateHasOwnView_ReturnsStateView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -486,7 +486,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
-    public async Task GetViewAsync_WhenWizardStateTransitionHasView_ReturnsTransitionView()
+    public async Task GetViewAsync_WhenWizardStateWithTransitionKey_ReturnsTransitionView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();
@@ -515,7 +515,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Label = string.Empty
             }));
 
-        // Act
+        // Act: the transition's view is requested explicitly — a wizard state gets no special handling.
         var result = await _service.GetViewAsync(new GetViewInput
         {
             Domain = TestDomain,
@@ -523,7 +523,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             Instance = instance.Id.ToString(),
             Headers = new Dictionary<string, string?>(),
             QueryParameters = new Dictionary<string, string?>()
-        }, transitionKey: null, CancellationToken.None);
+        }, transitionKey: "continue", CancellationToken.None);
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
@@ -531,7 +531,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
-    public async Task GetViewAsync_WhenWizardStateTransitionHasNoView_ReturnsStateView()
+    public async Task GetViewAsync_WhenWizardStateWithoutTransitionKey_ReturnsStateView()
     {
         // Arrange
         var instanceId = Guid.NewGuid();

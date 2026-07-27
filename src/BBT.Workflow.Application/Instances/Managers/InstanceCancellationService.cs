@@ -1,6 +1,7 @@
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +19,7 @@ public sealed class InstanceCancellationService(
     IInstanceRepository instanceRepository,
     IInstanceJobRepository instanceJobRepository,
     IBackgroundJobService backgroundJobService,
+    IResourceLockService resourceLockService,
     IUnitOfWorkManager uowManager,
     ILogger<InstanceCancellationService> logger)
     :  IInstanceCancellationService
@@ -40,6 +42,12 @@ public sealed class InstanceCancellationService(
                 logger.InstanceNotFound(instanceId, string.Empty);
                 return Result.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString()));
             }
+
+            // Release any distributed resource locks this instance holds. Runs on every terminal
+            // path (completed / faulted / canceled) and before the job-cleanup early return, so a
+            // lock is freed the moment the instance reaches a terminal state — no per-transition
+            // Release wiring, and no leak until TTL on unexpected faults. Best-effort and idempotent.
+            await ReleaseTrackedResourceLocksAsync(instance, cancellationToken);
 
             var jobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
 
@@ -151,6 +159,35 @@ public sealed class InstanceCancellationService(
         {
             logger.InstanceCanceledProcessingFailed(ex, instanceId);
             return Result.Fail(WorkflowErrors.InstanceCancellationFailed(instanceId, ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Releases every distributed resource lock recorded on the instance (owner = instance ID).
+    /// Best-effort: release is idempotent (an already-expired/released lock is a no-op) and a failure
+    /// to release one key must never abort terminal cleanup — the lock's TTL is the ultimate safety net.
+    /// The tracked key set is intentionally left in metadata (re-release is harmless) to avoid an
+    /// extra persistence write on the cleanup path.
+    /// </summary>
+    private async Task ReleaseTrackedResourceLocksAsync(Instance instance, CancellationToken cancellationToken)
+    {
+        var lockKeys = instance.GetTrackedResourceLocks();
+        if (lockKeys.Count == 0)
+        {
+            return;
+        }
+
+        var owner = instance.Id.ToString();
+        foreach (var lockKey in lockKeys)
+        {
+            try
+            {
+                await resourceLockService.ReleaseAsync(lockKey, owner, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.ResourceLockAutoReleaseError(ex, lockKey, instance.Id);
+            }
         }
     }
 

@@ -36,11 +36,13 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
             LifecycleOrder.Preflight,
             LifecycleOrder.CheckParentUpdateDataTransition,
             LifecycleOrder.ForwardToActiveSubflow,
-            LifecycleOrder.ResourceLock,
+            LifecycleOrder.SetBusy,
             LifecycleOrder.ApplyTimeoutState,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected);
         profile.ExcludedStepOrders.Count.ShouldBe(5);
+        // ResourceLock must NOT be excluded: a `resourceLock` on an auto-chained transition must run.
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.ResourceLock);
     }
 
     [Fact]

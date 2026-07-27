@@ -56,17 +56,17 @@ public sealed class SubflowCompletionServiceTests
     }
 
     [Fact]
-    public async Task CompletionAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    public async Task CompletionAsync_WhenParentLockCannotBeAcquired_ShouldThrowRetryableLockException()
     {
         var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
         _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
 
-        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+        var exception = await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
             () => CreateService().CompletionAsync(input));
 
-        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
     }
@@ -444,7 +444,7 @@ public sealed class SubflowCompletionServiceTests
         var lockCall = 0;
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(
-                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
                 It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"lock-{++lockCall}"))
             .ReturnsAsync(_lockScope.Object);
@@ -478,7 +478,7 @@ public sealed class SubflowCompletionServiceTests
         order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
         terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Exactly(2));
         _instanceRepository.Verify(x => x.UpdateAsync(
             terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }

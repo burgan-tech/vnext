@@ -80,18 +80,22 @@ public sealed class SubflowCompletionService(
                 Instance? parentInstance;
                 Definitions.Workflow? parentWorkflow;
 
-                var lockKey = $"vnext:{completedInput.Domain}:{completedInput.Flow}:{completedInput.InstanceId}";
+                // Per-subInstance terminal lock, independent of the main-flow lock and reserved keys:
+                // a long-held chain lease never blocks the signal, parallel SubProcess terminal-closes
+                // don't contend, and only duplicate deliveries of the SAME subInstance serialize.
+                // Sync/async safe: distinct from the parent's held key (no self-deadlock); nested
+                // same-key reentry is still handled by ChainLockRegistry.
+                var lockKey = $"vnext:{completedInput.Domain}:{completedInput.Flow}:{completedInput.InstanceId}:sub:{completedInput.SubInstanceId:N}";
                 await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
                 {
                     if (!lockScope.IsAcquired)
                     {
                         logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Completed.ToString());
-                        throw new SubflowCompletionException(
+                        throw new SubflowTerminalLockNotAcquiredException(
                             completedInput.Domain,
                             completedInput.Flow,
                             completedInput.InstanceId.ToString(),
-                            WorkflowErrorCodes.ConflictWorkflow,
-                            "Parent instance terminal lock could not be acquired.");
+                            SubItemTerminalOutcome.Completed.ToString());
                     }
 
                     await using var correlationUow = uowManager.Begin(

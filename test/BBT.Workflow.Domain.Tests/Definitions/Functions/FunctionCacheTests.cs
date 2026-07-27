@@ -65,6 +65,35 @@ public sealed class FunctionCacheTests
     }
 
     [Fact]
+    public void Deserialize_ParsesVaryByHeadersAndPrefixes()
+    {
+        var json = """
+        {
+          "key": "dcs:configA",
+          "varyByHeaders": ["x-tenant", "x-channel"],
+          "varyByHeaderPrefixes": ["x-param-"]
+        }
+        """;
+
+        var cache = JsonSerializer.Deserialize<FunctionCache>(json, JsonSerializerConstants.JsonOptions);
+
+        cache.ShouldNotBeNull();
+        cache!.VaryByHeaders.ShouldBe(new[] { "x-tenant", "x-channel" });
+        cache.VaryByHeaderPrefixes.ShouldBe(new[] { "x-param-" });
+    }
+
+    [Fact]
+    public void VaryByCollections_DefaultToEmpty_WhenAbsent()
+    {
+        var cache = JsonSerializer.Deserialize<FunctionCache>(
+            """{ "key": "dcs:configA" }""", JsonSerializerConstants.JsonOptions);
+
+        cache.ShouldNotBeNull();
+        cache!.VaryByHeaders.ShouldBeEmpty();
+        cache.VaryByHeaderPrefixes.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void HasGenerationSource_False_WhenNoGenerationKey()
     {
         var cache = JsonSerializer.Deserialize<FunctionCache>(

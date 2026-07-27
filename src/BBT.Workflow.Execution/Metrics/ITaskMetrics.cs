@@ -40,6 +40,13 @@ public interface ITaskMetrics
     /// <param name="command">The command executed (get, set, delete).</param>
     /// <param name="status">The status of the operation (success, failure, cancelled).</param>
     void RecordStateStoreOperation(string storeName, string command, string status);
+
+    /// <summary>
+    /// Records a Dapr conversation (AI/LLM) invocation.
+    /// </summary>
+    /// <param name="componentName">The name of the conversation component (LLM provider).</param>
+    /// <param name="status">The status of the invocation (success, failure, cancelled).</param>
+    void RecordDaprConversationInvocation(string componentName, string status);
 }
 
 /// <summary>
@@ -56,5 +63,6 @@ public sealed class NullTaskMetrics : ITaskMetrics
     public void RecordDaprPubSubPublish(string pubSubName, string topic, string status) { }
     public void RecordNotificationInvocation(string bindingName, string bindingKind, string status) { }
     public void RecordStateStoreOperation(string storeName, string command, string status) { }
+    public void RecordDaprConversationInvocation(string componentName, string status) { }
 }
 

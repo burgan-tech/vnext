@@ -43,6 +43,7 @@ public static class WorkflowErrorCodes
     public const string ActiveInstanceAlreadyExists = "Instance:100025";
     public const string ExitNotConfiguredForWorkflow = "Instance:100026";
     public const string InstanceNotFaulted = "Instance:100027";
+    public const string SubflowTerminalLockNotAcquired = "Instance:100032";
     public const string NoIncompleteTransitionFound = "Instance:100028";
     public const string TimeoutConfigMissing = "Instance:100029";
     public const string SubflowOutputMappingFailed = "Instance:100030";
@@ -75,7 +76,6 @@ public static class WorkflowErrorCodes
     public const string ResourceLockKeyEmpty = "Execution:200011";
     public const string ResourceLockKeyResolutionFailed = "Execution:200012";
     public const string ResourceLockInvalidAction = "Execution:200013";
-    public const string ResourceLockReleaseFailed = "Execution:200014";
     
     #endregion
     
