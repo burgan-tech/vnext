@@ -441,7 +441,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .Returns(instance);
 
         var functionCacheJson = workflowTtlSeconds is not null
-            ? $$""", "functionCache": { "ttlSeconds": {{workflowTtlSeconds}} }"""
+            ? $$""", "config": { "functionCache": { "ttlSeconds": {{workflowTtlSeconds}} } }"""
             : string.Empty;
         var json = $$"""
                    {
