@@ -157,6 +157,7 @@ const log = {
  */
 const DEFAULT_COMPONENT_PATHS = {
     componentsRoot: 'core',
+    mappings: 'Mappings',
     tasks: 'Tasks',
     views: 'Views',
     functions: 'Functions',
@@ -221,7 +222,9 @@ function getComponentDirectories(packagePath, vnextConfig) {
     const directories = [];
     
     // Get all path entries except componentsRoot
-    const componentTypes = ['tasks', 'views', 'functions', 'extensions', 'workflows', 'schemas'];
+    // 'mappings' first: sys-mappings components are referenced by other components'
+    // scripts.helpers, so publish them before their consumers.
+    const componentTypes = ['mappings', 'tasks', 'views', 'functions', 'extensions', 'workflows', 'schemas'];
     
     for (const type of componentTypes) {
         const relativePath = paths[type] || DEFAULT_COMPONENT_PATHS[type];
