@@ -2324,6 +2324,22 @@ public static partial class WorkflowLogs
         string? transitionKey,
         string error);
 
+    /// <summary>
+    /// Logs when an event delivery is discarded because it can never be processed, so the response
+    /// signals Dapr to DROP the message rather than block the partition with endless redelivery.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40994,
+        Level = LogLevel.Warning,
+        Message = "Event delivery dropped (Dapr DROP). Domain: {Domain}, Workflow: {Workflow}, TransitionKey: {TransitionKey}, Code: {ErrorCode}, Reason: {Reason}")]
+    public static partial void EventDeliveryDropped(
+        this ILogger logger,
+        string? domain,
+        string? workflow,
+        string? transitionKey,
+        string? errorCode,
+        string? reason);
+
     #endregion
 
     #region Authorization (authorize / permissions)

@@ -125,8 +125,13 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
 - **Events**: `event.mapping` on the workflow (`action=start`) or on a `triggerType: 3` transition
   (`action=transition`). Mapping implements `IEventMapping` → `EventMappingResult { InstanceKey, Body, Selector }`.
   Delivery is domain-owned Dapr Subscription YAMLs routing topics to
-  `POST /api/v1/{domain}/workflows/{workflow}/instances/events?action=...`. No active match ⇒ 200 + ignore
-  (no redelivery). Full guide: `docs/domain/event-driven-workflows.md`.
+  `POST /api/v1/{domain}/workflows/{workflow}/instances/events?action=...`.
+  **Response is a Dapr pub/sub protocol body** (`EventDeliveryResponse`), never an instance DTO — Dapr
+  reads the top-level `status` field as its signal, so an `InstanceStatus` code there (`"B"`) causes
+  endless redelivery. Processed or no-active-match ⇒ `200 {"status":"SUCCESS"}`; permanently
+  unprocessable (bad `transitionKey`/action/domain, non-JSON body, missing event definition) ⇒
+  `200 {"status":"DROP","reason":…}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
+  so the broker retries. Full guide: `docs/domain/event-driven-workflows.md`.
 - **Filtering**: author instance queries with fluent `InstanceQuery` (default script import), never
   hand-concatenated GraphQL JSON. Terminals: `.First()/.Last()` → event `Selector` (single-resolve);
   `.Build()` → `InstanceQuerySpec` for `GetInstancesTask.SetFilterSpec(...)` (preferred; in-process when
