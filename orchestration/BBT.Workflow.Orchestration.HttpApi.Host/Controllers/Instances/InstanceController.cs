@@ -496,19 +496,27 @@ public sealed class InstanceController(
     /// <param name="sync">When true, blocks until the pipeline completes; otherwise accepted and run asynchronously.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <remarks>
+    /// <para>
     /// The raw event payload is read directly from the request body and parsed as JSON, independent of the
     /// request <c>Content-Type</c>. Kafka / pub-sub sources routed through Dapr routinely deliver bodies with
     /// no content type or <c>application/octet-stream</c>; binding via <c>[FromBody]</c> would reject those with
     /// <c>415 Unsupported Media Type</c>, so the body is bound manually here instead.
+    /// </para>
+    /// <para>
+    /// The response is an <see cref="EventDeliveryResponse"/> — a Dapr pub/sub protocol body, not an
+    /// instance envelope. Dapr reads the top-level <c>status</c> field as its delivery signal, so
+    /// returning an instance DTO here (whose <c>status</c> is an <see cref="InstanceStatus"/> code such
+    /// as <c>"B"</c>) makes Dapr treat every delivery as failed and redeliver the same message forever,
+    /// blocking the partition. Unprocessable messages are answered with <c>200 DROP</c> for the same
+    /// reason; only transient failures return non-2xx so the broker retries them.
+    /// </para>
     /// </remarks>
-    /// <response code="200">Event processed (or intentionally ignored when no active instance matches).</response>
-    /// <response code="400">Invalid action, transitionKey missing for action=transition, or malformed JSON body.</response>
-    /// <response code="404">Workflow or event definition not found.</response>
+    /// <response code="200">Dapr signal: <c>SUCCESS</c> when processed (or intentionally ignored because no active instance matches), <c>DROP</c> when the message can never be processed.</response>
+    /// <response code="500">Transient failure — the broker should redeliver.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/events")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> HandleEventAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
@@ -517,13 +525,12 @@ public sealed class InstanceController(
         [FromQuery] bool sync = false,
         CancellationToken cancellationToken = default)
     {
+        // A subscription routed at the wrong action, or a producer publishing a body that is not JSON,
+        // is a permanent defect: retrying it can never succeed, so drop instead of wedging the topic.
         if (!Enum.TryParse<EventAction>(action, ignoreCase: true, out var eventAction))
-            return BadRequest(new ProblemDetails
-            {
-                Title = "Invalid action",
-                Detail = $"action must be 'start' or 'transition'. Received: '{action}'.",
-                Status = StatusCodes.Status400BadRequest
-            });
+            return EventDeliveryResultMapper.Drop(
+                $"InvalidEventAction: action must be 'start' or 'transition'. Received: '{action}'.",
+                domain, workflow, transitionKey, "InvalidEventAction", Logger);
 
         JsonElement payload;
         try
@@ -532,12 +539,9 @@ public sealed class InstanceController(
         }
         catch (JsonException exception)
         {
-            return BadRequest(new ProblemDetails
-            {
-                Title = "Invalid payload",
-                Detail = $"The request body could not be parsed as JSON: {exception.Message}",
-                Status = StatusCodes.Status400BadRequest
-            });
+            return EventDeliveryResultMapper.Drop(
+                $"InvalidEventPayload: the request body could not be parsed as JSON: {exception.Message}",
+                domain, workflow, transitionKey, "InvalidEventPayload", Logger);
         }
 
         var input = new EventInput
@@ -553,7 +557,7 @@ public sealed class InstanceController(
         };
 
         var result = await eventAppService.HandleAsync(input, cancellationToken);
-        return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+        return EventDeliveryResultMapper.ToActionResult(result, input, HttpContext, Logger);
     }
 
     /// <summary>
