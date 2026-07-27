@@ -1,5 +1,30 @@
 {
   "versions": {
+    "0.0.76": {
+      "schemaVersion": "0.0.51",
+      "releasedAt": "2026-07-27",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-76"
+    },
+    "0.0.75": {
+      "schemaVersion": "0.0.50",
+      "releasedAt": "2026-07-23",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-71"
+    },
+    "0.0.74": {
+      "schemaVersion": "0.0.50",
+      "releasedAt": "2026-07-22",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-71"
+    },
+    "0.0.73": {
+      "schemaVersion": "0.0.50",
+      "releasedAt": "2026-07-22",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-71"
+    },
+    "0.0.72": {
+      "schemaVersion": "0.0.50",
+      "releasedAt": "2026-07-21",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-71"
+    },
     "0.0.71": {
       "schemaVersion": "0.0.50",
       "releasedAt": "2026-07-21",
