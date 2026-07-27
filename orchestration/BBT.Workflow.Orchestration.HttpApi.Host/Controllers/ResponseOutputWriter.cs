@@ -8,10 +8,10 @@ namespace BBT.Workflow.Orchestration.Controllers;
 /// server-owned headers, and resolves the response Content-Type.
 /// </summary>
 /// <remarks>
-/// <c>content-type</c> is intentionally not written as a raw header — it is applied through
-/// <see cref="ObjectResult.ContentTypes"/> so the exact media-type string is preserved (no
-/// implicit <c>charset</c> suffix). When the author does not supply one, it defaults to
-/// <c>application/json</c>. Functions act as a BFF layer, so authors may set a custom
+/// <c>content-type</c> is intentionally not written as a raw header — the resolved media type is
+/// applied through <see cref="ContentResult.ContentType"/> so the exact media-type string is
+/// preserved (no implicit <c>charset</c> suffix). When the author does not supply one, it defaults
+/// to <c>application/json</c>. Functions act as a BFF layer, so authors may set a custom
 /// Content-Type for integration scenarios.
 /// </remarks>
 internal static class ResponseOutputWriter
@@ -25,7 +25,7 @@ internal static class ResponseOutputWriter
     {
         "connection",
         "content-length",
-        ContentTypeHeader, // applied via ObjectResult.ContentTypes, never as a raw header
+        ContentTypeHeader, // applied via ContentResult.ContentType, never as a raw header
         "date", // server writes its own
         "host", // upstream internal hostname must not leak
         "keep-alive",
