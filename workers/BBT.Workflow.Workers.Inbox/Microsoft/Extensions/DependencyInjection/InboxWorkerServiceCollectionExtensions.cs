@@ -62,9 +62,6 @@ public static class InboxWorkerServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var schemaSwitchingMode = configuration.GetValue("Aether:SchemaSwitchingMode",
-            SchemaSwitchingMode.SessionSearchPath);
-
         services.AddSchemaResolution(options =>
         {
             options.HeaderKey = "X-Workflow";
@@ -77,7 +74,7 @@ public static class InboxWorkerServiceCollectionExtensions
 
         services.AddAetherNpgsql<MessagingDbContext>(
             configuration.GetConnectionString("Default")!,
-            schemaSwitchingMode,
+            SchemaSwitchingMode.QualifiedNames,
             (_, options) =>
         {
             options.UseNpgsql(configuration.GetConnectionString("Default"),

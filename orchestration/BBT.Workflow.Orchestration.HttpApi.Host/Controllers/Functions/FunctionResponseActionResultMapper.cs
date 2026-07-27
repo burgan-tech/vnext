@@ -1,29 +1,14 @@
+using System.Text.Json;
 using BBT.Aether.AspNetCore.Results;
 using BBT.Aether.Results;
 using BBT.Workflow.Functions;
+using BBT.Workflow.Orchestration.Controllers;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BBT.Workflow.Controllers.Instances;
 
 internal static class FunctionResponseActionResultMapper
 {
-    private static readonly HashSet<string> RestrictedResponseHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "connection",
-        "content-length",
-        "content-type",         // ObjectResult negotiates this via output formatters
-        "date",                 // server writes its own
-        "host",                 // upstream internal hostname must not leak
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "server",               // orchestrator sets its own Server header
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade"
-    };
-
     public static IActionResult ToActionResult(
         Result<FunctionResponseOutput> result,
         HttpContext httpContext)
@@ -32,25 +17,30 @@ internal static class FunctionResponseActionResultMapper
             return result.ToActionResult(httpContext);
 
         var output = result.Value!;
-        ApplyHeaders(output, httpContext);
+        ResponseOutputWriter.ApplyHeaders(output.Headers, httpContext);
 
-        return new ObjectResult(output.Data)
+        // Use ContentResult (not ObjectResult) so the author-supplied media type is written
+        // verbatim. ObjectResult runs content negotiation and the SystemTextJson output formatter
+        // appends "; charset=utf-8" to the resolved media type; ContentResult preserves the exact
+        // content-type string when it carries no charset of its own.
+        return new ContentResult
         {
-            StatusCode = output.StatusCode ?? StatusCodes.Status200OK
+            StatusCode = output.StatusCode ?? StatusCodes.Status200OK,
+            ContentType = ResponseOutputWriter.ResolveContentType(output.Headers),
+            Content = SerializeContent(output.Data)
         };
     }
 
-    private static void ApplyHeaders(FunctionResponseOutput output, HttpContext httpContext)
+    /// <summary>
+    /// Serializes the response payload. String payloads are written verbatim (the author has
+    /// already produced the wire representation, e.g. XML for a custom Content-Type); any other
+    /// object is serialized with the centralized JSON options for parity with the previous
+    /// ObjectResult behavior.
+    /// </summary>
+    private static string? SerializeContent(object? data) => data switch
     {
-        if (output.Headers is null || output.Headers.Count == 0)
-            return;
-
-        foreach (var (key, value) in output.Headers)
-        {
-            if (RestrictedResponseHeaders.Contains(key))
-                continue;
-
-            httpContext.Response.Headers[key] = value;
-        }
-    }
+        null => null,
+        string s => s,
+        _ => JsonSerializer.Serialize(data, JsonSerializerConstants.JsonOptions)
+    };
 }

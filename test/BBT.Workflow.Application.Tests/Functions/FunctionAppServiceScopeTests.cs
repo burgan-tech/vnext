@@ -46,6 +46,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     private readonly IComponentCacheStore _componentCacheStore;
     private readonly ITaskCoordinator _taskCoordinator;
     private readonly IStateStoreCacheGateway _cacheGateway;
+    private readonly IDynamicExpressoValueEvaluator _keyEvaluator;
     private readonly FunctionAppService _service;
 
     private readonly IServiceProvider _ambientServiceProvider;
@@ -57,6 +58,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         _componentCacheStore = Substitute.For<IComponentCacheStore>();
         _taskCoordinator = Substitute.For<ITaskCoordinator>();
         _cacheGateway = Substitute.For<IStateStoreCacheGateway>();
+        _keyEvaluator = Substitute.For<IDynamicExpressoValueEvaluator>();
 
         // Ambient provider needed by PostSharp UnitOfWork interception.
         var mockUoW = Substitute.For<IUnitOfWork>();
@@ -66,6 +68,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             .Returns(Task.FromResult(mockUoW));
         var services = new ServiceCollection();
         services.AddSingleton(mockUoWManager);
+        services.AddLogging();
+        // ApplicationService.Logger resolves through ILazyServiceProvider.
+        services.AddTransient<ILazyServiceProvider, LazyServiceProvider>();
         _ambientServiceProvider = services.BuildServiceProvider();
         _previousAmbientServiceProvider = AmbientServiceProvider.Current;
         AmbientServiceProvider.Current = _ambientServiceProvider;
@@ -79,6 +84,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         builder.WithBody(Arg.Any<object?>()).Returns(builder);
         builder.WithHeaders(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
         builder.WithQueryParameters(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
+        builder.WithMetadata(Arg.Any<Dictionary<string, object>?>()).Returns(builder);
         builder.BuildAsync(Arg.Any<CancellationToken>()).Returns(scriptContext);
 
         var scriptContextFactory = Substitute.For<IScriptContextFactory>();
@@ -105,7 +111,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             scriptEngine: Substitute.For<IScriptEngine>(),
             currentUser: Substitute.For<ICurrentUser>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
-            keyEvaluator: Substitute.For<IDynamicExpressoValueEvaluator>(),
+            keyEvaluator: _keyEvaluator,
             cacheGateway: _cacheGateway,
             remoteInvoker: Substitute.For<IRemoteInvokerService>());
     }
@@ -239,7 +245,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         // On a hit the tasks are not executed and nothing is written back.
         await _taskCoordinator.DidNotReceive().ExecuteAsync(
             Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
-            Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
         await _cacheGateway.DidNotReceive().SetAsync(
             Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
@@ -262,7 +268,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         await _taskCoordinator.Received(1).ExecuteAsync(
             Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
-            Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
         await _cacheGateway.Received(1).SetAsync(
             "fn:test", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
@@ -293,17 +299,41 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task GetFunctionByKeyAsync_KeyExpressionFails_BypassesCache_AndRunsFunction()
+    {
+        SetupCachedFunction(keyExpressionCode: "varyKey(context)");
+        // A failing key expression must NOT 500 the endpoint — it bypasses the cache and runs the function.
+        _keyEvaluator
+            .Evaluate(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>())
+            .Returns(Result<string>.Fail(Error.Failure("expr.fail", "boom")));
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        // Function executed; cache never touched.
+        await _taskCoordinator.Received(1).ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(), Arg.Any<TaskExecutionOrigin>(),
+            Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+        await _cacheGateway.DidNotReceive().GetAsync(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────────
 
-    private void SetupCachedFunction(string? generationKey = null)
+    private void SetupCachedFunction(string? generationKey = null, string? keyExpressionCode = null)
     {
         var task = OnExecuteTask.Create(
             1,
             new Reference("my-task", TestDomain, "sys-tasks", TestVersion),
             ScriptCode.FromNative(string.Empty));
+        var keyExpression = keyExpressionCode is null
+            ? null
+            : ScriptCode.FromNative(keyExpressionCode, "dynamicExpresso");
         var function = new Function(
             TaskScope.Domain, task,
-            cache: new FunctionCache(key: "fn:test", ttlInSeconds: 300, generationKey: generationKey));
+            cache: new FunctionCache(
+                key: "fn:test", ttlInSeconds: 300, generationKey: generationKey, keyExpression: keyExpression));
         function.SetReference(new Reference(FunctionKey, TestDomain, "sys-functions", TestVersion));
 
         _componentCacheStore

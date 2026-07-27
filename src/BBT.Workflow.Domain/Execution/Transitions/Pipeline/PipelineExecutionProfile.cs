@@ -28,12 +28,16 @@ public sealed class PipelineExecutionProfile
     /// </summary>
     public required bool AllowSubFlow { get; init; }
 
+    // NOTE: ResourceLock is intentionally NOT excluded here. It is per-transition business logic
+    // (acquire/release a shared-resource lock keyed by the transition's script), not chain-head
+    // request setup like SetBusy. Excluding it made a schema-valid `resourceLock` on an auto-chained
+    // transition silently no-op — and it is inconsistent with the Scheduled/Event profiles, which
+    // already run it. Only the genuine per-request/subflow-prelude steps stay excluded.
     private static readonly ImmutableHashSet<int> AutoChainExcluded = ImmutableHashSet.Create(
         LifecycleOrder.Preflight,
         LifecycleOrder.CheckParentUpdateDataTransition,
         LifecycleOrder.ForwardToActiveSubflow,
         LifecycleOrder.SetBusy,
-        LifecycleOrder.ResourceLock,
         LifecycleOrder.ApplyTimeoutState);
 
     private static readonly ImmutableHashSet<int> ScheduledExcluded = ImmutableHashSet.Create(
@@ -98,7 +102,8 @@ public sealed class PipelineExecutionProfile
 
     /// <summary>
     /// Creates the profile optimized for automatic (auto-chain) transitions:
-    /// excludes preflight, parent/subflow forwarding, resource lock, and timeout application; subflow disabled.
+    /// excludes preflight, parent/subflow forwarding, busy marking, and timeout application; subflow disabled.
+    /// Resource lock steps still run so a <c>resourceLock</c> defined on an auto-chained transition is honored.
     /// </summary>
     public static PipelineExecutionProfile ForAutoChain() => AutoChainInstance;
 

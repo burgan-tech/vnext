@@ -103,8 +103,10 @@ public static class PipelineServiceCollectionExtensions
         // Error Boundary Services (used by TaskCoordinator for task-level error handling)
         services.AddScoped<IErrorNormalizer, ErrorNormalizer>();
         
-        // Post-Commit Execution (jobs run inside lock scope)
+        // Post-Commit Execution (runner coordinates jobs after the lock/UoW barrier)
         services.AddScoped<IPostCommitExecutor, PostCommitExecutor>();
+        services.AddScoped<IPostCommitTransitionCoordinator, PostCommitTransitionCoordinator>();
+        services.AddScoped<IPostCommitParentMutationService, PostCommitParentMutationService>();
         services.AddScoped<IPostCommitHandler<StartSubflowJob>, StartSubflowJobHandler>();
         services.AddScoped<IPostCommitHandler<ForwardToSubflowJob>, ForwardToSubflowJobHandler>();
         services.AddSingleton<IPostCommitFailurePolicy, DefaultPostCommitFailurePolicy>();

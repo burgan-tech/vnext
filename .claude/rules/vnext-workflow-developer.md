@@ -41,7 +41,7 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 | Profile | Trigger | Key Exclusions |
 |---------|---------|----------------|
 | Manual | Manual (0) | None |
-| AutoChain | Automatic (1) | Preflight, SetBusy, CreateTransition, ResourceLock, ResolveAvailable |
+| AutoChain | Automatic (1) | Preflight, CheckParentUpdateData, ForwardSubflow, SetBusy, ApplyTimeoutState (ResourceLock runs — auto-chained transitions can acquire locks) |
 | Scheduled | Scheduled (2) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
 | Event | Event (3) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
 | ErrorBoundary | Error boundary | Preflight, UpdateDataCheck, ForwardSubflow, ResourceLock, Auto, Schedule; `AllowAutoChain=false`, `AllowSubFlow=false` |

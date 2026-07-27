@@ -19,7 +19,9 @@ public sealed class FunctionCache
         string? consistency = null,
         bool bypassOnCacheError = true,
         ScriptCode? generationKeyExpression = null,
-        string? generationKey = null)
+        string? generationKey = null,
+        IReadOnlyList<string>? varyByHeaders = null,
+        IReadOnlyList<string>? varyByHeaderPrefixes = null)
     {
         KeyExpression = keyExpression;
         Key = key;
@@ -29,6 +31,8 @@ public sealed class FunctionCache
         BypassOnCacheError = bypassOnCacheError;
         GenerationKeyExpression = generationKeyExpression;
         GenerationKey = generationKey;
+        VaryByHeaders = varyByHeaders ?? [];
+        VaryByHeaderPrefixes = varyByHeaderPrefixes ?? [];
     }
 
     /// <summary>
@@ -81,6 +85,20 @@ public sealed class FunctionCache
     /// <see cref="GenerationKeyExpression"/> is absent).
     /// </summary>
     public string? GenerationKey { get; }
+
+    /// <summary>
+    /// Optional exact request-header names that vary the result. Used by the <c>varyKey(context)</c>
+    /// key-expression helper as the header-name set (unioned with <see cref="VaryByHeaderPrefixes"/>)
+    /// when the instance does not supply <c>Instance.Data["varyBy"]</c>. Domain-supplied so the runtime
+    /// stays free of any specific header convention.
+    /// </summary>
+    public IReadOnlyList<string> VaryByHeaders { get; }
+
+    /// <summary>
+    /// Optional request-header name prefixes that vary the result (e.g. all headers starting with a
+    /// given prefix). See <see cref="VaryByHeaders"/>.
+    /// </summary>
+    public IReadOnlyList<string> VaryByHeaderPrefixes { get; }
 
     /// <summary>
     /// True when a key source (expression or static key) is configured.

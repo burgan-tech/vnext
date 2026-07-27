@@ -108,10 +108,14 @@ public sealed class ForwardToSubflowJobHandler(
     /// </summary>
     private static TransitionInput CreateTransitionInput(ForwardToSubflowJob job, ExecMode mode)
     {
-        var headers = new Dictionary<string, string?>(job.Headers)
-        {
-            [TelemetryConstants.HeaderNames.ParentInstanceId] = job.ParentInstanceId.ToString()
-        };
+        // HTTP headers are case-insensitive. Build with OrdinalIgnoreCase and copy the forwarded
+        // headers with last-wins semantics so a parent-instance-id already present (possibly
+        // lower-cased by an upstream hop) collapses into a single entry. Stamping the current
+        // parent id then REPLACES it instead of producing a duplicate / "same key" collision.
+        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in job.Headers)
+            headers[kv.Key] = kv.Value;
+        headers[TelemetryConstants.HeaderNames.ParentInstanceId] = job.ParentInstanceId.ToString();
 
         return new TransitionInput(
             job.SubflowDomain,

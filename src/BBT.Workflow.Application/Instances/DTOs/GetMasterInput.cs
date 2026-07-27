@@ -36,4 +36,9 @@ public sealed class GetMasterInput : IHasDomain
     /// Caller roles, used to enforce state/workflow queryRoles visibility.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
+
+    /// <summary>
+    /// ETag value for conditional requests (If-None-Match header).
+    /// </summary>
+    public string? IfNoneMatch { get; set; }
 }

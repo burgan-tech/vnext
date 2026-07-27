@@ -5,10 +5,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>BBT.Workflow.Execution</RootNamespace>
+    <!-- Dapr Conversation building block is Alpha; the Dapr.AI client is marked [Experimental].
+         Suppress the evaluation-only diagnostic so it can be consumed by the DaprConversation invoker. -->
+    <NoWarn>$(NoWarn);DAPR_CONVERSATION</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <!-- No Domain dependency! Execution is completely independent -->
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
+    <PackageReference Include="Dapr.AI" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftPackageVersion)" />

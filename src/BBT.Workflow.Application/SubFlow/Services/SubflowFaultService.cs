@@ -71,23 +71,29 @@ public sealed class SubflowFaultService(
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
 
-                var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}";
+                // Per-subInstance terminal lock, independent of the main-flow lock and reserved keys:
+                // a long-held chain lease never blocks the signal, parallel SubProcess terminal-closes
+                // don't contend, and only duplicate deliveries of the SAME subInstance serialize.
+                // Sync/async safe: distinct from the parent's held key (no self-deadlock); nested
+                // same-key reentry is still handled by ChainLockRegistry.
+                var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}";
                 await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
                 {
                     if (!lockScope.IsAcquired)
                     {
                         logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Faulted.ToString());
-                        throw new SubflowCompletionException(
+                        throw new SubflowTerminalLockNotAcquiredException(
                             input.Domain,
                             input.Flow,
                             input.InstanceId.ToString(),
-                            WorkflowErrorCodes.ConflictWorkflow,
-                            "Parent instance terminal lock could not be acquired.");
+                            SubItemTerminalOutcome.Faulted.ToString());
                     }
 
                     await using var uow = uowManager.Begin(
                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
-                    parentInstance = await instanceRepository.FindWithAllCorrelationsAsync(
+                    // Data must be loaded here: output mapping appends a new data version via
+                    // Instance.AddData, whose version/IsLatest math reads the in-memory data list.
+                    parentInstance = await instanceRepository.FindWithAllCorrelationsAndDataAsync(
                         input.InstanceId, cancellationToken);
 
                     if (parentInstance == null)

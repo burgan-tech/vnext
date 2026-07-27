@@ -14,51 +14,39 @@ namespace BBT.Workflow.Orchestration.Controllers.Instances;
 /// </summary>
 internal static class InstanceResponseActionResultMapper
 {
-    private static readonly HashSet<string> RestrictedResponseHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "connection",
-        "content-length",
-        "content-type",         // ObjectResult negotiates this via output formatters
-        "date",                 // server writes its own
-        "host",                 // upstream internal hostname must not leak
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "server",               // orchestrator sets its own Server header
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade"
-    };
-
-    internal static IActionResult ToActionResult<T>(Result<T> result, HttpContext httpContext)
+    /// <remarks>
+    /// When <paramref name="async"/> is <c>true</c> the request runs durably in the background
+    /// (<c>sync=false</c>): a successful result is returned as <c>202 Accepted</c> instead of
+    /// <c>200 OK</c>, since the work has been accepted for processing rather than completed.
+    /// Ignored for the custom output-response path (where the author sets the status explicitly)
+    /// and for error results.
+    /// </remarks>
+    internal static IActionResult ToActionResult<T>(Result<T> result, HttpContext httpContext, bool async = false)
         where T : InstanceOutputBase
     {
         if (result.IsSuccess && result.Value is { HasOutputResponse: true } output)
         {
-            ApplyHeaders(output.OutputHeaders, httpContext);
+            ResponseOutputWriter.ApplyHeaders(output.OutputHeaders, httpContext);
 
             // OutputData may be null → empty body with the configured/default status code.
-            return new ObjectResult(output.OutputData)
+            var objectResult = new ObjectResult(output.OutputData)
             {
                 StatusCode = output.OutputStatusCode ?? StatusCodes.Status200OK
             };
+            objectResult.ContentTypes.Add(ResponseOutputWriter.ResolveContentType(output.OutputHeaders));
+
+            return objectResult;
         }
 
-        return WorkflowResultActionResultMapper.ToActionResult(result, httpContext);
-    }
+        var actionResult = WorkflowResultActionResultMapper.ToActionResult(result, httpContext);
 
-    private static void ApplyHeaders(Dictionary<string, string>? headers, HttpContext httpContext)
-    {
-        if (headers is null || headers.Count == 0)
-            return;
-
-        foreach (var (key, value) in headers)
+        // Durable (sync=false) success → 202 Accepted: the work is queued, not finished.
+        if (async && result.IsSuccess &&
+            actionResult is ObjectResult { StatusCode: null or StatusCodes.Status200OK } acceptedResult)
         {
-            if (RestrictedResponseHeaders.Contains(key))
-                continue;
-
-            httpContext.Response.Headers[key] = value;
+            acceptedResult.StatusCode = StatusCodes.Status202Accepted;
         }
+
+        return actionResult;
     }
 }

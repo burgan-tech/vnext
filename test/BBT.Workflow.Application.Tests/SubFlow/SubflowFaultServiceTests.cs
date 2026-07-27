@@ -65,17 +65,17 @@ public sealed class SubflowFaultServiceTests
     }
 
     [Fact]
-    public async Task FaultAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    public async Task FaultAsync_WhenParentLockCannotBeAcquired_ShouldThrowRetryableLockException()
     {
         var input = CreateInput(Guid.NewGuid(), Guid.NewGuid(), CreateJsonElement("{}"));
         _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
 
-        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+        var exception = await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
             () => CreateService().FaultAsync(input));
 
-        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
     }
@@ -281,18 +281,17 @@ public sealed class SubflowFaultServiceTests
         var reloaded = CloneParentWithCompletedCorrelation(parentInstance, subInstanceId);
         _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parentInstance);
-        _instanceRepository
-            .SetupSequence(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parentInstance)
             .ReturnsAsync(reloaded);
 
         await Should.ThrowAsync<SubflowCompletionException>(
             () => CreateService().FaultAsync(input, CancellationToken.None));
 
         _instanceRepository.Verify(
+            x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
-            Times.Exactly(2));
+            Times.Once);
         reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         _instanceRepository.Verify(
             x => x.UpdateAsync(reloaded, true, It.IsAny<CancellationToken>()),
@@ -311,15 +310,19 @@ public sealed class SubflowFaultServiceTests
         var lockCall = 0;
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(
-                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
                 It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"lock-{++lockCall}"))
             .ReturnsAsync(_lockScope.Object);
         var loadCall = 0;
         _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"load-{++loadCall}"))
+            .ReturnsAsync(parent);
+        _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"load-{++loadCall}"))
-            .ReturnsAsync(() => loadCall == 1 ? parent : terminalReload);
+            .ReturnsAsync(terminalReload);
         _instanceRepository
             .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
             .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
@@ -337,7 +340,7 @@ public sealed class SubflowFaultServiceTests
         order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
         terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Exactly(2));
         _instanceRepository.Verify(x => x.UpdateAsync(
             terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -683,6 +686,11 @@ public sealed class SubflowFaultServiceTests
 
     private void SetupParentInstance(Instance parentInstance)
     {
+        // Main load (correlations + data) and compensation reload (correlations only)
+        // both resolve to the same entity unless a test overrides the revert path.
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
         _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);

@@ -56,7 +56,7 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"DaprBinding task input handler failed: {ex.Message}"));
+            $"DaprBinding task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {
@@ -134,7 +134,7 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"DaprBinding task output handler failed: {ex.Message}"));
+            $"DaprBinding task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {

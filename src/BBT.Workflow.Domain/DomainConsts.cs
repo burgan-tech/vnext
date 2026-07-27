@@ -21,5 +21,11 @@ public class DomainConsts
         public const string StateRoleOverrides = "subflow.state_role_overrides";
         /// <summary>Root (ancestor) flow instance ID — always carries the original A-flow ID down the entire chain.</summary>
         public const string RootInstanceId = "root.instance.id";
+        /// <summary>
+        /// JSON array of distributed resource-lock keys acquired by this instance (owner = instance ID).
+        /// Recorded on Acquire so the instance's terminal cleanup can release them automatically,
+        /// independent of which transition path completes the instance.
+        /// </summary>
+        public const string ResourceLocks = "resource.locks";
     }
 }

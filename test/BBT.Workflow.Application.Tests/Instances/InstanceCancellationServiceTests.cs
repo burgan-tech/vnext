@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Shouldly;
@@ -23,6 +24,7 @@ public sealed class InstanceCancellationServiceTests
     private readonly Mock<IInstanceRepository> _instanceRepository = new();
     private readonly Mock<IInstanceJobRepository> _instanceJobRepository = new();
     private readonly Mock<IBackgroundJobService> _backgroundJobService = new();
+    private readonly Mock<IResourceLockService> _resourceLockService = new();
     private readonly Mock<IUnitOfWorkManager> _uowManager = new();
     private readonly Mock<IUnitOfWork> _uow = new();
     private readonly CapturingLogger _logger = new();
@@ -215,6 +217,44 @@ public sealed class InstanceCancellationServiceTests
             $"Processed 1 scheduled jobs for instance {_instance.Id}, transitions: failed, waiting, running");
     }
 
+    [Fact]
+    public async Task ProcessCancellation_releases_all_tracked_resource_locks_even_without_jobs()
+    {
+        // Auto-release must run on the terminal path regardless of whether the instance has jobs.
+        _instance.TrackResourceLock("limit:scope:2026-07-24");
+        _instance.TrackResourceLock("seat:A1");
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob>());
+
+        var result = await CreateService().ProcessCancellationAsync(_instance.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+        _resourceLockService.Verify(
+            s => s.ReleaseAsync("limit:scope:2026-07-24", _instance.Id.ToString(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _resourceLockService.Verify(
+            s => s.ReleaseAsync("seat:A1", _instance.Id.ToString(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessCancellation_lockReleaseThrows_stillCompletesCleanup()
+    {
+        // Releasing is best-effort: an exception from the lock store must not fail terminal cleanup.
+        _instance.TrackResourceLock("k1");
+        _resourceLockService
+            .Setup(s => s.ReleaseAsync("k1", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("lock store unavailable"));
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob>());
+
+        var result = await CreateService().ProcessCancellationAsync(_instance.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
     private InstanceJob CreateInstanceJob(string transition = "check") =>
         InstanceJob.Create(
             Guid.NewGuid(),
@@ -229,6 +269,7 @@ public sealed class InstanceCancellationServiceTests
             _instanceRepository.Object,
             _instanceJobRepository.Object,
             _backgroundJobService.Object,
+            _resourceLockService.Object,
             _uowManager.Object,
             _logger);
 

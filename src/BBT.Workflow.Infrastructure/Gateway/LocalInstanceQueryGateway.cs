@@ -145,7 +145,10 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Instance = input.Instance,
                     Roles = input.Roles
                 };
-                return await queryService.GetSchemaAsync(schemaInput, transitionKey, ct);
+                // Subflow composition path: no If-None-Match is ever sent, so the conditional
+                // result can never be NotModified — unwrap to the plain body result.
+                var conditional = await queryService.GetSchemaAsync(schemaInput, transitionKey, ct);
+                return conditional.Result;
             }, cancellationToken);
     }
 
@@ -190,7 +193,10 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     QueryParameters = input.QueryParams,
                     Roles = input.Roles
                 };
-                return await queryService.GetMasterAsync(masterInput, ct);
+                // Subflow composition path: no If-None-Match is ever sent, so the conditional
+                // result can never be NotModified — unwrap to the plain body result.
+                var conditional = await queryService.GetMasterAsync(masterInput, ct);
+                return conditional.Result;
             }, cancellationToken);
     }
 }

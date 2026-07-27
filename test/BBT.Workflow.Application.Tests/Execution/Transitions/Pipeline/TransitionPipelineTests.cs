@@ -33,7 +33,6 @@ public class TransitionPipelineTests
     private readonly IReservedTransitionResolver _mockReservedResolver;
     private readonly IInstanceBusyManager _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
-    private readonly IPostCommitExecutor _mockPostCommitExecutor;
     private readonly IInstanceRepository _mockInstanceRepository;
     private readonly IUnitOfWorkManager _mockUowManager;
     private readonly ITransitionValidationService _mockValidationService;
@@ -48,7 +47,6 @@ public class TransitionPipelineTests
         _mockReservedResolver = Substitute.For<IReservedTransitionResolver>();
         _mockBusyMarker = Substitute.For<IInstanceBusyManager>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
-        _mockPostCommitExecutor = Substitute.For<IPostCommitExecutor>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
         _mockUowManager = Substitute.For<IUnitOfWorkManager>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
@@ -85,13 +83,6 @@ public class TransitionPipelineTests
             .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        // Default: post-commit succeeds
-        _mockPostCommitExecutor.ExecuteAsync(
-            Arg.Any<IReadOnlyList<IPostCommitJob>>(),
-            Arg.Any<TransitionExecutionContext>(),
-            Arg.Any<CancellationToken>())
-            .Returns(PostCommitResult.Ok());
-
         // Default: validation succeeds
         _mockValidationService.ValidateAsync(
             Arg.Any<TransitionExecutionContext>(),
@@ -120,7 +111,6 @@ public class TransitionPipelineTests
             _mockReservedResolver,
             _mockBusyMarker,
             _mockContextFactory,
-            _mockPostCommitExecutor,
             _mockInstanceRepository,
             _mockUowManager,
             _mockValidationService,
@@ -186,6 +176,95 @@ public class TransitionPipelineTests
         // Assert
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPostCommitJobsAreQueued_ShouldReturnThemWithoutExecutingOrConsumingThem()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var postCommitJob = Substitute.For<IPostCommitJob>();
+        var next = new NextTransitionRequest("next-transition", "automatic");
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Target = CreateStateWithNotification("waiting-for-post-commit");
+        context.Instance.BeginChain(Guid.NewGuid());
+        context.Directives.RequestNextTransition(next);
+        context.Directives.SetResolvedStatus(InstanceStatus.Active);
+        context.Directives.RequestEndChain();
+        context.Directives.EnqueuePostCommit(postCommitJob);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Directives.PostCommitJobs.Count.ShouldBe(1);
+        result.Value.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
+        result.Value.Directives.NextTransition.ShouldBeSameAs(next);
+        result.Value.Directives.ResolvedStatus.ShouldBe(InstanceStatus.Active);
+        result.Value.Directives.EndChainRequested.ShouldBeTrue();
+        context.Instance.ChainToken.ShouldNotBeNull();
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _mockStateNotificationScheduler.DidNotReceive()
+            .ScheduleAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        ChainLockRegistry.IsHeld(context.LockKey).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPostCommitJobsAreQueuedForEnqueueContinuation_ShouldDispatchBeforeReturning()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.EnqueueContinuations = true;
+        var postCommitJob = Substitute.For<IPostCommitJob>();
+        var next = new NextTransitionRequest("next-transition", "automatic");
+        var jobRepository = Substitute.For<IInstanceJobRepository>();
+        jobRepository.InsertAsync(
+                Arg.Any<InstanceJob>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult(callInfo.ArgAt<InstanceJob>(0)));
+        var enqueueGateway = Substitute.For<ITransitionEnqueueGateway>();
+        enqueueGateway.EnqueueAsync(
+                Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
+                Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var enqueueStrategy = new EnqueueContinuationStrategy(jobRepository, enqueueGateway);
+
+        var jobsVisibleDuringEnqueue = false;
+        enqueueGateway.EnqueueAsync(
+                Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
+                Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                jobsVisibleDuringEnqueue = context.Directives.PostCommitJobs.Single() == postCommitJob;
+                return Task.CompletedTask;
+            });
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Directives.RequestNextTransition(next);
+        context.Directives.EnqueuePostCommit(postCommitJob);
+
+        var pipeline = CreatePipelineWithContinuationStrategies(enqueueStrategy);
+
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        jobsVisibleDuringEnqueue.ShouldBeTrue();
+        await jobRepository.Received(1).InsertAsync(
+            Arg.Any<InstanceJob>(),
+            true,
+            Arg.Any<CancellationToken>());
+        await enqueueGateway.Received(1).EnqueueAsync(
+            Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
+            Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+            Arg.Any<CancellationToken>());
+        result.Value!.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
+        result.Value.Directives.NextTransition.ShouldBeNull();
     }
 
     [Fact]
@@ -466,13 +545,36 @@ public class TransitionPipelineTests
             _mockReservedResolver,
             _mockBusyMarker,
             _mockContextFactory,
-            _mockPostCommitExecutor,
             _mockInstanceRepository,
             _mockUowManager,
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
             Microsoft.Extensions.Options.Options.Create(options),
+            _mockLogger);
+    }
+
+    private TransitionPipeline CreatePipelineWithContinuationStrategies(
+        params IContinuationStrategy[] continuationStrategies)
+    {
+        var executor = new TransitionExecutor(
+            _mockSteps,
+            Substitute.For<ILogger<TransitionExecutor>>());
+        var continuationDispatcher = new ContinuationDispatcher(continuationStrategies);
+
+        return new TransitionPipeline(
+            executor,
+            continuationDispatcher,
+            _mockLockScopeFactory,
+            _mockReservedResolver,
+            _mockBusyMarker,
+            _mockContextFactory,
+            _mockInstanceRepository,
+            _mockUowManager,
+            _mockValidationService,
+            new PipelineProfileResolver(),
+            _mockStateNotificationScheduler,
+            Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }
 
@@ -528,44 +630,36 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenPostCommitFaults_ShouldRecordIncidentAndFaultInstance()
+    public async Task RunAsync_WhenStepFailsWithClientFacingError_ShouldFaultInstanceAndReturnFailure()
     {
-        // Arrange
+        // A caller-actionable failure (ResourceLockConflict) must fault the instance AND surface the
+        // failure so the HTTP layer returns the mapped status (409) instead of "200 + Status=F".
         var context = CreateTransitionExecutionContext();
         var workflowContext = CreateWorkflowExecutionContext(context);
+        var error = Error.Conflict(WorkflowErrorCodes.ResourceLockConflict, "Resource is already locked");
 
         SetupContextFactory(context);
-        SetupStepsToSucceed();
 
-        // Queue a post-commit job so the executor is invoked.
-        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
-
-        // Simulate a subflow input-mapping failure that the failure policy classifies
-        // as a system error (Instance:* prefix) -> ShouldMarkInstanceFaulted.
-        var error = Error.Failure(
-            "Instance:100023",
-            "SubFlow 'credit-bureau-inquiry' input mapping failed: " +
-            "'System.Dynamic.ExpandoObject' does not contain a definition for 'application'");
-
-        _mockPostCommitExecutor.ExecuteAsync(
-            Arg.Any<IReadOnlyList<IPostCommitJob>>(),
-            Arg.Any<TransitionExecutionContext>(),
-            Arg.Any<CancellationToken>())
-            .Returns(PostCommitResult.Fail(
-                error,
-                new PostCommitFaultRequest(error.Code, error.Message, "   at SubFlowMapping.InputHandler()")));
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(error)));
+        for (int i = 1; i < _mockSteps.Count; i++)
+        {
+            _mockSteps[i].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
 
         // Act
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-        context.Instance.HasActiveIncident.ShouldBeTrue();
+        // Assert: instance still faulted...
         await _mockInstanceRepository.Received(1)
             .UpdateAsync(
-                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted) && x.HasActiveIncident),
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
                 true,
                 Arg.Any<CancellationToken>());
+        // ...but the failure is propagated to the caller (→ 409), not swallowed into a success.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
     }
 
     [Fact]

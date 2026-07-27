@@ -32,6 +32,16 @@ public sealed class TransitionLockScopeFactory(
         string lockKey,
         CancellationToken cancellationToken = default)
     {
+        // Chain-reentrant acquisition: when this exact key is already held higher up in the
+        // same async call chain (e.g. a sync subflow completion callback running inside the
+        // parent pipeline's post-commit phase), the outer holder already provides mutual
+        // exclusion — and the provider (SET NX) would reject the re-acquire anyway.
+        if (ChainLockRegistry.IsHeld(lockKey))
+        {
+            logger.TransitionLockReentrantAcquired(lockKey);
+            return TransitionLockScope.Reentrant(lockKey);
+        }
+
         var handle = await distributedLockService.TryAcquireLockAsync(
             lockKey,
             _leaseSeconds,
@@ -73,10 +83,10 @@ internal sealed class TransitionLockScope : ITransitionLockScope
         _logger = logger;
     }
 
-    private TransitionLockScope(string lockKey)
+    private TransitionLockScope(string lockKey, bool isAcquired)
     {
         LockKey = lockKey;
-        IsAcquired = false;
+        IsAcquired = isAcquired;
         _handle = null;
         _leaseSeconds = 0;
         _logger = null!;
@@ -91,7 +101,9 @@ internal sealed class TransitionLockScope : ITransitionLockScope
     /// <inheritdoc />
     public async Task<bool> ExtendAsync(CancellationToken cancellationToken = default)
     {
-        if (_handle is null) return false;
+        // A reentrant scope has no handle of its own; the outer holder owns the lease
+        // (sized upfront to cover the chain budget), so report extension as succeeded.
+        if (_handle is null) return IsAcquired;
 
         var extended = await _handle.ExtendAsync(_leaseSeconds, cancellationToken);
 
@@ -113,5 +125,11 @@ internal sealed class TransitionLockScope : ITransitionLockScope
         }
     }
 
-    internal static TransitionLockScope NotAcquired(string lockKey) => new(lockKey);
+    internal static TransitionLockScope NotAcquired(string lockKey) => new(lockKey, isAcquired: false);
+
+    /// <summary>
+    /// Creates an acquired scope without an underlying handle for a key the current execution
+    /// chain already holds. Disposal is a no-op so the outer holder's lock is never released.
+    /// </summary>
+    internal static TransitionLockScope Reentrant(string lockKey) => new(lockKey, isAcquired: true);
 }

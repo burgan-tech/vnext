@@ -6,16 +6,24 @@
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
         <RootNamespace>BBT.Workflow</RootNamespace>
+        <!-- Dapr Conversation building block is Alpha; suppress the [Experimental] diagnostic
+             so the DaprConversation invoker tests can reference the Dapr.AI client. -->
+        <NoWarn>$(NoWarn);DAPR_CONVERSATION</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkPackageVersion)" />
+        <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="$(MicrosoftPackageVersion)" />
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="$(MicrosoftPackageVersion)" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCorePackageVersion)" />
+        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
     </ItemGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
       <ProjectReference Include="..\..\src\BBT.Workflow.Execution\BBT.Workflow.Execution.csproj" />
       <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj" />
+      <ProjectReference Include="..\..\orchestration\BBT.Workflow.Orchestration.HttpApi.Host\BBT.Workflow.Orchestration.HttpApi.Host.csproj" />
       <ProjectReference Include="..\BBT.Workflow.Domain.Tests\BBT.Workflow.Domain.Tests.csproj" />
     </ItemGroup>
 

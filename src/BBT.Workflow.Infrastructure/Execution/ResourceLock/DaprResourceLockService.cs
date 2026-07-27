@@ -35,24 +35,37 @@ public sealed class DaprResourceLockService(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Release is idempotent, like DELETE: the postcondition is "this owner no longer holds the lock".
+    /// <see cref="LockStatus.Success"/> and <see cref="LockStatus.LockDoesNotExist"/> both satisfy that
+    /// postcondition and return <c>true</c> — a lock whose TTL already expired (or was never held) is a
+    /// no-op, not a failure. Only a genuine anomaly (<see cref="LockStatus.LockBelongsToOthers"/> or an
+    /// infrastructure error) returns <c>false</c>, and is logged as a warning so it can be metered
+    /// without faulting the caller's (already-successful) business transition.
+    /// </remarks>
     public async Task<bool> ReleaseAsync(
         string resourceKey, string owner, CancellationToken cancellationToken)
     {
         var response = await daprClient.Unlock(
             lockStoreName, resourceKey, owner, cancellationToken);
 
-        var success = response.status == LockStatus.Success;
-
-        if (success)
+        switch (response.status)
         {
-            logger.ResourceLockReleased(resourceKey, owner);
-        }
-        else
-        {
-            logger.ResourceLockReleaseFailed(resourceKey, owner, response.status.ToString());
-        }
+            case LockStatus.Success:
+                logger.ResourceLockReleased(resourceKey, owner);
+                return true;
 
-        return success;
+            case LockStatus.LockDoesNotExist:
+                // Idempotent: nothing to release (TTL expired or never acquired). Postcondition holds.
+                logger.ResourceLockReleaseNoop(resourceKey, owner);
+                return true;
+
+            default:
+                // LockBelongsToOthers / InternalError: a real anomaly, but releasing is best-effort
+                // cleanup — surface it via a warning/metric, never fault the business transition.
+                logger.ResourceLockReleaseFailed(resourceKey, owner, response.status.ToString());
+                return false;
+        }
     }
 
     /// <inheritdoc />

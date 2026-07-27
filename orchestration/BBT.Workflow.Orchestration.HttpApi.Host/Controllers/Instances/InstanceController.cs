@@ -43,12 +43,14 @@ public sealed class InstanceController(
     /// <summary>
     /// Starts a new workflow instance.
     /// </summary>
-    /// <response code="200">Instance started successfully</response>
+    /// <response code="200">Instance started synchronously (sync=true)</response>
+    /// <response code="202">Instance accepted for durable background processing (sync=false)</response>
     /// <response code="400">Validation failed</response>
     /// <response code="404">Workflow or state not found</response>
     /// <response code="409">Instance with same key already exists</response>
     [HttpPost("{domain}/workflows/{workflow}/instances/start")]
     [ProducesResponseType(typeof(StartInstanceOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(StartInstanceOutput), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
@@ -95,7 +97,7 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -335,7 +337,8 @@ public sealed class InstanceController(
     /// <summary>
     /// Executes a transition on a workflow instance.
     /// </summary>
-    /// <response code="200">Transition executed successfully</response>
+    /// <response code="200">Transition executed synchronously (sync=true)</response>
+    /// <response code="202">Transition accepted for durable background processing (sync=false)</response>
     /// <response code="400">Validation or state transition rule failed</response>
     /// <response code="403">Transition not authorized for current context</response>
     /// <response code="404">Instance, workflow, or transition not found</response>
@@ -343,6 +346,7 @@ public sealed class InstanceController(
     /// <response code="503">Service temporarily unavailable</response>
     [HttpPatch("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}")]
     [ProducesResponseType(typeof(TransitionOutput), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(TransitionOutput), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -392,7 +396,7 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext);
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
     }
 
     /// <summary>
@@ -489,11 +493,16 @@ public sealed class InstanceController(
     /// <param name="workflow">Target workflow key.</param>
     /// <param name="action">Either <c>start</c> (create a new instance) or <c>transition</c> (advance an existing one).</param>
     /// <param name="transitionKey">Transition to execute. Required when <paramref name="action"/> is <c>transition</c>.</param>
-    /// <param name="payload">Raw event payload, mapped by the workflow's/transition's event mapping.</param>
     /// <param name="sync">When true, blocks until the pipeline completes; otherwise accepted and run asynchronously.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
+    /// <remarks>
+    /// The raw event payload is read directly from the request body and parsed as JSON, independent of the
+    /// request <c>Content-Type</c>. Kafka / pub-sub sources routed through Dapr routinely deliver bodies with
+    /// no content type or <c>application/octet-stream</c>; binding via <c>[FromBody]</c> would reject those with
+    /// <c>415 Unsupported Media Type</c>, so the body is bound manually here instead.
+    /// </remarks>
     /// <response code="200">Event processed (or intentionally ignored when no active instance matches).</response>
-    /// <response code="400">Invalid action, or transitionKey missing for action=transition.</response>
+    /// <response code="400">Invalid action, transitionKey missing for action=transition, or malformed JSON body.</response>
     /// <response code="404">Workflow or event definition not found.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/events")]
@@ -505,7 +514,6 @@ public sealed class InstanceController(
         [FromRoute] string workflow,
         [FromQuery] string action,
         [FromQuery] string? transitionKey = null,
-        [FromBody] JsonElement payload = default,
         [FromQuery] bool sync = false,
         CancellationToken cancellationToken = default)
     {
@@ -516,6 +524,21 @@ public sealed class InstanceController(
                 Detail = $"action must be 'start' or 'transition'. Received: '{action}'.",
                 Status = StatusCodes.Status400BadRequest
             });
+
+        JsonElement payload;
+        try
+        {
+            payload = await ReadEventPayloadAsync(HttpContext.Request, cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Invalid payload",
+                Detail = $"The request body could not be parsed as JSON: {exception.Message}",
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
 
         var input = new EventInput
         {
@@ -531,6 +554,27 @@ public sealed class InstanceController(
 
         var result = await eventAppService.HandleAsync(input, cancellationToken);
         return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
+    }
+
+    /// <summary>
+    /// Reads the event request body as raw bytes and parses it into a <see cref="JsonElement"/>, ignoring the
+    /// request <c>Content-Type</c>. An empty body yields a default (<see cref="JsonValueKind.Undefined"/>) element,
+    /// preserving the previous <c>[FromBody]</c> optional-body behaviour. Malformed JSON surfaces as
+    /// <see cref="JsonException"/> for the caller to translate into a 400 response.
+    /// </summary>
+    internal static async Task<JsonElement> ReadEventPayloadAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        await request.Body.CopyToAsync(buffer, cancellationToken);
+
+        if (buffer.Length == 0)
+            return default;
+
+        buffer.Position = 0;
+        using var document = await JsonDocument.ParseAsync(buffer, cancellationToken: cancellationToken);
+        return document.RootElement.Clone();
     }
 
     /// <summary>

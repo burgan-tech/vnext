@@ -107,6 +107,14 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public WorkflowTimeout? Timeout { get; private set; }
 
     /// <summary>
+    /// Optional flow-level configuration container. Consolidates author-controlled,
+    /// workflow-scoped settings (currently function cache tuning) under a single
+    /// <c>config</c> object. Null means host defaults apply.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("config")]
+    public WorkflowConfig? Config { get; private set; }
+
+    /// <summary>
     /// Defines the cancellation configuration for this workflow.
     /// When configured, allows the workflow to be canceled via the cancel transition.
     /// </summary>

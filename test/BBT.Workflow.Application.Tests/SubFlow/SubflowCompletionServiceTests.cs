@@ -56,17 +56,17 @@ public sealed class SubflowCompletionServiceTests
     }
 
     [Fact]
-    public async Task CompletionAsync_WhenParentLockCannotBeAcquired_ShouldFailBeforeRepositoryAccess()
+    public async Task CompletionAsync_WhenParentLockCannotBeAcquired_ShouldThrowRetryableLockException()
     {
         var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
         _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
 
-        var exception = await Should.ThrowAsync<SubflowCompletionException>(
+        var exception = await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
             () => CreateService().CompletionAsync(input));
 
-        exception.Message.ShouldContain(WorkflowErrorCodes.ConflictWorkflow);
+        exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
     }
@@ -137,7 +137,7 @@ public sealed class SubflowCompletionServiceTests
         parent.SetEffectiveState("child-active");
         var completedAt = DateTime.UtcNow.AddMinutes(-1);
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()))
@@ -171,7 +171,7 @@ public sealed class SubflowCompletionServiceTests
         parent.SetEffectiveState("terminal-parent");
         var completedAt = DateTime.UtcNow.AddMinutes(-1);
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()))
@@ -201,7 +201,7 @@ public sealed class SubflowCompletionServiceTests
         var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
         parent.Complete("bank");
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
 
         await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId));
@@ -223,7 +223,7 @@ public sealed class SubflowCompletionServiceTests
         typeof(Instance).GetProperty(nameof(Instance.Status))!
             .SetValue(parent, InstanceStatus.Passive);
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
 
         await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId));
@@ -246,7 +246,7 @@ public sealed class SubflowCompletionServiceTests
         parent.SetEffectiveState("terminal-parent");
         var completedAt = DateTime.UtcNow.AddMinutes(-1);
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()))
@@ -274,7 +274,7 @@ public sealed class SubflowCompletionServiceTests
         var input = CreateInput(parentInstance.Id, subInstanceId);
 
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
@@ -309,7 +309,7 @@ public sealed class SubflowCompletionServiceTests
         var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
 
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
@@ -353,7 +353,7 @@ public sealed class SubflowCompletionServiceTests
         var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
 
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parentInstance);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
@@ -392,9 +392,12 @@ public sealed class SubflowCompletionServiceTests
 
         var reloaded = CloneParentWithCompletedCorrelation(parentInstance, subInstanceId);
         _instanceRepository
-            .SetupSequence(x => x.FindWithAllCorrelationsAsync(
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(
                 parentInstance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parentInstance)
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(
+                parentInstance.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(reloaded);
         _instanceRepository
             .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
@@ -418,8 +421,11 @@ public sealed class SubflowCompletionServiceTests
             () => CreateService().CompletionAsync(input, CancellationToken.None));
 
         _instanceRepository.Verify(
+            x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(parentInstance.Id, It.IsAny<CancellationToken>()),
-            Times.Exactly(2));
+            Times.Once);
         reloaded.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
         _instanceRepository.Verify(
             x => x.UpdateAsync(reloaded, true, It.IsAny<CancellationToken>()),
@@ -438,15 +444,19 @@ public sealed class SubflowCompletionServiceTests
         var lockCall = 0;
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(
-                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}",
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
                 It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"lock-{++lockCall}"))
             .ReturnsAsync(_lockScope.Object);
         var loadCall = 0;
         _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"load-{++loadCall}"))
+            .ReturnsAsync(parent);
+        _instanceRepository
             .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
             .Callback(() => order.Add($"load-{++loadCall}"))
-            .ReturnsAsync(() => loadCall == 1 ? parent : terminalReload);
+            .ReturnsAsync(terminalReload);
         _instanceRepository
             .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
             .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
@@ -468,7 +478,7 @@ public sealed class SubflowCompletionServiceTests
         order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
         terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}", CancellationToken.None), Times.Exactly(2));
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Exactly(2));
         _instanceRepository.Verify(x => x.UpdateAsync(
             terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -480,8 +490,10 @@ public sealed class SubflowCompletionServiceTests
         var input = CreateInput(parent.Id, subInstanceId);
         var workflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
         _instanceRepository
-            .SetupSequence(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parent)
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync((Instance?)null);
         _instanceRepository
             .Setup(x => x.UpdateAsync(It.IsAny<Instance>(), true, It.IsAny<CancellationToken>()))
@@ -503,8 +515,10 @@ public sealed class SubflowCompletionServiceTests
 
         actual.ShouldBeSameAs(expected);
         parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
+        _instanceRepository.Verify(x => x.FindWithAllCorrelationsAndDataAsync(
+            parent.Id, CancellationToken.None), Times.Once);
         _instanceRepository.Verify(x => x.FindWithAllCorrelationsAsync(
-            parent.Id, CancellationToken.None), Times.Exactly(2));
+            parent.Id, CancellationToken.None), Times.Once);
         VerifyRevertFailureLogged();
     }
 
@@ -534,7 +548,7 @@ public sealed class SubflowCompletionServiceTests
     {
         var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
         _instanceRepository
-            .Setup(x => x.FindWithAllCorrelationsAsync(parent.Id, It.IsAny<CancellationToken>()))
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parent.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(parent);
         _instanceRepository
             .Setup(x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()))
@@ -558,8 +572,11 @@ public sealed class SubflowCompletionServiceTests
     private void VerifyNoMappingOrResume()
     {
         _instanceRepository.Verify(
-            x => x.FindWithAllCorrelationsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            x => x.FindWithAllCorrelationsAndDataAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Once);
+        _instanceRepository.Verify(
+            x => x.FindWithAllCorrelationsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
         _instanceRepository.Verify(
             x => x.FindAsync(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);

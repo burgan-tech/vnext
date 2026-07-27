@@ -175,23 +175,25 @@ public sealed class PipelineDirectives
     }
 
     /// <summary>
-    /// Gets the deferred instance status to be applied after all pipeline work
-    /// (including post-commit jobs) completes.
-    /// When set, the actual status update is deferred until the pipeline
-    /// returns control to the caller.
+    /// Gets the deferred instance status for chain settlement. When no post-commit jobs are
+    /// pending, the pipeline settles it at the in-lock rest point. When a post-commit barrier is
+    /// present, it remains in the preserved directives snapshot for runner-owned settlement after
+    /// the handoff.
     /// </summary>
     public InstanceStatus? ResolvedStatus { get; private set; }
 
     /// <summary>
     /// Sets the deferred resolved status.
-    /// The status will be applied after post-commit jobs complete.
+    /// It is settled by the pipeline on the no-post-commit path, or by runner-owned orchestration
+    /// from the preserved snapshot after a post-commit barrier.
     /// </summary>
     /// <param name="status">The status to defer.</param>
     public void SetResolvedStatus(InstanceStatus status) => ResolvedStatus = status;
 
     /// <summary>
     /// Consumes and clears the resolved status.
-    /// Called by the pipeline after post-commit jobs complete.
+    /// Called by the pipeline only on the no-post-commit path; after a post-commit barrier, the
+    /// runner consumes the preserved snapshot during post-handoff settlement.
     /// </summary>
     /// <returns>The deferred status, or null if none was set.</returns>
     public InstanceStatus? ConsumeResolvedStatus()
@@ -219,7 +221,8 @@ public sealed class PipelineDirectives
 
     /// <summary>
     /// Consumes and clears the end-chain request.
-    /// Called by the pipeline after post-commit jobs complete.
+    /// Called by the runner during post-barrier settlement after the pipeline has returned and
+    /// its lock scope has ended. The directive remains intact across the pipeline-to-runner handoff.
     /// </summary>
     /// <returns><c>true</c> if a chain-ownership release was requested; otherwise <c>false</c>.</returns>
     public bool ConsumeEndChain()
@@ -231,7 +234,9 @@ public sealed class PipelineDirectives
 
     /// <summary>
     /// Enqueues a post-commit job to be executed after the distributed lock is released.
-    /// Post-commit jobs are used for side effects like remote calls that shouldn't block the lock.
+    /// Post-commit jobs are returned intact across the pipeline barrier for runner-owned execution
+    /// after the distributed lock is released. They are used for side effects like remote calls
+    /// that should not block the lock.
     /// For idempotent jobs, duplicate enqueueing within the same transition is prevented.
     /// </summary>
     /// <param name="job">The post-commit job to enqueue.</param>
@@ -256,7 +261,8 @@ public sealed class PipelineDirectives
 
     /// <summary>
     /// Consumes and clears all post-commit jobs.
-    /// Called by the pipeline after transition completes to get jobs for execution outside the lock.
+    /// Called by runner-owned post-commit orchestration after the pipeline barrier. The pipeline
+    /// itself only exposes these jobs as part of the handoff snapshot and never consumes them.
     /// </summary>
     /// <returns>A read-only list of post-commit jobs.</returns>
     public IReadOnlyList<IPostCommitJob> ConsumePostCommitJobs()
@@ -270,7 +276,8 @@ public sealed class PipelineDirectives
     /// <summary>
     /// Projects the current directive state into an immutable <see cref="ContinuationSet"/>
     /// snapshot. This is a pure read: it does NOT consume or clear any directive
-    /// (next transition, post-commit jobs, resolved status, resume order remain intact).
+    /// (next transition, post-commit jobs, resolved status, resume order remain intact), so the
+    /// directives remain available to runner-owned orchestration across the handoff.
     /// Post-commit jobs are snapshotted into a stable array so the returned value is
     /// unaffected by later mutations.
     /// </summary>
@@ -282,7 +289,8 @@ public sealed class PipelineDirectives
             ResolvedStatus,
             ResumeFromOrder,
             TerminalReached,
-            Epilogue);
+            Epilogue,
+            EndChainRequested);
 
     /// <summary>
     /// Gets a value indicating whether there are deferred events waiting to be published.
