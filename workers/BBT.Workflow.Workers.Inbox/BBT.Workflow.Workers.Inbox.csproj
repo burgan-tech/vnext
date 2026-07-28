@@ -8,7 +8,6 @@
     <RootNamespace>BBT.Workflow.Workers.Inbox</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="BBT.Aether.Npgsql" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
@@ -16,6 +15,7 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Npgsql/BBT.Aether.Npgsql.csproj" />
     <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj" />
     <ProjectReference Include="..\..\src\BBT.Workflow.Events.Contracts\BBT.Workflow.Events.Contracts.csproj" />
   </ItemGroup>

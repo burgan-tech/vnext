@@ -7,8 +7,6 @@
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="BBT.Aether.AspNetCore" Version="$(AetherPackageVersion)" />
-    <PackageReference Include="BBT.Aether.Npgsql" Version="$(AetherPackageVersion)" />
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
@@ -16,6 +14,8 @@
     <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" Version="$(PrometheusVersion)" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.AspNetCore/BBT.Aether.AspNetCore.csproj" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Npgsql/BBT.Aether.Npgsql.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Infrastructure\BBT.Workflow.Infrastructure.csproj" />
   </ItemGroup>

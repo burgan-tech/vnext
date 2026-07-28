@@ -7,6 +7,6 @@
     <RootNamespace>BBT.Workflow</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="BBT.Aether.Domain" Version="$(AetherPackageVersion)" />
+    <ProjectReference Include="../../../aether/framework/src/BBT.Aether.Domain/BBT.Aether.Domain.csproj" />
   </ItemGroup>
 </Project>
