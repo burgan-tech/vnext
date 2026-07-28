@@ -2267,6 +2267,50 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Outbox Wake-up Signal
+
+    /// <summary>
+    /// Logs when the outbox wake-up endpoint receives a request with no deserializable body.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50032,
+        Level = LogLevel.Warning,
+        Message = "Outbox wake-up signal had no body; ignoring.")]
+    public static partial void OutboxWakeupSignalMissingBody(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when the outbox wake-up endpoint receives a signal with a PartitionId outside the
+    /// configured partition range.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50033,
+        Level = LogLevel.Warning,
+        Message = "Outbox wake-up signal had out-of-range PartitionId {PartitionId}; ignoring.")]
+    public static partial void OutboxWakeupSignalPartitionOutOfRange(
+        this ILogger logger,
+        short partitionId);
+
+    /// <summary>
+    /// Logs when the outbox wake-up endpoint receives a signal for a schema this worker does not
+    /// serve. Pub/sub is scoped per-domain and the subscription targets only this worker, so in
+    /// correct operation this should never fire; every occurrence means misconfiguration (wrong
+    /// topic, wrong subscription, or a component pointed at the wrong place). Kept at Warning
+    /// rather than Debug so that signal is visible instead of disappearing from normal logs — if
+    /// the deployment really is misconfigured this will be noisy, and that noise is the intended
+    /// diagnostic, not something to suppress.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50034,
+        Level = LogLevel.Warning,
+        Message = "Outbox wake-up signal for schema {SignalSchema} ignored; this worker serves {WorkerSchema}.")]
+    public static partial void OutboxWakeupSignalSchemaMismatch(
+        this ILogger logger,
+        string? signalSchema,
+        string? workerSchema);
+
+    #endregion
+
     #region Event-driven transitions
 
     /// <summary>

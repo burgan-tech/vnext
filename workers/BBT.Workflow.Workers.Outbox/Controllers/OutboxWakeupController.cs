@@ -1,5 +1,6 @@
 using BBT.Aether.Events;
 using BBT.Aether.Events.Processing;
+using BBT.Workflow.Logging;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BBT.Workflow.Workers.Outbox.Controllers;
@@ -31,27 +32,26 @@ public sealed class OutboxWakeupController(
     {
         if (signal is null)
         {
-            logger.LogWarning("Outbox wake-up signal had no body; ignoring.");
+            logger.OutboxWakeupSignalMissingBody();
             return Ok();
         }
 
         if (signal.PartitionId < OutboxWakeupSignal.AllPartitions ||
             signal.PartitionId >= outboxOptions.PartitionCount)
         {
-            logger.LogWarning(
-                "Outbox wake-up signal had out-of-range PartitionId {PartitionId}; ignoring.",
-                signal.PartitionId);
+            logger.OutboxWakeupSignalPartitionOutOfRange(signal.PartitionId);
             return Ok();
         }
 
         // Covers the null-schema case too: a payload missing "schema" deserializes signal.Schema
-        // as null rather than throwing, and null never equals a configured schema.
+        // as null rather than throwing, and null never equals a configured schema. Logged at
+        // Warning, not Debug: per-domain pub/sub plus a subscription scoped to this worker mean a
+        // mismatched signal should never arrive in correct operation, so every occurrence means
+        // misconfiguration. That makes the noise the point, not something to quiet down.
         if (string.IsNullOrEmpty(signal.Schema) ||
             !string.Equals(signal.Schema, outboxOptions.Schema, StringComparison.Ordinal))
         {
-            logger.LogDebug(
-                "Outbox wake-up signal for schema {SignalSchema} ignored; this worker serves {WorkerSchema}.",
-                signal.Schema, outboxOptions.Schema);
+            logger.OutboxWakeupSignalSchemaMismatch(signal.Schema, outboxOptions.Schema);
             return Ok();
         }
 
