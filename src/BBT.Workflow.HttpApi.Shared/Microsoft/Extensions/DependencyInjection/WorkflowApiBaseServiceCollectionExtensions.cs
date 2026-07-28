@@ -179,6 +179,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddAetherOutbox<MessagingDbContext>(options =>
             configuration.GetSection("Aether:Outbox").Bind(options));
+
+        // Replaces the SDK's no-op wake-up publisher with the Dapr-backed one. This is the process
+        // that actually writes outbox rows (EfCoreOutboxStore.StoreAsync -> IOutboxSignalCollector.Mark),
+        // so it must be the one publishing signals, not the dispatcher-only Outbox worker. Requires a
+        // DaprClient, already registered here via AddDaprClients().
+        services.AddAetherOutboxDaprSignalling();
+
         services.AddAetherInbox<MessagingDbContext>();
 
         return services;
