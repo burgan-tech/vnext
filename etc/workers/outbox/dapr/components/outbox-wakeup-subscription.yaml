@@ -1,0 +1,21 @@
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: vnext-outbox-wakeup-subscription
+spec:
+  topic: outbox-wakeup
+  route: /internal/outbox/wakeup
+  # Deliberately vnext-pubsub-outbox, NOT vnext-pubsub-broadcast.
+  #
+  # vnext-pubsub-outbox (see pubsub.yaml in this same directory) carries a static
+  # consumerID ("vnext-workers") that is identical on every replica of this worker,
+  # because the one component file is mounted verbatim into every pod. A shared
+  # consumerID gives Redis Streams competing-consumer semantics: each published
+  # signal is delivered to exactly one replica, which is how partition ownership
+  # falls out of this design with no extra coordination.
+  #
+  # vnext-pubsub-broadcast assigns a distinct consumerId per pod. Substituting it
+  # here would fan every wake-up signal out to all ten replicas instead of one,
+  # turning a load-reducing signal into a 10x load multiplier. Do not "fix" this
+  # to the broadcast component.
+  pubsubname: vnext-pubsub-outbox

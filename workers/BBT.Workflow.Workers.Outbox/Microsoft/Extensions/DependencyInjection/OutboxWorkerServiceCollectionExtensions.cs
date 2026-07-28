@@ -77,6 +77,9 @@ public static class OutboxWorkerServiceCollectionExtensions
             options => configuration.GetSection("Aether:Outbox").Bind(options),
             withHostedService: true);
 
+        // Replaces the SDK's no-op publisher; this worker already has a DaprClient.
+        services.AddAetherOutboxDaprSignalling();
+
         return services;
     }
 }
