@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Events;
+using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -32,7 +33,18 @@ public sealed class EventAppService(
     /// <inheritdoc />
     public async Task<Result<object?>> HandleAsync(EventInput input, CancellationToken cancellationToken = default)
     {
-        runtimeInfoProvider.Check(input.Domain);
+        // A misrouted subscription is a permanent defect, so surface it as a Result the delivery mapper
+        // can turn into a Dapr DROP. Letting NotFoundDomainException escape would produce a 500 that the
+        // broker retries forever on a message this runtime can never accept.
+        try
+        {
+            runtimeInfoProvider.Check(input.Domain);
+        }
+        catch (NotFoundDomainException exception)
+        {
+            return Result<object?>.Fail(Error.NotFound("EventDomainMismatch", exception.Message));
+        }
+
         logger.EventReceived(input.Domain, input.Workflow, input.Action.ToString(), input.TransitionKey);
 
         // Resolve the flow definition from the component cache (sys-flows).
