@@ -38,6 +38,12 @@ public sealed class WorkflowOutputMappingService(
                 response.StatusCode,
                 NormalizeHeaders((object?)response.Headers)));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller itself went away — propagate rather than reporting a script failure and
+            // silently degrading to the standard envelope.
+            throw;
+        }
         catch (Exception ex)
         {
             logger.WorkflowOutputScriptFailed(workflow.Key, ex);
