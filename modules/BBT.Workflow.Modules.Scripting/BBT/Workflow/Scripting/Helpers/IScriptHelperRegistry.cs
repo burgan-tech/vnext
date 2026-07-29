@@ -44,7 +44,9 @@ public interface IScriptHelperRegistry
     /// <param name="allowedAssemblies">Per-mapping sandbox grant merged on top of the baseline.</param>
     /// <param name="contractReferences">Runtime-owned contract references (e.g. ScriptBase) to include.</param>
     /// <param name="baseUsings">Using directives prepended to every helper source.</param>
-    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <param name="cancellationToken">Checked before the build starts so an abandoned caller does not
+    /// kick off an expensive shared compile. It does NOT cancel a build in progress: the helper set is a
+    /// process-wide artifact, so one caller going away must not fail the build other callers await.</param>
     HelperSet GetOrBuildHelpers(
         IReadOnlyList<HelperSource> helpers,
         IReadOnlyList<string>? allowedAssemblies,
