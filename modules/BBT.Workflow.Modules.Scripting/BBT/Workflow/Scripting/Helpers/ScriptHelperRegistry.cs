@@ -19,6 +19,10 @@ namespace BBT.Workflow.Scripting.Helpers;
 /// consuming mapping — are loaded, so a superseded set can be unloaded independently. Operator-mounted
 /// plugin DLLs are preloaded into each set's context so helper code can resolve them at runtime even
 /// though the host does not reference them.
+///
+/// A failed build is never cached: <see cref="Lazy{T}"/> retains the factory's exception, and since this
+/// registry is a singleton a cached fault would be replayed for the whole process lifetime, so faulted
+/// entries are evicted and their load context unloaded.
 /// </summary>
 public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOptions? sandboxOptions = null)
     : IScriptHelperRegistry, IDisposable
@@ -37,12 +41,62 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
         if (helpers is null || helpers.Count == 0)
             throw new ArgumentException("At least one helper is required.", nameof(helpers));
 
-        var key = HashOf(helpers, allowedAssemblies);
-        var fromCache = _cache.ContainsKey(key);
+        // The caller's token only gates entry: an already-abandoned request must not start an expensive
+        // shared compile. Once the build starts it is deliberately detached from the request — see
+        // BuildHelperSet.
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var lazy = _cache.GetOrAdd(key, _ => new Lazy<HelperSet>(() =>
+        var key = HashOf(helpers, allowedAssemblies);
+
+        // Fast path: an already-materialised set is a cache hit no matter which caller produced it.
+        if (_cache.TryGetValue(key, out var existing) && existing.IsValueCreated)
+            return existing.Value with { FromCache = true };
+
+        // Set from inside the factory so a call that triggered a real compile reports FromCache: false,
+        // while calls served by an already-published set report a hit.
+        var built = false;
+
+        var lazy = _cache.GetOrAdd(key, _ => new Lazy<HelperSet>(
+            () =>
+            {
+                built = true;
+                return BuildHelperSet(key, helpers, allowedAssemblies, contractReferences, baseUsings);
+            },
+            LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
         {
-            var alc = new ScriptAssemblyLoadContext($"Helpers_{key[..8]}");
+            var set = lazy.Value;
+            return built ? set : set with { FromCache = true };
+        }
+        catch
+        {
+            // Lazy<T> caches the *exception* as well as the value, so without eviction a single
+            // transient failure would be replayed from cache for the rest of the process lifetime
+            // (this registry is a singleton). Drop the poisoned entry so the next caller recompiles.
+            Evict(key, lazy);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Compiles a helper set into its own collectible context. Compilation runs with
+    /// <see cref="CancellationToken.None"/> on purpose: the result is a process-wide artifact shared by
+    /// every request, so a single client disconnect (or a request timeout) must not be able to abort —
+    /// and thereby fail — a build that all other callers are waiting on. On failure the context is
+    /// unloaded so a failed build leaves nothing behind.
+    /// </summary>
+    private HelperSet BuildHelperSet(
+        string key,
+        IReadOnlyList<HelperSource> helpers,
+        IReadOnlyList<string>? allowedAssemblies,
+        IEnumerable<MetadataReference> contractReferences,
+        IEnumerable<string> baseUsings)
+    {
+        var alc = new ScriptAssemblyLoadContext($"Helpers_{key[..8]}");
+
+        try
+        {
             PreloadPlugins(alc);
 
             var compiled = evaluator.CompileHelpers(
@@ -51,13 +105,25 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
                 extraReferences: contractReferences,
                 usingDirectives: baseUsings,
                 sandboxGrant: allowedAssemblies,
-                cancellationToken: cancellationToken);
+                cancellationToken: CancellationToken.None);
 
             return new HelperSet(compiled.Reference, compiled.Namespaces, alc, FromCache: false);
-        }));
+        }
+        catch
+        {
+            // A failed build must not leak its collectible context and preloaded plugin assemblies.
+            TryUnload(alc);
+            throw;
+        }
+    }
 
-        var set = lazy.Value;
-        return fromCache ? set with { FromCache = true } : set;
+    /// <summary>
+    /// Removes a faulted cache entry, but only when it is still the entry we observed — never clobbers a
+    /// healthy set that another caller has already published under the same key.
+    /// </summary>
+    private void Evict(string key, Lazy<HelperSet> lazy)
+    {
+        _cache.TryRemove(new KeyValuePair<string, Lazy<HelperSet>>(key, lazy));
     }
 
     /// <summary>
@@ -96,24 +162,33 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
 
+    /// <summary>
+    /// Unloads a collectible context, tolerating unload failures (nothing actionable remains at that point).
+    /// </summary>
+    private static void TryUnload(AssemblyLoadContext context)
+    {
+        if (context is not ScriptAssemblyLoadContext owned)
+            return;
+
+        try
+        {
+            owned.Unload();
+        }
+        catch
+        {
+            // Ignore unload failures.
+        }
+    }
+
     public void Dispose()
     {
         foreach (var entry in _cache.Values.ToList())
         {
+            // A faulted Lazy still reports IsValueCreated == false; reading .Value would rethrow.
             if (!entry.IsValueCreated)
                 continue;
 
-            if (entry.Value.LoadContext is ScriptAssemblyLoadContext owned)
-            {
-                try
-                {
-                    owned.Unload();
-                }
-                catch
-                {
-                    // Ignore unload failures.
-                }
-            }
+            TryUnload(entry.Value.LoadContext);
         }
 
         _cache.Clear();

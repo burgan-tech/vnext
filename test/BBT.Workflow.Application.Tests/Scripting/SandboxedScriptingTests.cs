@@ -1,6 +1,11 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.Loader;
+using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Evaluators;
+using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
@@ -314,5 +319,149 @@ public class SandboxedScriptingTests
             loadContext: set.LoadContext);
 
         instance.Calc().ShouldBe(10);
+    }
+
+    [Fact]
+    public void HelperRegistry_Does_Not_Cache_A_Failed_Build()
+    {
+        // Regression: the registry stored the build in a Lazy<T>, which caches the factory's exception.
+        // Because the registry is a singleton, one transient failure (e.g. an OperationCanceledException
+        // from a torn-down request) was replayed for the whole process lifetime and the helper set could
+        // never be compiled again. The faulted entry must be evicted instead.
+        var sandbox = EnabledSandbox();
+        var evaluator = new FailOnceEvaluator(new CSharpEvaluator(sandbox));
+        var registry = new ScriptHelperRegistry(evaluator, sandbox);
+
+        Should.Throw<OperationCanceledException>(() =>
+        {
+            registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"]);
+        });
+
+        // Second attempt must reach the evaluator again rather than replaying the cached exception.
+        var set = registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"]);
+
+        set.Namespaces.ShouldContain("MyHelpers");
+        set.FromCache.ShouldBeFalse();
+        evaluator.Attempts.ShouldBe(2);
+    }
+
+    [Fact]
+    public void HelperRegistry_Does_Not_Pass_Caller_Token_To_The_Compiler()
+    {
+        // The helper set is a process-wide artifact, so a build in progress must not be cancellable by
+        // the request that happened to trigger it: the compile runs with CancellationToken.None.
+        var sandbox = EnabledSandbox();
+        var evaluator = new TokenCapturingEvaluator(new CSharpEvaluator(sandbox));
+        var registry = new ScriptHelperRegistry(evaluator, sandbox);
+
+        using var cts = new CancellationTokenSource();
+
+        var set = registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"], cts.Token);
+
+        set.Namespaces.ShouldContain("MyHelpers");
+        evaluator.ObservedToken.CanBeCanceled.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HelperRegistry_Rejects_An_Already_Cancelled_Caller_Before_Compiling()
+    {
+        // An abandoned caller should not kick off an expensive shared compile at all.
+        var sandbox = EnabledSandbox();
+        var evaluator = new TokenCapturingEvaluator(new CSharpEvaluator(sandbox));
+        var registry = new ScriptHelperRegistry(evaluator, sandbox);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Should.Throw<OperationCanceledException>(() =>
+        {
+            registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"], cts.Token);
+        });
+
+        evaluator.Attempts.ShouldBe(0);
+    }
+
+    private static HelperSource TaxHelper => new(
+        "tax-calculator", "1.0.0",
+        "namespace MyHelpers { public static class TaxCalc { public static int Tax(int x) => x / 10; } }",
+        "tax-calculator.csx");
+
+    /// <summary>
+    /// Delegating evaluator that simulates a cancelled first helper compilation and then succeeds,
+    /// so the registry's poisoned-entry eviction can be observed.
+    /// </summary>
+    private sealed class FailOnceEvaluator(IEvaluator inner) : DelegatingEvaluator(inner)
+    {
+        public override CompiledHelpers CompileHelpers(
+            IReadOnlyList<(string Path, string Code)> sources,
+            AssemblyLoadContext loadContext,
+            IEnumerable<MetadataReference>? extraReferences,
+            IEnumerable<string>? usingDirectives,
+            IReadOnlyList<string>? sandboxGrant,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+
+            if (Attempts == 1)
+                throw new OperationCanceledException("The operation was canceled.");
+
+            return Inner.CompileHelpers(
+                sources, loadContext, extraReferences, usingDirectives, sandboxGrant, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Delegating evaluator that records the token the registry hands to the compiler.
+    /// </summary>
+    private sealed class TokenCapturingEvaluator(IEvaluator inner) : DelegatingEvaluator(inner)
+    {
+        public CancellationToken ObservedToken { get; private set; }
+
+        public override CompiledHelpers CompileHelpers(
+            IReadOnlyList<(string Path, string Code)> sources,
+            AssemblyLoadContext loadContext,
+            IEnumerable<MetadataReference>? extraReferences,
+            IEnumerable<string>? usingDirectives,
+            IReadOnlyList<string>? sandboxGrant,
+            CancellationToken cancellationToken)
+        {
+            Attempts++;
+            ObservedToken = cancellationToken;
+
+            return Inner.CompileHelpers(
+                sources, loadContext, extraReferences, usingDirectives, sandboxGrant, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Test-only <see cref="IEvaluator"/> base that forwards to a real evaluator, letting each test
+    /// override only the helper-compilation behaviour it cares about.
+    /// </summary>
+    private abstract class DelegatingEvaluator(IEvaluator inner) : IEvaluator
+    {
+        protected IEvaluator Inner { get; } = inner;
+
+        public int Attempts { get; protected set; }
+
+        public Task<T> CompileToInstanceAsync<T>(
+            string code,
+            IScriptServices? services = null,
+            IEnumerable<MetadataReference>? extraReferences = null,
+            IEnumerable<string>? usingDirectives = null,
+            CancellationToken cancellationToken = default,
+            AssemblyLoadContext? loadContext = null,
+            IReadOnlyList<string>? sandboxGrant = null)
+            => Inner.CompileToInstanceAsync<T>(
+                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant);
+
+        // Declared without default values: defaults are not part of the signature, so this still
+        // implements IEvaluator.CompileHelpers, and every call site here passes all arguments.
+        public abstract CompiledHelpers CompileHelpers(
+            IReadOnlyList<(string Path, string Code)> sources,
+            AssemblyLoadContext loadContext,
+            IEnumerable<MetadataReference>? extraReferences,
+            IEnumerable<string>? usingDirectives,
+            IReadOnlyList<string>? sandboxGrant,
+            CancellationToken cancellationToken);
     }
 }
