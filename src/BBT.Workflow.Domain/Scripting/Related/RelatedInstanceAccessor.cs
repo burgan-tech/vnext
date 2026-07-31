@@ -15,6 +15,7 @@ namespace BBT.Workflow.Scripting.Related;
 public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
 {
     private const string DirectionParent = "parent";
+    private const string DirectionSub = "sub";
 
     private readonly Instance _instance;
     private readonly IRelatedInstanceReader _reader;
@@ -23,6 +24,9 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<Guid, RelatedInstanceView> _memo;
     private readonly RelatedInstanceRef? _parentRef;
+
+    private readonly SemaphoreSlim _correlationGate = new(1, 1);
+    private List<InstanceCorrelation>? _correlations;
 
     /// <summary>Creates an accessor bound to one instance snapshot.</summary>
     public RelatedInstanceAccessor(
@@ -68,18 +72,60 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<string>> SubKeysAsync(CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException("Implemented in Task 4.");
+    public async Task<IReadOnlyList<string>> SubKeysAsync(CancellationToken cancellationToken = default)
+    {
+        var correlations = await GetCorrelationsAsync(cancellationToken);
+        return correlations
+            .Select(correlation => correlation.SubFlowName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
 
     /// <inheritdoc />
-    public Task<RelatedInstanceView?> SubAsync(string subFlowKey, CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException("Implemented in Task 4.");
+    public async Task<RelatedInstanceView?> SubAsync(
+        string subFlowKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(subFlowKey);
+
+        var correlations = await GetCorrelationsAsync(cancellationToken);
+        var correlation = correlations
+            .Where(candidate => string.Equals(candidate.SubFlowName, subFlowKey, StringComparison.Ordinal))
+            .OrderByDescending(candidate => candidate.CreatedAt)
+            .FirstOrDefault();
+
+        if (correlation == null)
+        {
+            _logger.RelatedInstanceNotFound(_instance.Id, DirectionSub, subFlowKey);
+            return null;
+        }
+
+        // Routed through the batch reader (not the single-item ResolveAsync used by ParentAsync) so the
+        // down direction always goes through ReadManyAsync — one code path, one read strategy.
+        var results = await ResolveManyAsync([correlation], cancellationToken);
+        return results.Count > 0 ? results[0] : null;
+    }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<RelatedInstanceView>> SubsAsync(
+    public async Task<IReadOnlyList<RelatedInstanceView>> SubsAsync(
         string? subFlowKey = null,
-        CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException("Implemented in Task 4.");
+        CancellationToken cancellationToken = default)
+    {
+        var correlations = await GetCorrelationsAsync(cancellationToken);
+        var matches = correlations
+            .Where(candidate => subFlowKey == null ||
+                                string.Equals(candidate.SubFlowName, subFlowKey, StringComparison.Ordinal))
+            .OrderBy(candidate => candidate.CreatedAt)
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            _logger.RelatedInstanceNotFound(_instance.Id, DirectionSub, subFlowKey);
+            return [];
+        }
+
+        return await ResolveManyAsync(matches, cancellationToken);
+    }
 
     private async Task<RelatedInstanceView?> ResolveAsync(
         RelatedInstanceRef reference,
@@ -90,7 +136,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         if (_memo.TryGetValue(reference.InstanceId, out var cached))
             return cached;
 
-        EnsureUnderLimit();
+        EnsureUnderLimit(1);
 
         var result = await _reader.ReadAsync(reference, cancellationToken);
         if (!result.IsSuccess)
@@ -116,9 +162,9 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         return view;
     }
 
-    private void EnsureUnderLimit()
+    private void EnsureUnderLimit(int additional)
     {
-        if (_memo.Count < _options.MaxResolutionsPerContext)
+        if (_memo.Count + additional <= _options.MaxResolutionsPerContext)
             return;
 
         _logger.RelatedInstanceResolutionLimitExceeded(_instance.Id, _options.MaxResolutionsPerContext);
@@ -127,6 +173,81 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
             "Reduce the number of distinct related instances a single script resolves, or raise " +
             $"{RelatedAccessOptions.SectionName}:MaxResolutionsPerContext.");
     }
+
+    private async Task<IReadOnlyList<RelatedInstanceView>> ResolveManyAsync(
+        List<InstanceCorrelation> correlations,
+        CancellationToken cancellationToken)
+    {
+        var pending = correlations
+            .Where(correlation => !_memo.ContainsKey(correlation.SubFlowInstanceId))
+            .ToList();
+
+        if (pending.Count > 0)
+        {
+            EnsureUnderLimit(pending.Count);
+
+            var references = pending.Select(ToRef).ToList();
+            var result = await _reader.ReadManyAsync(references, cancellationToken);
+            if (!result.IsSuccess)
+            {
+                var reason = result.Error.Message ?? "unknown";
+                _logger.RelatedInstanceResolutionFailed(
+                    _instance.Id,
+                    DirectionSub,
+                    pending[0].SubFlowInstanceId,
+                    pending[0].SubFlowDomain,
+                    pending[0].SubFlowName,
+                    reason);
+                throw new RelatedInstanceAccessException(
+                    $"Failed to read {pending.Count} related instance(s) of {_instance.Id}: {reason}");
+            }
+
+            var byId = result.Value!.ToDictionary(snapshot => snapshot.InstanceId);
+            foreach (var correlation in pending)
+            {
+                if (!byId.TryGetValue(correlation.SubFlowInstanceId, out var snapshot))
+                {
+                    _logger.RelatedInstanceNotFound(_instance.Id, DirectionSub, correlation.SubFlowName);
+                    continue;
+                }
+
+                _memo[correlation.SubFlowInstanceId] = ToView(snapshot, correlation);
+                _logger.RelatedInstanceResolved(
+                    _instance.Id, DirectionSub, snapshot.InstanceId, snapshot.Domain, snapshot.Flow);
+            }
+        }
+
+        return correlations
+            .Where(correlation => _memo.ContainsKey(correlation.SubFlowInstanceId))
+            .Select(correlation => _memo[correlation.SubFlowInstanceId])
+            .ToList();
+    }
+
+    private async Task<List<InstanceCorrelation>> GetCorrelationsAsync(CancellationToken cancellationToken)
+    {
+        if (_correlations != null)
+            return _correlations;
+
+        await _correlationGate.WaitAsync(cancellationToken);
+        try
+        {
+            // Deliberately not Instance.ChildCorrelations: the repository's default include filters
+            // out completed correlations, and completed subflow output must stay readable.
+            _correlations ??= await _correlationRepository.GetByParentAsync(_instance.Id, cancellationToken);
+            return _correlations;
+        }
+        finally
+        {
+            _correlationGate.Release();
+        }
+    }
+
+    private static RelatedInstanceRef ToRef(InstanceCorrelation correlation) =>
+        new(
+            correlation.SubFlowInstanceId,
+            correlation.SubFlowDomain,
+            correlation.SubFlowName,
+            correlation.SubFlowVersion);
 
     private static RelatedInstanceView ToView(RelatedInstanceSnapshot snapshot, InstanceCorrelation? correlation) =>
         new()
