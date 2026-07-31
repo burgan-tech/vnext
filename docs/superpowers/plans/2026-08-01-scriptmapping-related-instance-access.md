@@ -1466,14 +1466,28 @@ Expected: FAIL — `System.NotImplementedException: Implemented in Task 4.`
 
 - [ ] **Step 3: Replace the three stub members in `RelatedInstanceAccessor.cs`**
 
-Add these fields next to the existing ones:
+Add these next to the existing fields:
 
 ```csharp
     private const string DirectionSub = "sub";
 
-    private readonly SemaphoreSlim _correlationGate = new(1, 1);
-    private List<InstanceCorrelation>? _correlations;
+    private readonly CorrelationCache _correlationCache;
+
+    /// <summary>
+    /// The lazily loaded correlation list plus its load gate, held in one object so parallel task
+    /// branches created by <c>ForBranch</c> can share a single load instead of each re-issuing
+    /// <c>GetByParentAsync</c> for the same parent instance.
+    /// </summary>
+    private sealed class CorrelationCache
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public List<InstanceCorrelation>? Items;
+    }
 ```
+
+Both constructors gain a trailing `CorrelationCache? correlationCache = null` parameter, and the
+private one assigns `_correlationCache = correlationCache ?? new CorrelationCache();`. The public
+constructor passes nothing, so a standalone accessor always gets a fresh cache.
 
 Replace the three `NotImplementedException` members with:
 
@@ -1582,20 +1596,21 @@ Replace the three `NotImplementedException` members with:
 
     private async Task<List<InstanceCorrelation>> GetCorrelationsAsync(CancellationToken cancellationToken)
     {
-        if (_correlations != null)
-            return _correlations;
+        if (_correlationCache.Items != null)
+            return _correlationCache.Items;
 
-        await _correlationGate.WaitAsync(cancellationToken);
+        await _correlationCache.Gate.WaitAsync(cancellationToken);
         try
         {
             // Deliberately not Instance.ChildCorrelations: the repository's default include filters
             // out completed correlations, and completed subflow output must stay readable.
-            _correlations ??= await _correlationRepository.GetByParentAsync(_instance.Id, cancellationToken);
-            return _correlations;
+            _correlationCache.Items ??=
+                await _correlationRepository.GetByParentAsync(_instance.Id, cancellationToken);
+            return _correlationCache.Items;
         }
         finally
         {
-            _correlationGate.Release();
+            _correlationCache.Gate.Release();
         }
     }
 
@@ -1793,26 +1808,44 @@ Add both public members after `SubsAsync`:
     /// snapshot but shares this accessor's memo and reader, so a related instance already resolved by
     /// the coordinator is not read again. Safe because branches only read.
     /// </summary>
+    /// <remarks>
+    /// The correlation cache is shared too, but only when the branch snapshots the same instance —
+    /// which is what <c>ScriptContext.CreateParallelBranch</c> does. Without that, every branch that
+    /// touches a <c>Sub*</c> member would re-issue <c>GetByParentAsync</c> for the same parent id.
+    /// A branch bound to a different instance gets its own cache, because its correlations differ.
+    /// </remarks>
     /// <param name="branchInstance">The branch's instance snapshot.</param>
-    public RelatedInstanceAccessor ForBranch(Instance branchInstance) =>
-        new(branchInstance, _reader, _correlationRepository, _options, _logger, _memo);
+    internal RelatedInstanceAccessor ForBranch(Instance branchInstance) =>
+        new(
+            branchInstance,
+            _reader,
+            _correlationRepository,
+            _options,
+            _logger,
+            _memo,
+            branchInstance.Id == _instance.Id ? _correlationCache : null);
 
     /// <summary>
-    /// Drops every memoized related instance. Called when the owning ScriptContext is disposed so the
-    /// resolved data does not outlive the transition.
+    /// Drops every memoized related instance and the cached correlation list. Called when the owning
+    /// ScriptContext is disposed so the resolved data does not outlive the transition.
     /// </summary>
-    public void ClearMemo()
+    internal void ClearMemo()
     {
         _memo.Clear();
-        _correlations = null;
+        _correlationCache.Items = null;
     }
 ```
+
+`ForBranch` and `ClearMemo` are `internal`, not `public`: they are lifecycle operations owned by
+`ScriptContext` (same assembly), and `IRelatedInstanceAccessor` — the script-facing surface —
+deliberately omits both. `BBT.Workflow.Domain.csproj` already grants `InternalsVisibleTo` to
+`BBT.Workflow.Domain.Tests` and `BBT.Workflow.Infrastructure`, so the tests still reach them.
 
 - [ ] **Step 4: Run all accessor tests to verify they pass**
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~RelatedInstanceAccessor"`
 
-Expected: PASS — 14 + 15 + 4 tests.
+Expected: PASS — 14 + 16 + 7 tests (plus the 5 NullRelatedInstanceAccessor tests the same filter picks up).
 
 - [ ] **Step 5: Commit**
 
@@ -3190,7 +3223,7 @@ Run:
 dotnet test vnext.sln --filter "FullyQualifiedName~Related"
 ```
 
-Expected: PASS — 14 + 15 + 4 + 5 + 4 + 5 + 5 tests, zero failures.
+Expected: PASS — 14 + 16 + 7 + 5 + 4 + 5 + 5 tests, zero failures.
 
 - [ ] **Step 9: Commit**
 
@@ -3404,7 +3437,7 @@ Expected: `Build succeeded`, zero warnings introduced by this branch.
 
 Run: `dotnet test vnext.sln --filter "FullyQualifiedName~Related"`
 
-Expected: 52 tests, all passing.
+Expected: 56 tests, all passing.
 
 - [ ] **Step 3: No regression against the recorded baseline**
 
