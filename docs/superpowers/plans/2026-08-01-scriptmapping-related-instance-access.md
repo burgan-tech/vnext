@@ -90,14 +90,23 @@
 
 ## Baseline warning (read before you start)
 
-`master` has **191 pre-existing test failures** (mostly `AmbientServiceProvider` leakage across parallel
-collections). Do not treat those as regressions. Before your first commit, capture the baseline:
+`master` has a large number of pre-existing test failures (mostly `AmbientServiceProvider` leakage
+across parallel collections). Do not treat those as regressions. The controller captured the baseline
+into `/tmp/test-baseline.txt` before Task 1 — do not overwrite it.
+
+**The repository root holds two solution files (`vnext.sln` and `BBT.Workflow.slnx`), so a bare
+`dotnet build` or `dotnet test` fails with `MSB1011`. Always pass an explicit target:**
 
 ```bash
-dotnet test 2>&1 | tail -20 > /tmp/test-baseline.txt
+dotnet build vnext.sln
 ```
 
-Always run the *specific* tests you wrote with `--filter`, never the whole suite, to judge your work.
+Always run the *specific* tests you wrote with `--filter` against the *specific* test project, never the
+whole suite, to judge your work:
+
+```bash
+dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~YourTestClass"
+```
 
 First-time setup on macOS/Linux (required for PostSharp on .NET 10):
 
@@ -3065,7 +3074,7 @@ Expected: PASS, 5 tests.
 
 - [ ] **Step 7: Verify the whole solution builds**
 
-Run: `dotnet build`
+Run: `dotnet build vnext.sln`
 
 Expected: `Build succeeded`.
 
@@ -3074,7 +3083,7 @@ Expected: `Build succeeded`.
 Run:
 
 ```bash
-dotnet test --filter "FullyQualifiedName~Related"
+dotnet test vnext.sln --filter "FullyQualifiedName~Related"
 ```
 
 Expected: PASS — 10 + 12 + 4 + 5 + 4 + 5 + 5 tests, zero failures.
@@ -3283,13 +3292,13 @@ git commit -m "docs(scripting): document related instance access"
 
 - [ ] **Step 1: Full build**
 
-Run: `dotnet build`
+Run: `dotnet build vnext.sln`
 
 Expected: `Build succeeded`, zero warnings introduced by this branch.
 
 - [ ] **Step 2: All feature tests**
 
-Run: `dotnet test --filter "FullyQualifiedName~Related"`
+Run: `dotnet test vnext.sln --filter "FullyQualifiedName~Related"`
 
 Expected: 45 tests, all passing.
 
@@ -3298,7 +3307,7 @@ Expected: 45 tests, all passing.
 Run:
 
 ```bash
-dotnet test 2>&1 | tail -20
+dotnet test vnext.sln 2>&1 | tail -30
 ```
 
 Compare the failure count with `/tmp/test-baseline.txt` from the Baseline section. It must not increase.
