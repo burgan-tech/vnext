@@ -124,6 +124,25 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         return await ResolveManyAsync(matches, cancellationToken);
     }
 
+    /// <summary>
+    /// Creates an accessor for a parallel task branch. The branch is bound to its own instance
+    /// snapshot but shares this accessor's memo and reader, so a related instance already resolved by
+    /// the coordinator is not read again. Safe because branches only read.
+    /// </summary>
+    /// <param name="branchInstance">The branch's instance snapshot.</param>
+    public RelatedInstanceAccessor ForBranch(Instance branchInstance) =>
+        new(branchInstance, _reader, _correlationRepository, _options, _logger, _memo);
+
+    /// <summary>
+    /// Drops every memoized related instance. Called when the owning ScriptContext is disposed so the
+    /// resolved data does not outlive the transition.
+    /// </summary>
+    public void ClearMemo()
+    {
+        _memo.Clear();
+        _correlations = null;
+    }
+
     private async Task<RelatedInstanceView?> ResolveAsync(
         RelatedInstanceRef reference,
         string direction,
