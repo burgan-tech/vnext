@@ -232,6 +232,76 @@ public class StateFunctionCacheTests
         sut.ComputeEtag(input, fingerprint with { FlowVersion = "2.0.0" }).ShouldNotBe(baseline);
     }
 
+    /// <summary>
+    /// The response body carries the full correlation set, so every way that set can change must move the
+    /// ETag even though the instance's own state, status and flow version are untouched. Without this a
+    /// long-polling client would keep receiving 304 and never see a sub item start, finish or advance.
+    /// </summary>
+    [Fact]
+    public void ComputeEtag_ChangesWithEveryCorrelationSetMutation()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint(
+            correlationCount: 2,
+            completedCorrelationCount: 1,
+            lastCorrelationCompletedAt: new DateTime(2026, 4, 5, 6, 7, 8, DateTimeKind.Utc),
+            lastSubFlowStateChangedAt: new DateTime(2026, 4, 5, 6, 7, 7, DateTimeKind.Utc));
+        var baseline = sut.ComputeEtag(input, fingerprint);
+
+        // A new sub item started.
+        sut.ComputeEtag(input, fingerprint with { CorrelationCount = 3 }).ShouldNotBe(baseline);
+        // A sub item terminated (or a completion was reverted) without changing the total.
+        sut.ComputeEtag(input, fingerprint with { CompletedCorrelationCount = 2 }).ShouldNotBe(baseline);
+        // Revert-then-recomplete leaves both counts as they were; the timestamp separates them.
+        sut.ComputeEtag(input, fingerprint with
+        {
+            LastCorrelationCompletedAt = new DateTime(2026, 4, 5, 6, 7, 9, DateTimeKind.Utc)
+        }).ShouldNotBe(baseline);
+        // A sub item advanced its own state — no count moves.
+        sut.ComputeEtag(input, fingerprint with
+        {
+            LastSubFlowStateChangedAt = new DateTime(2026, 4, 5, 6, 7, 10, DateTimeKind.Utc)
+        }).ShouldNotBe(baseline);
+    }
+
+    /// <summary>
+    /// The counterpart guarantee: an unchanged correlation set must reproduce the same ETag, so a quiet
+    /// instance keeps answering 304 instead of re-sending the body on every poll.
+    /// </summary>
+    [Fact]
+    public void ComputeEtag_IsStableForAnUnchangedCorrelationSet()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var completedAt = new DateTime(2026, 4, 5, 6, 7, 8, DateTimeKind.Utc);
+
+        var first = sut.ComputeEtag(input, CreateFingerprint(
+            correlationCount: 2, completedCorrelationCount: 1, lastCorrelationCompletedAt: completedAt));
+        var second = sut.ComputeEtag(input, CreateFingerprint(
+            correlationCount: 2, completedCorrelationCount: 1, lastCorrelationCompletedAt: completedAt));
+
+        second.ShouldBe(first);
+    }
+
+    /// <summary>
+    /// Counts must not collapse into one another in the hash material: 2 total / 1 completed must never
+    /// hash the same as 1 total / 2 completed (a naive concatenation would let "21" collide with "12").
+    /// </summary>
+    [Fact]
+    public void ComputeEtag_DoesNotConflateCorrelationCounts()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+
+        var twoOfOne = sut.ComputeEtag(input,
+            CreateFingerprint(correlationCount: 21, completedCorrelationCount: 1));
+        var oneOfTwo = sut.ComputeEtag(input,
+            CreateFingerprint(correlationCount: 2, completedCorrelationCount: 11));
+
+        oneOfTwo.ShouldNotBe(twoOfOne);
+    }
+
     [Fact]
     public void ComputeEtag_ChangesWithCallerScope()
     {
@@ -272,7 +342,15 @@ public class StateFunctionCacheTests
         subFlowBusy.ShouldNotBe(subFlowActive);
     }
 
-    private static InstanceStateFingerprint CreateFingerprint() =>
+    private static InstanceStateFingerprint CreateFingerprint(
+        int correlationCount = 0,
+        int completedCorrelationCount = 0,
+        DateTime? lastCorrelationCompletedAt = null,
+        DateTime? lastSubFlowStateChangedAt = null) =>
         new(Guid.Parse("11111111-1111-1111-1111-111111111111"), "test-key", "review",
-            InstanceStatus.Active, "1.0.0", HasActiveSubFlow: false);
+            InstanceStatus.Active, "1.0.0", HasActiveSubFlow: false,
+            CorrelationCount: correlationCount,
+            CompletedCorrelationCount: completedCorrelationCount,
+            LastCorrelationCompletedAt: lastCorrelationCompletedAt,
+            LastSubFlowStateChangedAt: lastSubFlowStateChangedAt);
 }

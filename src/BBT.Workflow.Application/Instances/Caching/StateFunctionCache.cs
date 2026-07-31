@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using BBT.Aether.DistributedCache;
@@ -52,6 +53,9 @@ public sealed class StateFunctionCache(
         string? displayedState,
         string? displayedStatus)
     {
+        // The correlation members participate because the response body carries the full correlation
+        // set: a sub item starting, terminating or advancing its state changes the body without
+        // touching the instance's own state or status, and must still invalidate the caller's ETag.
         var material = string.Join('|',
             fingerprint.Id,
             fingerprint.EffectiveState ?? string.Empty,
@@ -59,11 +63,23 @@ public sealed class StateFunctionCache(
             fingerprint.FlowVersion ?? string.Empty,
             BuildCallerHash(input),
             displayedState ?? string.Empty,
-            displayedStatus ?? string.Empty);
+            displayedStatus ?? string.Empty,
+            fingerprint.CorrelationCount,
+            fingerprint.CompletedCorrelationCount,
+            FormatTimestamp(fingerprint.LastCorrelationCompletedAt),
+            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt));
 
         return Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
     }
+
+    /// <summary>
+    /// Round-trip ("O") rendering of a fingerprint timestamp, or the empty string for null. Both
+    /// fingerprint paths read their timestamps from the database, so precision and
+    /// <see cref="DateTimeKind"/> match and the rendered material is stable.
+    /// </summary>
+    private static string FormatTimestamp(DateTime? value) =>
+        value?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty;
 
     private string BuildCallerHash(GetInstanceStateInput input) =>
         CallerScopeHash.Compute(currentUser, input.Role, input.Roles, input.Extensions, input.Headers, input.Version);

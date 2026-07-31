@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
@@ -115,6 +116,113 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
 
         fingerprint.ShouldNotBeNull();
         fingerprint!.HasActiveSubFlow.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The correlation aggregates must count the full set — active and completed — and must translate to
+    /// SQL (COUNT / COUNT-with-predicate / MAX over nullable timestamp columns).
+    /// </summary>
+    [Fact]
+    public async Task ProjectsCorrelationAggregatesOverActiveAndCompletedRows()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "fp-correlation-aggregates");
+        instance.SetEffectiveState("review");
+
+        var completedAt = new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc);
+        var stateChangedAt = new DateTime(2026, 3, 4, 5, 6, 6, DateTimeKind.Utc);
+
+        var completed = CreateCorrelation(instance.Id, subFlowType: "S");
+        completed.ApplyTerminalOutcome(SubItemTerminalOutcome.Completed, completedAt);
+        instance.AddCorrelation(completed);
+
+        var active = CreateCorrelation(instance.Id, subFlowType: "S");
+        active.UpdateSubFlowState("sub-review", stateChangedAt);
+        instance.AddCorrelation(active);
+
+        await SeedAsync(instance);
+
+        await using var ctx = CreateContext();
+        var fingerprint = await QueryAsync(ctx, instance.Id.ToString());
+
+        fingerprint.ShouldNotBeNull();
+        fingerprint!.CorrelationCount.ShouldBe(2);
+        fingerprint.CompletedCorrelationCount.ShouldBe(1);
+        fingerprint.LastCorrelationCompletedAt.ShouldBe(completedAt);
+        fingerprint.LastSubFlowStateChangedAt.ShouldBe(stateChangedAt);
+    }
+
+    /// <summary>
+    /// No correlations at all must yield zero counts and null timestamps — SQL <c>MAX</c> over an empty
+    /// set and LINQ-to-Objects <c>Max</c> over a nullable sequence must agree on null rather than one
+    /// throwing or returning a default.
+    /// </summary>
+    [Fact]
+    public async Task WithoutCorrelations_ProjectsZeroCountsAndNullTimestamps()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "fp-no-correlations");
+        instance.SetEffectiveState("review");
+        await SeedAsync(instance);
+
+        await using var ctx = CreateContext();
+        var fingerprint = await QueryAsync(ctx, instance.Id.ToString());
+
+        fingerprint.ShouldNotBeNull();
+        fingerprint!.CorrelationCount.ShouldBe(0);
+        fingerprint.CompletedCorrelationCount.ShouldBe(0);
+        fingerprint.LastCorrelationCompletedAt.ShouldBeNull();
+        fingerprint.LastSubFlowStateChangedAt.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Regression guard for endless cache invalidation. The long-poll fast path builds the fingerprint
+    /// from the projection query while the full-build path builds it from the loaded aggregate plus the
+    /// separately-read correlation list. If the two disagree on a single member, the ETag computed on the
+    /// full path never matches the one the fast path validates against and every poll re-builds.
+    /// Runs with a mixed correlation set (active, completed, state-advanced) to exercise every member.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectionAndFromInstance_ProduceIdenticalFingerprints(bool withCorrelations)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, $"fp-parity-{withCorrelations}");
+        instance.SetEffectiveState("review");
+
+        if (withCorrelations)
+        {
+            var completed = CreateCorrelation(instance.Id, subFlowType: "S");
+            completed.ApplyTerminalOutcome(
+                SubItemTerminalOutcome.Faulted, new DateTime(2026, 5, 6, 7, 8, 9, DateTimeKind.Utc));
+            instance.AddCorrelation(completed);
+
+            var advanced = CreateCorrelation(instance.Id, subFlowType: "P");
+            advanced.UpdateSubFlowState("child-state", new DateTime(2026, 5, 6, 7, 8, 10, DateTimeKind.Utc));
+            instance.AddCorrelation(advanced);
+
+            instance.AddCorrelation(CreateCorrelation(instance.Id, subFlowType: "S"));
+        }
+
+        await SeedAsync(instance);
+
+        await using var ctx = CreateContext();
+        var projected = await QueryAsync(ctx, instance.Id.ToString());
+
+        // Mirror the production full-build path: aggregate loaded with the active-only filtered include,
+        // full correlation set read separately.
+        var loaded = await ctx.Instances
+            .AsNoTracking()
+            .Include(i => i.DataList)
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .FirstAsync(i => i.Id == instance.Id);
+        var allCorrelations = await ctx.Set<InstanceCorrelation>()
+            .AsNoTracking()
+            .Where(c => c.ParentInstanceId == instance.Id)
+            .ToListAsync();
+
+        var fromInstance = InstanceStateFingerprint.FromInstance(loaded, allCorrelations);
+
+        projected.ShouldNotBeNull();
+        fromInstance.ShouldBe(projected);
     }
 
     [Fact]

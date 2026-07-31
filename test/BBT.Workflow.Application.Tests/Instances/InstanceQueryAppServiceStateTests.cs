@@ -44,6 +44,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IUrlTemplateBuilder _urlTemplateBuilder;
     private readonly IViewContentResolutionService _viewContentResolutionService;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
+    private readonly IInstanceCorrelationRepository _instanceCorrelationRepository;
     private readonly Caching.IStateFunctionCache _stateFunctionCache;
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
@@ -64,6 +65,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
         _viewContentResolutionService = Substitute.For<IViewContentResolutionService>();
         _transitionAuthorizationManager = Substitute.For<ITransitionAuthorizationManager>();
+        _instanceCorrelationRepository = Substitute.For<IInstanceCorrelationRepository>();
         // Enabled defaults to false so existing tests exercise the full build path;
         // cache-specific tests opt in explicitly.
         _stateFunctionCache = Substitute.For<Caching.IStateFunctionCache>();
@@ -88,7 +90,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
-            instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
+            instanceCorrelationRepository: _instanceCorrelationRepository,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -112,6 +114,87 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     {
         AmbientServiceProvider.Current = _previousAmbientServiceProvider;
         (_ambientServiceProvider as IDisposable)?.Dispose();
+    }
+
+    /// <summary>
+    /// The full <c>correlations</c> list carries completed correlations with their terminal details,
+    /// while <c>activeCorrelations</c> keeps its active-only semantics — the compatibility contract for
+    /// clients already reading the active list.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ReturnsCompletedCorrelations_WithoutWideningActiveCorrelations()
+    {
+        // Arrange — one still-active correlation (from the fixture) plus one that already faulted
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        SetupSubFlowGateway(InstanceStatus.Active, "sub-review");
+
+        var activeCorrelation = instance.ChildCorrelations.Single();
+        var completedAt = new DateTime(2026, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+        // Pinned older than the fixture's active correlation so the expected CreatedAt order is explicit.
+        var completedCorrelation = CreateCorrelation(
+            instance.Id, "earlier-sub-flow", SubItemTerminalOutcome.Faulted, completedAt, "child-error",
+            createdAt: activeCorrelation.CreatedAt.AddMinutes(-5));
+        SetupFullCorrelations(instance.Id, [completedCorrelation, activeCorrelation]);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var output = result.Result.Value!;
+
+        output.ActiveCorrelations.Select(c => c.CorrelationId)
+            .ShouldBe([activeCorrelation.Id]);
+
+        output.Correlations.Select(c => c.CorrelationId)
+            .ShouldBe([completedCorrelation.Id, activeCorrelation.Id]);
+
+        var completedEntry = output.Correlations.Single(c => c.CorrelationId == completedCorrelation.Id);
+        completedEntry.IsCompleted.ShouldBeTrue();
+        completedEntry.CompletedAt.ShouldBe(completedAt);
+        completedEntry.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Faulted);
+        completedEntry.CurrentState.ShouldBe("child-error");
+        completedEntry.StateChangedAt.ShouldNotBeNull();
+        completedEntry.SubFlowName.ShouldBe("earlier-sub-flow");
+        completedEntry.Href.ShouldBe("https://data-url");
+
+        var activeEntry = output.Correlations.Single(c => c.CorrelationId == activeCorrelation.Id);
+        activeEntry.IsCompleted.ShouldBeFalse();
+        activeEntry.CompletedAt.ShouldBeNull();
+        activeEntry.TerminalOutcome.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The full list is ordered by creation time ascending regardless of the order the read returns,
+    /// so a client can replay sub items in the order the parent started them.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_OrdersCorrelationsByCreatedAtAscending()
+    {
+        // Arrange — supplied newest-first to prove the service re-orders
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        SetupSubFlowGateway(InstanceStatus.Active, "sub-review");
+
+        var newest = CreateCorrelation(instance.Id, "third", SubItemTerminalOutcome.Completed,
+            createdAt: new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc));
+        var middle = CreateCorrelation(instance.Id, "second", SubItemTerminalOutcome.Completed,
+            createdAt: new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+        var oldest = CreateCorrelation(instance.Id, "first", SubItemTerminalOutcome.Completed,
+            createdAt: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        SetupFullCorrelations(instance.Id, [newest, middle, oldest]);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Correlations.Select(c => c.SubFlowName)
+            .ShouldBe(["first", "second", "third"]);
     }
 
     /// <summary>
@@ -1056,7 +1139,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceRepository
             .GetStateFingerprintAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceStateFingerprint(instance.Id, "test-key", TestState, InstanceStatus.Busy,
-                TestVersion, HasActiveSubFlow: true));
+                TestVersion, HasActiveSubFlow: true,
+                CorrelationCount: 1, CompletedCorrelationCount: 0,
+                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 
         // Act
         var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
@@ -1114,7 +1199,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceRepository
             .GetStateFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
-                TestVersion, HasActiveSubFlow: false));
+                TestVersion, HasActiveSubFlow: false,
+                CorrelationCount: 0, CompletedCorrelationCount: 0,
+                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 
     private void SetupCachedEntry(out Caching.StateFunctionCacheEntry entry, string etag = "etag-current")
     {
@@ -1233,6 +1320,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         _representationEtagService.Generate(Arg.Any<object>()).Returns((string?)null);
 
+        // Full correlation set for the `correlations` response list and the fingerprint. Defaults to
+        // the aggregate's own (active) correlations so tests that do not care about completed rows
+        // see a consistent picture; SetupFullCorrelations overrides it.
+        SetupFullCorrelations(instance.Id, [.. instance.ChildCorrelations]);
+
         // Default: queryRoles visibility allowed (specific tests override to false to assert 403).
         _transitionAuthorizationManager
             .IsQueryAllowedAsync(
@@ -1243,6 +1335,59 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<CancellationToken>())
             .Returns(true);
     }
+
+    /// <summary>
+    /// Stubs the dedicated full-correlation read (active + completed) the state path performs, since the
+    /// aggregate's own collection is loaded active-only in production.
+    /// </summary>
+    private void SetupFullCorrelations(Guid instanceId, List<InstanceCorrelation> correlations) =>
+        _instanceCorrelationRepository
+            .GetByParentAsync(instanceId, Arg.Any<CancellationToken>())
+            .Returns(correlations);
+
+    /// <summary>
+    /// Builds a correlation for <paramref name="parentInstanceId"/>, optionally already terminated.
+    /// </summary>
+    private static InstanceCorrelation CreateCorrelation(
+        Guid parentInstanceId,
+        string subFlowName,
+        SubItemTerminalOutcome? outcome = null,
+        DateTime? completedAt = null,
+        string? subFlowCurrentState = null,
+        DateTime? createdAt = null)
+    {
+        var correlation = InstanceCorrelation.Create(
+            id: Guid.NewGuid(),
+            instanceId: parentInstanceId,
+            parentState: TestState,
+            subFlowInstanceId: Guid.NewGuid(),
+            subFlowType: "S",
+            subFlowDomain: "sub-domain",
+            subFlowName: subFlowName,
+            subFlowVersion: "1.0.0");
+
+        if (subFlowCurrentState is not null)
+            correlation.UpdateSubFlowState(subFlowCurrentState, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+
+        if (outcome is not null)
+            correlation.ApplyTerminalOutcome(outcome.Value,
+                completedAt ?? new DateTime(2026, 1, 2, 3, 4, 6, DateTimeKind.Utc));
+
+        if (createdAt is not null)
+            PinCreatedAt(correlation, createdAt.Value);
+
+        return correlation;
+    }
+
+    /// <summary>
+    /// Pins a correlation's <c>CreatedAt</c>. The audit base exposes only a protected setter (production
+    /// stamps it on save), so ordering assertions have to reach it reflectively.
+    /// </summary>
+    private static void PinCreatedAt(InstanceCorrelation correlation, DateTime createdAt) =>
+        typeof(InstanceCorrelation)
+            .GetProperty(nameof(InstanceCorrelation.CreatedAt))!
+            .GetSetMethod(nonPublic: true)!
+            .Invoke(correlation, [createdAt]);
 
     private void SetupSubFlowGateway(InstanceStatus subFlowStatus, string subFlowState,
         InstanceInteractionOutput? interaction = null)
