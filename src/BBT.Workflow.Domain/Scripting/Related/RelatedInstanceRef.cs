@@ -1,5 +1,3 @@
-using System;
-
 namespace BBT.Workflow.Scripting.Related;
 
 /// <summary>
