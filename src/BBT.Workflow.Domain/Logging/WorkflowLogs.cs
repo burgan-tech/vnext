@@ -2840,13 +2840,15 @@ public static partial class WorkflowLogs
     /// </summary>
     [LoggerMessage(
         EventId = 20433,
-        Level = LogLevel.Warning,
-        Message = "Related instance resolution failed. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, Reason: {Reason}")]
+        Level = LogLevel.Error,
+        Message = "Related instance resolution failed. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Reason: {Reason}")]
     public static partial void RelatedInstanceResolutionFailed(
         this ILogger logger,
         Guid instanceId,
         string direction,
         Guid targetInstanceId,
+        string targetDomain,
+        string targetFlow,
         string reason);
 
     /// <summary>
@@ -2861,6 +2863,20 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         int limit);
+
+    /// <summary>
+    /// Logs when the Application-layer related-instance reader catches an exception at the
+    /// repository boundary while reading the target instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20435,
+        Level = LogLevel.Error,
+        Message = "Related instance read failed. Target: {TargetInstanceId}, Flow: {TargetFlow}")]
+    public static partial void RelatedInstanceReadFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid targetInstanceId,
+        string targetFlow);
 
     #endregion
 
