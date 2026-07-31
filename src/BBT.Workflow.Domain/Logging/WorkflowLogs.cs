@@ -2789,6 +2789,81 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Related Instance Access
+
+    /// <summary>
+    /// Logs when a related instance (parent or correlation) was read successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20430,
+        Level = LogLevel.Debug,
+        Message = "Related instance resolved. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, Domain: {TargetDomain}, Flow: {TargetFlow}")]
+    public static partial void RelatedInstanceResolved(
+        this ILogger logger,
+        Guid instanceId,
+        string direction,
+        Guid targetInstanceId,
+        string targetDomain,
+        string targetFlow);
+
+    /// <summary>
+    /// Logs when no related instance could be resolved (no parent, no matching correlation,
+    /// or the target instance is gone). This is a normal outcome, not an error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20431,
+        Level = LogLevel.Debug,
+        Message = "Related instance not found. Instance: {InstanceId}, Direction: {Direction}, Key: {Key}")]
+    public static partial void RelatedInstanceNotFound(
+        this ILogger logger,
+        Guid instanceId,
+        string direction,
+        string? key);
+
+    /// <summary>
+    /// Logs when resolving a related instance required a cross-domain read over HTTP.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20432,
+        Level = LogLevel.Debug,
+        Message = "Related instance cross-domain read. Instance: {InstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Count: {Count}")]
+    public static partial void RelatedInstanceCrossDomainRead(
+        this ILogger logger,
+        Guid instanceId,
+        string targetDomain,
+        string targetFlow,
+        int count);
+
+    /// <summary>
+    /// Logs when resolving a related instance failed due to an infrastructure problem;
+    /// the accessor throws after logging this.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20433,
+        Level = LogLevel.Warning,
+        Message = "Related instance resolution failed. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, Reason: {Reason}")]
+    public static partial void RelatedInstanceResolutionFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string direction,
+        Guid targetInstanceId,
+        string reason);
+
+    /// <summary>
+    /// Logs when the per-ScriptContext related-instance resolution cap was hit;
+    /// the accessor throws after logging this.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20434,
+        Level = LogLevel.Warning,
+        Message = "Related instance resolution limit exceeded. Instance: {InstanceId}, Limit: {Limit}")]
+    public static partial void RelatedInstanceResolutionLimitExceeded(
+        this ILogger logger,
+        Guid instanceId,
+        int limit);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>
