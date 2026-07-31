@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using BBT.Aether.Results;
-using BBT.Workflow.Domain;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -184,6 +182,12 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         };
     }
 
+    /// <summary>
+    /// Reads a string from instance metadata. Fails closed like <see cref="ReadGuid"/>: an unexpected
+    /// stored type yields null rather than a fabricated <c>ToString()</c> value, which would otherwise
+    /// pass the non-empty check in <see cref="BuildParentRef"/> and produce a reference to a domain or
+    /// flow that never existed.
+    /// </summary>
     private static string? ReadString(Instance instance, string key)
     {
         if (!instance.ExtraProperties.TryGetValue(key, out var raw) || raw == null)
@@ -193,7 +197,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         {
             string text => string.IsNullOrWhiteSpace(text) ? null : text,
             JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
-            _ => raw.ToString()
+            _ => null
         };
     }
 }

@@ -1,11 +1,9 @@
 using System;
-using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Aether.Results;
-using BBT.Workflow.Domain;
 using BBT.Workflow.Instances;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -153,6 +151,59 @@ public class RelatedInstanceAccessorParentTests
                 r.Flow == "loan-application" &&
                 r.FlowVersion == "2.1.0"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentIdIsEmptyGuid()
+    {
+        var instance = ChildWithParentMetadata(Guid.Empty);
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentIdIsNonStringJson()
+    {
+        // Exercises the `when element.ValueKind == JsonValueKind.String` guard in ReadGuid.
+        // Without the guard, TryGetGuid throws InvalidOperationException on a non-string element.
+        var instance = ChildWithParentMetadata(JsonSerializer.SerializeToElement(42));
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentFlowIsMissing()
+    {
+        // parent.id and parent.domain resolve, parent.flow does not — forces the
+        // `IsNullOrWhiteSpace(domain) || IsNullOrWhiteSpace(flow)` branch in BuildParentRef.
+        var instance = Instance.Create(ChildId, "kyc-flow", "1.0.0");
+        instance.SetMetaData(new ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.Id] = ParentId,
+            [DomainConsts.MetaDataKeys.Domain] = "lending"
+        });
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentDomainHasUnexpectedStoredType()
+    {
+        // ReadString must fail closed rather than fabricating a ToString() value, which would
+        // otherwise pass BuildParentRef's non-empty check and point at a domain that never existed.
+        var instance = Instance.Create(ChildId, "kyc-flow", "1.0.0");
+        instance.SetMetaData(new ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.Id] = ParentId,
+            [DomainConsts.MetaDataKeys.Domain] = new object(),
+            [DomainConsts.MetaDataKeys.Flow] = "loan-application"
+        });
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
     }
 
     [Fact]
