@@ -117,4 +117,75 @@ public class RelatedInstanceAccessorMemoAndLimitTests
 
         await reader.Received(2).ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task ForBranch_ShouldShareTheMemoBidirectionally()
+    {
+        // The existing ForBranch test resolves on the coordinator first, so a ForBranch that COPIED
+        // the dictionary would also pass. Resolving on the branch first and then on the coordinator
+        // only passes if the memo is genuinely shared.
+        var reader = ReaderReturning(ParentId);
+        var accessor = new RelatedInstanceAccessor(
+            ChildWithParent(), reader, Substitute.For<IInstanceCorrelationRepository>(),
+            new RelatedAccessOptions(), NullLogger.Instance);
+
+        var branch = accessor.ForBranch(ChildWithParent());
+        await branch.ParentAsync(CancellationToken.None);
+        await accessor.ParentAsync(CancellationToken.None);
+
+        await reader.Received(1).ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ClearMemo_ShouldAlsoResetTheCorrelationCache()
+    {
+        // The existing ClearMemo test only calls ParentAsync, which never touches the correlation
+        // cache — so the `_correlationCache.Items = null` half was untested.
+        var instanceId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        var instance = Instance.Create(instanceId, "loan-application", "2.1.0");
+
+        var correlationRepository = Substitute.For<IInstanceCorrelationRepository>();
+        correlationRepository.GetByParentAsync(instanceId, Arg.Any<CancellationToken>())
+            .Returns([
+                InstanceCorrelation.Create(
+                    Guid.NewGuid(), instanceId, "awaiting-sub", Guid.NewGuid(),
+                    "S", "compliance", "kyc-flow", "1.0.0")
+            ]);
+
+        var accessor = new RelatedInstanceAccessor(
+            instance, Substitute.For<IRelatedInstanceReader>(), correlationRepository,
+            new RelatedAccessOptions(), NullLogger.Instance);
+
+        await accessor.SubKeysAsync(CancellationToken.None);
+        accessor.ClearMemo();
+        await accessor.SubKeysAsync(CancellationToken.None);
+
+        await correlationRepository.Received(2).GetByParentAsync(instanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ForBranch_ShouldShareTheCorrelationCache_ForTheSameInstance()
+    {
+        var instanceId = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var instance = Instance.Create(instanceId, "loan-application", "2.1.0");
+
+        var correlationRepository = Substitute.For<IInstanceCorrelationRepository>();
+        correlationRepository.GetByParentAsync(instanceId, Arg.Any<CancellationToken>())
+            .Returns([
+                InstanceCorrelation.Create(
+                    Guid.NewGuid(), instanceId, "awaiting-sub", Guid.NewGuid(),
+                    "S", "compliance", "kyc-flow", "1.0.0")
+            ]);
+
+        var accessor = new RelatedInstanceAccessor(
+            instance, Substitute.For<IRelatedInstanceReader>(), correlationRepository,
+            new RelatedAccessOptions(), NullLogger.Instance);
+
+        await accessor.SubKeysAsync(CancellationToken.None);
+        var branch = accessor.ForBranch(Instance.Create(instanceId, "loan-application", "2.1.0"));
+        await branch.SubKeysAsync(CancellationToken.None);
+
+        // One load across coordinator and branch — the branch must not re-query the same parent.
+        await correlationRepository.Received(1).GetByParentAsync(instanceId, Arg.Any<CancellationToken>());
+    }
 }

@@ -24,9 +24,18 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<Guid, RelatedInstanceView> _memo;
     private readonly RelatedInstanceRef? _parentRef;
+    private readonly CorrelationCache _correlationCache;
 
-    private readonly SemaphoreSlim _correlationGate = new(1, 1);
-    private List<InstanceCorrelation>? _correlations;
+    /// <summary>
+    /// The lazily loaded correlation list plus its load gate, held in one object so parallel task
+    /// branches created by <see cref="ForBranch"/> can share a single load instead of each re-issuing
+    /// <c>GetByParentAsync</c> for the same parent instance.
+    /// </summary>
+    private sealed class CorrelationCache
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public List<InstanceCorrelation>? Items;
+    }
 
     /// <summary>Creates an accessor bound to one instance snapshot.</summary>
     public RelatedInstanceAccessor(
@@ -45,7 +54,8 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         IInstanceCorrelationRepository correlationRepository,
         RelatedAccessOptions options,
         ILogger logger,
-        ConcurrentDictionary<Guid, RelatedInstanceView> memo)
+        ConcurrentDictionary<Guid, RelatedInstanceView> memo,
+        CorrelationCache? correlationCache = null)
     {
         _instance = instance ?? throw new ArgumentNullException(nameof(instance));
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
@@ -54,6 +64,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _memo = memo;
         _parentRef = BuildParentRef(instance);
+        _correlationCache = correlationCache ?? new CorrelationCache();
     }
 
     /// <inheritdoc />
@@ -129,18 +140,30 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
     /// snapshot but shares this accessor's memo and reader, so a related instance already resolved by
     /// the coordinator is not read again. Safe because branches only read.
     /// </summary>
+    /// <remarks>
+    /// The correlation cache is shared too, but only when the branch snapshots the same instance —
+    /// which is what <c>ScriptContext.CreateParallelBranch</c> does. A branch bound to a different
+    /// instance gets its own cache, because its correlations differ.
+    /// </remarks>
     /// <param name="branchInstance">The branch's instance snapshot.</param>
-    public RelatedInstanceAccessor ForBranch(Instance branchInstance) =>
-        new(branchInstance, _reader, _correlationRepository, _options, _logger, _memo);
+    internal RelatedInstanceAccessor ForBranch(Instance branchInstance) =>
+        new(
+            branchInstance,
+            _reader,
+            _correlationRepository,
+            _options,
+            _logger,
+            _memo,
+            branchInstance.Id == _instance.Id ? _correlationCache : null);
 
     /// <summary>
-    /// Drops every memoized related instance. Called when the owning ScriptContext is disposed so the
-    /// resolved data does not outlive the transition.
+    /// Drops every memoized related instance and the cached correlation list. Called when the owning
+    /// ScriptContext is disposed so the resolved data does not outlive the transition.
     /// </summary>
-    public void ClearMemo()
+    internal void ClearMemo()
     {
         _memo.Clear();
-        _correlations = null;
+        _correlationCache.Items = null;
     }
 
     private async Task<RelatedInstanceView?> ResolveAsync(
@@ -242,20 +265,21 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
 
     private async Task<List<InstanceCorrelation>> GetCorrelationsAsync(CancellationToken cancellationToken)
     {
-        if (_correlations != null)
-            return _correlations;
+        if (_correlationCache.Items != null)
+            return _correlationCache.Items;
 
-        await _correlationGate.WaitAsync(cancellationToken);
+        await _correlationCache.Gate.WaitAsync(cancellationToken);
         try
         {
             // Deliberately not Instance.ChildCorrelations: the repository's default include filters
             // out completed correlations, and completed subflow output must stay readable.
-            _correlations ??= await _correlationRepository.GetByParentAsync(_instance.Id, cancellationToken);
-            return _correlations;
+            _correlationCache.Items ??=
+                await _correlationRepository.GetByParentAsync(_instance.Id, cancellationToken);
+            return _correlationCache.Items;
         }
         finally
         {
-            _correlationGate.Release();
+            _correlationCache.Gate.Release();
         }
     }
 
