@@ -68,7 +68,7 @@
 |---|---|
 | `src/BBT.Workflow.Domain/Scripting/Models.cs` | `ScriptContext.Related`, `Builder.SetRelated`, `Dispose`, `CreateParallelBranch` |
 | `src/BBT.Workflow.Domain/Scripting/Factory/Services/ScriptContextBuilder.cs` | Build the accessor |
-| `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` | 5 new `[LoggerMessage]` partials (20430–20434) |
+| `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` | 6 new `[LoggerMessage]` partials (20430–20435) |
 | `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs` | 2 internal route templates |
 | `src/BBT.Workflow.Infrastructure/Microsoft/Extensions/DependencyInjection/GatewayServiceCollectionExtensions.cs` | Register the three readers |
 | `orchestration/.../Controllers/Instances/InstanceController.cs` | 2 internal endpoints |
@@ -517,7 +517,7 @@ git commit -m "feat(scripting): add related instance access contracts and value 
 
 No test — `LoggerMessage` partials are compile-time generated and verified by the tasks that call them.
 
-- [ ] **Step 1: Append the five partials**
+- [ ] **Step 1: Append the six partials**
 
 Add to `WorkflowLogs.cs`, after the existing `EventId = 20425` method:
 
@@ -557,13 +557,15 @@ Add to `WorkflowLogs.cs`, after the existing `EventId = 20425` method:
 
     [LoggerMessage(
         EventId = 20433,
-        Level = LogLevel.Warning,
-        Message = "Related instance resolution failed. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, Reason: {Reason}")]
+        Level = LogLevel.Error,
+        Message = "Related instance resolution failed. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Reason: {Reason}")]
     public static partial void RelatedInstanceResolutionFailed(
         this ILogger logger,
         Guid instanceId,
         string direction,
         Guid targetInstanceId,
+        string targetDomain,
+        string targetFlow,
         string reason);
 
     [LoggerMessage(
@@ -574,19 +576,47 @@ Add to `WorkflowLogs.cs`, after the existing `EventId = 20425` method:
         this ILogger logger,
         Guid instanceId,
         int limit);
+
+    [LoggerMessage(
+        EventId = 20435,
+        Level = LogLevel.Error,
+        Message = "Related instance read failed. Target: {TargetInstanceId}, Flow: {TargetFlow}")]
+    public static partial void RelatedInstanceReadFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid targetInstanceId,
+        string targetFlow);
 ```
+
+Rationale for the two deviations from the neighbouring 20xxx block, both established by reviewing this
+file's own conventions:
+
+- **20433 is `Error`, not `Warning`.** The accessor logs it and then *throws*
+  `RelatedInstanceAccessException`. Every fails-and-propagates event in this file is `Error`
+  (`TaskExecutionFailed` 10071, `TaskInvocationFailed` 10076, `TransitionContinuationEnqueueFailed`
+  10123). The `Warning` cases (`InstanceSchemaFunctionCacheError` 20423, `ResourceLockAutoReleaseError`
+  10105) are all swallowed-and-degrade, which this is not. 20434 stays `Warning` because it matches
+  `MaxAutoHopsExceeded` (10045) — a cap was hit and the flow aborts, which this file treats as Warning.
+- **20433 carries `TargetDomain`/`TargetFlow`.** Failures here are disproportionately cross-domain HTTP
+  failures. Without them the failure log is *less* diagnosable than the success log for the same
+  operation (20430 already carries both), which is backwards. Every call site has the
+  `RelatedInstanceRef` in hand, so there is no cost to supplying them.
+- **20435 exists** so the Application-layer reader in Task 8 has a `WorkflowLogs` method that takes the
+  caught `Exception`, instead of the raw `logger.LogError(...)` the coding standard forbids. It is
+  separate from 20433 because the two fire at different layers: 20435 at the repository read (has a real
+  exception), 20433 at the accessor (has a failed `Result`, no exception).
 
 - [ ] **Step 2: Verify it compiles**
 
 Run: `dotnet build src/BBT.Workflow.Domain`
 
-Expected: `Build succeeded`. If you see `SYSLIB1006` (duplicate event id), another branch took 20430–20434 — pick the next free block and keep the five ids contiguous.
+Expected: `Build succeeded`. If you see `SYSLIB1006` (duplicate event id), another branch took 20430–20435 — pick the next free block and keep the six ids contiguous.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs
-git commit -m "feat(logging): add related instance access log messages (20430-20434)"
+git commit -m "feat(logging): add related instance access log messages (20430-20435)"
 ```
 
 ---
@@ -911,7 +941,8 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         if (!result.IsSuccess)
         {
             var reason = result.Error.Message ?? "unknown";
-            _logger.RelatedInstanceResolutionFailed(_instance.Id, direction, reference.InstanceId, reason);
+            _logger.RelatedInstanceResolutionFailed(
+                _instance.Id, direction, reference.InstanceId, reference.Domain, reference.Flow, reason);
             throw new RelatedInstanceAccessException(
                 $"Failed to read related instance {reference.InstanceId} ({direction}): {reason}");
         }
@@ -1448,7 +1479,12 @@ Replace the three `NotImplementedException` members with:
             {
                 var reason = result.Error.Message ?? "unknown";
                 _logger.RelatedInstanceResolutionFailed(
-                    _instance.Id, DirectionSub, pending[0].SubFlowInstanceId, reason);
+                    _instance.Id,
+                    DirectionSub,
+                    pending[0].SubFlowInstanceId,
+                    pending[0].SubFlowDomain,
+                    pending[0].SubFlowName,
+                    reason);
                 throw new RelatedInstanceAccessException(
                     $"Failed to read {pending.Count} related instance(s) of {_instance.Id}: {reason}");
             }
@@ -2233,11 +2269,8 @@ public sealed class RelatedInstanceQueryAppService(
         }
         catch (Exception exception)
         {
-            logger.LogError(
-                exception,
-                "Related instance read failed for {InstanceId} in flow {Flow}",
-                reference.InstanceId,
-                reference.Flow);
+            // WorkflowLogs extension, not raw logger.LogError — the coding standard forbids the latter.
+            logger.RelatedInstanceReadFailed(exception, reference.InstanceId, reference.Flow);
 
             return Result<RelatedInstanceSnapshot?>.Fail(Error.Failure(
                 WorkflowErrorCodes.InstanceNotFound,

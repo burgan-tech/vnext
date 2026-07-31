@@ -321,8 +321,14 @@ id family, unique ids continuing the existing sequence:
 | `RelatedInstanceResolved` | Debug | instanceId, direction, targetInstanceId, domain, flow |
 | `RelatedInstanceNotFound` | Debug | instanceId, direction, key |
 | `RelatedInstanceCrossDomainRead` | Debug | instanceId, targetDomain, targetFlow, count |
-| `RelatedInstanceResolutionFailed` | Warning | instanceId, direction, targetInstanceId, reason |
+| `RelatedInstanceResolutionFailed` | Error | instanceId, direction, targetInstanceId, targetDomain, targetFlow, reason |
 | `RelatedInstanceResolutionLimitExceeded` | Warning | instanceId, limit |
+| `RelatedInstanceReadFailed` | Error | exception, targetInstanceId, targetFlow |
+
+`RelatedInstanceResolutionFailed` is `Error` rather than `Warning` because the accessor throws
+immediately after logging it; this file reserves `Warning` for swallowed, degrade-gracefully failures.
+`RelatedInstanceReadFailed` gives the Application-layer reader a `WorkflowLogs` method that accepts the
+caught exception, so no code needs the forbidden raw `logger.LogError`.
 
 No raw `logger.Log*` calls.
 
