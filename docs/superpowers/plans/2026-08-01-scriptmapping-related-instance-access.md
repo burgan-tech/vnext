@@ -68,7 +68,7 @@
 |---|---|
 | `src/BBT.Workflow.Domain/Scripting/Models.cs` | `ScriptContext.Related`, `Builder.SetRelated`, `Dispose`, `CreateParallelBranch` |
 | `src/BBT.Workflow.Domain/Scripting/Factory/Services/ScriptContextBuilder.cs` | Build the accessor |
-| `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` | 6 new `[LoggerMessage]` partials (20430–20435) |
+| `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` | 7 new `[LoggerMessage]` partials (20430–20436) |
 | `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs` | 2 internal route templates |
 | `src/BBT.Workflow.Infrastructure/Microsoft/Extensions/DependencyInjection/GatewayServiceCollectionExtensions.cs` | Register the three readers |
 | `orchestration/.../Controllers/Instances/InstanceController.cs` | 2 internal endpoints |
@@ -517,7 +517,7 @@ git commit -m "feat(scripting): add related instance access contracts and value 
 
 No test — `LoggerMessage` partials are compile-time generated and verified by the tasks that call them.
 
-- [ ] **Step 1: Append the six partials**
+- [ ] **Step 1: Append the seven partials**
 
 Add to `WorkflowLogs.cs`, after the existing `EventId = 20425` method:
 
@@ -586,6 +586,17 @@ Add to `WorkflowLogs.cs`, after the existing `EventId = 20425` method:
         Exception exception,
         Guid targetInstanceId,
         string targetFlow);
+
+    [LoggerMessage(
+        EventId = 20436,
+        Level = LogLevel.Error,
+        Message = "Related instance batch resolution failed. Instance: {InstanceId}, Count: {Count}, TargetDomains: {TargetDomains}, Reason: {Reason}")]
+    public static partial void RelatedInstanceBatchResolutionFailed(
+        this ILogger logger,
+        Guid instanceId,
+        int count,
+        string targetDomains,
+        string reason);
 ```
 
 Rationale for the two deviations from the neighbouring 20xxx block, both established by reviewing this
@@ -610,13 +621,13 @@ file's own conventions:
 
 Run: `dotnet build src/BBT.Workflow.Domain`
 
-Expected: `Build succeeded`. If you see `SYSLIB1006` (duplicate event id), another branch took 20430–20435 — pick the next free block and keep the six ids contiguous.
+Expected: `Build succeeded`. If you see `SYSLIB1006` (duplicate event id), another branch took 20430–20436 — pick the next free block and keep the seven ids contiguous.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs
-git commit -m "feat(logging): add related instance access log messages (20430-20435)"
+git commit -m "feat(logging): add related instance access log messages (20430-20436)"
 ```
 
 ---
@@ -1537,15 +1548,15 @@ Replace the three `NotImplementedException` members with:
             if (!result.IsSuccess)
             {
                 var reason = result.Error.Message ?? "unknown";
-                _logger.RelatedInstanceResolutionFailed(
-                    _instance.Id,
-                    DirectionSub,
-                    pending[0].SubFlowInstanceId,
-                    pending[0].SubFlowDomain,
-                    pending[0].SubFlowName,
-                    reason);
+                // Batch-shaped log: a batch can span several domains, so naming any single
+                // correlation's domain would point an operator at an innocent target.
+                var domains = string.Join(
+                    ", ",
+                    pending.Select(correlation => correlation.SubFlowDomain).Distinct(StringComparer.Ordinal));
+                _logger.RelatedInstanceBatchResolutionFailed(_instance.Id, pending.Count, domains, reason);
                 throw new RelatedInstanceAccessException(
-                    $"Failed to read {pending.Count} related instance(s) of {_instance.Id}: {reason}");
+                    $"Failed to read {pending.Count} related instance(s) of {_instance.Id} " +
+                    $"in domain(s) {domains}: {reason}");
             }
 
             var byId = result.Value!.ToDictionary(snapshot => snapshot.InstanceId);
@@ -1608,6 +1619,7 @@ Change `EnsureUnderLimit` to accept a count, and update the existing single-read
         _logger.RelatedInstanceResolutionLimitExceeded(_instance.Id, _options.MaxResolutionsPerContext);
         throw new RelatedInstanceAccessException(
             $"Related instance resolution limit of {_options.MaxResolutionsPerContext} exceeded for instance {_instance.Id}. " +
+            $"Attempted to add {additional} more. " +
             "Reduce the number of distinct related instances a single script resolves, or raise " +
             $"{RelatedAccessOptions.SectionName}:MaxResolutionsPerContext.");
     }
@@ -1619,7 +1631,7 @@ Add `using System.Linq;` if the file does not already have it.
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~RelatedInstanceAccessor"`
 
-Expected: PASS — 14 parent tests + 12 sub tests.
+Expected: PASS — 14 parent tests + 15 sub tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1800,7 +1812,7 @@ Add both public members after `SubsAsync`:
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~RelatedInstanceAccessor"`
 
-Expected: PASS — 14 + 12 + 4 tests.
+Expected: PASS — 14 + 15 + 4 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -3178,7 +3190,7 @@ Run:
 dotnet test vnext.sln --filter "FullyQualifiedName~Related"
 ```
 
-Expected: PASS — 14 + 12 + 4 + 5 + 4 + 5 + 5 tests, zero failures.
+Expected: PASS — 14 + 15 + 4 + 5 + 4 + 5 + 5 tests, zero failures.
 
 - [ ] **Step 9: Commit**
 
@@ -3392,7 +3404,7 @@ Expected: `Build succeeded`, zero warnings introduced by this branch.
 
 Run: `dotnet test vnext.sln --filter "FullyQualifiedName~Related"`
 
-Expected: 49 tests, all passing.
+Expected: 52 tests, all passing.
 
 - [ ] **Step 3: No regression against the recorded baseline**
 

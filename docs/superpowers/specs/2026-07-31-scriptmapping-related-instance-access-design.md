@@ -222,6 +222,14 @@ _runtimeInfoProvider.IsDomainMatch(reference.Domain)
 `ReadManyAsync` groups references by domain, dispatches the same-domain group locally in one query and
 each foreign domain group as a single batch call.
 
+**Partial failure is all-or-nothing, deliberately.** If any domain group fails, `ReadManyAsync` returns
+a failed `Result` for the whole batch — it does not return the snapshots that succeeded. A partial set
+would hand the script four children when there are five, with no way to tell the difference, so a
+predicate like `uploads.Count(u => u.CorrelationCompleted == true) >= 3` could silently produce the
+wrong answer. That is exactly "treating a fault as absence", which §5.5 forbids: an unreachable domain
+is a fault, so the whole call faults. Instances that simply do not exist are still omitted silently —
+that is absence, and it is data.
+
 **`LocalRelatedInstanceReader` (Application).** Wraps `currentSchema.Use(flow)` and reads the instance
 via `IInstanceRepository` with `AsNoTracking` and `DataList` only. It deliberately does **not** go
 through `InstanceQueryAppService.GetInstanceDataAsync`, therefore:
