@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Shared.Merging;
 using Microsoft.Extensions.Logging;
 
@@ -200,6 +201,11 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 RouteValues = null;
                 CurrentTransition = null;
                 Incident = null;
+
+                if (Related is RelatedInstanceAccessor accessor)
+                    accessor.ClearMemo();
+
+                Related = NullRelatedInstanceAccessor.Instance;
             }
             catch (InvalidOperationException ex)
             {
@@ -358,6 +364,20 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// Null when no instance is loaded in the script context.
     /// </value>
     public ScriptIncidentInfo? Incident { get; private set; }
+
+    /// <summary>
+    /// Access to instances related to <see cref="Instance"/> — one hop up (the parent that started this
+    /// instance as a SubFlow/SubProcess) or one hop down (this instance's own correlations).
+    /// Nothing is pre-fetched; the first call that needs data performs the read, and results are
+    /// memoized until this context is disposed.
+    /// </summary>
+    /// <remarks>
+    /// Reads are unfiltered by design (no query-role check, no x-roles field filtering, no extensions).
+    /// Copying a related instance's field into this instance's data therefore makes that field reachable
+    /// by any client entitled to read this instance — x-roles protection does not follow the copy.
+    /// Never null: defaults to <see cref="NullRelatedInstanceAccessor"/> when no reader is wired.
+    /// </remarks>
+    public IRelatedInstanceAccessor Related { get; private set; } = NullRelatedInstanceAccessor.Instance;
 
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
@@ -643,6 +663,11 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         if (Mutations.HasStageChange)
             branch.Mutations.SetStage(Mutations.Stage);
 
+        if (Related is RelatedInstanceAccessor branchSource && branch.Instance != null)
+            branch.Related = branchSource.ForBranch(branch.Instance);
+        else
+            branch.Related = Related;
+
         return branch;
     }
 
@@ -789,6 +814,18 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 ActiveIncident = instance.Incidents.LastOrDefault(i => !i.IsResolved),
                 TotalIncidentCount = instance.Incidents.Count
             };
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the related-instance accessor. When omitted, the context uses
+        /// <see cref="NullRelatedInstanceAccessor"/> and reports no parent and no correlations.
+        /// </summary>
+        public Builder SetRelated(IRelatedInstanceAccessor? related)
+        {
+            if (related != null)
+                _context.Related = related;
+
             return this;
         }
 
