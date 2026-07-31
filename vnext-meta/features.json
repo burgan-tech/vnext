@@ -24,6 +24,14 @@
         "POST {domain}/workflows/{workflow}/instances/{instance}/longpoll/ack"
       ]
     },
+    "stateCorrelationHistory": {
+      "since": "0.0.77",
+      "status": "stable",
+      "description": "The State (long-poll) function returns the full child-correlation set, not just the open ones. The existing activeCorrelations field keeps its active-only semantics, and a new correlations field carries every correlation — active and completed — ordered by createdAt ascending. Each entry adds isCompleted, completedAt, terminalOutcome (completed/faulted/canceled), currentState and stateChangedAt, so a client workflow manager can reconstruct which sub items ran and how each one ended without extra queries. Both lists merge the active subflow's corresponding list when the parent is inside a subflow. The completed rows come from a dedicated read because the instance aggregate is loaded with an active-only filtered include; correlation-set changes (a sub item starting, terminating, being reverted, or advancing its own state) now participate in the state fingerprint ETag, so a long-polling client is no longer served 304 while the set changes underneath it.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state"
+      ]
+    },
     "stateNotification": {
       "since": "0.0.63",
       "status": "stable",

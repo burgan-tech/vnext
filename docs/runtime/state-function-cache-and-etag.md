@@ -44,7 +44,11 @@ aggregate materialization:
 
 ```
 SELECT Id, Key, EffectiveState, Status, FlowVersion,
-       EXISTS(active SubFlow correlation) AS HasActiveSubFlow
+       EXISTS(active SubFlow correlation)      AS HasActiveSubFlow,
+       COUNT(correlations)                     AS CorrelationCount,
+       COUNT(correlations WHERE IsCompleted)   AS CompletedCorrelationCount,
+       MAX(correlations.CompletedAt)           AS LastCorrelationCompletedAt,
+       MAX(correlations.SubFlowStateChangedAt) AS LastSubFlowStateChangedAt
 ```
 
 - Identifier resolution mirrors `FindByIdentifierAsReadOnlyAsync`: id first, then the most
@@ -54,13 +58,31 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   AND SubFlowType = 'S'`) — a single B-tree probe, not a correlation load.
 - `EffectiveState` (not `CurrentState`) is used because subflow state changes are propagated
   upward into the parent's `EffectiveState` column.
+- The four **correlation aggregates** exist because the response body carries the full
+  `correlations` list (active *and* completed). They run over the unfiltered correlation set and
+  are served by `IX_InstancesCorrelations_ByParent` (`ParentInstanceId`, no filter) — the two
+  partial indexes cannot serve them, since both exclude exactly the completed rows involved.
+  Each mutation of the set moves at least one aggregate: a sub item starting moves
+  `CorrelationCount`, terminating (or a revert) moves `CompletedCorrelationCount`, a
+  revert-then-recomplete that restores both counts moves `LastCorrelationCompletedAt`, and a sub
+  item advancing its own state moves `LastSubFlowStateChangedAt`.
+
+> **Invariant — the two build paths must agree.** The fast path fingerprints via this projection;
+> the full-build path uses `InstanceStateFingerprint.FromInstance(instance, allCorrelations)`.
+> The aggregate's own `ChildCorrelations` is loaded with an active-only filtered include, so it
+> must never feed the aggregates — hence `allCorrelations` is a required argument rather than
+> read off the instance. If the two disagree on one member, the full-path ETag never matches the
+> one the fast path validates and every poll rebuilds the response. Guarded by
+> `InstanceStateFingerprintQueryTests.ProjectionAndFromInstance_ProduceIdenticalFingerprints`.
 
 ### ETag
 
 Computed by `IStateFunctionCache.ComputeEtag` — a deterministic SHA-256 hash (32 hex chars):
 
 ```
-etag = h(instanceId | effectiveState | status | flowVersion | callerHash)
+etag = h(instanceId | effectiveState | status | flowVersion | callerHash
+         | correlationCount | completedCorrelationCount
+         | lastCorrelationCompletedAt | lastSubFlowStateChangedAt)
 ```
 
 - **Deterministic across pods**: any instance of the service computes the same ETag for the
@@ -73,6 +95,10 @@ etag = h(instanceId | effectiveState | status | flowVersion | callerHash)
   `h(... | displayedState | displayedStatus)`. The parent row alone cannot see
   subflow-internal Busy/Active flips (`PropagateEffectiveStateToParent` updates only
   `EffectiveState`, never `Status`, and is asynchronous via the Inbox worker).
+- **Correlation members are in the hash** because the body exposes the full `correlations` list:
+  a sub item starting, terminating or advancing its state changes the body without touching the
+  instance's own state or status, and a long-polling client would otherwise keep getting 304 and
+  never observe it.
 - The ETag intentionally does **not** track instance-data-only changes: the state function
   signals state/status transitions, not data versions. `X-Entity-ETag` served from cache may
   lag data-only updates until the next state/status change (accepted by design — the data

@@ -224,6 +224,12 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ActiveBlockingSubFlow")
                 .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
 
+            // Unfiltered counterpart for the reads that must see completed rows too: GetByParentAsync
+            // (state-function correlation list, hierarchy tree, monitor) and the correlation aggregates
+            // in ProjectStateFingerprint. Neither partial index above can serve those — both exclude
+            // exactly the completed rows these reads are after.
+            b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ByParent");
+
             // SubFlowInstanceId is 1-1 with the started SubFlow instance (subflow start is
             // unique per parent state). UNIQUE both enforces this invariant and gives the
             // hot SubFlow-completion lookup (FindBySubInstanceIdAsync) a direct B-tree probe.

@@ -44,6 +44,16 @@ public sealed class GetInstanceStateOutput
     public List<ActiveCorrelationHref> ActiveCorrelations { get; set; } = [];
 
     /// <summary>
+    /// Full child correlation set — active and completed — ordered by creation time ascending.
+    /// Clients that need the sub item history (which subflows ran and how they terminated) read this
+    /// list and filter on <see cref="ActiveCorrelationHref.IsCompleted"/>;
+    /// <see cref="ActiveCorrelations"/> keeps its active-only semantics.
+    /// Read from a dedicated query, so under concurrent completion its active subset can be a moment
+    /// fresher than <see cref="ActiveCorrelations"/>.
+    /// </summary>
+    public List<ActiveCorrelationHref> Correlations { get; set; } = [];
+
+    /// <summary>
     /// Available transition items with href links
     /// </summary>
     public List<TransitionItem> Transitions { get; set; } = [];

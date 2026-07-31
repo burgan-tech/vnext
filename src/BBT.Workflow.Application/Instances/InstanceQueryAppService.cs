@@ -336,6 +336,62 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
+    /// Data-function href for a correlation's sub item, carrying the caller's extensions when present.
+    /// </summary>
+    private string BuildCorrelationDataHref(
+        string subFlowDomain, string subFlowName, Guid subFlowInstanceId, string[] allExtensions) =>
+        allExtensions.Length > 0
+            ? urlTemplateBuilder.BuildDataWithExtensionsUrl(
+                subFlowDomain, subFlowName, subFlowInstanceId.ToString(), allExtensions)
+            : urlTemplateBuilder.BuildDataUrl(
+                subFlowDomain, subFlowName, subFlowInstanceId.ToString());
+
+    /// <summary>
+    /// Maps an active-correlation projection onto its response entry — the <c>activeCorrelations</c>
+    /// list. Terminal and state-tracking details are absent from the projection and stay unset; they
+    /// are meaningless for an active correlation anyway.
+    /// </summary>
+    private ActiveCorrelationHref BuildCorrelationHref(InstanceCorrelationInfo correlation, string[] allExtensions) =>
+        new()
+        {
+            CorrelationId = correlation.CorrelationId,
+            ParentState = correlation.ParentState,
+            SubFlowInstanceId = correlation.SubFlowInstanceId,
+            SubFlowType = correlation.SubFlowType,
+            SubFlowDomain = correlation.SubFlowDomain,
+            SubFlowName = correlation.SubFlowName,
+            SubFlowVersion = correlation.SubFlowVersion,
+            IsCompleted = correlation.IsCompleted,
+            Href = BuildCorrelationDataHref(
+                correlation.SubFlowDomain, correlation.SubFlowName, correlation.SubFlowInstanceId, allExtensions)
+        };
+
+    /// <summary>
+    /// Maps a correlation entity onto its response entry — the full <c>correlations</c> list. Carries the
+    /// terminal details (<c>completedAt</c>, <c>terminalOutcome</c>) and the tracked sub-item state that
+    /// let a client reconstruct which sub items ran and how each one ended.
+    /// </summary>
+    private ActiveCorrelationHref BuildCorrelationHref(InstanceCorrelation correlation, string[] allExtensions) =>
+        new()
+        {
+            CorrelationId = correlation.Id,
+            ParentState = correlation.ParentState,
+            SubFlowInstanceId = correlation.SubFlowInstanceId,
+            SubFlowType = correlation.SubFlowType,
+            SubFlowDomain = correlation.SubFlowDomain,
+            SubFlowName = correlation.SubFlowName,
+            SubFlowVersion = correlation.SubFlowVersion,
+            IsCompleted = correlation.IsCompleted,
+            CompletedAt = correlation.CompletedAt,
+            TerminalOutcome = correlation.TerminalOutcome,
+            CreatedAt = correlation.CreatedAt,
+            CurrentState = correlation.SubFlowCurrentState,
+            StateChangedAt = correlation.SubFlowStateChangedAt,
+            Href = BuildCorrelationDataHref(
+                correlation.SubFlowDomain, correlation.SubFlowName, correlation.SubFlowInstanceId, allExtensions)
+        };
+
+    /// <summary>
     /// Gets available transitions and state information from a remote SubFlow instance.
     /// Includes view extensions and active correlations from the SubFlow.
     /// </summary>
@@ -398,6 +454,7 @@ public sealed class InstanceQueryAppService(
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
                     SubFlowActiveCorrelations: subFlowValue.ActiveCorrelations,
+                    SubFlowCorrelations: subFlowValue.Correlations,
                     SubFlowTransitionItems: subFlowValue.Transitions,
                     // Bubble the (possibly deeper) subflow's long-poll termination signal up the chain.
                     Interaction: subFlowValue.Interaction);
@@ -864,7 +921,18 @@ public sealed class InstanceQueryAppService(
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
-                    var buildResult = await BuildInstanceStateOutputAsync(data.instance, data.workflow, input, cancellationToken);
+                    // Full correlation set (active + completed), ordered by creation time. The aggregate's
+                    // own ChildCorrelations collection is loaded with an active-only filtered include, so
+                    // the completed rows the response exposes require this dedicated read. Ordering is
+                    // applied here rather than in the shared repository method, whose ParentState ordering
+                    // the hierarchy and monitor consumers already depend on.
+                    var allCorrelations = (await instanceCorrelationRepository
+                            .GetByParentAsync(data.instance.Id, cancellationToken))
+                        .OrderBy(c => c.CreatedAt)
+                        .ToList();
+
+                    var buildResult = await BuildInstanceStateOutputAsync(
+                        data.instance, data.workflow, input, allCorrelations, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
 
@@ -872,10 +940,12 @@ public sealed class InstanceQueryAppService(
                     var entityEtag = data.instance.LatestData?.ETag ?? string.Empty;
                     output.EntityEtag = entityEtag;
 
-                    // Same fingerprint-ETag the fast path computes from the projection query.
+                    // Same fingerprint-ETag the fast path computes from the projection query. The
+                    // correlation members must come from allCorrelations, not from the aggregate, so both
+                    // paths hash the same set — see InstanceStateFingerprint.FromInstance.
                     // Active-subflow responses fold the live displayed state/status into the hash:
                     // the parent row alone cannot see subflow-internal Busy/Active flips.
-                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance);
+                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance, allCorrelations);
                     var etag = data.instance.HasActiveSubFlow
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
@@ -957,10 +1027,18 @@ public sealed class InstanceQueryAppService(
     /// Builds the complete instance state output including transitions, correlations, and view information.
     /// When there's an active SubFlow, includes the SubFlow's view extensions in data href and merges active correlations.
     /// </summary>
+    /// <param name="instance">The loaded instance aggregate (child correlations active-only).</param>
+    /// <param name="currentWorkflow">The workflow definition bound to the instance.</param>
+    /// <param name="input">The state request.</param>
+    /// <param name="allCorrelations">Full child correlation set (active + completed), CreatedAt ascending.
+    /// Feeds the <c>correlations</c> response list only — the active-subflow detection below deliberately
+    /// keeps using the aggregate, whose active set drives Busy/settlement semantics.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
+        IReadOnlyCollection<InstanceCorrelation> allCorrelations,
         CancellationToken cancellationToken)
     {
         // Build instance transition information using shared logic (no DB call - uses instance.ActiveCorrelations)
@@ -1184,26 +1262,21 @@ public sealed class InstanceQueryAppService(
         {
             Href = urlTemplateBuilder.BuildMasterUrl(input.Domain, input.Workflow, instance.Id.ToString())
         };
-        var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations.Select(correlation =>
-            new ActiveCorrelationHref
-            {
-                CorrelationId = correlation.CorrelationId,
-                ParentState = correlation.ParentState,
-                SubFlowInstanceId = correlation.SubFlowInstanceId,
-                SubFlowType = correlation.SubFlowType,
-                SubFlowDomain = correlation.SubFlowDomain,
-                SubFlowName = correlation.SubFlowName,
-                SubFlowVersion = correlation.SubFlowVersion,
-                IsCompleted = correlation.IsCompleted,
-                Href = allExtensions.Length > 0
-                    ? urlTemplateBuilder.BuildDataWithExtensionsUrl(correlation.SubFlowDomain, correlation.SubFlowName,
-                        correlation.SubFlowInstanceId.ToString(), allExtensions)
-                    : urlTemplateBuilder.BuildDataUrl(correlation.SubFlowDomain, correlation.SubFlowName,
-                        correlation.SubFlowInstanceId.ToString())
-            }).ToList();
+        var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations
+            .Select(correlation => BuildCorrelationHref(correlation, allExtensions))
+            .ToList();
         var allActiveCorrelations = subFlowStateInfo.SubFlowActiveCorrelations != null
             ? mainFlowCorrelationHrefs.Concat(subFlowStateInfo.SubFlowActiveCorrelations).ToList()
             : mainFlowCorrelationHrefs;
+
+        // Full set (active + completed) for clients that need the sub item history. Merged with the
+        // subflow's own full set exactly as the active list is, so a nested chain stays consistent.
+        var fullCorrelationHrefs = allCorrelations
+            .Select(correlation => BuildCorrelationHref(correlation, allExtensions))
+            .ToList();
+        var allCorrelationHrefs = subFlowStateInfo.SubFlowCorrelations != null
+            ? fullCorrelationHrefs.Concat(subFlowStateInfo.SubFlowCorrelations).ToList()
+            : fullCorrelationHrefs;
 
         // Role-aware state alias: when the displayed state is the main-flow current state and that
         // state defines aliases, return the role-resolved alias (localized label, else name) instead
@@ -1257,6 +1330,7 @@ public sealed class InstanceQueryAppService(
                 : subFlowStateInfo.StateType!,
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
+            Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
             Interaction = interaction
         });
@@ -2440,6 +2514,7 @@ public sealed class InstanceQueryAppService(
     /// <param name="SubFlowData">Data href from SubFlow (contains extensions info) - null for main flow</param>
     /// <param name="SubFlowView">View href from SubFlow - null for main flow</param>
     /// <param name="SubFlowActiveCorrelations">Active correlations from SubFlow - empty for main flow</param>
+    /// <param name="SubFlowCorrelations">Full correlation set (active + completed) from SubFlow - empty for main flow</param>
     /// <param name="SubFlowTransitionItems">Transition items from SubFlow (includes HasView) - null for main flow</param>
     private sealed record SubFlowStateInfo(
         List<string> AvailableTransitions,
@@ -2449,6 +2524,7 @@ public sealed class InstanceQueryAppService(
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
+        List<ActiveCorrelationHref>? SubFlowCorrelations = null,
         List<TransitionItem>? SubFlowTransitionItems = null,
         InstanceInteractionOutput? Interaction = null);
 

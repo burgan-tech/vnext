@@ -27,11 +27,27 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 
 | Endpoint family | Behavior |
 | --- | --- |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
 | `POST /{domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}` | Runs a transition sync or async. |
+
+### State response: correlation lists
+
+The state response exposes child correlations through two lists, and clients must pick the one
+matching their intent:
+
+| Field | Contents |
+| --- | --- |
+| `activeCorrelations` | Open correlations only. Stable, long-standing semantics — safe for "is a sub item still running". |
+| `correlations` | Full set, active **and** completed, ordered by `createdAt` ascending. Each entry carries `isCompleted`, `completedAt`, `terminalOutcome` (`completed` / `faulted` / `canceled`), `currentState`, `stateChangedAt`. Use this to reconstruct which sub items ran and how each ended. |
+
+Both merge the active subflow's own corresponding list when the parent is inside a subflow, so a
+nested chain stays consistent. `correlations` is read through a dedicated query, so under
+concurrent completion its active subset can be a moment fresher than `activeCorrelations`.
+Changes to the correlation set participate in the state ETag — see
+[state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
 ## Sync and Async Semantics
 

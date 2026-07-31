@@ -373,6 +373,13 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <remarks>
+    /// The correlation members deliberately run over the unfiltered <c>ChildCorrelations</c> set: the
+    /// state response carries the full correlation list, so completed rows must take part in cache
+    /// validation. They mirror <see cref="InstanceStateFingerprint.FromInstance"/> term for term —
+    /// the full-build path must produce a byte-identical fingerprint or the cache invalidates on every
+    /// poll. Served by IX_InstancesCorrelations_ByParent (unfiltered, on ParentInstanceId).
+    /// </remarks>
     private static IQueryable<InstanceStateFingerprint> ProjectStateFingerprint(IQueryable<Instance> query) =>
         query.Select(i => new InstanceStateFingerprint(
             i.Id,
@@ -380,7 +387,11 @@ public sealed class EfCoreInstanceRepository(
             i.EffectiveState,
             i.Status,
             i.FlowVersion,
-            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
+            i.ChildCorrelations.Count,
+            i.ChildCorrelations.Count(c => c.IsCompleted),
+            i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
+            i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()));
 
     /// <inheritdoc />
     public async Task<InstanceDataFingerprint?> GetDataFingerprintAsync(

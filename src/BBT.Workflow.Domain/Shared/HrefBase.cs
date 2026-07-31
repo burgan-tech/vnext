@@ -96,7 +96,9 @@ public sealed class ViewHref : HrefBase
 }
 
 /// <summary>
-/// Active correlation with href link and additional properties
+/// Child correlation with href link and additional properties. Used for both the active-only
+/// <c>activeCorrelations</c> list and the full <c>correlations</c> list (active + completed);
+/// <see cref="IsCompleted"/> distinguishes the two within the full list.
 /// </summary>
 public sealed class ActiveCorrelationHref : HrefBase
 {
@@ -141,12 +143,35 @@ public sealed class ActiveCorrelationHref : HrefBase
     public bool IsCompleted { get; set; }
 
     /// <summary>
-    /// Status of the correlation (optional)
+    /// When the correlation was completed; null while it is still active.
+    /// </summary>
+    public DateTime? CompletedAt { get; set; }
+
+    /// <summary>
+    /// How the sub item terminated (Completed / Faulted / Canceled). Null while the correlation is
+    /// active, and also null for legacy rows completed before the outcome was recorded.
+    /// </summary>
+    public SubItemTerminalOutcome? TerminalOutcome { get; set; }
+
+    /// <summary>
+    /// When the correlation was created — the stable ordering key for the full correlation list.
+    /// </summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Reserved for the sub item's instance status. Not populated today — use the sub item's own
+    /// state endpoint (see <see cref="HrefBase.Href"/>) when the live status is required.
     /// </summary>
     public InstanceStatus? Status { get; set; }
 
     /// <summary>
-    /// Current state of the correlation (optional)
+    /// Last known state of the sub item, tracked on the parent correlation so the parent does not
+    /// need a cross-domain query. Null until the sub item reports its first state change.
     /// </summary>
     public string? CurrentState { get; set; }
+
+    /// <summary>
+    /// When <see cref="CurrentState"/> was last updated.
+    /// </summary>
+    public DateTime? StateChangedAt { get; set; }
 }
