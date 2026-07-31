@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
@@ -18,6 +19,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -34,6 +36,7 @@ public sealed class SubflowCompletionServiceTests
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
     private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
+    private readonly Mock<ISubItemTerminalGuard> _terminalGuard = new();
     private readonly Mock<ITransitionLockScope> _lockScope = new();
     private readonly Mock<ILogger<SubflowCompletionService>> _logger = new();
 
@@ -52,6 +55,17 @@ public sealed class SubflowCompletionServiceTests
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(_lockScope.Object);
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_lockScope.Object);
+        // Default: the pre-lock probe finds nothing terminal, so every test exercises the
+        // authoritative locked path unless it explicitly overrides this.
+        _terminalGuard
+            .Setup(x => x.ProbeAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(),
+                It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Proceed);
         _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
     }
 
@@ -67,8 +81,162 @@ public sealed class SubflowCompletionServiceTests
         exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
             $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
+            It.IsAny<LockAcquireWait>(),
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenPreLockProbeReportsSettled_ShouldNoOpWithoutTakingLock()
+    {
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        _terminalGuard
+            .Setup(x => x.ProbeAsync(
+                input.InstanceId, input.SubInstanceId,
+                SubItemTerminalOutcome.Completed, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled);
+
+        await CreateService().CompletionAsync(input);
+
+        // The whole point of the pre-lock probe: a duplicate delivery must never contend on the
+        // distributed lock, and must never be reported as a transient failure.
+        _lockScopeFactory.VerifyNoOtherCalls();
+        _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The tests above stub ISubItemTerminalGuard, so they only prove how the service reacts to a
+    // probe result. The tests below wire the REAL guard against a correlation snapshot, which is
+    // what actually decides whether a durable delivery may be acknowledged without the lock.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task CompletionAsync_BlockingSubFlowDuplicate_ShouldNotBeAcknowledgedByProbe()
+    {
+        // Phase 1 committed (correlation terminal) but the parent resume runs in a later phase and
+        // reverts the correlation if it fails. The probe must therefore refuse to settle this, and
+        // the delivery must reach the authoritative locked path instead.
+        var parent = CreateParentInstance(out var subInstanceId);
+        parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed, DateTime.UtcNow);
+        SetupCompletedCorrelationPath(parent);
+        var service = CreateServiceWithRealGuard(
+            SnapshotOf(parent, subInstanceId, SubFlowType.SubFlow, SubItemTerminalOutcome.Completed));
+
+        await service.CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _instanceRepository.Verify(x => x.FindWithAllCorrelationsAndDataAsync(
+            parent.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_BlockingSubFlowDuplicate_WhenOriginalHoldsLock_ShouldStayUnacknowledged()
+    {
+        // The original is still inside its transaction, so its write is invisible to the probe and
+        // the lock is held. The duplicate must be pushed back for broker re-delivery — never ACKed.
+        var parent = CreateParentInstance(out var subInstanceId);
+        parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed, DateTime.UtcNow);
+        SetupCompletedCorrelationPath(parent);
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+        var service = CreateServiceWithRealGuard(
+            SnapshotOf(parent, subInstanceId, SubFlowType.SubFlow, SubItemTerminalOutcome.Completed));
+
+        var exception = await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
+            () => service.CompletionAsync(CreateInput(parent.Id, subInstanceId)));
+
+        exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_SubProcessDuplicate_ShouldBeSettledWithoutTakingLock()
+    {
+        // A SubProcess commits its correlation and returns — there is no second phase to roll back,
+        // so a persisted terminal outcome really is final and the lock can be skipped entirely.
+        var parent = CreateParentInstance(out var subInstanceId);
+        parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed, DateTime.UtcNow);
+        var service = CreateServiceWithRealGuard(
+            SnapshotOf(parent, subInstanceId, SubFlowType.SubProcess, SubItemTerminalOutcome.Completed));
+
+        await service.CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        _lockScopeFactory.VerifyNoOtherCalls();
+        _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    private SubflowCompletionService CreateServiceWithRealGuard(InstanceCorrelation? snapshot)
+    {
+        var correlationRepository = new Mock<IInstanceCorrelationRepository>();
+        correlationRepository
+            .Setup(x => x.FindBySubInstanceIdAsReadOnlyAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(snapshot);
+
+        var guardLogger = new Mock<ILogger<SubItemTerminalGuard>>();
+        guardLogger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+
+        return new SubflowCompletionService(
+            _uowManager.Object,
+            _componentCacheStore.Object,
+            _instanceRepository.Object,
+            _runtimeInfoProvider.Object,
+            _workflowExecutionService.Object,
+            _outputMappingService.Object,
+            _lockScopeFactory.Object,
+            new SubItemTerminalGuard(correlationRepository.Object, guardLogger.Object),
+            Options.Create(new WorkflowExecutionOptions()),
+            _logger.Object);
+    }
+
+    /// <summary>
+    /// Builds the read-only correlation snapshot the real guard sees, independent of the tracked
+    /// aggregate the locked path loads.
+    /// </summary>
+    private static InstanceCorrelation SnapshotOf(
+        Instance parent,
+        Guid subInstanceId,
+        SubFlowType subFlowType,
+        SubItemTerminalOutcome outcome)
+    {
+        var snapshot = InstanceCorrelation.Create(
+            Guid.NewGuid(), parent.Id, "waiting-child", subInstanceId,
+            subFlowType.Code, "bank", "child-flow", "1.0.0");
+        snapshot.ApplyTerminalOutcome(outcome, DateTime.UtcNow);
+        return snapshot;
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenPreLockProbeReportsConflict_ShouldNotReopenCorrelation()
+    {
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        _terminalGuard
+            .Setup(x => x.ProbeAsync(
+                input.InstanceId, input.SubInstanceId,
+                SubItemTerminalOutcome.Completed, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Conflict);
+
+        await CreateService().CompletionAsync(input);
+
+        _lockScopeFactory.VerifyNoOtherCalls();
+        _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_ShouldAcquireTerminalLockWithBoundedWait()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        parent.CompleteCorrelation(subInstanceId, SubItemTerminalOutcome.Completed, DateTime.UtcNow);
+        SetupCompletedCorrelationPath(parent);
+
+        await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        // Duplicates that collide with an in-flight original cannot see its pending write, so the
+        // acquisition must wait it out rather than fail fast into a broker re-delivery cycle.
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            It.IsAny<string>(),
+            It.Is<LockAcquireWait>(w => w.MaxAttempts > 1 && w.Delay > TimeSpan.Zero),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -442,6 +610,14 @@ public sealed class SubflowCompletionServiceTests
         terminalReload.Complete("bank");
         var order = new List<string>();
         var lockCall = 0;
+        // Main path takes the waiting overload; the compensation path still fails fast.
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
+                It.IsAny<LockAcquireWait>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"lock-{++lockCall}"))
+            .ReturnsAsync(_lockScope.Object);
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(
                 $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
@@ -478,7 +654,10 @@ public sealed class SubflowCompletionServiceTests
         order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
         terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Exactly(2));
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
+            It.IsAny<LockAcquireWait>(), CancellationToken.None), Times.Once);
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Once);
         _instanceRepository.Verify(x => x.UpdateAsync(
             terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -542,6 +721,8 @@ public sealed class SubflowCompletionServiceTests
             _workflowExecutionService.Object,
             _outputMappingService.Object,
             _lockScopeFactory.Object,
+            _terminalGuard.Object,
+            Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
 
     private void SetupCompletedCorrelationPath(Instance parent)

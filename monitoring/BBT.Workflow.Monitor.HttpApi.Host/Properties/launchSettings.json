@@ -22,7 +22,9 @@
         "OTEL_LOGS_EXPORTER": "otlp",
         "DAPR_SECRET_STORE_NAME": "vnext-secret",
         "DAPR_STATE_STORE_NAME": "vnext-state",
-        "DAPR_LOCK_STORE_NAME": "vnext-lock"
+        "DAPR_LOCK_STORE_NAME": "vnext-lock",
+        "DAPR_PUBSUB_STORE_NAME": "vnext-pubsub",
+        "DAPR_PUBSUB_BROADCAST_STORE_NAME": "vnext-pubsub-broadcast"
       }
     },
     "https": {
@@ -45,7 +47,9 @@
         "OTEL_LOGS_EXPORTER": "otlp",
         "DAPR_SECRET_STORE_NAME": "vnext-secret",
         "DAPR_STATE_STORE_NAME": "vnext-state",
-        "DAPR_LOCK_STORE_NAME": "vnext-lock"
+        "DAPR_LOCK_STORE_NAME": "vnext-lock",
+        "DAPR_PUBSUB_STORE_NAME": "vnext-pubsub",
+        "DAPR_PUBSUB_BROADCAST_STORE_NAME": "vnext-pubsub-broadcast"
       }
     }
   }

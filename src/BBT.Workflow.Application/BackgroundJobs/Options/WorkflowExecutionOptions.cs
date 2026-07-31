@@ -1,3 +1,5 @@
+using BBT.Workflow.Execution.Pipeline;
+
 namespace BBT.Workflow.BackgroundJobs.Options;
 
 public sealed class WorkflowExecutionOptions
@@ -132,6 +134,22 @@ public sealed class WorkflowExecutionOptions
     /// a short bounded retry absorbs that instead of losing the transition.
     /// </summary>
     public LockConflictRetryOptions LockConflictRetry { get; set; } = new();
+
+    /// <summary>
+    /// Bounded wait applied when acquiring the per-subInstance terminal lock in the SubFlow
+    /// completion / fault / cancellation services.
+    /// <para>
+    /// Terminal sub-item signals are delivered at least twice by design (DurablePostCommit hook
+    /// plus the Inbox worker). A duplicate that arrives while the original is still inside its
+    /// transaction cannot see the pending write, so it must wait the short critical section out
+    /// rather than fail fast into a full broker re-delivery cycle.
+    /// </para>
+    /// </summary>
+    public LockConflictRetryOptions SubItemTerminalLockRetry { get; set; } = new()
+    {
+        MaxAttempts = 4,
+        BaseDelayMilliseconds = 120
+    };
 }
 
 public sealed class TransitionJobFailurePolicyOptions
@@ -141,9 +159,13 @@ public sealed class TransitionJobFailurePolicyOptions
 }
 
 /// <summary>
-/// Bounded exponential-backoff retry settings for instance-lock conflicts in
-/// <c>TransitionJobHandler</c>. Worst case total delay with defaults:
-/// 100 + 200 + 400 + 800 = 1.5s across 5 attempts.
+/// Bounded retry settings for lock contention.
+/// <para>
+/// Used by <c>TransitionJobHandler</c> for instance-lock conflicts (exponential backoff; worst
+/// case with its defaults: 100 + 200 + 400 + 800 = 1.5s across 5 attempts), and by the SubFlow
+/// terminal services for the per-subInstance lock (linear backoff plus jitter; worst case with
+/// its defaults: roughly 120 + 240 + 360 ms plus jitter across 4 attempts).
+/// </para>
 /// </summary>
 public sealed class LockConflictRetryOptions
 {
@@ -152,4 +174,19 @@ public sealed class LockConflictRetryOptions
 
     /// <summary>Base delay before the first retry; doubles per attempt. Default: 100ms.</summary>
     public int BaseDelayMilliseconds { get; set; } = 100;
+}
+
+/// <summary>
+/// Conversions from configured retry settings to the lock-acquisition contract.
+/// </summary>
+public static class LockConflictRetryOptionsExtensions
+{
+    /// <summary>
+    /// Projects the configured retry settings onto a <see cref="LockAcquireWait"/>, clamping
+    /// misconfigured values so a bad setting can never produce a negative delay or zero attempts.
+    /// </summary>
+    public static LockAcquireWait ToLockAcquireWait(this LockConflictRetryOptions options)
+        => new(
+            Math.Max(1, options.MaxAttempts),
+            TimeSpan.FromMilliseconds(Math.Max(0, options.BaseDelayMilliseconds)));
 }

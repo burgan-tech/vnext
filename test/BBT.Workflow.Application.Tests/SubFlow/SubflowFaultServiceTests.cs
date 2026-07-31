@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
@@ -19,6 +20,7 @@ using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -34,6 +36,7 @@ public sealed class SubflowFaultServiceTests
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
     private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
+    private readonly Mock<ISubItemTerminalGuard> _terminalGuard = new();
     private readonly Mock<ITransitionLockScope> _lockScope = new();
     private readonly Mock<ILogger<SubflowFaultService>> _logger = new();
 
@@ -61,6 +64,17 @@ public sealed class SubflowFaultServiceTests
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(_lockScope.Object);
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_lockScope.Object);
+        // Default: the pre-lock probe finds nothing terminal, so every test exercises the
+        // authoritative locked path unless it explicitly overrides this.
+        _terminalGuard
+            .Setup(x => x.ProbeAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(),
+                It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Proceed);
         _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
     }
 
@@ -76,6 +90,7 @@ public sealed class SubflowFaultServiceTests
         exception.Code.ShouldBe(WorkflowErrorCodes.SubflowTerminalLockNotAcquired);
         _lockScopeFactory.Verify(x => x.AcquireAsync(
             $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
+            It.IsAny<LockAcquireWait>(),
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
     }
@@ -308,6 +323,14 @@ public sealed class SubflowFaultServiceTests
         terminalReload.Complete("bank");
         var order = new List<string>();
         var lockCall = 0;
+        // Main path takes the waiting overload; the compensation path still fails fast.
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(
+                $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
+                It.IsAny<LockAcquireWait>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add($"lock-{++lockCall}"))
+            .ReturnsAsync(_lockScope.Object);
         _lockScopeFactory
             .Setup(x => x.AcquireAsync(
                 $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
@@ -340,7 +363,10 @@ public sealed class SubflowFaultServiceTests
         order.ShouldBe(["lock-1", "load-1", "resume", "lock-2", "load-2"]);
         terminalReload.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeTrue();
         _lockScopeFactory.Verify(x => x.AcquireAsync(
-            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Exactly(2));
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}",
+            It.IsAny<LockAcquireWait>(), CancellationToken.None), Times.Once);
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}", CancellationToken.None), Times.Once);
         _instanceRepository.Verify(x => x.UpdateAsync(
             terminalReload, true, It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -632,6 +658,8 @@ public sealed class SubflowFaultServiceTests
             resolver,
             executor,
             _lockScopeFactory.Object,
+            _terminalGuard.Object,
+            Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
     }
 

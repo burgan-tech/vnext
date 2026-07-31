@@ -1,7 +1,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: vnext-execution-lock
+  name: vnext-lock
 spec:
   type: lock.redis
   version: v1
