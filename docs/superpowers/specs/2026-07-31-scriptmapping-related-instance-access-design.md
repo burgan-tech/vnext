@@ -335,7 +335,10 @@ No raw `logger.Log*` calls.
 ## 7. Testing
 
 **`Domain.Tests`**
-- `ParentAsync` resolves from `ExtraProperties`; returns `null` when `parent.id` is absent or malformed.
+- `ParentAsync` resolves from `ExtraProperties`; returns `null` when `parent.id` is absent, malformed,
+  `Guid.Empty`, or stored as non-string JSON, and when `parent.domain`/`parent.flow` are missing or
+  stored as an unexpected type. Metadata readers fail closed — they never fabricate a `ToString()`
+  value, which would otherwise produce a reference to a domain or flow that never existed.
 - `SubAsync` picks the newest `CreatedAt` among same-key correlations.
 - `SubsAsync(null)` returns every correlation including completed ones and both `S` and `P` types.
 - `CorrelationCompleted` / `TerminalOutcome` / `SubFlowType` come from the correlation row, and

@@ -795,6 +795,59 @@ public class RelatedInstanceAccessorParentTests
     }
 
     [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentIdIsEmptyGuid()
+    {
+        var instance = ChildWithParentMetadata(Guid.Empty);
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentIdIsNonStringJson()
+    {
+        // Exercises the `when element.ValueKind == JsonValueKind.String` guard in ReadGuid.
+        // Without the guard, TryGetGuid throws InvalidOperationException on a non-string element.
+        var instance = ChildWithParentMetadata(JsonSerializer.SerializeToElement(42));
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentFlowIsMissing()
+    {
+        // parent.id and parent.domain resolve, parent.flow does not — forces the
+        // `IsNullOrWhiteSpace(domain) || IsNullOrWhiteSpace(flow)` branch in BuildParentRef.
+        var instance = Instance.Create(ChildId, "kyc-flow", "1.0.0");
+        instance.SetMetaData(new ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.Id] = ParentId,
+            [DomainConsts.MetaDataKeys.Domain] = "lending"
+        });
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void HasParent_ShouldBeFalse_WhenParentDomainHasUnexpectedStoredType()
+    {
+        // ReadString must fail closed rather than fabricating a ToString() value, which would
+        // otherwise pass BuildParentRef's non-empty check and point at a domain that never existed.
+        var instance = Instance.Create(ChildId, "kyc-flow", "1.0.0");
+        instance.SetMetaData(new ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.Id] = ParentId,
+            [DomainConsts.MetaDataKeys.Domain] = new object(),
+            [DomainConsts.MetaDataKeys.Flow] = "loan-application"
+        });
+        var accessor = CreateAccessor(instance, Substitute.For<IRelatedInstanceReader>());
+
+        accessor.HasParent.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task ParentAsync_ShouldReturnNull_WhenReaderReportsNotFound()
     {
         var instance = ChildWithParentMetadata(ParentId);
@@ -1027,6 +1080,12 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         };
     }
 
+    /// <summary>
+    /// Reads a string from instance metadata. Fails closed like <see cref="ReadGuid"/>: an unexpected
+    /// stored type yields null rather than a fabricated <c>ToString()</c> value, which would otherwise
+    /// pass the non-empty check in <see cref="BuildParentRef"/> and produce a reference to a domain or
+    /// flow that never existed.
+    /// </summary>
     private static string? ReadString(Instance instance, string key)
     {
         if (!instance.ExtraProperties.TryGetValue(key, out var raw) || raw == null)
@@ -1036,7 +1095,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         {
             string text => string.IsNullOrWhiteSpace(text) ? null : text,
             JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
-            _ => raw.ToString()
+            _ => null
         };
     }
 }
@@ -1046,7 +1105,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~RelatedInstanceAccessorParentTests"`
 
-Expected: PASS, 10 tests (3 theory cases + 7 facts).
+Expected: PASS, 14 tests (3 theory cases + 11 facts).
 
 - [ ] **Step 5: Commit**
 
@@ -1560,7 +1619,7 @@ Add `using System.Linq;` if the file does not already have it.
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~RelatedInstanceAccessor"`
 
-Expected: PASS — 10 parent tests + 12 sub tests.
+Expected: PASS — 14 parent tests + 12 sub tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1741,7 +1800,7 @@ Add both public members after `SubsAsync`:
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~RelatedInstanceAccessor"`
 
-Expected: PASS — 10 + 12 + 4 tests.
+Expected: PASS — 14 + 12 + 4 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -3119,7 +3178,7 @@ Run:
 dotnet test vnext.sln --filter "FullyQualifiedName~Related"
 ```
 
-Expected: PASS — 10 + 12 + 4 + 5 + 4 + 5 + 5 tests, zero failures.
+Expected: PASS — 14 + 12 + 4 + 5 + 4 + 5 + 5 tests, zero failures.
 
 - [ ] **Step 9: Commit**
 
@@ -3333,7 +3392,7 @@ Expected: `Build succeeded`, zero warnings introduced by this branch.
 
 Run: `dotnet test vnext.sln --filter "FullyQualifiedName~Related"`
 
-Expected: 45 tests, all passing.
+Expected: 49 tests, all passing.
 
 - [ ] **Step 3: No regression against the recorded baseline**
 
