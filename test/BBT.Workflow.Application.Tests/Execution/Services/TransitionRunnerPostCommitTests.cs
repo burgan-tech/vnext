@@ -481,6 +481,12 @@ public sealed class TransitionRunnerPostCommitTests
                 Interlocked.Increment(ref owner._activeTransitionLocks);
                 return Task.FromResult<ITransitionLockScope>(new RecordingTransitionLockScope(owner, lockKey));
             }
+
+            public Task<ITransitionLockScope> AcquireAsync(
+                string lockKey,
+                LockAcquireWait wait,
+                CancellationToken cancellationToken = default)
+                => AcquireAsync(lockKey, cancellationToken);
         }
 
         private sealed class RecordingTransitionLockScope(RunnerHarness owner, string lockKey)

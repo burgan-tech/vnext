@@ -896,6 +896,62 @@ public static partial class WorkflowLogs
         string outcome);
 
     /// <summary>
+    /// Logs when a duplicate terminal delivery is short-circuited before the distributed lock is
+    /// taken, because the identical outcome is already persisted on the correlation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40056,
+        Level = LogLevel.Debug,
+        Message = "Duplicate {Outcome} SubItem terminal delivery skipped pre-lock for parent {ParentInstanceId}, child {SubInstanceId}")]
+    public static partial void SubItemTerminalDuplicateSkippedPreLock(
+        this ILogger logger,
+        string outcome,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    /// <summary>
+    /// Logs when the pre-lock fast path is declined because settlement cannot be proven from the
+    /// snapshot — a blocking SubFlow settles only after its second-phase parent resume succeeds.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40059,
+        Level = LogLevel.Debug,
+        Message = "SubItem terminal settlement not provable for {SubItemType} (parent {ParentInstanceId}, child {SubInstanceId}); using locked path")]
+    public static partial void SubItemTerminalSettlementNotProvable(
+        this ILogger logger,
+        string subItemType,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    /// <summary>
+    /// Logs when the lock-free terminal probe could not read the correlation snapshot. The caller
+    /// falls back to the authoritative locked path, so this is not a failure of the delivery.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40057,
+        Level = LogLevel.Debug,
+        Message = "SubItem terminal pre-lock probe failed for parent {ParentInstanceId}, child {SubInstanceId}; falling back to locked path")]
+    public static partial void SubItemTerminalProbeFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    /// <summary>
+    /// Logs when a contended transition lock acquisition is retried after a jittered backoff.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40058,
+        Level = LogLevel.Debug,
+        Message = "Transition lock {LockKey} busy (attempt {Attempt}/{MaxAttempts}); retrying in {DelayMs}ms")]
+    public static partial void TransitionLockRetryScheduled(
+        this ILogger logger,
+        string lockKey,
+        int attempt,
+        int maxAttempts,
+        int delayMs);
+
+    /// <summary>
     /// Logs when a correlation is marked as completed.
     /// </summary>
     [LoggerMessage(

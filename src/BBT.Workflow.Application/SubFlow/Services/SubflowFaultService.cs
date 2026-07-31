@@ -1,4 +1,5 @@
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
@@ -10,6 +11,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -23,9 +25,13 @@ public sealed class SubflowFaultService(
     IErrorBoundaryResolver errorBoundaryResolver,
     IErrorActionExecutor errorActionExecutor,
     ITransitionLockScopeFactory transitionLockScopeFactory,
+    ISubItemTerminalGuard terminalGuard,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowFaultService> logger)
     : ISubflowFaultService
 {
+    private LockAcquireWait TerminalLockWait => executionOptions.Value.SubItemTerminalLockRetry.ToLockAcquireWait();
+
     /// <inheritdoc />
     public async Task FaultAsync(
         SubFlowFaultedInput input,
@@ -77,7 +83,28 @@ public sealed class SubflowFaultService(
                 // Sync/async safe: distinct from the parent's held key (no self-deadlock); nested
                 // same-key reentry is still handled by ChainLockRegistry.
                 var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}";
-                await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
+
+                // Lock-free duplicate short-circuit — see SubflowCompletionService for the rationale.
+                var probe = await terminalGuard.ProbeAsync(
+                    input.InstanceId,
+                    input.SubInstanceId,
+                    SubItemTerminalOutcome.Faulted,
+                    cancellationToken);
+
+                if (probe != SubItemTerminalProbe.Proceed)
+                {
+                    activity?.SetTag("vnext.subflow.result",
+                        probe == SubItemTerminalProbe.AlreadySettled
+                            ? "correlation_already_settled_prelock"
+                            : "terminal_outcome_conflict_prelock");
+                    SubFlowActivityHelper.SetSuccess(activity);
+                    return;
+                }
+
+                // Bounded wait rather than fail-fast: absorbs duplicates that collide with the
+                // original while its transaction is still open.
+                await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(
+                                 lockKey, TerminalLockWait, cancellationToken))
                 {
                     if (!lockScope.IsAcquired)
                     {

@@ -66,15 +66,6 @@ public sealed class SubflowStateService(
                     return;
                 }
 
-                if (correlation.IsCompleted)
-                {
-                    logger.LogDebug(
-                        "Correlation for SubInstance {SubInstanceId} is already completed, skipping state update",
-                        input.SubInstanceId);
-                    activity?.SetTag("vnext.subflow.result", "already_completed");
-                    return;
-                }
-
                 // Out-of-order event detection using timestamp:
                 // If correlation already has a state update with a later timestamp,
                 // this event is out-of-order/stale - reject it to prevent downgrade.
