@@ -167,6 +167,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
         _logger.RelatedInstanceResolutionLimitExceeded(_instance.Id, _options.MaxResolutionsPerContext);
         throw new RelatedInstanceAccessException(
             $"Related instance resolution limit of {_options.MaxResolutionsPerContext} exceeded for instance {_instance.Id}. " +
+            $"Attempted to add {additional} more. " +
             "Reduce the number of distinct related instances a single script resolves, or raise " +
             $"{RelatedAccessOptions.SectionName}:MaxResolutionsPerContext.");
     }
@@ -188,15 +189,15 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
             if (!result.IsSuccess)
             {
                 var reason = result.Error.Message ?? "unknown";
-                _logger.RelatedInstanceResolutionFailed(
-                    _instance.Id,
-                    DirectionSub,
-                    pending[0].SubFlowInstanceId,
-                    pending[0].SubFlowDomain,
-                    pending[0].SubFlowName,
-                    reason);
+                // Batch-shaped log: a batch can span several domains, so naming any single
+                // correlation's domain would point an operator at an innocent target.
+                var domains = string.Join(
+                    ", ",
+                    pending.Select(correlation => correlation.SubFlowDomain).Distinct(StringComparer.Ordinal));
+                _logger.RelatedInstanceBatchResolutionFailed(_instance.Id, pending.Count, domains, reason);
                 throw new RelatedInstanceAccessException(
-                    $"Failed to read {pending.Count} related instance(s) of {_instance.Id}: {reason}");
+                    $"Failed to read {pending.Count} related instance(s) of {_instance.Id} " +
+                    $"in domain(s) {domains}: {reason}");
             }
 
             var byId = result.Value!.ToDictionary(snapshot => snapshot.InstanceId);

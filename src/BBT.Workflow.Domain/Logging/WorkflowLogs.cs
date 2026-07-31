@@ -2878,6 +2878,22 @@ public static partial class WorkflowLogs
         Guid targetInstanceId,
         string targetFlow);
 
+    /// <summary>
+    /// Logs when resolving a batch of related instances failed due to an infrastructure problem;
+    /// the accessor throws after logging this. Unlike <see cref="RelatedInstanceResolutionFailed"/>,
+    /// a batch can span several domains, so every distinct target domain is named rather than one.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20436,
+        Level = LogLevel.Error,
+        Message = "Related instance batch resolution failed. Instance: {InstanceId}, Count: {Count}, TargetDomains: {TargetDomains}, Reason: {Reason}")]
+    public static partial void RelatedInstanceBatchResolutionFailed(
+        this ILogger logger,
+        Guid instanceId,
+        int count,
+        string targetDomains,
+        string reason);
+
     #endregion
 
     #region Multi-Channel Notification

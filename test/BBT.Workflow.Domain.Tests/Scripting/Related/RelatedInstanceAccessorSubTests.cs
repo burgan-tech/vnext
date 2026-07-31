@@ -325,4 +325,64 @@ public class RelatedInstanceAccessorSubTests
 
         await correlationRepository.Received(1).GetByParentAsync(ParentId, Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task SubsAsync_ShouldNotRecheckTheCap_WhenEverythingIsAlreadyMemoized()
+    {
+        // Guards the memo-first filter in ResolveManyAsync: once resolved, a repeat call has
+        // pending.Count == 0 and must not re-count already-resolved instances against the cap.
+        var (accessor, reader) = CreateAccessor(
+            Correlation(Guid.NewGuid(), "doc-upload", new DateTime(2026, 1, 1)),
+            Correlation(Guid.NewGuid(), "doc-upload", new DateTime(2026, 2, 1)));
+
+        var first = await accessor.SubsAsync("doc-upload", CancellationToken.None);
+        var second = await accessor.SubsAsync("doc-upload", CancellationToken.None);
+
+        first.Count.ShouldBe(2);
+        second.Count.ShouldBe(2);
+        await reader.Received(1).ReadManyAsync(
+            Arg.Any<IReadOnlyList<RelatedInstanceRef>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SubsAsync_ShouldExposeBothSubFlowTypesInOneBatch()
+    {
+        var subflowId = Guid.Parse("eeeeeeee-0000-0000-0000-000000000001");
+        var subprocessId = Guid.Parse("eeeeeeee-0000-0000-0000-000000000002");
+        var (accessor, _) = CreateAccessor(
+            Correlation(subflowId, "kyc-flow", new DateTime(2026, 1, 1), subFlowType: "S"),
+            Correlation(subprocessId, "notify-flow", new DateTime(2026, 2, 1), subFlowType: "P"));
+
+        var result = await accessor.SubsAsync(null, CancellationToken.None);
+
+        result.Single(r => r.InstanceId == subflowId).SubFlowType.ShouldBe("S");
+        result.Single(r => r.InstanceId == subprocessId).SubFlowType.ShouldBe("P");
+    }
+
+    [Fact]
+    public async Task SubsAsync_ShouldNameEveryDomainInTheBatchFailureMessage()
+    {
+        var instance = Instance.Create(ParentId, "loan-application", "2.1.0");
+        var correlationRepository = Substitute.For<IInstanceCorrelationRepository>();
+        correlationRepository.GetByParentAsync(ParentId, Arg.Any<CancellationToken>())
+            .Returns([
+                Correlation(Guid.NewGuid(), "kyc-flow", new DateTime(2026, 1, 1), subFlowDomain: "compliance"),
+                Correlation(Guid.NewGuid(), "notify-flow", new DateTime(2026, 2, 1), subFlowDomain: "messaging")
+            ]);
+
+        var reader = Substitute.For<IRelatedInstanceReader>();
+        reader.ReadManyAsync(Arg.Any<IReadOnlyList<RelatedInstanceRef>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<IReadOnlyList<RelatedInstanceSnapshot>>.Fail(
+                Error.Failure("RELATED_READ", "messaging unreachable"))));
+
+        var accessor = new RelatedInstanceAccessor(
+            instance, reader, correlationRepository, new RelatedAccessOptions(), NullLogger.Instance);
+
+        var exception = await Should.ThrowAsync<RelatedInstanceAccessException>(
+            () => accessor.SubsAsync(null, CancellationToken.None));
+
+        // Both domains named — the operator must not be pointed at only the first correlation's domain.
+        exception.Message.ShouldContain("compliance");
+        exception.Message.ShouldContain("messaging");
+    }
 }
