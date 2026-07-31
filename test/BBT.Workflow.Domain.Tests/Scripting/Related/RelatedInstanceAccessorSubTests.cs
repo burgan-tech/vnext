@@ -74,6 +74,13 @@ public class RelatedInstanceAccessorSubTests
                     refs.Select(r => Snapshot(r.InstanceId, r.Flow)).ToList();
                 return Task.FromResult(Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(snapshots));
             });
+        reader.ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var reference = call.Arg<RelatedInstanceRef>();
+                return Task.FromResult(
+                    Result<RelatedInstanceSnapshot?>.Ok(Snapshot(reference.InstanceId, reference.Flow)));
+            });
 
         var accessor = new RelatedInstanceAccessor(
             instance,
@@ -136,9 +143,9 @@ public class RelatedInstanceAccessorSubTests
             .Returns([Correlation(subId, "kyc-flow", new DateTime(2026, 1, 1), completed: false)]);
 
         var reader = Substitute.For<IRelatedInstanceReader>();
-        reader.ReadManyAsync(Arg.Any<IReadOnlyList<RelatedInstanceRef>>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(
-                (IReadOnlyList<RelatedInstanceSnapshot>)[Snapshot(subId, "kyc-flow", "C", isCompleted: true)])));
+        reader.ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(
+                Result<RelatedInstanceSnapshot?>.Ok(Snapshot(subId, "kyc-flow", "C", isCompleted: true))));
 
         var accessor = new RelatedInstanceAccessor(
             instance, reader, correlationRepository, new RelatedAccessOptions(), NullLogger.Instance);
@@ -160,6 +167,20 @@ public class RelatedInstanceAccessorSubTests
         var result = await accessor.SubAsync("notify-flow", CancellationToken.None);
 
         result!.SubFlowType.ShouldBe("P");
+    }
+
+    [Fact]
+    public async Task SubAsync_ShouldUseTheSingleItemRead_NotTheBatchRead()
+    {
+        // A single-key lookup must not go through the batch endpoint: cross-domain, ReadAsync is a
+        // GET while ReadManyAsync is a POST with a one-element array.
+        var (accessor, reader) = CreateAccessor(
+            Correlation(Guid.NewGuid(), "kyc-flow", new DateTime(2026, 1, 1)));
+
+        await accessor.SubAsync("kyc-flow", CancellationToken.None);
+
+        await reader.Received(1).ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>());
+        await reader.DidNotReceiveWithAnyArgs().ReadManyAsync(default!, default);
     }
 
     [Fact]
@@ -285,6 +306,13 @@ public class RelatedInstanceAccessorSubTests
                 IReadOnlyList<RelatedInstanceSnapshot> snapshots =
                     refs.Select(r => Snapshot(r.InstanceId, r.Flow)).ToList();
                 return Task.FromResult(Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(snapshots));
+            });
+        reader.ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var reference = call.Arg<RelatedInstanceRef>();
+                return Task.FromResult(
+                    Result<RelatedInstanceSnapshot?>.Ok(Snapshot(reference.InstanceId, reference.Flow)));
             });
 
         var accessor = new RelatedInstanceAccessor(

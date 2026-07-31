@@ -100,10 +100,7 @@ public sealed class RelatedInstanceAccessor : IRelatedInstanceAccessor
             return null;
         }
 
-        // Routed through the batch reader (not the single-item ResolveAsync used by ParentAsync) so the
-        // down direction always goes through ReadManyAsync — one code path, one read strategy.
-        var results = await ResolveManyAsync([correlation], cancellationToken);
-        return results.Count > 0 ? results[0] : null;
+        return await ResolveAsync(ToRef(correlation), DirectionSub, correlation, cancellationToken);
     }
 
     /// <inheritdoc />
