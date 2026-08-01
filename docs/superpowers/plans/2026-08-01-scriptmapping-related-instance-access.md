@@ -66,6 +66,9 @@
 
 | File | Change |
 |---|---|
+| `src/BBT.Workflow.Domain/WorkflowErrorCodes.cs` | `RelatedInstanceReadFailed` (`Instance:100033`) |
+| `src/BBT.Workflow.Domain/Instances/IInstanceRepository.cs` | `FindByIdsAsReadOnlyAsync` (batched, data-only) |
+| `src/BBT.Workflow.Infrastructure/Instances/EfCoreInstanceRepository.cs` | implementation of the batched read |
 | `src/BBT.Workflow.Domain/Scripting/Models.cs` | `ScriptContext.Related`, `Builder.SetRelated`, `Dispose`, `CreateParallelBranch` |
 | `src/BBT.Workflow.Domain/Scripting/Factory/Services/ScriptContextBuilder.cs` | Build the accessor |
 | `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` | 7 new `[LoggerMessage]` partials (20430–20436) |
