@@ -2393,7 +2393,8 @@ public sealed class RelatedInstanceQueryAppService(
             var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
                 reference.InstanceId.ToString(), cancellationToken);
 
-            return Result<RelatedInstanceSnapshot?>.Ok(instance == null ? null : ToSnapshot(instance));
+            return Result<RelatedInstanceSnapshot?>.Ok(
+                instance == null ? null : ToSnapshot(instance, reference));
         }
         catch (Exception exception)
         {
@@ -2428,13 +2429,16 @@ public sealed class RelatedInstanceQueryAppService(
         return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(snapshots);
     }
 
-    private static RelatedInstanceSnapshot ToSnapshot(Instance instance) => new()
+    /// <summary>
+    /// Projects the aggregate into the wire/read shape. <paramref name="reference"/> supplies the
+    /// domain: the <see cref="Instance"/> aggregate does not carry one (the schema and runtime do), and
+    /// the reference is what the caller resolved the instance by, so it is authoritative.
+    /// </summary>
+    private static RelatedInstanceSnapshot ToSnapshot(Instance instance, RelatedInstanceRef reference) => new()
     {
         InstanceId = instance.Id,
         Key = instance.Key,
-        Domain = instance.ExtraProperties.TryGetValue("domain", out var domain)
-            ? domain?.ToString() ?? string.Empty
-            : string.Empty,
+        Domain = reference.Domain,
         Flow = instance.Flow,
         FlowVersion = instance.FlowVersion,
         Status = instance.Status.Code,
@@ -2445,16 +2449,8 @@ public sealed class RelatedInstanceQueryAppService(
 }
 ```
 
-`Instance` has no `Domain` property (the schema/runtime supplies it), so `ToSnapshot` cannot fill it
-reliably. The reader layer overwrites `Domain` with the value from the `RelatedInstanceRef` in Task 11 —
-that is the authoritative source. If the `ExtraProperties["domain"]` lookup above proves to be dead
-weight during review, replace the `Domain` line with `Domain = string.Empty` and rely on the reader.
-
-If `WorkflowErrorCodes.InstanceNotFound` does not exist, list the available codes and pick the closest:
-
-```bash
-grep -n "public const string" src/BBT.Workflow.Domain/*/WorkflowErrorCodes.cs
-```
+`WorkflowErrorCodes.InstanceNotFound` exists (`src/BBT.Workflow.Domain/WorkflowErrorCodes.cs`, value
+`"Instance:100017"`) — verified, use it as written.
 
 - [ ] **Step 5: Run test to verify it passes**
 
@@ -3027,10 +3023,7 @@ public sealed class LocalRelatedInstanceReader(IServiceScopeFactory serviceScope
             async (serviceProvider, ct) =>
             {
                 var service = serviceProvider.GetRequiredService<IRelatedInstanceQueryAppService>();
-                var result = await service.ReadAsync(reference, ct);
-                return result.IsSuccess
-                    ? Result<RelatedInstanceSnapshot?>.Ok(WithDomain(result.Value, reference))
-                    : result;
+                return await service.ReadAsync(reference, ct);
             },
             cancellationToken);
 
@@ -3070,40 +3063,10 @@ public sealed class LocalRelatedInstanceReader(IServiceScopeFactory serviceScope
             if (!groupResult.IsSuccess)
                 return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Fail(groupResult.Error);
 
-            var byId = groupRefs.ToDictionary(reference => reference.InstanceId);
-            snapshots.AddRange(groupResult.Value!
-                .Where(snapshot => byId.ContainsKey(snapshot.InstanceId))
-                .Select(snapshot => WithDomain(snapshot, byId[snapshot.InstanceId])!));
+            snapshots.AddRange(groupResult.Value!);
         }
 
         return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(snapshots);
-    }
-
-    /// <summary>
-    /// The reference is authoritative for the domain — the instance aggregate does not carry one.
-    /// </summary>
-    private static RelatedInstanceSnapshot? WithDomain(
-        RelatedInstanceSnapshot? snapshot,
-        RelatedInstanceRef reference)
-    {
-        if (snapshot == null)
-            return null;
-
-        if (snapshot.Domain == reference.Domain)
-            return snapshot;
-
-        return new RelatedInstanceSnapshot
-        {
-            InstanceId = snapshot.InstanceId,
-            Key = snapshot.Key,
-            Domain = reference.Domain,
-            Flow = snapshot.Flow,
-            FlowVersion = snapshot.FlowVersion,
-            Status = snapshot.Status,
-            CurrentState = snapshot.CurrentState,
-            IsCompleted = snapshot.IsCompleted,
-            Data = snapshot.Data
-        };
     }
 }
 ```
