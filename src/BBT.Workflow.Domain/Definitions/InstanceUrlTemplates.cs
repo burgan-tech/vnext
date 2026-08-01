@@ -149,6 +149,18 @@ public static class InstanceUrlTemplates
     public const string LongPollAckTemplate = "/{0}/workflows/{1}/instances/{2}/longpoll/ack";
 
     /// <summary>
+    /// Internal related-instance data read template.
+    /// {0} = domain, {1} = workflow, {2} = instance
+    /// </summary>
+    public const string RelatedDataTemplate = "/{0}/workflows/{1}/instances/{2}/internal/related-data";
+
+    /// <summary>
+    /// Internal batched related-instance data read template.
+    /// {0} = domain, {1} = workflow
+    /// </summary>
+    public const string RelatedDataBatchTemplate = "/{0}/workflows/{1}/internal/related-data/batch";
+
+    /// <summary>
     /// URL template for retry instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/retry
     /// </summary>
@@ -389,6 +401,18 @@ public static class InstanceUrlTemplates
     /// </summary>
     public static string ChildCancel(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(ChildCancelTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for the internal related-instance data read endpoint.
+    /// </summary>
+    public static string RelatedData(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(RelatedDataTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for the internal batched related-instance data read endpoint.
+    /// </summary>
+    public static string RelatedDataBatch(string domain, string workflow, string? apiVersionPrefix = null)
+        => BuildUrl(RelatedDataBatchTemplate, apiVersionPrefix, domain, workflow);
 
     /// <summary>
     /// Generates URL for SubFlow Busy propagation endpoint.

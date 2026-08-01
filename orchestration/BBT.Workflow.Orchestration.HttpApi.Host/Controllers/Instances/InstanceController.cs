@@ -13,6 +13,8 @@ using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.Instances.Related;
+using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -38,7 +40,8 @@ public sealed class InstanceController(
     IChildSubflowFaultService childSubflowFaultService,
     ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway,
-    IEventAppService eventAppService) : AetherControllerBase
+    IEventAppService eventAppService,
+    IRelatedInstanceQueryAppService relatedInstanceQueryAppService) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -286,6 +289,55 @@ public sealed class InstanceController(
     {
         var result = await childSubflowFaultService.FaultChildAsync(
             instance, domain, workflow, request.ParentInstanceId, request.Termination, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Reads a single instance's raw data for related-instance access from another runtime.
+    /// Internal-to-internal: no caller identity, no query-role check, no x-roles field filtering and
+    /// no extensions. Never expose this route publicly.
+    /// </summary>
+    /// <response code="200">The instance snapshot.</response>
+    /// <response code="204">No such instance — absence, not an error.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/internal/related-data")]
+    public async Task<IActionResult> GetRelatedDataAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await relatedInstanceQueryAppService.ReadAsync(
+            new RelatedInstanceRef(instance, domain, workflow, version),
+            cancellationToken);
+
+        // FromResult is the house pattern for this controller. A successful read of a nonexistent
+        // instance maps to 204 No Content — deliberately NOT 404, which would be indistinguishable
+        // from a misrouted request or a wrong app id. Absence is data; a wrong route is a fault.
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Reads several instances' raw data in one call for related-instance access from another runtime.
+    /// Internal-to-internal, same caveats as the single read. Ids that do not resolve are omitted.
+    /// </summary>
+    /// <response code="200">The resolved instance snapshots (possibly an empty array).</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/internal/related-data/batch")]
+    public async Task<IActionResult> GetRelatedDataBatchAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromBody] RelatedDataBatchInput input,
+        [FromQuery] string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var references = input.InstanceIds
+            .Select(id => new RelatedInstanceRef(id, domain, workflow, version))
+            .ToList();
+
+        var result = await relatedInstanceQueryAppService.ReadManyAsync(references, cancellationToken);
+
         return FromResult(result);
     }
 
