@@ -1998,10 +1998,27 @@ using block, then insert this property immediately after the existing `Incident`
     /// <remarks>
     /// Reads are unfiltered by design (no query-role check, no x-roles field filtering, no extensions).
     /// Copying a related instance's field into this instance's data therefore makes that field reachable
-    /// by any client entitled to read this instance — x-roles protection does not follow the copy.
+    /// by any client entitled to read this instance — x-roles protection does not follow the copy, so
+    /// copy only the fields you intend to expose. Every cross-domain read is logged
+    /// (<c>RelatedInstanceCrossDomainRead</c>, event id 20432).
     /// Never null: defaults to <see cref="NullRelatedInstanceAccessor"/> when no reader is wired.
     /// </remarks>
-    public IRelatedInstanceAccessor Related { get; private set; } = NullRelatedInstanceAccessor.Instance;
+    /// <exception cref="ObjectDisposedException">The context has been disposed.</exception>
+    public IRelatedInstanceAccessor Related
+    {
+        get
+        {
+            // Deliberately guarded, unlike Body/Incident which merely go null. Those are nullable
+            // values; this is an accessor whose contract is "null means no parent". Handing back the
+            // null accessor after disposal would answer HasParent == false — a definite claim, not an
+            // absence — which is exactly the fault-as-absence conflation §5.5 forbids.
+            ThrowIfDisposed();
+            return _related;
+        }
+        private set => _related = value;
+    }
+
+    private IRelatedInstanceAccessor _related = NullRelatedInstanceAccessor.Instance;
 ```
 
 - [ ] **Step 4: Clear the memo on dispose**
@@ -2009,10 +2026,12 @@ using block, then insert this property immediately after the existing `Incident`
 In `Dispose(bool disposing)`, inside the `try` block, after `Incident = null;` add:
 
 ```csharp
-                if (Related is RelatedInstanceAccessor accessor)
+                // Backing field, not the property: the property getter throws once disposed, and
+                // Dispose must stay callable twice.
+                if (_related is RelatedInstanceAccessor accessor)
                     accessor.ClearMemo();
 
-                Related = NullRelatedInstanceAccessor.Instance;
+                _related = NullRelatedInstanceAccessor.Instance;
 ```
 
 - [ ] **Step 5: Propagate to parallel branches**
@@ -2021,10 +2040,14 @@ In `CreateParallelBranch()`, after the object-initializer block that creates `br
 existing `if (branch.Instance != null) { ... }` incident block, add:
 
 ```csharp
-        if (Related is RelatedInstanceAccessor branchSource && branch.Instance != null)
-            branch.Related = branchSource.ForBranch(branch.Instance);
-        else
-            branch.Related = Related;
+        // A real accessor is bound to a specific instance, so a branch without one must not inherit
+        // it — that would answer the branch's questions from the coordinator's instance.
+        branch.Related = (Related, branch.Instance) switch
+        {
+            (RelatedInstanceAccessor branchSource, not null) => branchSource.ForBranch(branch.Instance),
+            (RelatedInstanceAccessor, null) => NullRelatedInstanceAccessor.Instance,
+            _ => Related
+        };
 ```
 
 - [ ] **Step 6: Add the builder setter**
@@ -2049,7 +2072,7 @@ In the nested `public sealed class Builder`, add after `SetInstance`:
 
 Run: `dotnet test test/BBT.Workflow.Domain.Tests --filter "FullyQualifiedName~ScriptContextRelatedTests"`
 
-Expected: PASS, 4 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 8: Verify no existing ScriptContext test regressed**
 
@@ -3223,7 +3246,7 @@ Run:
 dotnet test vnext.sln --filter "FullyQualifiedName~Related"
 ```
 
-Expected: PASS — 14 + 16 + 7 + 5 + 4 + 5 + 5 tests, zero failures.
+Expected: PASS — 14 + 16 + 7 + 5 + 8 + 5 + 5 tests, zero failures.
 
 - [ ] **Step 9: Commit**
 
@@ -3437,7 +3460,7 @@ Expected: `Build succeeded`, zero warnings introduced by this branch.
 
 Run: `dotnet test vnext.sln --filter "FullyQualifiedName~Related"`
 
-Expected: 56 tests, all passing.
+Expected: 60 tests, all passing.
 
 - [ ] **Step 3: No regression against the recorded baseline**
 
