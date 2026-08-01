@@ -2584,6 +2584,14 @@ namespace BBT.Workflow.Instances.Related;
 /// </summary>
 public sealed class RelatedDataBatchInput
 {
+    /// <summary>
+    /// Upper bound on ids accepted in one request. This is an abuse guard, not the feature's cap —
+    /// <see cref="RelatedAccessOptions.MaxResolutionsPerContext"/> is the real limit and lives in the
+    /// calling runtime, which this endpoint cannot trust. Deliberately far above any legitimate batch
+    /// so raising the caller-side cap never trips it.
+    /// </summary>
+    public const int MaxInstanceIds = 100;
+
     /// <summary>Instance identifiers to read. Ids that do not resolve are omitted from the response.</summary>
     public IReadOnlyList<Guid> InstanceIds { get; init; } = [];
 }
@@ -2643,6 +2651,12 @@ In `InstanceController.cs`, after the `child-fault` action, add:
         [FromQuery] string? version,
         CancellationToken cancellationToken)
     {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the caller's
+        // batch size. The real cap lives in the calling runtime and cannot be enforced from here.
+        if (input.InstanceIds.Count > RelatedDataBatchInput.MaxInstanceIds)
+            return BadRequest(
+                $"At most {RelatedDataBatchInput.MaxInstanceIds} instance ids may be read in one batch.");
+
         var references = input.InstanceIds
             .Select(id => new RelatedInstanceRef(id, domain, workflow, version))
             .ToList();
