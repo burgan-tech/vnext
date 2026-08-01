@@ -2806,8 +2806,10 @@ public sealed class RemoteRelatedInstanceReader(
         var snapshots = new List<RelatedInstanceSnapshot>(references.Count);
 
         // One call per (domain, flow, version) group — the endpoint is routed by domain and flow.
-        foreach (var group in references.GroupBy(reference =>
-                     (reference.Domain, reference.Flow, reference.FlowVersion)))
+        // Grouped by domain+flow only: those two are the route, while version is an inert query
+        // parameter — the read resolves purely by instance id. Including version in the key would
+        // split one POST into two against the identical route.
+        foreach (var group in references.GroupBy(reference => (reference.Domain, reference.Flow)))
         {
             var groupResult = await ReadGroupAsync(group.Key, [.. group], cancellationToken);
             if (!groupResult.IsSuccess)
@@ -2874,8 +2876,10 @@ public sealed class RemoteRelatedInstanceReader(
     }
 
     /// <summary>
-    /// The reference is authoritative for domain, flow and version — the remote side does not carry a
-    /// domain on the instance aggregate.
+    /// The reference is authoritative for the <b>domain only</b> — the instance aggregate does not
+    /// carry one. <c>Flow</c> and <c>FlowVersion</c> come from the wire payload, which is ground truth:
+    /// overriding them with the caller's belief would report a stale version to the script and would
+    /// diverge from the local path, where <c>ToSnapshot</c> takes both from the instance itself.
     /// </summary>
     private static RelatedInstanceSnapshot? Normalize(
         RelatedInstanceSnapshot? snapshot,
@@ -2894,7 +2898,11 @@ public sealed class RemoteRelatedInstanceReader(
             Status = snapshot.Status,
             CurrentState = snapshot.CurrentState,
             IsCompleted = snapshot.IsCompleted,
-            Data = snapshot.Data
+            // dynamic? is object at the CLR level, so System.Text.Json never invokes
+            // ExpandoObjectJsonConverter and leaves a boxed JsonElement. The local path yields an
+            // ExpandoObject; without this the same script would work same-domain and throw
+            // RuntimeBinderException cross-domain.
+            Data = snapshot.Data is JsonElement element ? element.ToDynamic() : snapshot.Data
         };
     }
 }
@@ -3229,8 +3237,28 @@ In `GatewayServiceCollectionExtensions.AddInstanceGatewayServices`, add to the l
 
 ```csharp
         services.AddKeyedScoped<IRelatedInstanceReader, LocalRelatedInstanceReader>(RelatedReaderKeys.Local);
-        services.AddKeyedScoped<IRelatedInstanceReader, RemoteRelatedInstanceReader>(RelatedReaderKeys.Remote);
+
+        // RemoteRelatedInstanceReader is a typed HttpClient consumer, so it must be registered through
+        // AddRemoteService to inherit the timeout / retry / circuit-breaker stack its siblings get.
+        // AddKeyedScoped alone would hand it a default HttpClient with a 100s timeout — on the
+        // synchronous transition pipeline, with batch groups awaited sequentially, one hung domain
+        // would stall a transition for 100s per group. The keyed entry is an alias onto that
+        // typed-client registration, not a second construction path.
+        services.AddKeyedScoped<IRelatedInstanceReader>(
+            RelatedReaderKeys.Remote,
+            (serviceProvider, _) => serviceProvider.GetRequiredService<RemoteRelatedInstanceReader>());
 ```
+
+and register the typed client itself in `src/BBT.Workflow.Infrastructure/Remote/Extensions/RemoteServiceExtensions.cs`, next to the other `AddRemoteService` calls (~line 50):
+
+```csharp
+        services.AddRemoteService<RemoteRelatedInstanceReader, RemoteRelatedInstanceReader>(options);
+```
+
+Verify `AddRemoteService<T, T>` satisfies its `where TImplementation : class, TClient` constraint with a
+single concrete type; if the compiler rejects it, register the `HttpClient` for the concrete type with
+the same `ConfigurePrimaryHttpMessageHandler` / timeout / retry / circuit-breaker chain rather than
+dropping the resilience.
 
 and to the routed block:
 
