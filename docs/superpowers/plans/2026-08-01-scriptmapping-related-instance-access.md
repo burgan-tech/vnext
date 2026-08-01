@@ -2108,6 +2108,7 @@ internal sealed class ScriptContextBuilder(
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
     ILogger<ScriptContext> logger,
+    ILogger<RelatedInstanceAccessor> relatedLogger,
     IRequestRawBodyProvider? rawBodyProvider = null,
     IRelatedInstanceReader? relatedInstanceReader = null,
     IInstanceCorrelationRepository? correlationRepository = null,
@@ -2166,7 +2167,7 @@ Add at the end of the class, next to the other private helpers:
             relatedInstanceReader,
             correlationRepository,
             relatedAccessOptions?.Value ?? new RelatedAccessOptions(),
-            logger);
+            relatedLogger);
     }
 ```
 
@@ -3219,6 +3220,14 @@ and to the routed block:
 
 Add `using BBT.Workflow.Scripting.Related;` to the file.
 
+**The registration must live in `AddInstanceGatewayServices`, next to the other routed gateways** — not
+in a separate extension method. `ScriptContextBuilder` takes `IRelatedInstanceReader` as an *optional*
+dependency, so a host missing the registration would silently give every script a no-op accessor that
+reports "no parent, no correlations" with no error. Keeping the registration inside the method that
+also registers `IInstanceQueryGateway`/`IInstanceCommandGateway` means it shares their fate: a host
+that skips that call has no gateways at all, which fails loudly and immediately for far more than this
+feature. Step 6 below adds a test that fails if the line is ever dropped.
+
 `RemoteRelatedInstanceReader` needs an `HttpClient`. Find how `RemoteInstanceQueryAppService` gets one
 and copy that registration:
 
@@ -3226,19 +3235,47 @@ and copy that registration:
 grep -rn "AddHttpClient<.*RemoteInstance" src/ --include=*.cs
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [ ] **Step 6: Add a DI resolution test**
+
+The reader is an *optional* constructor dependency of `ScriptContextBuilder`, so a missing registration
+degrades silently instead of failing. Pin the registration with a test rather than a runtime assertion.
+Add to `test/BBT.Workflow.Infrastructure.Tests/Gateway/RoutedRelatedInstanceReaderTests.cs`:
+
+```csharp
+    [Fact]
+    public void AddInstanceGatewayServices_ShouldRegisterTheRelatedInstanceReader()
+    {
+        // The reader is an optional dependency of ScriptContextBuilder: if this registration is ever
+        // dropped, every script silently gets a no-op accessor reporting "no parent, no correlations"
+        // with no error anywhere. This test is the guard.
+        var services = new ServiceCollection();
+
+        services.AddInstanceGatewayServices();
+
+        services.ShouldContain(descriptor =>
+            descriptor.ServiceType == typeof(IRelatedInstanceReader) &&
+            descriptor.ImplementationType == typeof(RoutedRelatedInstanceReader));
+    }
+```
+
+Add `using Microsoft.Extensions.DependencyInjection;` to the test file. If `AddInstanceGatewayServices`
+cannot be called against a bare `ServiceCollection` (missing prerequisite registrations), assert on the
+descriptors instead of building the provider — the point is that the descriptor exists, not that it
+resolves.
+
+- [ ] **Step 7: Run test to verify it passes**
 
 Run: `dotnet test test/BBT.Workflow.Infrastructure.Tests --filter "FullyQualifiedName~RoutedRelatedInstanceReaderTests"`
 
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
-- [ ] **Step 7: Verify the whole solution builds**
+- [ ] **Step 8: Verify the whole solution builds**
 
 Run: `dotnet build vnext.sln`
 
 Expected: `Build succeeded`.
 
-- [ ] **Step 8: Run every test written for this feature**
+- [ ] **Step 9: Run every test written for this feature**
 
 Run:
 
@@ -3246,9 +3283,9 @@ Run:
 dotnet test vnext.sln --filter "FullyQualifiedName~Related"
 ```
 
-Expected: PASS — 14 + 16 + 7 + 5 + 8 + 5 + 5 tests, zero failures.
+Expected: PASS — 14 + 16 + 7 + 5 + 8 + 4 + 5 + 6 tests, zero failures.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/BBT.Workflow.Infrastructure/Gateway test/BBT.Workflow.Infrastructure.Tests/Gateway/RoutedRelatedInstanceReaderTests.cs
@@ -3460,7 +3497,7 @@ Expected: `Build succeeded`, zero warnings introduced by this branch.
 
 Run: `dotnet test vnext.sln --filter "FullyQualifiedName~Related"`
 
-Expected: 60 tests, all passing.
+Expected: 65 tests, all passing.
 
 - [ ] **Step 3: No regression against the recorded baseline**
 
