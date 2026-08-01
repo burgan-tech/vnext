@@ -2619,8 +2619,8 @@ In `InstanceController.cs`, after the `child-fault` action, add:
             cancellationToken);
 
         // FromResult is the house pattern for this controller. A successful read of a nonexistent
-        // instance returns 200 with a null body — deliberately NOT 404, which would be
-        // indistinguishable from a misrouted request. Absence is data; a wrong route is a fault.
+        // instance maps to 204 No Content — deliberately NOT 404, which would be indistinguishable
+        // from a misrouted request or a wrong app id. Absence is data; a wrong route is a fault.
         return FromResult(result);
     }
 
@@ -2757,9 +2757,13 @@ public sealed class RemoteRelatedInstanceReader(
         {
             var response = await httpClient.GetAsync(url, cancellationToken);
 
-            // The endpoint answers 200 with a null body for a nonexistent instance. A 404 here means
-            // the route or the app id is wrong — an infrastructure fault, not absence — so it falls
-            // through to the failure branch below rather than being reported as "not found".
+            // The endpoint answers 204 No Content for a nonexistent instance (AetherControllerBase
+            // .FromResult maps a successful null value that way). A 404 here means the route or the
+            // app id is wrong — an infrastructure fault, not absence — so it falls through to the
+            // failure branch below rather than being reported as "not found".
+            if (response.StatusCode == HttpStatusCode.NoContent)
+                return Result<RelatedInstanceSnapshot?>.Ok(null);
+
             if (!response.IsSuccessStatusCode)
                 return Result<RelatedInstanceSnapshot?>.Fail(Error.Failure(
                     WorkflowErrorCodes.TaskExecution,
