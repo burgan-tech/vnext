@@ -253,6 +253,15 @@ reachable by any client entitled to read the current instance. `x-roles` protect
 the copy. The docs must state this explicitly, and every cross-domain read is logged
 (`RelatedInstanceCrossDomainRead`).
 
+**`Data` must be an `ExpandoObject` on both paths.** `RelatedInstanceSnapshot.Data` is `dynamic?`, which
+is `object` at the CLR level, and `System.Text.Json` selects converters by *declared* type — so
+`ExpandoObjectJsonConverter` never fires for it and a deserialized payload stays a boxed `JsonElement`.
+The local path yields an `ExpandoObject` (`InstanceData.Attributes` → `JsonElement.ToDynamic()`). Left
+alone, `context.Related.ParentAsync().Data.SomeField` would work for a same-domain parent and throw
+`RuntimeBinderException` for a cross-domain one. The remote reader therefore converts via
+`JsonDocumentExtensions.ToDynamic()` (which recurses into nested objects and arrays) before returning,
+so scripts behave identically regardless of where the related instance lives.
+
 **`RemoteRelatedInstanceReader` (Infrastructure).** Resolves the target app id via
 `IDomainDiscoveryResolver` and calls new internal endpoints on the orchestration host:
 
