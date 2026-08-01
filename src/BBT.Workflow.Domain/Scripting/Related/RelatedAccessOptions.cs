@@ -16,3 +16,16 @@ public sealed class RelatedAccessOptions
     /// </summary>
     public int MaxResolutionsPerContext { get; set; } = 10;
 }
+
+/// <summary>
+/// DI keys distinguishing the two <see cref="IRelatedInstanceReader"/> implementations behind the
+/// routed reader.
+/// </summary>
+public static class RelatedReaderKeys
+{
+    /// <summary>Key of the same-domain reader.</summary>
+    public const string Local = "related-instance-reader-local";
+
+    /// <summary>Key of the cross-domain reader.</summary>
+    public const string Remote = "related-instance-reader-remote";
+}

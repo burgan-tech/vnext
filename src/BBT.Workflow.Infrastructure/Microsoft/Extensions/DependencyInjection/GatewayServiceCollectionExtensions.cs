@@ -1,4 +1,5 @@
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Scripting.Related;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -29,12 +30,25 @@ public static class GatewayServiceCollectionExtensions
         services.AddScoped<LocalAuthorizeGateway>();
         services.AddScoped<RemoteAuthorizeGateway>();
 
+        services.AddKeyedScoped<IRelatedInstanceReader, LocalRelatedInstanceReader>(RelatedReaderKeys.Local);
+
+        // RemoteRelatedInstanceReader is a typed HttpClient consumer, so it must come from the
+        // AddRemoteService registration to inherit the timeout / retry / circuit-breaker stack its
+        // siblings get. AddKeyedScoped<,> alone would hand it a default HttpClient with a 100s
+        // timeout — on the synchronous transition pipeline, with batch groups awaited sequentially,
+        // one hung domain would stall a transition for 100s per group. This keyed entry is an alias
+        // onto that typed-client registration, not a second construction path.
+        services.AddKeyedScoped<IRelatedInstanceReader>(
+            RelatedReaderKeys.Remote,
+            (serviceProvider, _) => serviceProvider.GetRequiredService<RemoteRelatedInstanceReader>());
+
         // Routed gateways - route based on IRuntimeInfoProvider.IsDomainMatch()
         // These are registered as the interface implementations
         services.AddScoped<IInstanceCommandGateway, RoutedInstanceCommandGateway>();
         services.AddScoped<IInstanceRetryGateway, RoutedInstanceRetryGateway>();
         services.AddScoped<IInstanceQueryGateway, RoutedInstanceQueryGateway>();
         services.AddScoped<IAuthorizeGateway, RoutedAuthorizeGateway>();
+        services.AddScoped<IRelatedInstanceReader, RoutedRelatedInstanceReader>();
 
         return services;
     }
