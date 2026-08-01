@@ -5,6 +5,7 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
+using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.Extensions.Configuration;
 using BBT.Workflow.Tasks.Coordinator;
@@ -238,7 +239,22 @@ public static class TaskServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddScriptingServices(this IServiceCollection services)
     {
-        services.AddSingleton<IScriptContextFactory, ScriptContextFactory>();
+        // Scoped, not singleton: the factory forwards the scoped IRelatedInstanceReader and
+        // IInstanceCorrelationRepository gateway services (registered in
+        // GatewayServiceCollectionExtensions.AddInstanceGatewayServices) into every ScriptContextBuilder
+        // it creates. A singleton factory would capture those scoped dependencies once from the root
+        // scope and reuse them for the app's lifetime — a stale-DbContext captive-dependency bug. The
+        // factory itself is stateless, so scoping it down has no other effect. Every current consumer of
+        // IScriptContextFactory (pipeline steps, app services, job handlers registered via
+        // AddAetherBackgroundJob) is itself registered scoped, so this does not turn a captive
+        // dependency the other way around into a resolution failure — verified by grepping every
+        // constructor-injection site of IScriptContextFactory across src/orchestration/execution/workers.
+        services.AddScoped<IScriptContextFactory, ScriptContextFactory>();
+
+        // Guardrails for related-instance access from mapping scripts (see RelatedAccessOptions),
+        // bound defensively so a missing section keeps the built-in defaults.
+        services.AddOptions<RelatedAccessOptions>()
+            .BindConfiguration(RelatedAccessOptions.SectionName);
 
         // Default raw-body provider resolves the original request body from the ambient job scope only.
         // HTTP hosts replace this (via Replace) with one that also reads the live HTTP request.
