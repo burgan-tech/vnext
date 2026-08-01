@@ -38,6 +38,18 @@
       "description": "Declarative state-level notifications. A state may declare a notifications[] array; each entry has a type (default 'state' — only 'state' is processed today, 'command' is reserved), an optional rule (compiled to IConditionMapping), and a mapping (compiled to IStateNotificationMapping, same contract as the NotificationTask state channel). After the transition pipeline settles and the instance state/status is finalized and committed, the engine schedules a durable one-shot background job (handler 'state.notify') that rebuilds a ScriptContext from the carried request context (Headers, RouteValues, Body), evaluates each entry's rule (absent rule => always processed; present rule => only entries whose rule returns true), and dispatches the applicable entries through the platform-managed state Dapr binding (vnext-notification-state) off the request thread, so the client response is never blocked. Fires once per settle (not on intermediate auto-chain hops). The state-channel payload is the slim pointer { domain, flow, id, version } — consumers re-fetch full state via the State function. Independent of and backward-compatible with the existing NotificationTask state channel.",
       "schemaPath": "state.notifications[]"
     },
+    "scriptRelatedInstanceAccess": {
+      "since": "0.0.78",
+      "status": "stable",
+      "description": "Mapping scripts read a related instance's data via context.Related (IRelatedInstanceAccessor) instead of duplicating it across the parent/child boundary: HasParent (sync), ParentAsync() for the one hop up to the parent that started this instance as a SubFlow/SubProcess, and SubAsync(subFlowKey)/SubsAsync(subFlowKey?)/SubKeysAsync() for one hop down to this instance's own correlations (active and completed). Keys match InstanceCorrelation.SubFlowName; SubAsync returns the newest correlation by CreatedAt, SubsAsync returns all oldest-first in one batched read. Nothing is pre-fetched; results are memoized for the ScriptContext's lifetime and shared across parallel task branches. Reads use the engine's own system identity and are unfiltered by design: no query-role check, no x-roles field filtering, no extensions, no data-function cache, so a script's decision stays deterministic across users and works in scheduled/automatic/event/job contexts with no caller identity. Copying a related field into the current instance's data does not carry its x-roles protection with it. Same-domain reads dispatch in-process; cross-domain reads call two internal-only endpoints that carry no in-app authorization and rely entirely on network isolation (Dapr sidecar-to-sidecar only). Absence resolves to null/empty; a read failure or exceeding the per-context resolution cap throws RelatedInstanceAccessException.",
+      "relatedConfig": [
+        "Workflow:Scripting:RelatedAccess:MaxResolutionsPerContext"
+      ],
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/internal/related-data",
+        "POST {domain}/workflows/{workflow}/internal/related-data/batch"
+      ]
+    },
     "stateStoreTask": {
       "since": "0.0.64",
       "status": "stable",
