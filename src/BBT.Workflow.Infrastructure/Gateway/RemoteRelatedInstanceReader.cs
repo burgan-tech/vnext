@@ -74,9 +74,17 @@ public sealed class RemoteRelatedInstanceReader(
 
             return Result<RelatedInstanceSnapshot?>.Ok(Normalize(snapshot, reference));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller itself went away — propagate rather than reporting a read failure.
+            throw;
+        }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
             // Network errors → Transient error (per Railway Pattern), matching RemoteInstanceQueryAppService.
+            // TaskCanceledException also surfaces an HttpClient *timeout* with the token left unsignaled —
+            // the guarded catch above already peeled off caller-cancellation, so anything reaching here is
+            // a genuine dependency fault.
             return Result<RelatedInstanceSnapshot?>.Fail(Error.Transient("remote_network_error", exception.Message));
         }
     }
@@ -93,9 +101,10 @@ public sealed class RemoteRelatedInstanceReader(
 
         var snapshots = new List<RelatedInstanceSnapshot>(references.Count);
 
-        // One HTTP call per (Domain, Flow, FlowVersion) group — the batch endpoint is routed by domain
-        // and workflow, so ids belonging to different flows cannot share a request.
-        foreach (var group in references.GroupBy(reference => (reference.Domain, reference.Flow, reference.FlowVersion)))
+        // Grouped by domain+flow only: those two are the route, while version is an inert query
+        // parameter — the batch endpoint (like Task 8's ReadManyAsync) resolves purely by instance id.
+        // Grouping by version too would split one POST into two against an identical route.
+        foreach (var group in references.GroupBy(reference => (reference.Domain, reference.Flow)))
         {
             var groupResult = await ReadGroupAsync(group.Key, [.. group], cancellationToken);
 
@@ -112,7 +121,7 @@ public sealed class RemoteRelatedInstanceReader(
     }
 
     private async Task<Result<IReadOnlyList<RelatedInstanceSnapshot>>> ReadGroupAsync(
-        (string Domain, string Flow, string? FlowVersion) key,
+        (string Domain, string Flow) key,
         IReadOnlyList<RelatedInstanceRef> group,
         CancellationToken cancellationToken)
     {
@@ -123,8 +132,12 @@ public sealed class RemoteRelatedInstanceReader(
         var endpoint = endpointResult.Value!;
 
         var relativePath = InstanceUrlTemplates.RelatedDataBatch(key.Domain, key.Flow, ApiVersionPrefix);
-        if (!string.IsNullOrWhiteSpace(key.FlowVersion))
-            relativePath += $"?version={Uri.EscapeDataString(key.FlowVersion)}";
+
+        // Version is not part of the route and the endpoint resolves purely by instance id, so any
+        // member's FlowVersion is equally valid here — the first one is taken as before.
+        var flowVersion = group[0].FlowVersion;
+        if (!string.IsNullOrWhiteSpace(flowVersion))
+            relativePath += $"?version={Uri.EscapeDataString(flowVersion)}";
 
         var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
@@ -164,6 +177,11 @@ public sealed class RemoteRelatedInstanceReader(
 
             return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(normalized);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller itself went away — propagate rather than reporting a read failure.
+            throw;
+        }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
             return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Fail(
@@ -172,11 +190,10 @@ public sealed class RemoteRelatedInstanceReader(
     }
 
     /// <summary>
-    /// Projects the wire snapshot into the shape the accessor expects. The reference — not the wire
-    /// payload — is authoritative for <see cref="RelatedInstanceSnapshot.Domain"/>,
-    /// <see cref="RelatedInstanceSnapshot.Flow"/> and <see cref="RelatedInstanceSnapshot.FlowVersion"/>:
-    /// the remote instance aggregate does not carry a domain at all (the schema/runtime does), and the
-    /// reference is what the caller resolved the instance by, so it is the trustworthy source.
+    /// The reference is authoritative for the <b>domain only</b> — the instance aggregate does not
+    /// carry one. <c>Flow</c> and <c>FlowVersion</c> come from the wire payload, which is ground truth;
+    /// the reference is only a fallback when the payload omits them. Overriding them with the caller's
+    /// belief would report a stale version to the script and diverge from the local path.
     /// </summary>
     /// <remarks>
     /// <see cref="RelatedInstanceSnapshot.Data"/> is declared <c>dynamic?</c>, which compiles to a plain
@@ -204,8 +221,8 @@ public sealed class RemoteRelatedInstanceReader(
             InstanceId = snapshot.InstanceId == Guid.Empty ? reference.InstanceId : snapshot.InstanceId,
             Key = snapshot.Key,
             Domain = reference.Domain,
-            Flow = reference.Flow,
-            FlowVersion = reference.FlowVersion,
+            Flow = string.IsNullOrWhiteSpace(snapshot.Flow) ? reference.Flow : snapshot.Flow,
+            FlowVersion = snapshot.FlowVersion ?? reference.FlowVersion,
             Status = snapshot.Status,
             CurrentState = snapshot.CurrentState,
             IsCompleted = snapshot.IsCompleted,

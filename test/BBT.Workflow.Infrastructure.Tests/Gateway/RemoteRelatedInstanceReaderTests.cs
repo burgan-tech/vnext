@@ -52,7 +52,7 @@ public sealed class RemoteRelatedInstanceReaderTests
         Key = "customer-42",
         Domain = domain,
         Flow = flow,
-        FlowVersion = "9.9.9", // deliberately different from the reference — must be overridden by Normalize
+        FlowVersion = "9.9.9", // ground truth from the wire — Normalize must prefer this over the reference's
         Status = "A",
         CurrentState = "awaiting-kyc",
         IsCompleted = false,
@@ -86,9 +86,13 @@ public sealed class RemoteRelatedInstanceReaderTests
     }
 
     [Fact]
-    public async Task ReadAsync_Ok_ReturnsSnapshot_WithReferenceAsAuthoritativeForDomainFlowVersion()
+    public async Task ReadAsync_Ok_ReturnsSnapshot_WithDomainFromReference_AndFlowVersionFromWire()
     {
-        var wireSnapshot = Snapshot(InstanceId);
+        // The reference is authoritative for Domain only — the instance aggregate does not carry one.
+        // Flow/FlowVersion are ground truth on the wire; the reference must not override them, or a
+        // script would see a stale version for a cross-domain parent while a same-domain one (Task 8's
+        // ToSnapshot, which never touches Flow/FlowVersion) reports the true one.
+        var wireSnapshot = Snapshot(InstanceId, domain: "some-other-domain", flow: "loan-application-v2");
         var (reader, _, _) = CreateSut(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
@@ -102,9 +106,9 @@ public sealed class RemoteRelatedInstanceReaderTests
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldNotBeNull();
         result.Value!.InstanceId.ShouldBe(InstanceId);
-        result.Value.Domain.ShouldBe(Reference.Domain);
-        result.Value.Flow.ShouldBe(Reference.Flow);
-        result.Value.FlowVersion.ShouldBe(Reference.FlowVersion);
+        result.Value.Domain.ShouldBe(Reference.Domain); // "lending" — reference wins over wire's "some-other-domain"
+        result.Value.Flow.ShouldBe("loan-application-v2"); // wire wins over Reference.Flow ("loan-application")
+        result.Value.FlowVersion.ShouldBe("9.9.9"); // wire wins over Reference.FlowVersion ("2.1.0")
     }
 
     [Fact]
@@ -129,6 +133,55 @@ public sealed class RemoteRelatedInstanceReaderTests
         object? data = result.Value!.Data;
         data.ShouldBeOfType<ExpandoObject>();
         ((IDictionary<string, object?>)data!)["amount"].ShouldBe(100);
+    }
+
+    [Fact]
+    public async Task ReadAsync_Ok_ConvertsNestedDataRecursively()
+    {
+        // JsonDocumentExtensions.ToDynamic() recurses into nested objects and arrays; nothing in the
+        // suite pinned that before, and `Data.customer.name` / `Data.documents[0].type` is exactly how
+        // scripts use this — a shallow conversion that only fixed the top level would still break them.
+        var wireSnapshot = new RelatedInstanceSnapshot
+        {
+            InstanceId = InstanceId,
+            Key = "customer-42",
+            Domain = "lending",
+            Flow = "loan-application",
+            FlowVersion = "2.1.0",
+            Status = "A",
+            CurrentState = "awaiting-kyc",
+            IsCompleted = false,
+            Data = new Dictionary<string, object?>
+            {
+                ["customer"] = new Dictionary<string, object?> { ["name"] = "Ada" },
+                ["documents"] = new object?[]
+                {
+                    new Dictionary<string, object?> { ["type"] = "passport" },
+                    new Dictionary<string, object?> { ["type"] = "utility-bill" }
+                }
+            }
+        };
+        var (reader, _, _) = CreateSut(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(wireSnapshot, JsonSerializerConstants.JsonOptions),
+                System.Text.Encoding.UTF8,
+                "application/json")
+        });
+
+        var result = await reader.ReadAsync(Reference, CancellationToken.None);
+
+        object? data = result.Value!.Data;
+        var dataDict = (IDictionary<string, object?>)data!;
+
+        dataDict["customer"].ShouldBeOfType<ExpandoObject>();
+        ((IDictionary<string, object?>)dataDict["customer"]!)["name"].ShouldBe("Ada");
+
+        dataDict["documents"].ShouldBeOfType<List<object?>>();
+        var documents = (List<object?>)dataDict["documents"]!;
+        documents.Count.ShouldBe(2);
+        documents[0].ShouldBeOfType<ExpandoObject>();
+        ((IDictionary<string, object?>)documents[0]!)["type"].ShouldBe("passport");
     }
 
     [Fact]
