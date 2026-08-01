@@ -323,6 +323,7 @@ public sealed class InstanceController(
     /// Internal-to-internal, same caveats as the single read. Ids that do not resolve are omitted.
     /// </summary>
     /// <response code="200">The resolved instance snapshots (possibly an empty array).</response>
+    /// <response code="400">More ids were requested than <see cref="RelatedDataBatchInput.MaxInstanceIds"/> allows.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/internal/related-data/batch")]
     public async Task<IActionResult> GetRelatedDataBatchAsync(
@@ -332,6 +333,12 @@ public sealed class InstanceController(
         [FromQuery] string? version,
         CancellationToken cancellationToken = default)
     {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the caller's
+        // batch size. The real cap lives in the calling runtime and cannot be enforced from here.
+        if (input.InstanceIds.Count > RelatedDataBatchInput.MaxInstanceIds)
+            return BadRequest(
+                $"At most {RelatedDataBatchInput.MaxInstanceIds} instance ids may be read in one batch.");
+
         var references = input.InstanceIds
             .Select(id => new RelatedInstanceRef(id, domain, workflow, version))
             .ToList();

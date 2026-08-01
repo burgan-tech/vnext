@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
@@ -111,6 +112,29 @@ public sealed class InstanceControllerRelatedDataTests
         var value = ok.Value.ShouldBeAssignableTo<IReadOnlyList<RelatedInstanceSnapshot>>();
         value!.ShouldHaveSingleItem();
         value[0].InstanceId.ShouldBe(foundId);
+    }
+
+    [Fact]
+    public async Task GetRelatedDataBatchAsync_TooManyIds_ProducesBadRequestWithoutCallingReadManyAsync()
+    {
+        // Defence in depth: this endpoint carries no authorization, so it cannot trust the caller's
+        // batch size — the real cap (RelatedAccessOptions.MaxResolutionsPerContext) lives in the
+        // calling runtime. This is a much higher abuse bound, deliberately above any legitimate batch.
+        var relatedService = Substitute.For<IRelatedInstanceQueryAppService>();
+        var input = new RelatedDataBatchInput
+        {
+            InstanceIds = Enumerable.Range(0, RelatedDataBatchInput.MaxInstanceIds + 1)
+                .Select(_ => Guid.NewGuid())
+                .ToList()
+        };
+        var sut = CreateController(relatedService);
+
+        var actionResult = await sut.GetRelatedDataBatchAsync(
+            "parent-domain", "parent-flow", input, null, CancellationToken.None);
+
+        actionResult.ShouldBeOfType<BadRequestObjectResult>();
+        await relatedService.DidNotReceive().ReadManyAsync(
+            Arg.Any<IReadOnlyList<RelatedInstanceRef>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
