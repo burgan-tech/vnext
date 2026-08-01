@@ -2821,15 +2821,18 @@ public static partial class WorkflowLogs
         string? key);
 
     /// <summary>
-    /// Logs when resolving a related instance required a cross-domain read over HTTP.
+    /// Logs when resolving a related instance required a cross-domain read over HTTP. Logged by
+    /// <see cref="BBT.Workflow.Gateway.RoutedRelatedInstanceReader"/>, which only sees the target of the
+    /// dispatch (a <c>RelatedInstanceRef</c>), not the instance whose script triggered the read — hence
+    /// <paramref name="targetInstanceId"/> identifies the instance being read, not the reader.
     /// </summary>
     [LoggerMessage(
         EventId = 20432,
         Level = LogLevel.Debug,
-        Message = "Related instance cross-domain read. Instance: {InstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Count: {Count}")]
+        Message = "Related instance cross-domain read. Target: {TargetInstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Count: {Count}")]
     public static partial void RelatedInstanceCrossDomainRead(
         this ILogger logger,
-        Guid instanceId,
+        Guid targetInstanceId,
         string targetDomain,
         string targetFlow,
         int count);

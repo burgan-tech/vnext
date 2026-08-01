@@ -109,7 +109,11 @@ event, and background-job contexts, where no caller identity exists at all.
 > instance — the source field's `x-roles` protection does not travel with the value. Only copy fields
 > you intend to expose, and say so at the point you copy them.
 
-Every cross-domain read is logged (`RelatedInstanceCrossDomainRead`, event id 20432).
+Every cross-domain read is logged (`RelatedInstanceCrossDomainRead`, event id 20432), emitted by
+`RoutedRelatedInstanceReader` — the only component that knows a dispatch went remote. It identifies the
+**target** instance being read, not the instance whose script triggered the read: the reader only ever
+sees the target's `RelatedInstanceRef`, never the caller. A batch read (`SubsAsync`) logs once per
+distinct remote `(domain, flow)` group, with `Count` equal to that group's size.
 
 For the deployment-facing security posture of the two internal HTTP endpoints backing cross-domain
 reads — including the fact that they carry **no in-app authorization at all** — see

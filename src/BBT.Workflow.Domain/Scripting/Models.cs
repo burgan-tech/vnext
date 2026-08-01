@@ -378,7 +378,9 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// Copying a related instance's field into this instance's data therefore makes that field reachable
     /// by any client entitled to read this instance — x-roles protection does not follow the copy, so
     /// copy only the fields you intend to expose. Every cross-domain read is logged
-    /// (<c>RelatedInstanceCrossDomainRead</c>, event id 20432).
+    /// (<c>RelatedInstanceCrossDomainRead</c>, event id 20432) by the infrastructure-layer routed
+    /// reader, identifying the target instance being read — not this instance — since the router only
+    /// ever sees the target's reference, never the caller's.
     /// Never null: defaults to <see cref="NullRelatedInstanceAccessor"/> when no reader is wired.
     /// </remarks>
     /// <exception cref="ObjectDisposedException">The context has been disposed.</exception>

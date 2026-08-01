@@ -344,7 +344,7 @@ id family, unique ids continuing the existing sequence:
 |---|---|---|
 | `RelatedInstanceResolved` | Debug | instanceId, direction, targetInstanceId, domain, flow |
 | `RelatedInstanceNotFound` | Debug | instanceId, direction, key |
-| `RelatedInstanceCrossDomainRead` | Debug | instanceId, targetDomain, targetFlow, count |
+| `RelatedInstanceCrossDomainRead` | Debug | targetInstanceId, targetDomain, targetFlow, count — logged by `RoutedRelatedInstanceReader`, which only sees the target's reference, not the reading instance; a batch read logs once per distinct remote (domain, flow) group |
 | `RelatedInstanceResolutionFailed` | Error | instanceId, direction, targetInstanceId, targetDomain, targetFlow, reason |
 | `RelatedInstanceResolutionLimitExceeded` | Warning | instanceId, limit |
 | `RelatedInstanceReadFailed` | Error | exception, targetInstanceId, targetFlow |

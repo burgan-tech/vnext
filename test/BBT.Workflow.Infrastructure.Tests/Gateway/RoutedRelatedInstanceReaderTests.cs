@@ -8,6 +8,7 @@ using BBT.Workflow.Gateway;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Related;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -28,10 +29,35 @@ public sealed class RoutedRelatedInstanceReaderTests
     private static RelatedInstanceRef Local() => new(TargetId, "lending", "loan-application", "2.1.0");
     private static RelatedInstanceRef Foreign() => new(TargetId, "compliance", "kyc-flow", "1.0.0");
 
+    /// <summary>
+    /// Minimal <see cref="ILogger{TCategoryName}"/> test double that records every entry's event id and
+    /// rendered message. NSubstitute can't cleanly verify calls to <see cref="ILogger.Log{TState}"/>
+    /// because the source-generated <c>[LoggerMessage]</c> partial closes it over a compiler-generated
+    /// state type per call site, so a recording fake is simpler and more reliable than generic-argument
+    /// matching tricks.
+    /// </summary>
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(int EventId, string Message)> Entries { get; } = [];
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((eventId.Id, formatter(state, exception)));
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    }
+
     private sealed record Harness(
         RoutedRelatedInstanceReader Reader,
         IRelatedInstanceReader LocalReader,
-        IRelatedInstanceReader RemoteReader);
+        IRelatedInstanceReader RemoteReader,
+        RecordingLogger<RoutedRelatedInstanceReader> Logger);
 
     private static Harness CreateHarness()
     {
@@ -41,6 +67,7 @@ public sealed class RoutedRelatedInstanceReaderTests
 
         var local = Substitute.For<IRelatedInstanceReader>();
         var remote = Substitute.For<IRelatedInstanceReader>();
+        var logger = new RecordingLogger<RoutedRelatedInstanceReader>();
 
         local.ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>())
             .Returns(Result<RelatedInstanceSnapshot?>.Ok(null));
@@ -51,8 +78,19 @@ public sealed class RoutedRelatedInstanceReaderTests
         remote.ReadManyAsync(Arg.Any<IReadOnlyList<RelatedInstanceRef>>(), Arg.Any<CancellationToken>())
             .Returns(Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok([]));
 
-        return new Harness(new RoutedRelatedInstanceReader(runtime, local, remote), local, remote);
+        return new Harness(
+            new RoutedRelatedInstanceReader(runtime, local, remote, logger),
+            local,
+            remote,
+            logger);
     }
+
+    /// <summary>
+    /// Asserts the router logged <c>RelatedInstanceCrossDomainRead</c> (event id 20432) exactly
+    /// <paramref name="times"/> time(s).
+    /// </summary>
+    private static void AssertCrossDomainReadLogged(RecordingLogger<RoutedRelatedInstanceReader> logger, int times) =>
+        logger.Entries.Count(entry => entry.EventId == 20432).ShouldBe(times);
 
     [Fact]
     public async Task ReadAsync_ShouldUseLocalReader_WhenDomainMatches()
@@ -77,6 +115,26 @@ public sealed class RoutedRelatedInstanceReaderTests
     }
 
     [Fact]
+    public async Task ReadAsync_ShouldLogCrossDomainRead_WhenDomainDiffers()
+    {
+        var harness = CreateHarness();
+
+        await harness.Reader.ReadAsync(Foreign(), CancellationToken.None);
+
+        AssertCrossDomainReadLogged(harness.Logger, times: 1);
+    }
+
+    [Fact]
+    public async Task ReadAsync_ShouldNotLogCrossDomainRead_WhenDomainMatches()
+    {
+        var harness = CreateHarness();
+
+        await harness.Reader.ReadAsync(Local(), CancellationToken.None);
+
+        AssertCrossDomainReadLogged(harness.Logger, times: 0);
+    }
+
+    [Fact]
     public async Task ReadManyAsync_ShouldSplitByDomain()
     {
         var harness = CreateHarness();
@@ -89,6 +147,42 @@ public sealed class RoutedRelatedInstanceReaderTests
         await harness.RemoteReader.Received(1).ReadManyAsync(
             Arg.Is<IReadOnlyList<RelatedInstanceRef>>(refs => refs.Count == 1 && refs[0].Domain == "compliance"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ReadManyAsync_ShouldLogCrossDomainReadOnceForTheRemoteGroup_WithGroupSizeAsCount()
+    {
+        var harness = CreateHarness();
+        var secondForeign = Foreign() with { InstanceId = Guid.NewGuid() };
+
+        await harness.Reader.ReadManyAsync([Local(), Foreign(), secondForeign], CancellationToken.None);
+
+        // One (domain, flow) group -> one log line, count = the whole remote group's size (2), not 1.
+        AssertCrossDomainReadLogged(harness.Logger, times: 1);
+        harness.Logger.Entries.Single(entry => entry.EventId == 20432).Message.ShouldContain("Count: 2");
+    }
+
+    [Fact]
+    public async Task ReadManyAsync_ShouldNotLogCrossDomainRead_WhenEveryRefIsLocal()
+    {
+        var harness = CreateHarness();
+
+        await harness.Reader.ReadManyAsync([Local(), Local()], CancellationToken.None);
+
+        AssertCrossDomainReadLogged(harness.Logger, times: 0);
+    }
+
+    [Fact]
+    public async Task ReadManyAsync_ShouldLogOncePerDistinctRemoteDomainAndFlow()
+    {
+        var harness = CreateHarness();
+        var otherForeign = new RelatedInstanceRef(Guid.NewGuid(), "compliance", "aml-flow", "1.0.0");
+
+        await harness.Reader.ReadManyAsync([Foreign(), otherForeign], CancellationToken.None);
+
+        // Foreign() is compliance/kyc-flow, otherForeign is compliance/aml-flow: two distinct (domain,
+        // flow) groups within the same remote domain, so two lines, not one that misattributes either.
+        AssertCrossDomainReadLogged(harness.Logger, times: 2);
     }
 
     [Fact]
