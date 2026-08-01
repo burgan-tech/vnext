@@ -126,10 +126,8 @@ public class RelatedInstanceQueryAppServiceTests : IDisposable
         var missingId = Guid.Parse("99999999-9999-9999-9999-999999999999");
         var targetInstance = TargetInstance();
         var repository = Substitute.For<IInstanceRepository>();
-        repository.FindByIdentifierAsReadOnlyAsync(TargetId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(targetInstance);
-        repository.FindByIdentifierAsReadOnlyAsync(missingId.ToString(), Arg.Any<CancellationToken>())
-            .Returns((Instance?)null);
+        repository.FindByIdsAsReadOnlyAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns([targetInstance]);
         var service = new RelatedInstanceQueryAppService(
             repository, NullLogger<RelatedInstanceQueryAppService>.Instance);
 
@@ -140,5 +138,43 @@ public class RelatedInstanceQueryAppServiceTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Count.ShouldBe(1);
         result.Value[0].InstanceId.ShouldBe(TargetId);
+    }
+
+    [Fact]
+    public async Task ReadManyAsync_ShouldIssueOneQuery_NotOnePerReference()
+    {
+        // The batch API exists to avoid N+1; pin it.
+        var secondId = Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111");
+        var repository = Substitute.For<IInstanceRepository>();
+        var target = TargetInstance();
+        repository.FindByIdsAsReadOnlyAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns([target]);
+        var service = new RelatedInstanceQueryAppService(
+            repository, NullLogger<RelatedInstanceQueryAppService>.Instance);
+
+        await service.ReadManyAsync(
+            [Reference(), new RelatedInstanceRef(secondId, "lending", "loan-application", "2.1.0")],
+            CancellationToken.None);
+
+        await repository.Received(1).FindByIdsAsReadOnlyAsync(
+            Arg.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 2), Arg.Any<CancellationToken>());
+        await repository.DidNotReceiveWithAnyArgs().FindByIdentifierAsReadOnlyAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ReadManyAsync_ShouldFailTheWholeBatch_WhenTheQueryThrows()
+    {
+        // Atomic failure: a partial set would let a script see four children when there are five,
+        // with no way to tell — treating a fault as absence.
+        var repository = Substitute.For<IInstanceRepository>();
+        repository.FindByIdsAsReadOnlyAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns<List<Instance>>(_ => throw new InvalidOperationException("connection reset"));
+        var service = new RelatedInstanceQueryAppService(
+            repository, NullLogger<RelatedInstanceQueryAppService>.Instance);
+
+        var result = await service.ReadManyAsync([Reference()], CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldContain("connection reset");
     }
 }
