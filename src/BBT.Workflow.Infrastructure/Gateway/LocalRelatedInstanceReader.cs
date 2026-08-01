@@ -7,9 +7,16 @@ namespace BBT.Workflow.Gateway;
 
 /// <summary>
 /// Reads related instances that live in this runtime's domain. Establishes the schema scope with
-/// <c>ExecuteWithWorkflowAsync</c> — the same pattern <see cref="LocalInstanceQueryGateway"/> uses —
-/// so each read runs in a fresh scope and does not interfere with the caller's unit of work.
+/// <c>ExecuteWithWorkflowAsync</c> — the same pattern <see cref="LocalInstanceQueryGateway"/> uses.
 /// </summary>
+/// <remarks>
+/// The fresh scope isolates the <see cref="IServiceProvider"/>, not the database transaction: Aether's
+/// ambient unit of work keys DbContexts by (type, schema) and enlists a newly opened one in the
+/// surrounding transition's connection and transaction. A related read therefore observes the current
+/// transition's uncommitted writes. That is intended — within one transition a script should see the
+/// engine's own in-flight state rather than a stale snapshot — but it is not the isolation the scope
+/// creation might suggest.
+/// </remarks>
 public sealed class LocalRelatedInstanceReader(IServiceScopeFactory serviceScopeFactory) : IRelatedInstanceReader
 {
     /// <inheritdoc />

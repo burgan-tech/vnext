@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
@@ -145,9 +146,15 @@ public sealed class RoutedRelatedInstanceReaderTests
             Equals(descriptor.ServiceKey, RelatedReaderKeys.Local) &&
             descriptor.KeyedImplementationType == typeof(LocalRelatedInstanceReader));
 
-        services.ShouldContain(descriptor =>
+        var remote = services.Single(descriptor =>
             descriptor.ServiceType == typeof(IRelatedInstanceReader) &&
             descriptor.IsKeyedService &&
             Equals(descriptor.ServiceKey, RelatedReaderKeys.Remote));
+
+        // Must be a factory alias onto the typed-client registration, never a direct type
+        // registration — a direct one would construct RemoteRelatedInstanceReader with a default
+        // HttpClient, losing the timeout/retry/circuit-breaker stack AddRemoteService provides.
+        remote.KeyedImplementationFactory.ShouldNotBeNull();
+        remote.KeyedImplementationType.ShouldBeNull();
     }
 }
