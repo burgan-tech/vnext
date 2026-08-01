@@ -2618,10 +2618,10 @@ In `InstanceController.cs`, after the `child-fault` action, add:
             new RelatedInstanceRef(instance, domain, workflow, version),
             cancellationToken);
 
-        if (!result.IsSuccess)
-            return Problem(detail: result.Error.Message, statusCode: StatusCodes.Status500InternalServerError);
-
-        return result.Value == null ? NotFound() : Ok(result.Value);
+        // FromResult is the house pattern for this controller. A successful read of a nonexistent
+        // instance returns 200 with a null body — deliberately NOT 404, which would be
+        // indistinguishable from a misrouted request. Absence is data; a wrong route is a fault.
+        return FromResult(result);
     }
 
     /// <summary>
@@ -2649,10 +2649,7 @@ In `InstanceController.cs`, after the `child-fault` action, add:
 
         var result = await relatedInstanceQueryAppService.ReadManyAsync(references, cancellationToken);
 
-        if (!result.IsSuccess)
-            return Problem(detail: result.Error.Message, statusCode: StatusCodes.Status500InternalServerError);
-
-        return Ok(result.Value);
+        return FromResult(result);
     }
 ```
 
@@ -2760,9 +2757,9 @@ public sealed class RemoteRelatedInstanceReader(
         {
             var response = await httpClient.GetAsync(url, cancellationToken);
 
-            if (response.StatusCode == HttpStatusCode.NotFound)
-                return Result<RelatedInstanceSnapshot?>.Ok(null);
-
+            // The endpoint answers 200 with a null body for a nonexistent instance. A 404 here means
+            // the route or the app id is wrong — an infrastructure fault, not absence — so it falls
+            // through to the failure branch below rather than being reported as "not found".
             if (!response.IsSuccessStatusCode)
                 return Result<RelatedInstanceSnapshot?>.Fail(Error.Failure(
                     WorkflowErrorCodes.TaskExecution,
