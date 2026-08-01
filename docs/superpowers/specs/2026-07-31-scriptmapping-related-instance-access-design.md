@@ -230,6 +230,13 @@ wrong answer. That is exactly "treating a fault as absence", which §5.5 forbids
 is a fault, so the whole call faults. Instances that simply do not exist are still omitted silently —
 that is absence, and it is data.
 
+**Transaction visibility.** The local reader opens a fresh DI scope per flow group, but that isolates
+only the `IServiceProvider` — Aether's ambient `CompositeUnitOfWork` keys DbContexts by `(Type, schema)`
+and enlists a newly opened one in the *same* `DbConnection`/`DbTransaction` as the surrounding
+transition. A related read therefore observes the current transition's uncommitted writes. That is the
+intended semantic: within one transition a script should see the engine's own in-flight state rather
+than a stale snapshot. It is recorded here because the isolation is easy to assume and is not there.
+
 **`LocalRelatedInstanceReader` (Application).** Wraps `currentSchema.Use(flow)` and reads the instance
 via `IInstanceRepository` with `AsNoTracking` and `DataList` only. It deliberately does **not** go
 through `InstanceQueryAppService.GetInstanceDataAsync`, therefore:
