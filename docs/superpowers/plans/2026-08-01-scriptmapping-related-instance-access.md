@@ -2396,13 +2396,19 @@ public sealed class RelatedInstanceQueryAppService(
             return Result<RelatedInstanceSnapshot?>.Ok(
                 instance == null ? null : ToSnapshot(instance, reference));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller itself went away — propagate rather than reporting a read failure. Matches
+            // WorkflowOutputMappingService and the background job handlers.
+            throw;
+        }
         catch (Exception exception)
         {
             // WorkflowLogs extension, not raw logger.LogError — the coding standard forbids the latter.
             logger.RelatedInstanceReadFailed(exception, reference.InstanceId, reference.Flow);
 
             return Result<RelatedInstanceSnapshot?>.Fail(Error.Failure(
-                WorkflowErrorCodes.InstanceNotFound,
+                WorkflowErrorCodes.RelatedInstanceReadFailed,
                 $"Related instance read failed for {reference.InstanceId}: {exception.Message}",
                 detail: exception.GetType().Name));
         }
@@ -2415,18 +2421,42 @@ public sealed class RelatedInstanceQueryAppService(
     {
         ArgumentNullException.ThrowIfNull(references);
 
-        var snapshots = new List<RelatedInstanceSnapshot>(references.Count);
-        foreach (var reference in references)
+        if (references.Count == 0)
+            return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok([]);
+
+        try
         {
-            var result = await ReadAsync(reference, cancellationToken);
-            if (!result.IsSuccess)
-                return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Fail(result.Error);
+            // One query, not one per reference: this is the whole reason the batch API exists, and
+            // the project rule forbids N+1. The reads also skip the ChildCorrelations include that
+            // FindByIdentifierAsReadOnlyAsync carries — this service never looks at correlations.
+            var instances = await instanceRepository.FindByIdsAsReadOnlyAsync(
+                references.Select(reference => reference.InstanceId).ToList(),
+                cancellationToken);
 
-            if (result.Value != null)
-                snapshots.Add(result.Value);
+            var byId = instances.ToDictionary(instance => instance.Id);
+
+            // Reference order is preserved, and references with no matching row are omitted —
+            // absence is data. Only a thrown exception fails the batch.
+            var snapshots = references
+                .Where(reference => byId.ContainsKey(reference.InstanceId))
+                .Select(reference => ToSnapshot(byId[reference.InstanceId], reference))
+                .ToList();
+
+            return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(snapshots);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.RelatedInstanceReadFailed(exception, references[0].InstanceId, references[0].Flow);
 
-        return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Ok(snapshots);
+            return Result<IReadOnlyList<RelatedInstanceSnapshot>>.Fail(Error.Failure(
+                WorkflowErrorCodes.RelatedInstanceReadFailed,
+                $"Related instance batch read of {references.Count} instance(s) failed: {exception.Message}",
+                detail: exception.GetType().Name));
+        }
     }
 
     /// <summary>
@@ -2449,8 +2479,17 @@ public sealed class RelatedInstanceQueryAppService(
 }
 ```
 
-`WorkflowErrorCodes.InstanceNotFound` exists (`src/BBT.Workflow.Domain/WorkflowErrorCodes.cs`, value
-`"Instance:100017"`) — verified, use it as written.
+Add a dedicated error code to `src/BBT.Workflow.Domain/WorkflowErrorCodes.cs`, next to the other
+`Instance:1000xx` codes (100033 is the next free value — verify before using):
+
+```csharp
+    public const string RelatedInstanceReadFailed = "Instance:100033";
+```
+
+Do **not** reuse `InstanceNotFound` (`Instance:100017`). Genuine not-found is already reported as
+`Result.Ok(null)`; reusing that code for an infrastructure fault would let a caller or an alert conflate
+"the related instance does not exist" with "the read blew up" — the exact ambiguity the
+absence-vs-failure split exists to prevent.
 
 - [ ] **Step 5: Run test to verify it passes**
 
