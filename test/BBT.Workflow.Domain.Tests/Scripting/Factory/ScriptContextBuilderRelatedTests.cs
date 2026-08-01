@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Workflow;
@@ -45,6 +46,7 @@ public class ScriptContextBuilderRelatedTests
             Substitute.For<IComponentCacheStore>(),
             Substitute.For<IInstanceRepository>(),
             NullLogger<ScriptContext>.Instance,
+            NullLogger<RelatedInstanceAccessor>.Instance,
             relatedInstanceReader: reader,
             correlationRepository: correlationRepository,
             relatedAccessOptions: Options.Create(new RelatedAccessOptions()));
@@ -85,6 +87,20 @@ public class ScriptContextBuilderRelatedTests
             correlationRepository: null);
 
         var context = await builder.WithInstance(instance).BuildAsync();
+
+        context.Related.ShouldBeSameAs(NullRelatedInstanceAccessor.Instance);
+    }
+
+    [Fact]
+    public async Task BuildAsync_ShouldLeaveTheNullAccessor_WhenNoInstanceIsResolved()
+    {
+        // Distinct from the deps-missing cases: here both dependencies are present, but there is no
+        // instance to be related to, so BuildRelatedAccessor must never be called.
+        var builder = CreateBuilder(
+            reader: Substitute.For<IRelatedInstanceReader>(),
+            correlationRepository: Substitute.For<IInstanceCorrelationRepository>());
+
+        var context = await builder.BuildAsync(CancellationToken.None);
 
         context.Related.ShouldBeSameAs(NullRelatedInstanceAccessor.Instance);
     }

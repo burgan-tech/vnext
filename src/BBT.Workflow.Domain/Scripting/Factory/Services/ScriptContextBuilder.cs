@@ -19,6 +19,7 @@ internal sealed class ScriptContextBuilder(
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
     ILogger<ScriptContext> logger,
+    ILogger<RelatedInstanceAccessor> relatedLogger,
     IRequestRawBodyProvider? rawBodyProvider = null,
     IRelatedInstanceReader? relatedInstanceReader = null,
     IInstanceCorrelationRepository? correlationRepository = null,
@@ -332,7 +333,7 @@ internal sealed class ScriptContextBuilder(
             relatedInstanceReader,
             correlationRepository,
             relatedAccessOptions?.Value ?? new RelatedAccessOptions(),
-            logger);
+            relatedLogger);
     }
 
     private Transition? ResolveTransition(Definitions.Workflow workflow)
