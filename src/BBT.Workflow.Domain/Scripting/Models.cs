@@ -202,10 +202,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 CurrentTransition = null;
                 Incident = null;
 
-                if (Related is RelatedInstanceAccessor accessor)
+                // Backing field, not the property: the property getter throws once disposed, and
+                // Dispose must stay callable twice.
+                if (_related is RelatedInstanceAccessor accessor)
                     accessor.ClearMemo();
 
-                Related = NullRelatedInstanceAccessor.Instance;
+                _related = NullRelatedInstanceAccessor.Instance;
             }
             catch (InvalidOperationException ex)
             {
@@ -374,10 +376,27 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// <remarks>
     /// Reads are unfiltered by design (no query-role check, no x-roles field filtering, no extensions).
     /// Copying a related instance's field into this instance's data therefore makes that field reachable
-    /// by any client entitled to read this instance — x-roles protection does not follow the copy.
+    /// by any client entitled to read this instance — x-roles protection does not follow the copy, so
+    /// copy only the fields you intend to expose. Every cross-domain read is logged
+    /// (<c>RelatedInstanceCrossDomainRead</c>, event id 20432).
     /// Never null: defaults to <see cref="NullRelatedInstanceAccessor"/> when no reader is wired.
     /// </remarks>
-    public IRelatedInstanceAccessor Related { get; private set; } = NullRelatedInstanceAccessor.Instance;
+    /// <exception cref="ObjectDisposedException">The context has been disposed.</exception>
+    public IRelatedInstanceAccessor Related
+    {
+        get
+        {
+            // Deliberately guarded, unlike Body/Incident which merely go null. Those are nullable
+            // values; this is an accessor whose contract is "null means no parent". Handing back the
+            // null accessor after disposal would answer HasParent == false — a definite claim, not an
+            // absence.
+            ThrowIfDisposed();
+            return _related;
+        }
+        private set => _related = value;
+    }
+
+    private IRelatedInstanceAccessor _related = NullRelatedInstanceAccessor.Instance;
 
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
@@ -663,8 +682,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         if (Mutations.HasStageChange)
             branch.Mutations.SetStage(Mutations.Stage);
 
+        // A real accessor is bound to a specific instance, so a branch without one must not inherit
+        // it — that would answer the branch's questions from the coordinator's instance.
         if (Related is RelatedInstanceAccessor branchSource && branch.Instance != null)
             branch.Related = branchSource.ForBranch(branch.Instance);
+        else if (Related is RelatedInstanceAccessor && branch.Instance == null)
+            branch.Related = NullRelatedInstanceAccessor.Instance;
         else
             branch.Related = Related;
 

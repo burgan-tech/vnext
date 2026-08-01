@@ -101,6 +101,74 @@ public class ScriptContextRelatedTests
         await context.Related.ParentAsync(CancellationToken.None);
         context.Dispose();
 
+        // Related now throws once disposed (see Related_ShouldThrow_AfterDispose) rather than quietly
+        // answering from the null accessor — a disposed context must not make a definite claim about
+        // whether this instance has a parent.
+        Should.Throw<ObjectDisposedException>(() => context.Related);
+    }
+
+    [Fact]
+    public void CreateParallelBranch_ShouldGiveTheBranchItsOwnAccessor()
+    {
+        // The memo-sharing test passes even if CreateParallelBranch just assigned the coordinator's
+        // accessor, because the memo is shared either way. This pins that ForBranch is actually called.
+        var instance = ChildWithParent();
+        var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetInstance(instance)
+            .SetRelated(Accessor(instance, OkReader()))
+            .Build();
+
+        var branch = context.CreateParallelBranch();
+
+        branch.Related.ShouldNotBeSameAs(context.Related);
+        branch.Related.ShouldBeOfType<RelatedInstanceAccessor>();
+    }
+
+    [Fact]
+    public async Task Dispose_ShouldClearTheMemo_NotJustResetTheProperty()
+    {
+        // The existing dispose test only checks the property was reset; nothing proved ClearMemo ran.
+        // Hold a direct reference to the accessor so it survives the property reset.
+        var instance = ChildWithParent();
+        var reader = OkReader();
+        var accessor = Accessor(instance, reader);
+        var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetInstance(instance)
+            .SetRelated(accessor)
+            .Build();
+
+        await accessor.ParentAsync(CancellationToken.None);
+        context.Dispose();
+        await accessor.ParentAsync(CancellationToken.None);
+
+        // Two reads: the memo was emptied by Dispose, so the second call hit the reader again.
+        await reader.Received(2).ReadAsync(Arg.Any<RelatedInstanceRef>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Related_ShouldThrow_AfterDispose()
+    {
+        var instance = ChildWithParent();
+        var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetInstance(instance)
+            .SetRelated(Accessor(instance, OkReader()))
+            .Build();
+
+        context.Dispose();
+
+        Should.Throw<ObjectDisposedException>(() => context.Related);
+    }
+
+    [Fact]
+    public void SetRelated_ShouldLeaveTheDefault_WhenGivenNull()
+    {
+        // Task 7's BuildRelatedAccessor returns null when no reader is registered and calls
+        // SetRelated unconditionally, so this no-op is load-bearing.
+        var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetInstance(ChildWithParent())
+            .SetRelated(null)
+            .Build();
+
         context.Related.ShouldBeSameAs(NullRelatedInstanceAccessor.Instance);
     }
 }
