@@ -32,6 +32,31 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
 | `POST /{domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}` | Runs a transition sync or async. |
+| `GET /{domain}/functions` | Lists domain function definitions, including `verbs[]` and input/output schema and view references. |
+| `GET\|POST\|PATCH\|DELETE /{domain}/functions/{function}` | Invokes a custom domain function. `GET /{function}` invokes — it is not a metadata route. |
+| `GET\|POST\|PATCH\|DELETE /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}` | Invokes a custom instance function. |
+
+### Custom function verbs and payload validation
+
+A custom function may declare `verbs[]` and an `inputSchema`. Both are opt-in — a function that
+declares neither accepts every routed verb and any body, which is the pre-existing behavior.
+
+| Condition | Response |
+| --- | --- |
+| Verb not in declared `verbs[]` | `405 Method Not Allowed` with an `Allow` header listing the declared verbs. |
+| Body present and fails `inputSchema` | `400` with field-level validation errors (same shape as transition schema validation). |
+| `outputSchema` | Never enforced; declarative contract for clients only. |
+
+The HTTP `QUERY` method is **not supported** — declaring it is a component validation error and no
+route accepts it. Surrounding tooling (Swagger/OpenAPI, gateways, client SDKs) does not handle an
+unrecognised method yet; model body-carrying reads as `POST`. See
+[Function Handler Architecture](../domain/function-handler-architecture.md) § Custom Function Contract.
+
+### View response: display modes
+
+The view response keeps `display` as the SDI (single-document) string and adds a `modes` object
+carrying `{ sdi, mdi }`. Clients predating MDI support keep reading `display` unchanged. See
+[View Display Modes](../domain/view-display-modes.md).
 
 ### State response: correlation lists
 

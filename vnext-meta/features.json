@@ -55,6 +55,21 @@
       "status": "stable",
       "description": "Built-in StateStoreTask (TaskType=17, discriminator 'statestore') that reads and writes a Dapr state store component from the workflow/function pipeline. When the task config omits storeName, the store is resolved from the executing runtime's DAPR_STATE_STORE_NAME configuration value, so each runtime targets its own component with no hard-coded name. Runs through the Execution API like the other Dapr tasks: the StateStoreTaskExecutor performs input/output mapping and delegates a TaskEnvelope to the StateStoreTaskInvoker, which uses DaprClient. Command names mirror the Dapr state API verbs: get (GetStateAndETagAsync; a cache miss returns success with metadata Found=false and null data, so the error boundary is not tripped), set (SaveStateAsync / TrySaveStateAsync when an ETag is supplied, with optional ttlInSeconds TTL, and StateOptions concurrency FirstWrite/LastWrite + consistency Eventual/Strong), and delete (single key via DeleteStateAsync, key list via DeleteBulkStateAsync, or tag/pattern via the Dapr state Query API which requires a query-capable state store). An explicit storeName must be exposed by the Execution sidecar; the repo ships a 'vnext-state' component there for that purpose. All task-supplied keys are stored under the fixed 'custom:' prefix to namespace task-written entries away from engine-owned cache keys sharing the same store.",
       "schemaPath": "task.type=17"
+    },
+    "viewDisplayModes": {
+      "since": "0.0.79",
+      "status": "stable",
+      "description": "A view declares its display per client interface mode. attributes.display accepts the existing bare string (full-page | popup | bottom-sheet | top-sheet | drawer | inline), which continues to mean the SDI (single-document interface) display, or an object { sdi, mdi } where mdi carries the multi-document display (tab | window | split | inline) for clients that render several documents side by side. At least one mode must be present. The runtime keeps the legacy string in the view response's display field, so clients predating MDI support are unaffected, and adds a modes object carrying both values; a view declaring only mdi returns an empty display. Component JSON round-trips in the shape it was authored: an SDI-only declaration is written back as a bare string, anything declaring mdi as an object. Values are a documented vocabulary (ViewDisplayMode), not an enforced enum — the runtime accepts any non-blank value, the same way renderer is treated.",
+      "schemaPath": "view.attributes.display",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/view"
+      ]
+    },
+    "functionContract": {
+      "since": "0.0.79",
+      "status": "stable",
+      "description": "A function declares the contract clients need in order to call it: attributes.verbs[] lists the supported HTTP verbs (GET, POST, PATCH, DELETE), and inputSchema/outputSchema (sys-schemas references) plus inputView/outputView (sys-views references) describe its payloads and screens. Both gates are opt-in: a function declaring no verbs accepts every routed verb, and one declaring no inputSchema accepts any body, so definitions authored before contract declaration are unaffected. When verbs are declared, an undeclared verb is rejected with HTTP 405 and an Allow response header listing the declared verbs; when inputSchema is declared, a request that carries a body is validated against it before any task runs, using the same JSON-schema validator and localization as transition schema validation. outputSchema is declarative only and is not enforced. Component validation also rejects an unknown verb, a reference pointing at the wrong flow, and an inputSchema declared alongside verbs that can never carry a body. The HTTP QUERY method is deliberately not supported yet — .NET 10 exposes it at the HTTP layer (HttpMethods.Query) and MVC's HttpMethodAttribute makes routing it trivial, but Swagger/OpenAPI generation, gateways and client SDKs do not handle an unrecognised method, so body-carrying reads should be modelled as POST for now. No dedicated contract endpoint exists: GET {domain}/functions already returns each function's full definition including verbs and the four reference fields.",
+      "schemaPath": "function.attributes.verbs"
     }
   }
 }
