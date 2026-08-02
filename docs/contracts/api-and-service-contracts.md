@@ -49,6 +49,39 @@ concurrent completion its active subset can be a moment fresher than `activeCorr
 Changes to the correlation set participate in the state ETag — see
 [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+## Internal-Only Endpoints
+
+Several routes on `InstanceController` exist purely for runtime-to-runtime calls and carry
+`[ApiExplorerSettings(IgnoreApi = true)]` — hidden from the public Swagger group. Existing examples:
+`sub/state`, `sub/fault`, `child-cancel`, `child-fault`, `longpoll/ack`. Two more back cross-domain
+related-instance reads (see
+[Script Related Instance Access](../runtime/script-related-instance-access.md)):
+
+| Method | Route | Response |
+| --- | --- | --- |
+| GET | `.../instances/{instance}/internal/related-data` | `200` snapshot, `204` if the instance does not exist. |
+| POST | `.../workflows/{workflow}/internal/related-data/batch` | `200` array (possibly `[]`), `400` above 100 ids. |
+
+**`[ApiExplorerSettings(IgnoreApi = true)]` hides a route from Swagger. It does nothing to routing.**
+Confirmed by reading the orchestration host directly:
+
+- There is no `[Authorize]` on `InstanceController` or on these actions.
+- `Program.cs` for the orchestration host registers **no** authentication or authorization middleware
+  (`UseAuthentication` / `UseAuthorization` are absent).
+- No NetworkPolicy or ingress manifest for this host exists anywhere in this repository.
+- `etc/docker/docker-compose.dev.yml` publishes the orchestration container's Kestrel port straight to
+  the host (`4201:5000`), bypassing the Dapr sidecar entirely. In local development these routes **are**
+  reachable directly from the host machine — expected for dev, not for any deployed environment.
+
+Their safety rests **entirely** on network isolation: sidecar-to-sidecar Dapr traffic only, with the
+orchestration host's public port unreachable from outside the cluster/mesh. This is the same posture as
+the pre-existing internal endpoints above, but the **blast radius is larger**: `sub/state`,
+`child-cancel`, and `child-fault` perform one narrow, parameterized action each, whereas
+`internal/related-data` and its batch form return **complete, unfiltered instance data for any instance
+id supplied** (no `x-roles` filtering, no query-role check). Whoever owns ingress and NetworkPolicy for
+this host must confirm these paths are not exposed before any environment goes live — this cannot be
+verified from application code alone, since nothing in the application layer restricts it.
+
 ## Sync and Async Semantics
 
 `sync=true` blocks until the pipeline completes and should be used for deterministic,

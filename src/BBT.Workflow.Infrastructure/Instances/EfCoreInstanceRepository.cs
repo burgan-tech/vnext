@@ -318,6 +318,27 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<List<Instance>> FindByIdsAsReadOnlyAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+            return [];
+
+        // Data-only include (via IncludeListData over the plain DbSet, not the overridden
+        // WithDetailsAsync): callers of this batch API never read ChildCorrelations, so that
+        // include — and the extra round trip it costs under split-query — is deliberately skipped.
+        var dbSet = await GetDbSetAsync();
+        var instances = await IncludeListData(dbSet.AsQueryable())
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Where(i => ids.Contains(i.Id))
+            .ToListAsync(cancellationToken);
+
+        return MarkListIfPartiallyLoaded(instances);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierSlimAsync(
         string identifier,
         CancellationToken cancellationToken = default)

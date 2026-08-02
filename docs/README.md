@@ -32,6 +32,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 10. Read [Event-Driven Workflows](domain/event-driven-workflows.md) before wiring external events into workflows or transitions (event mappings, Dapr subscriptions, correlation).
 11. Read [Instance Filtering and Queries](runtime/instance-filtering-and-queries.md) before writing instance queries in mapping scripts (fluent `InstanceQuery`, operator reference, `GetInstancesTask` vs `DaprServiceTask`, migration from hand-written GraphQL filters).
 12. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `18`, local/remote response parity).
+13. Read [Script Related Instance Access](runtime/script-related-instance-access.md) before using or changing `context.Related` in mapping scripts (parent/correlation reads, unfiltered `x-roles` behavior, internal endpoint security posture).
 
 ## Documentation Rules
 

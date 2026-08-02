@@ -5,7 +5,9 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Related;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Scripting;
 
@@ -17,7 +19,11 @@ internal sealed class ScriptContextBuilder(
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
     ILogger<ScriptContext> logger,
-    IRequestRawBodyProvider? rawBodyProvider = null) : IScriptContextBuilder
+    ILogger<RelatedInstanceAccessor> relatedLogger,
+    IRequestRawBodyProvider? rawBodyProvider = null,
+    IRelatedInstanceReader? relatedInstanceReader = null,
+    IInstanceCorrelationRepository? correlationRepository = null,
+    IOptions<RelatedAccessOptions>? relatedAccessOptions = null) : IScriptContextBuilder
 {
     private IRuntimeInfoProvider? _runtimeInfoProvider;
     private Definitions.Workflow? _workflow;
@@ -219,6 +225,7 @@ internal sealed class ScriptContextBuilder(
         if (instance != null)
         {
             builder.SetInstance(instance);
+            builder.SetRelated(BuildRelatedAccessor(instance));
         }
         
         var scriptTransitionRequest = BuildScriptTransitionRequest();
@@ -309,6 +316,24 @@ internal sealed class ScriptContextBuilder(
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Builds the related-instance accessor for the resolved instance. Returns null when the reader or
+    /// the correlation repository is not registered — the ScriptContext then falls back to the no-op
+    /// accessor, which is the correct behaviour for unit tests and reader-less hosts.
+    /// </summary>
+    private IRelatedInstanceAccessor? BuildRelatedAccessor(Instance instance)
+    {
+        if (relatedInstanceReader == null || correlationRepository == null)
+            return null;
+
+        return new RelatedInstanceAccessor(
+            instance,
+            relatedInstanceReader,
+            correlationRepository,
+            relatedAccessOptions?.Value ?? new RelatedAccessOptions(),
+            relatedLogger);
     }
 
     private Transition? ResolveTransition(Definitions.Workflow workflow)

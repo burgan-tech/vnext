@@ -25,6 +25,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Loads several instances by id for read-only projection, including only their data rows.
+    /// Unlike <see cref="FindByIdentifierAsReadOnlyAsync"/> this omits the ChildCorrelations include,
+    /// because callers of this method never read correlations. Ids with no matching row are omitted.
+    /// </summary>
+    Task<List<Instance>> FindByIdsAsReadOnlyAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds an instance by its identifier (GUID or key) without loading DataList.
     /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
     /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.

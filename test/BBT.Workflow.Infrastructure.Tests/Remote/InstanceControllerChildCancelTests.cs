@@ -8,7 +8,9 @@ using BBT.Workflow.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.Instances.Related;
 using BBT.Workflow.Orchestration.Controllers.Instances;
+using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -109,7 +111,8 @@ public sealed class InstanceControllerChildCancelTests
     private static InstanceController CreateController(
         IInstanceCommandAppService commandService,
         IHttpContextAccessor accessor,
-        IChildSubflowCancellationService childService) => new(
+        IChildSubflowCancellationService childService,
+        IRelatedInstanceQueryAppService? relatedInstanceQueryAppService = null) => new(
         commandService,
         Substitute.For<IInstanceQueryAppService>(),
         Substitute.For<IInstanceRetryAppService>(),
@@ -123,5 +126,6 @@ public sealed class InstanceControllerChildCancelTests
         Substitute.For<IChildSubflowFaultService>(),
         Substitute.For<ITransitionJobEnqueuer>(),
         Substitute.For<IInstanceCommandGateway>(),
-        Substitute.For<IEventAppService>());
+        Substitute.For<IEventAppService>(),
+        relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>());
 }

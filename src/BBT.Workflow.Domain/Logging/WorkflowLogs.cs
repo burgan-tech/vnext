@@ -2789,6 +2789,116 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Related Instance Access
+
+    /// <summary>
+    /// Logs when a related instance (parent or correlation) was read successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20430,
+        Level = LogLevel.Debug,
+        Message = "Related instance resolved. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, Domain: {TargetDomain}, Flow: {TargetFlow}")]
+    public static partial void RelatedInstanceResolved(
+        this ILogger logger,
+        Guid instanceId,
+        string direction,
+        Guid targetInstanceId,
+        string targetDomain,
+        string targetFlow);
+
+    /// <summary>
+    /// Logs when no related instance could be resolved (no parent, no matching correlation,
+    /// or the target instance is gone). This is a normal outcome, not an error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20431,
+        Level = LogLevel.Debug,
+        Message = "Related instance not found. Instance: {InstanceId}, Direction: {Direction}, Key: {Key}")]
+    public static partial void RelatedInstanceNotFound(
+        this ILogger logger,
+        Guid instanceId,
+        string direction,
+        string? key);
+
+    /// <summary>
+    /// Logs when resolving a related instance required a cross-domain read over HTTP. Logged by
+    /// <see cref="BBT.Workflow.Gateway.RoutedRelatedInstanceReader"/>, which only sees the target of the
+    /// dispatch (a <c>RelatedInstanceRef</c>), not the instance whose script triggered the read — hence
+    /// <paramref name="targetInstanceId"/> identifies the instance being read, not the reader.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20432,
+        Level = LogLevel.Debug,
+        Message = "Related instance cross-domain read. Target: {TargetInstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Count: {Count}")]
+    public static partial void RelatedInstanceCrossDomainRead(
+        this ILogger logger,
+        Guid targetInstanceId,
+        string targetDomain,
+        string targetFlow,
+        int count);
+
+    /// <summary>
+    /// Logs when resolving a related instance failed due to an infrastructure problem;
+    /// the accessor throws after logging this.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20433,
+        Level = LogLevel.Error,
+        Message = "Related instance resolution failed. Instance: {InstanceId}, Direction: {Direction}, Target: {TargetInstanceId}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Reason: {Reason}")]
+    public static partial void RelatedInstanceResolutionFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string direction,
+        Guid targetInstanceId,
+        string targetDomain,
+        string targetFlow,
+        string reason);
+
+    /// <summary>
+    /// Logs when the per-ScriptContext related-instance resolution cap was hit;
+    /// the accessor throws after logging this.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20434,
+        Level = LogLevel.Warning,
+        Message = "Related instance resolution limit exceeded. Instance: {InstanceId}, Limit: {Limit}")]
+    public static partial void RelatedInstanceResolutionLimitExceeded(
+        this ILogger logger,
+        Guid instanceId,
+        int limit);
+
+    /// <summary>
+    /// Logs when the Application-layer related-instance reader catches an exception at the
+    /// repository boundary while reading the target instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20435,
+        Level = LogLevel.Error,
+        Message = "Related instance read failed. Target: {TargetInstanceId}, Flow: {TargetFlow}")]
+    public static partial void RelatedInstanceReadFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid targetInstanceId,
+        string targetFlow);
+
+    /// <summary>
+    /// Logs when resolving a batch of related instances failed due to an infrastructure problem;
+    /// the accessor throws after logging this. Unlike <see cref="RelatedInstanceResolutionFailed"/>,
+    /// a batch can span several domains, so every distinct target domain is named rather than one.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20436,
+        Level = LogLevel.Error,
+        Message = "Related instance batch resolution failed. Instance: {InstanceId}, Count: {Count}, TargetDomains: {TargetDomains}, Reason: {Reason}")]
+    public static partial void RelatedInstanceBatchResolutionFailed(
+        this ILogger logger,
+        Guid instanceId,
+        int count,
+        string targetDomains,
+        string reason);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>
