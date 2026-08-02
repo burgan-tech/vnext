@@ -22,10 +22,12 @@ public sealed class ViewInstanceAttributesDto
     public ViewType? Type { get; set; }
 
     /// <summary>
-    /// Display mode.
+    /// Per-client-mode display declaration. Accepts both the legacy string form (SDI-only) and the
+    /// object form via <see cref="ViewDisplayJsonConverter"/>.
     /// </summary>
     [JsonPropertyName("display")]
-    public string? Display { get; set; }
+    [JsonConverter(typeof(ViewDisplayJsonConverter))]
+    public ViewDisplay? Display { get; set; }
 
     /// <summary>
     /// Localization label.

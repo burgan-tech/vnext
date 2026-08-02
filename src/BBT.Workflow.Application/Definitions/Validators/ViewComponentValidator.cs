@@ -32,10 +32,13 @@ public sealed class ViewComponentValidator : IComponentValidator
                 result.AddError("View type is required.", $"{nameof(View)}.{nameof(View.Type)}");
             }
 
-            // Validate display
-            if (string.IsNullOrWhiteSpace(view.Display))
+            // Validate display - accepts the legacy string form (SDI) or the { sdi, mdi } object form,
+            // but at least one mode must declare a value.
+            if (view.DisplayModes is null || view.DisplayModes.IsEmpty)
             {
-                result.AddError("View display is required.", $"{nameof(View)}.{nameof(View.Display)}");
+                result.AddError(
+                    "View display is required (at least one of sdi/mdi).",
+                    $"{nameof(View)}.{nameof(View.DisplayModes)}");
             }
 
             if (!string.IsNullOrEmpty(view.Renderer) && view.Type != ViewType.Json)

@@ -21,13 +21,13 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     private View(
         ViewType type,
         object content,
-        string display,
+        ViewDisplay? display,
         LanguageLabel[]? labels,
         string? renderer) : this()
     {
         Type = type;
         Content = content;
-        Display = display;
+        this.display = display;
         Labels = labels ?? [];
         Renderer = renderer;
     }
@@ -67,11 +67,33 @@ public sealed class View : IDomainEntity, IViewReference, IReferenceSetter
     /// </summary>
     public object Content { get; private set; } = string.Empty;
     
+    [JsonInclude]
+    [JsonPropertyName("display")]
+    [JsonConverter(typeof(ViewDisplayJsonConverter))]
+    private ViewDisplay? display;
+
     /// <summary>
-    /// Display
+    /// Per-client-mode display declaration. Authored either as a bare string (legacy, SDI-only) or as
+    /// <c>{ "sdi": "...", "mdi": "..." }</c>. Null when the view declares no display.
     /// </summary>
-    public string Display { get; private set; } = string.Empty;
-    
+    [JsonIgnore]
+    public ViewDisplay? DisplayModes => display;
+
+    /// <summary>
+    /// SDI (single-document interface) display value. This is what the legacy string-form
+    /// <c>display</c> declaration maps to, and what clients predating MDI support consume.
+    /// Empty when the view only declares an MDI display.
+    /// </summary>
+    [JsonIgnore]
+    public string Display => display?.Sdi ?? string.Empty;
+
+    /// <summary>
+    /// MDI (multi-document interface) display value. Null when the view declares no MDI presentation.
+    /// </summary>
+    [JsonIgnore]
+    public string? MdiDisplay => display?.Mdi;
+
+
     /// <summary>
     /// Localization labels
     /// </summary>
