@@ -197,4 +197,64 @@ public class ViewComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeTrue();
     }
+
+    // ── display: SDI / MDI modes ─────────────────────────────────────────────
+
+    private static JsonElement ViewWithDisplay(string displayJson) =>
+        JsonDocument.Parse($$"""
+        {
+            "type": "json",
+            "content": "{\"test\": \"content\"}",
+            "display": {{displayJson}}
+        }
+        """).RootElement;
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForLegacyStringDisplay()
+    {
+        var result = _validator.Validate(ViewWithDisplay("\"popup\""));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForDisplayWithBothModes()
+    {
+        var result = _validator.Validate(ViewWithDisplay("""{"sdi": "popup", "mdi": "tab"}"""));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForDisplayWithMdiOnly()
+    {
+        var result = _validator.Validate(ViewWithDisplay("""{"mdi": "window"}"""));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_ForMissingDisplay()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "type": "json",
+            "content": "{\"test\": \"content\"}"
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("View.DisplayModes"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_ForEmptyDisplayObject()
+    {
+        var result = _validator.Validate(ViewWithDisplay("{}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("View.DisplayModes"));
+    }
 }

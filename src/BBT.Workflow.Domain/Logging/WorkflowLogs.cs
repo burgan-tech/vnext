@@ -3088,4 +3088,33 @@ public static partial class WorkflowLogs
         string reason);
 
     #endregion
+
+    #region Function Contract (800xx)
+
+    /// <summary>
+    /// Logs when a request is rejected because the function does not declare support for its HTTP verb.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80001,
+        Level = LogLevel.Warning,
+        Message = "Function {FunctionKey} rejected HTTP {HttpMethod}; declared verbs: {AllowedVerbs}")]
+    public static partial void FunctionVerbRejected(
+        this ILogger logger,
+        string functionKey,
+        string httpMethod,
+        string allowedVerbs);
+
+    /// <summary>
+    /// Logs when a request body fails validation against the function's declared input schema.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80002,
+        Level = LogLevel.Warning,
+        Message = "Function {FunctionKey} input schema validation failed against {SchemaKey}")]
+    public static partial void FunctionInputSchemaValidationFailed(
+        this ILogger logger,
+        string functionKey,
+        string schemaKey);
+
+    #endregion
 }

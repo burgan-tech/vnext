@@ -106,6 +106,7 @@ public sealed class ViewContentResolutionService(
             Content = content,
             Type = view.Type.ToString(),
             Display = view.Display,
+            Modes = MapDisplayModes(view.DisplayModes),
             Label = string.Empty,
             Renderer = view.Renderer
         };
@@ -128,9 +129,26 @@ public sealed class ViewContentResolutionService(
             Key = instanceOutput.Key ?? viewKey,
             Content = contentTyped,
             Type = viewType.ToString(),
-            Display = attrs?.Display ?? string.Empty,
+            Display = attrs?.Display?.Sdi ?? string.Empty,
+            Modes = MapDisplayModes(attrs?.Display),
             Label = attrs?.Label ?? string.Empty,
             Renderer = attrs?.Renderer
+        };
+    }
+
+    /// <summary>
+    /// Maps the domain display declaration to its response DTO. Returns null when the view declares
+    /// no display, so the field is omitted rather than emitted as an empty object.
+    /// </summary>
+    private static ViewDisplayModesDto? MapDisplayModes(ViewDisplay? display)
+    {
+        if (display is null || display.IsEmpty)
+            return null;
+
+        return new ViewDisplayModesDto
+        {
+            Sdi = display.Sdi,
+            Mdi = display.Mdi
         };
     }
 

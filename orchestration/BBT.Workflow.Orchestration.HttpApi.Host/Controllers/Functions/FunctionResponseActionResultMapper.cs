@@ -14,7 +14,7 @@ internal static class FunctionResponseActionResultMapper
         HttpContext httpContext)
     {
         if (!result.IsSuccess)
-            return result.ToActionResult(httpContext);
+            return MapFailure(result, httpContext);
 
         var output = result.Value!;
         ResponseOutputWriter.ApplyHeaders(output.Headers, httpContext);
@@ -28,6 +28,33 @@ internal static class FunctionResponseActionResultMapper
             StatusCode = output.StatusCode ?? StatusCodes.Status200OK,
             ContentType = ResponseOutputWriter.ResolveContentType(output.Headers),
             Content = SerializeContent(output.Data)
+        };
+    }
+
+    /// <summary>
+    /// Maps a failed function result to an action result. A rejected HTTP verb is the one failure the
+    /// generic Aether mapping cannot express: it must surface as 405 with an <c>Allow</c> header listing
+    /// the verbs the function declares. The allowed verbs travel in <c>Error.Target</c>.
+    /// </summary>
+    private static IActionResult MapFailure(
+        Result<FunctionResponseOutput> result,
+        HttpContext httpContext)
+    {
+        if (result.Error.Code != WorkflowErrorCodes.FunctionVerbNotAllowed)
+            return result.ToActionResult(httpContext);
+
+        if (!string.IsNullOrWhiteSpace(result.Error.Target))
+            httpContext.Response.Headers.Allow = result.Error.Target;
+
+        return new ObjectResult(new ProblemDetails
+        {
+            Status = StatusCodes.Status405MethodNotAllowed,
+            Title = "Method Not Allowed",
+            Detail = result.Error.Message,
+            Type = result.Error.Code
+        })
+        {
+            StatusCode = StatusCodes.Status405MethodNotAllowed
         };
     }
 

@@ -463,6 +463,26 @@ public static class WorkflowErrors
             WorkflowErrorCodes.FunctionScopeNotSatisfied,
             $"Function '{functionKey}' with scope '{scope}' cannot be invoked in this context.");
 
+    /// <summary>
+    /// The function declares a set of supported HTTP verbs and the request's verb is not among them.
+    /// Maps to HTTP 405; the allowed verbs travel in <c>Error.Target</c> so the HTTP layer can emit
+    /// the <c>Allow</c> response header without re-reading the definition.
+    /// </summary>
+    /// <param name="functionKey">The key of the function that was invoked.</param>
+    /// <param name="httpMethod">The rejected HTTP method.</param>
+    /// <param name="allowedVerbs">The verbs the function declares support for.</param>
+    public static Error FunctionVerbNotAllowed(
+        string functionKey,
+        string httpMethod,
+        IEnumerable<string> allowedVerbs)
+    {
+        var allowed = string.Join(", ", allowedVerbs);
+        return Error.Validation(
+            WorkflowErrorCodes.FunctionVerbNotAllowed,
+            $"Function '{functionKey}' does not support HTTP {httpMethod}. Allowed: {allowed}.",
+            target: allowed);
+    }
+
     #endregion
 
     #region Authorization Errors

@@ -9,6 +9,7 @@ using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -37,7 +38,9 @@ public sealed class FunctionAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IDynamicExpressoValueEvaluator keyEvaluator,
     IStateStoreCacheGateway cacheGateway,
-    IRemoteInvokerService remoteInvoker) : ApplicationService(serviceProvider), IFunctionAppService
+    IRemoteInvokerService remoteInvoker,
+    IFunctionRequestValidationService functionRequestValidationService)
+    : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
     public async Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
@@ -47,6 +50,7 @@ public sealed class FunctionAppService(
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         JsonElement? body = null,
+        string? httpMethod = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
@@ -55,7 +59,7 @@ public sealed class FunctionAppService(
             return await componentCacheStore
                 .GetFunctionAsync(domain, key, version, cancellationToken)
                 .BindAsync(function =>
-                    ExecuteFunctionAsync(function, null, null, headers, queryParameters, body, cancellationToken));
+                    ExecuteFunctionAsync(function, null, null, headers, queryParameters, body, httpMethod, cancellationToken));
         }
     }
 
@@ -68,6 +72,7 @@ public sealed class FunctionAppService(
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         JsonElement? body = null,
+        string? httpMethod = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
@@ -87,7 +92,7 @@ public sealed class FunctionAppService(
             return await componentCacheStore
                 .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
                 .BindAsync(workflow =>
-                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, headers, queryParameters, body, cancellationToken));
+                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, headers, queryParameters, body, httpMethod, cancellationToken));
         }
     }
 
@@ -116,13 +121,14 @@ public sealed class FunctionAppService(
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
         JsonElement? body,
+        string? httpMethod,
         CancellationToken cancellationToken)
     {
         var functionReference = workflow.FindFunction(key);
         return componentCacheStore
             .GetFunctionAsync(domain, key, functionReference?.Version, cancellationToken)
             .BindAsync(function =>
-                ExecuteFunctionAsync(function, instance, workflow, headers, queryParameters, body, cancellationToken));
+                ExecuteFunctionAsync(function, instance, workflow, headers, queryParameters, body, httpMethod, cancellationToken));
     }
 
     /// <summary>
@@ -135,6 +141,7 @@ public sealed class FunctionAppService(
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
         JsonElement? body,
+        string? httpMethod,
         CancellationToken cancellationToken)
     {
         // Scope enforcement. Domain is exempt; Instance/Flow require an instance;
@@ -166,6 +173,22 @@ public sealed class FunctionAppService(
             if (!allowed)
                 return Result<FunctionResponseOutput>.Fail(WorkflowErrors.FunctionAccessDenied(function.Key));
         }
+
+        // Contract enforcement. Both gates are opt-in: a function that declares no verbs accepts every
+        // verb, and one that declares no input schema accepts any body - so definitions authored before
+        // contract declaration behave exactly as before. Runs after authorization so an unauthorized
+        // caller learns nothing about the function's shape.
+        if (!function.SupportsVerb(httpMethod))
+        {
+            Logger.FunctionVerbRejected(function.Key, httpMethod!, string.Join(", ", function.Verbs));
+            return Result<FunctionResponseOutput>.Fail(
+                WorkflowErrors.FunctionVerbNotAllowed(function.Key, httpMethod!, function.Verbs));
+        }
+
+        var inputValidation = await functionRequestValidationService.ValidateRequestAsync(
+            function, body, headers, cancellationToken);
+        if (!inputValidation.IsSuccess)
+            return Result<FunctionResponseOutput>.Fail(inputValidation.Error);
 
         object scriptBody = body.HasValue
             ? (object)body.Value

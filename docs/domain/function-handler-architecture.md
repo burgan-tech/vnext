@@ -36,6 +36,74 @@ Application services own domain behavior and result construction.
 | `hierarchy` | `HierarchyFunctionHandler` | Returns instance hierarchy. |
 | `humanTask` | `HumanTaskFunctionHandler` | Returns human task state for clients. |
 
+## Custom Function Contract (verbs, schemas, views)
+
+A custom function declares the contract its clients need in order to call it. Every part is
+optional, and a function that declares nothing behaves exactly as it did before this existed.
+
+| Attribute | Purpose |
+| --- | --- |
+| `verbs[]` | HTTP verbs the function accepts: `GET`, `POST`, `PATCH`, `DELETE`. Empty/absent means no restriction. |
+| `inputSchema` | `sys-schemas` reference describing the request body. Enforced at runtime. |
+| `outputSchema` | `sys-schemas` reference describing the response body. Declarative only. |
+| `inputView` | `sys-views` reference the client renders to collect input. |
+| `outputView` | `sys-views` reference the client renders to present output. |
+
+```jsonc
+"attributes": {
+  "scope": "D",
+  "verbs": ["POST"],
+  "inputSchema":  { "key": "search-request",  "domain": "core", "flow": "sys-schemas", "version": "1.0.0" },
+  "outputSchema": { "key": "search-response", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" },
+  "inputView":    { "key": "search-form",     "domain": "core", "flow": "sys-views",   "version": "1.0.0" },
+  "task": { }
+}
+```
+
+### The QUERY verb (deferred, not supported)
+
+The HTTP `QUERY` method — a safe, idempotent read that carries a request body — is **deliberately
+not supported**. Declaring it is a component validation error and no route accepts it.
+
+.NET 10 does know the method at the HTTP layer (`HttpMethods.Query`, `HttpMethods.IsQuery`), and
+MVC's `HttpMethodAttribute` extension point makes routing it a few lines of work. The blocker is
+the surrounding ecosystem, not the runtime: Swagger/OpenAPI generation, gateways, WAFs and client
+SDKs do not handle an unrecognised method, so enabling it breaks tooling well before it buys
+anything. Revisit when that support lands.
+
+Until then, model body-carrying reads as `POST`.
+
+### Enforcement
+
+Both gates run inside `FunctionAppService.ExecuteFunctionAsync`, after scope enforcement and
+authorization and before any task executes. System functions (`state`, `view`, `data`, …) never
+reach this path — they are served by their own handlers — so they are unaffected.
+
+| Condition | Result |
+| --- | --- |
+| `verbs[]` empty or absent | Every routed verb accepted. |
+| Verb declared and matched | Request proceeds. |
+| Verb declared and not matched | `405 Method Not Allowed` + `Allow` header listing declared verbs. |
+| `inputSchema` absent | Body not validated. |
+| `inputSchema` set, no body (e.g. `GET`) | Body not validated. |
+| `inputSchema` set, body present | Validated via `IJsonSchemaValidator`; failure → `400` with field-level errors. |
+
+Comparison is case-insensitive and verbs are normalized to upper case, so `"post"` and `"POST"`
+are equivalent. `outputSchema` is never validated at runtime.
+
+Component validation rejects an unknown verb, a reference pointing at the wrong flow, and an
+`inputSchema` declared alongside verbs that can never carry a body (e.g. `verbs: ["GET"]` only),
+since the schema would be silently dead.
+
+### Discovery
+
+There is no dedicated contract endpoint. `GET {domain}/functions` already returns each function's
+full component definition, including `verbs[]` and the four reference fields, so a client reads the
+contract from the definition it already has and resolves the referenced schema/view components the
+same way it resolves any other reference.
+
+Note that `GET {domain}/functions/{function}` **invokes** the function — it is not a metadata route.
+
 ## State Alias (Role-Based State Visibility)
 
 A state may declare an `alias` array so the same internal state is presented under

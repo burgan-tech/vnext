@@ -83,7 +83,7 @@ public sealed class FunctionController(
 
         var result = await functionAppService.GetFunctionByInstanceAsync(
             function, workflow, domain, instance,
-            requestContext.Headers, requestContext.QueryParameters, null, cancellationToken);
+            requestContext.Headers, requestContext.QueryParameters, null, HttpContext.Request.Method, cancellationToken);
 
         return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
@@ -148,7 +148,7 @@ public sealed class FunctionController(
 
         var result = await functionAppService.GetFunctionByInstanceAsync(
             function, workflow, domain, instance,
-            requestContext.Headers, requestContext.QueryParameters, body, cancellationToken);
+            requestContext.Headers, requestContext.QueryParameters, body, HttpContext.Request.Method, cancellationToken);
 
         return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
