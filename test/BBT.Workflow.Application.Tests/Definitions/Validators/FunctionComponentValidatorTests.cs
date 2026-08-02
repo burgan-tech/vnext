@@ -97,4 +97,131 @@ public class FunctionComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeFalse();
     }
+
+    // ── verbs / contract references ──────────────────────────────────────────
+
+    private static JsonElement FunctionWith(string extraAttributes) =>
+        JsonDocument.Parse($$"""
+        {
+            "scope": "F",
+            "task": {
+                "type": "6",
+                "config": { "url": "https://example.com", "method": "GET" }
+            }{{extraAttributes}}
+        }
+        """).RootElement;
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_WhenNoVerbsDeclared()
+    {
+        var result = _validator.Validate(FunctionWith(string.Empty));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForAllKnownVerbs()
+    {
+        var result = _validator.Validate(
+            FunctionWith(""", "verbs": ["GET", "POST", "PATCH", "DELETE"]"""));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_ForQueryVerb_NotSupportedYet()
+    {
+        // QUERY is intentionally unsupported until Swagger/gateway tooling handles it.
+        var result = _validator.Validate(FunctionWith(""", "verbs": ["QUERY"]"""));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Verbs"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_ForUnknownVerb()
+    {
+        var result = _validator.Validate(FunctionWith(""", "verbs": ["PUT"]"""));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Verbs"));
+    }
+
+    [Fact]
+    public void Validate_ShouldNormalizeVerbCasing()
+    {
+        var result = _validator.Validate(FunctionWith(""", "verbs": ["post", " patch "]"""));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForWellFormedContractReferences()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "verbs": ["POST"]
+        , "inputSchema":  { "key": "in",  "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }
+        , "outputSchema": { "key": "out", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }
+        , "inputView":    { "key": "vin", "domain": "d", "flow": "sys-views",   "version": "1.0.0" }
+        , "outputView":   { "key": "vout","domain": "d", "flow": "sys-views",   "version": "1.0.0" }
+        """));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenInputSchemaReferencesWrongFlow()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "verbs": ["POST"]
+        , "inputSchema": { "key": "in", "domain": "d", "flow": "sys-views", "version": "1.0.0" }
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputSchema"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenInputViewReferencesWrongFlow()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "inputView": { "key": "vin", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputView"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenInputSchemaDeclaredButNoVerbCarriesABody()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "verbs": ["GET"]
+        , "inputSchema": { "key": "in", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputSchema"));
+    }
+
+    [Fact]
+    public void Validate_ShouldAllowInputSchema_WhenABodyCarryingVerbAccompaniesGet()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "verbs": ["GET", "POST"]
+        , "inputSchema": { "key": "in", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }
+        """));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldAllowInputSchema_WhenNoVerbsDeclared()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "inputSchema": { "key": "in", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }
+        """));
+
+        result.IsValid.ShouldBeTrue();
+    }
 }

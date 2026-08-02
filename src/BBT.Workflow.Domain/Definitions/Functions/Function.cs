@@ -23,7 +23,12 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         ScriptCode? output = null,
         List<RoleGrant>? roles = null,
         bool rawResponse = false,
-        FunctionCache? cache = null
+        FunctionCache? cache = null,
+        List<string>? verbs = null,
+        Reference? inputSchema = null,
+        Reference? outputSchema = null,
+        Reference? inputView = null,
+        Reference? outputView = null
     ) : this()
     {
         Scope = scope;
@@ -33,6 +38,11 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         this.roles = roles ?? [];
         RawResponse = rawResponse;
         Cache = cache;
+        this.verbs = NormalizeVerbs(verbs);
+        InputSchema = inputSchema;
+        OutputSchema = outputSchema;
+        InputView = inputView;
+        OutputView = outputView;
     }
 
     /// <summary>
@@ -91,6 +101,45 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     [JsonInclude] [JsonPropertyName("cache")]
     public FunctionCache? Cache { get; private set; }
 
+    [JsonInclude] [JsonPropertyName("verbs")]
+    private List<string> verbs = [];
+
+    /// <summary>
+    /// HTTP verbs this function supports, normalized to upper case.
+    /// Empty means no verb restriction is applied, preserving the behaviour of definitions authored
+    /// before verb declaration existed. Well-known values are defined in <see cref="FunctionVerb"/>.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<string> Verbs => verbs.AsReadOnly();
+
+    /// <summary>
+    /// Optional reference to the <c>sys-schemas</c> component describing this function's request body.
+    /// When set, the runtime validates the request body against it before executing any task.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("inputSchema")]
+    public Reference? InputSchema { get; private set; }
+
+    /// <summary>
+    /// Optional reference to the <c>sys-schemas</c> component describing this function's response body.
+    /// Declarative only - the runtime does not validate responses against it.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("outputSchema")]
+    public Reference? OutputSchema { get; private set; }
+
+    /// <summary>
+    /// Optional reference to the <c>sys-views</c> component the client renders to collect this
+    /// function's input.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("inputView")]
+    public Reference? InputView { get; private set; }
+
+    /// <summary>
+    /// Optional reference to the <c>sys-views</c> component the client renders to present this
+    /// function's output.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("outputView")]
+    public Reference? OutputView { get; private set; }
+
     [JsonInclude] [JsonPropertyName("roles")]
     private List<RoleGrant> roles = new();
 
@@ -120,6 +169,36 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
 
     public List<OnExecuteTask> GetExecuteTasks() =>
         onExecutionTasks.Count > 0 ? onExecutionTasks : [Task!];
+
+    /// <summary>
+    /// True when this function accepts the given HTTP verb. A function that declares no verbs
+    /// accepts every verb, so existing definitions keep their current behaviour.
+    /// </summary>
+    /// <param name="httpMethod">The incoming HTTP method. A null or blank value is treated as unrestricted.</param>
+    public bool SupportsVerb(string? httpMethod)
+    {
+        if (verbs.Count == 0 || string.IsNullOrWhiteSpace(httpMethod))
+            return true;
+
+        var normalized = FunctionVerb.Normalize(httpMethod);
+        return verbs.Contains(normalized, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Trims, upper-cases and de-duplicates authored verbs so comparison and the <c>Allow</c> header
+    /// are stable regardless of how the component JSON was written.
+    /// </summary>
+    private static List<string> NormalizeVerbs(List<string>? authored)
+    {
+        if (authored is null || authored.Count == 0)
+            return [];
+
+        return authored
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(FunctionVerb.Normalize)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
 
     public void SetReference(IReference reference)
     {

@@ -132,6 +132,9 @@ public static class WorkflowErrorCodes
     public const string FunctionNotInWorkflow = "Function:800001";
     public const string FunctionScopeNotSatisfied = "Function:800002";
 
+    /// <summary>The function does not declare support for the request's HTTP verb. Maps to HTTP 405.</summary>
+    public const string FunctionVerbNotAllowed = "Function:800003";
+
     #endregion
 
     #region Authorization Errors (110xxx)
