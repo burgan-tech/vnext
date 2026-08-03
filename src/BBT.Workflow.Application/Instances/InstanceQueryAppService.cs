@@ -660,7 +660,9 @@ public sealed class InstanceQueryAppService(
         response.Extensions = extensionsResult.Value!;
 
         response.Attributes =
-            await schemaFieldFilterService.ApplyAsync(flow, response.Attributes, instance, cancellationToken) ??
+            await schemaFieldFilterService.ApplyAsync(
+                flow, response.Attributes, instance,
+                new AuthorizationRequestContext(headers, queryParameters), cancellationToken) ??
             response.Attributes;
 
         return Result<GetInstanceOutput>.Ok(response);
@@ -721,7 +723,10 @@ public sealed class InstanceQueryAppService(
                     else
                     {
                         result.Data = instanceData?.Data.JsonElement;
-                        result.Data = await schemaFieldFilterService.ApplyAsync(flow, result.Data, instance, cancellationToken) ??
+                        result.Data = await schemaFieldFilterService.ApplyAsync(
+                                          flow, result.Data, instance,
+                                          new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                                          cancellationToken) ??
                                       result.Data;
                     }
 
@@ -1111,6 +1116,11 @@ public sealed class InstanceQueryAppService(
             // When this instance was started as a SubFlow with parent-defined transition overrides,
             // apply combined filtering: parent override grants for overridden transitions,
             // own role filtering for non-overridden transitions.
+            // The same request context the authorize function passes, so a transition guarded by a dynamic
+            // grant reading $.context.Headers/QueryParameters is listed here exactly when authorize would
+            // allow it. Without it those namespaces are empty and the grant silently never matches.
+            var authRequestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
+
             var parentTransitionOverrides = TryGetParentTransitionRoleOverrides(instance);
             if (parentTransitionOverrides is { Count: > 0 })
             {
@@ -1122,7 +1132,7 @@ public sealed class InstanceQueryAppService(
                     {
                         // Parent override (replace mode): use parent-defined grants
                         var allowed = await transitionAuthorizationManager
-                            .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, cancellationToken: cancellationToken);
+                            .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, authRequestContext, cancellationToken);
                         if (allowed) filteredKeys.Add(key);
                     }
                     else
@@ -1133,7 +1143,7 @@ public sealed class InstanceQueryAppService(
                         if (ownTransition != null)
                         {
                             var result = await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                                currentWorkflow, currentStateValue, instance, [key], input.Role, cancellationToken);
+                                currentWorkflow, currentStateValue, instance, [key], input.Role, authRequestContext, cancellationToken);
                             filteredKeys.AddRange(result);
                         }
                         else
@@ -1156,7 +1166,7 @@ public sealed class InstanceQueryAppService(
                     .ToList();
                 var filteredParentSharedKeys = parentSharedKeys.Count > 0
                     ? (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                            currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Role, cancellationToken))
+                            currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Role, authRequestContext, cancellationToken))
                       .ToList()
                     : parentSharedKeys;
                 keysForTransitions = keysForTransitions
@@ -1167,7 +1177,7 @@ public sealed class InstanceQueryAppService(
             else
             {
                 keysForTransitions = (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                        currentWorkflow, currentStateValue, instance, keysForTransitions, input.Role, cancellationToken))
+                        currentWorkflow, currentStateValue, instance, keysForTransitions, input.Role, authRequestContext, cancellationToken))
                     .ToList();
             }
         }
@@ -2215,6 +2225,7 @@ public sealed class InstanceQueryAppService(
     /// <inheritdoc />
     public async Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
         string domain,
+        IReadOnlyDictionary<string, string?>? headers = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
@@ -2231,7 +2242,10 @@ public sealed class InstanceQueryAppService(
         const int humanTaskFanoutParallelism = 10;
 
         var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var userRoles = currentUser.Roles ?? [];
+        // Honor the legacy `role` header: a caller whose roles arrive only as a header must not be
+        // treated as role-less, which would silently drop every task guarded by a role grant.
+        var userRoles = currentUser.ResolveCallerRoles(headers) ?? [];
+        var requestContext = new AuthorizationRequestContext(headers);
         var allItems = new System.Collections.Concurrent.ConcurrentBag<HumanTaskItemOutput>();
 
         var parallelOptions = new ParallelOptions
@@ -2268,7 +2282,7 @@ public sealed class InstanceQueryAppService(
                 return;
 
             var filtered = await FilterAuthorizedInstancesAsync(
-                instances, currentWorkflow, domain, userRoles, ct);
+                instances, currentWorkflow, domain, userRoles, requestContext, ct);
 
             foreach (var instance in filtered)
             {
@@ -2345,7 +2359,9 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Filters instances by checking whether the current user is authorized to trigger
     /// at least one transition. For each instance, resolves the correct workflow and state
-    /// (main flow or active SubFlow via correlation), then checks static roles and predefined roles.
+    /// (main flow or active SubFlow via correlation), then evaluates that transition's grants through the
+    /// shared role evaluator — the same decision the transition-execution path makes, so a task appears in
+    /// the list exactly when its transition is executable.
     /// When a SubFlow transition is overridden by the parent, the parent's role grants are used instead.
     /// </summary>
     private async Task<List<Instance>> FilterAuthorizedInstancesAsync(
@@ -2353,6 +2369,7 @@ public sealed class InstanceQueryAppService(
         Definitions.Workflow parentWorkflow,
         string domain,
         string[] userRoles,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
         var result = new List<Instance>(instances.Count);
@@ -2371,73 +2388,36 @@ public sealed class InstanceQueryAppService(
 
             var parentOverrides = GetParentTransitionOverrides(instance, parentWorkflow);
 
-            var isAuthorized = false;
-
+            // Resolve every candidate first so the evaluator's prefetch hint covers the whole instance:
+            // one previous-transition fetch serves all of this instance's transitions and caller roles.
+            var candidates = new List<(Transition Transition, IReadOnlyCollection<RoleGrant> Grants)>(transitions.Count);
             foreach (var transitionKey in transitions)
-            {                
-                List<RoleGrant> transitionRoles = [];
+            {
                 var transition = workflow.FindTransitionInContext(transitionKey);
                 if (transition == null)
                     continue;
 
-                if (parentOverrides != null
-                    && parentOverrides.TryGetValue(transitionKey, out var tOverride)
-                    && tOverride.Roles is { Count: > 0 })
-                {
-                    transitionRoles = tOverride.Roles;
-                }
-                else
-                {
-                    transitionRoles = transition.Roles.ToList();
-                }
+                var grants = parentOverrides != null
+                             && parentOverrides.TryGetValue(transitionKey, out var tOverride)
+                             && tOverride.Roles is { Count: > 0 }
+                    ? tOverride.Roles!
+                    : transition.Roles;
 
-                var staticRoles = transitionRoles
-                    .Where(r => !PredefinedInstanceRoles.IsPredefinedRole(r.Role))
-                    .ToList();
-
-                var predefinedRoles = transitionRoles
-                    .Where(r => PredefinedInstanceRoles.IsPredefinedRole(r.Role))
-                    .ToList();
-
-                var hasStaticRoles = staticRoles.Count > 0;
-                var hasPredefinedRoles = predefinedRoles.Count > 0;
-
-                if (!hasStaticRoles && !hasPredefinedRoles)
-                {
-                    isAuthorized = true;
-                    break;
-                }
-
-                // Blacklist decision is made over the WHOLE grant list, not the split subsets:
-                // when no ALLOW grant exists anywhere, both subsets evaluate as deny-only blacklists.
-                var applyBlacklistFallback = !transitionRoles.Any(g => g.IsAllow);
-
-                var staticMatch = !hasStaticRoles;
-                if (hasStaticRoles)
-                {
-                    foreach (var role in userRoles)
-                    {
-                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles, applyBlacklistFallback))
-                        {
-                            staticMatch = true;
-                            break;
-                        }
-                    }
-                }
-
-                var predefinedMatch = !hasPredefinedRoles;
-                if (hasPredefinedRoles)
-                {
-                    predefinedMatch = await transitionAuthorizationManager.IsPredefinedRoleMatchAsync(
-                        predefinedRoles, instance, cancellationToken, applyBlacklistFallback);
-                }
-
-                if (staticMatch && predefinedMatch)
-                {
-                    isAuthorized = true;
-                    break;
-                }
+                candidates.Add((transition, grants));
             }
+
+            if (candidates.Count == 0)
+                continue;
+
+            var evaluator = await transitionAuthorizationManager.CreateEvaluatorAsync(
+                instance,
+                workflow,
+                requestContext,
+                candidates.SelectMany(c => c.Grants),
+                cancellationToken);
+
+            var isAuthorized = candidates.Any(c =>
+                evaluator.IsAnyRoleAllowed(userRoles, c.Grants, c.Transition));
 
             if (isAuthorized)
                 result.Add(instance);

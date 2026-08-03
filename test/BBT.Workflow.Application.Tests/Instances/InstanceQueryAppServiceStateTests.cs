@@ -1315,6 +1315,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<Instance?>(),
                 Arg.Any<IReadOnlyList<string>>(),
                 Arg.Any<string?>(),
+                Arg.Any<AuthorizationRequestContext?>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<IReadOnlyList<string>>(3)));
 
@@ -1495,6 +1496,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<Instance?>(),
                 Arg.Any<IReadOnlyList<string>>(),
                 Arg.Any<string?>(),
+                Arg.Any<AuthorizationRequestContext?>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult<IReadOnlyList<string>>(
                 [.. callInfo.ArgAt<IReadOnlyList<string>>(3)

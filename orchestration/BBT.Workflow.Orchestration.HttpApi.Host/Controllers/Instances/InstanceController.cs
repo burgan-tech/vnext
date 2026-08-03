@@ -3,8 +3,10 @@ using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Events;
@@ -41,7 +43,8 @@ public sealed class InstanceController(
     ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
-    IRelatedInstanceQueryAppService relatedInstanceQueryAppService) : AetherControllerBase
+    IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
+    ICurrentUser currentUser) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -777,7 +780,10 @@ public sealed class InstanceController(
             IfNoneMatch = ifNoneMatch,
             Version = version,
             Headers = requestContext.Headers,
-            QueryParameters = requestContext.QueryParameters
+            QueryParameters = requestContext.QueryParameters,
+            // Without this the queryRoles gate evaluates a role-less caller, so this route would
+            // disagree with the `data` function handler about the very same instance.
+            Roles = currentUser.ResolveCallerRoles(requestContext.Headers)
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);

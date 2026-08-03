@@ -3,9 +3,15 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Authorization;
 
 /// <summary>
-/// Computes which schema property paths are visible to the caller based on role grants.
-/// Used for master schema field-level visibility: paths with no "roles" in schema are visible to all;
-/// paths with "roles" are visible only if at least one caller role is allowed (DENY wins over ALLOW).
+/// Computes which schema property paths are visible to the caller based on <c>x-roles</c> grants.
+/// Paths with no grants in the schema are visible to all; paths with grants are visible only when the
+/// caller resolves to an allow.
+/// <para>
+/// Evaluation is delegated to a shared <see cref="IRoleGrantEvaluator"/>, so field-level visibility
+/// honors exactly the same grant forms as every other authorization surface — static roles, predefined
+/// instance roles, and dynamic <c>$.context.*</c> references — and DENY wins over the whole grant set
+/// rather than per caller role.
+/// </para>
 /// </summary>
 public static class SchemaFieldVisibilityService
 {
@@ -13,11 +19,20 @@ public static class SchemaFieldVisibilityService
     /// Gets the set of property paths that the caller is allowed to see.
     /// </summary>
     /// <param name="pathRoleGrants">Map of property path to role grants (from SchemaRolesParser).</param>
-    /// <param name="callerRoles">Caller roles (e.g. from ICurrentUser.Roles).</param>
-    /// <returns>Set of visible property paths. Paths not in pathRoleGrants are considered visible to all and are not included; only paths that have roles and are allowed are included. For filtering, include all paths that exist in the data: paths without roles in schema → visible; paths with roles → include if allowed.</returns>
+    /// <param name="callerRoles">Caller roles.</param>
+    /// <param name="evaluator">
+    /// Evaluator built for the instance being read. Create it once for the whole schema — via
+    /// <see cref="ITransitionAuthorizationManager.CreateEvaluatorAsync"/> with the union of every path's
+    /// grants — so a schema with many guarded fields costs one prefetch, not one per field.
+    /// </param>
+    /// <returns>
+    /// Set of visible property paths. Paths not present in <paramref name="pathRoleGrants"/> carry no grants
+    /// and are visible to all, so they are not listed here; only guarded paths that resolve to an allow are.
+    /// </returns>
     public static IReadOnlySet<string> GetVisiblePaths(
         IReadOnlyDictionary<string, IReadOnlyList<RoleGrant>> pathRoleGrants,
-        IReadOnlyList<string>? callerRoles)
+        IReadOnlyList<string>? callerRoles,
+        IRoleGrantEvaluator evaluator)
     {
         if (pathRoleGrants.Count == 0)
             return new HashSet<string>(0);
@@ -25,7 +40,7 @@ public static class SchemaFieldVisibilityService
         var visible = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (path, grants) in pathRoleGrants)
         {
-            if (IsPathVisibleForCaller(grants, callerRoles))
+            if (IsPathVisibleForCaller(grants, callerRoles, evaluator))
                 visible.Add(path);
         }
         return visible;
@@ -33,26 +48,18 @@ public static class SchemaFieldVisibilityService
 
     /// <summary>
     /// Determines whether a property with the given role grants is visible to the caller.
-    /// Semantics: DENY wins. If at least one ALLOW grant exists, any ALLOW match for a caller role → visible (default hidden otherwise).
-    /// A grant set with no ALLOW grant is a blacklist: visible unless a caller role is explicitly denied.
+    /// Semantics are the canonical grant rule: DENY wins; if at least one ALLOW grant exists an ALLOW match
+    /// is required; a grant set with no ALLOW grant is a blacklist (visible unless explicitly denied);
+    /// an empty grant set is visible.
     /// </summary>
     public static bool IsPathVisibleForCaller(
         IReadOnlyList<RoleGrant> roleGrants,
-        IReadOnlyList<string>? callerRoles)
+        IReadOnlyList<string>? callerRoles,
+        IRoleGrantEvaluator evaluator)
     {
         if (roleGrants.Count == 0)
             return true;
 
-        if (callerRoles is null || callerRoles.Count == 0)
-            return false;
-
-        foreach (var role in callerRoles)
-        {
-            if (string.IsNullOrWhiteSpace(role))
-                continue;
-            if (TransitionAuthorizationManager.EvaluateRolesStatic(role.Trim(), roleGrants))
-                return true;
-        }
-        return false;
+        return evaluator.IsAnyRoleAllowed(callerRoles, roleGrants);
     }
 }

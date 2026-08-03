@@ -18,7 +18,7 @@ public sealed class HumanTaskFunctionHandler(
         DomainFunctionRequest request, CancellationToken cancellationToken)
     {
         var result = await queryAppService.GetHumanTaskInstancesAsync(
-            request.Domain, cancellationToken);
+            request.Domain, request.Headers, cancellationToken);
 
         return result.ToActionResult(request.HttpContext);
     }

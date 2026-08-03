@@ -104,6 +104,10 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         {
             var headers = ConvertTaskHeadersToDictionary(task.Headers);
 
+            // Roles are deliberately left unset: a task reads under the system identity, not the
+            // triggering caller's, so state/workflow queryRoles and schema x-roles do not apply.
+            // Same contract as related-instance access — copying a field read here into instance data
+            // makes it visible to callers the grants would otherwise have filtered it from.
             var input = new GetInstanceDataInput
             {
                 Domain = task.TriggerDomain,

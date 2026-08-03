@@ -2,6 +2,7 @@ using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
@@ -70,7 +71,7 @@ public sealed class AuthorizeAppService(
             {
                 if (IsParentOwnedTransition(wf, transitionKey))
                 {
-                    var parentCallerRoles = GetCallerRoles(role);
+                    var parentCallerRoles = GetCallerRoles(role, requestContext);
                     var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles, transitionKey, null, instance, false, domain, workflowVersion, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, parentAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
@@ -81,7 +82,7 @@ public sealed class AuthorizeAppService(
                     subFlowConfig.Overrides!.Transitions!.TryGetValue(transitionKey, out var transitionOverride) &&
                     transitionOverride.Roles is { Count: > 0 })
                 {
-                    var overrideCallerRoles = GetCallerRoles(role);
+                    var overrideCallerRoles = GetCallerRoles(role, requestContext);
                     var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, transitionOverride.Roles!, instance, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
@@ -96,7 +97,7 @@ public sealed class AuthorizeAppService(
                     subFlowConfig.Overrides!.States!.TryGetValue(subFlowCurrentState, out var stateOverride) &&
                     stateOverride.QueryRoles is { Count: > 0 })
                 {
-                    var overrideCallerRoles = GetCallerRoles(role);
+                    var overrideCallerRoles = GetCallerRoles(role, requestContext);
                     var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, stateOverride.QueryRoles!, instance, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
@@ -104,7 +105,10 @@ public sealed class AuthorizeAppService(
             }
 
             // Forward to SubFlow (functionKey, no-override transition, no-override queryRoles)
-            var roleForForward = currentUser.Roles?.Length > 0 ? string.Join(",", currentUser.Roles) : role;
+            var resolvedForForward = GetCallerRoles(role, requestContext);
+            var roleForForward = resolvedForForward is { Count: > 0 }
+                ? string.Join(",", resolvedForForward)
+                : role;
             return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,
@@ -118,22 +122,25 @@ public sealed class AuthorizeAppService(
                 cancellationToken);
         }
 
-        var callerRoles = GetCallerRoles(role);
+        var callerRoles = GetCallerRoles(role, requestContext);
         var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
 
     /// <summary>
-    /// Resolves caller roles: ICurrentUser.Roles when present; otherwise single role parameter as fallback.
+    /// Resolves caller roles in precedence order: <c>ICurrentUser.Roles</c>, then the explicit <c>role</c>
+    /// request parameter, then the legacy <c>role</c> header. The header leg matters because
+    /// <c>ChangeFromHeaders</c> is not applied on the HTTP path, so a header-only caller would otherwise
+    /// be evaluated as role-less here while other surfaces resolve their roles.
     /// </summary>
-    private IReadOnlyList<string>? GetCallerRoles(string? roleParameter)
+    private IReadOnlyList<string>? GetCallerRoles(string? roleParameter, AuthorizationRequestContext? requestContext)
     {
         if (currentUser.Roles is { Length: > 0 } roles)
             return roles;
         if (!string.IsNullOrWhiteSpace(roleParameter))
             return [roleParameter.Trim()];
-        return null;
+        return currentUser.ResolveCallerRoles(requestContext?.Headers);
     }
     
     private async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixAsync(

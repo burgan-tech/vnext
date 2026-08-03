@@ -36,6 +36,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 14. Read [View Display Modes](domain/view-display-modes.md) before changing a view's `display` declaration or how clients present views (SDI / MDI shapes, response `modes` contract).
 15. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
 16. Read [Well-Known Transitions](domain/well-known-transitions.md) before changing `cancel` / `updateData` / `exit` behavior, what `availableTransitions` contains, or the `kind` discriminator clients switch on.
+17. Read [Role Grant Authorization](domain/role-grant-authorization.md) before touching any role check — `roles`, `queryRoles`, schema `x-roles` — or adding an authorization decision point. Covers the single-evaluator rule, batching, and why discovery must pass the same request context as enforcement.
 
 ## Documentation Rules
 

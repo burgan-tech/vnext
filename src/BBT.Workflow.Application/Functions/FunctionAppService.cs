@@ -8,6 +8,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
@@ -164,8 +165,10 @@ public sealed class FunctionAppService(
         // Built-in functions never reach this path (they use their own handlers/authorization).
         if (function.Roles.Count > 0)
         {
+            // Honor the legacy `role` header: a caller whose roles arrive only as a header would
+            // otherwise be treated as role-less and rejected with 403 by an allowlist grant set.
             var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                currentUser.Roles,
+                currentUser.ResolveCallerRoles(headers),
                 function.Roles,
                 instance,
                 new AuthorizationRequestContext(headers, queryParameters),
