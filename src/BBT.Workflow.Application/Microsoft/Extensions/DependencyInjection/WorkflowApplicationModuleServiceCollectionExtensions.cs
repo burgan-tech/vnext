@@ -19,6 +19,7 @@ using BBT.Workflow.Events;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Functions.Validation;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -139,6 +140,17 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<ICacheBackend<View>, RuntimeCacheBackend<View>>();
         services.AddSingleton<ICacheBackend<Extension>, RuntimeCacheBackend<Extension>>();
         services.AddSingleton<ICacheBackend<Mapping>, RuntimeCacheBackend<Mapping>>();
+
+        // Registered here rather than with the other application options so read-only hosts, which wire
+        // only the cache module, still bind configuration instead of silently falling back to defaults.
+        services.AddOptions<ComponentCacheOptions>()
+            .BindConfiguration(ComponentCacheOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // Scopes cached version resolutions so a publish invalidates them all at once.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IComponentGenerationProvider, ComponentGenerationProvider>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();

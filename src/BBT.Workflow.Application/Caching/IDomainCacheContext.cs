@@ -22,4 +22,12 @@ public interface IDomainCacheContext
     /// <typeparam name="T">The entity type</typeparam>
     /// <returns>The cache set for the entity type</returns>
     ICacheSet<T> Set<T>() where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
+    /// Gets the cache set for the specified component type key, for callers that only have the key as a
+    /// string (for example a cast handler dispatching on <c>sys-views</c>).
+    /// </summary>
+    /// <param name="componentTypeKey">The component type key (e.g. <c>sys-views</c>, <c>sys-flows</c>)</param>
+    /// <returns>The matching cache set, or null when the key does not name a cached component type.</returns>
+    ICacheSet? Set(string componentTypeKey);
 }

@@ -43,6 +43,11 @@ namespace BBT.Workflow.Instances;
 public partial class InstanceDataVersionComparer : IComparer<InstanceData>
 {
     /// <summary>
+    /// The reserved version keyword that resolves to the highest available version.
+    /// </summary>
+    public const string LatestKeyword = "latest";
+
+    /// <summary>
     /// Singleton instance of the comparer.
     /// </summary>
     public static InstanceDataVersionComparer Instance { get; } = new();
@@ -101,10 +106,7 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     public static ParsedVersion ParseVersion(string version)
     {
         // Remove build metadata (+PKG_NAME) as it doesn't affect comparison
-        var buildMetadataIndex = version.IndexOf('+');
-        var versionWithoutMetadata = buildMetadataIndex >= 0
-            ? version[..buildMetadataIndex]
-            : version;
+        var versionWithoutMetadata = CanonicalFullVersion(version);
 
         // Try to match extended format: MAJOR.MINOR.PATCH-pkg.PKG_VERSION
         var match = ExtendedVersionRegex().Match(versionWithoutMetadata);
@@ -316,7 +318,7 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// <returns>True if the version is "latest" (case-insensitive)</returns>
     public static bool IsLatestKeyword(string? version)
     {
-        return string.Equals(version, "latest", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(version, LatestKeyword, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -395,15 +397,9 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
         if (string.IsNullOrWhiteSpace(fullVersion) || string.IsNullOrWhiteSpace(partialVersion))
             return false;
 
-        var parsed = ParseVersion(fullVersion);
-
-        // Extract MAJOR.MINOR from artifact version
-        var parts = parsed.ArtifactVersion.Split('.');
-        if (parts.Length < 2)
-            return false;
-
-        var artifactMajorMinor = $"{parts[0]}.{parts[1]}";
-        return string.Equals(artifactMajorMinor, partialVersion, StringComparison.Ordinal);
+        var artifactMajorMinor = GetMajorMinor(fullVersion);
+        return artifactMajorMinor is not null &&
+               string.Equals(artifactMajorMinor, partialVersion, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -423,15 +419,9 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
         if (string.IsNullOrWhiteSpace(fullVersion) || string.IsNullOrWhiteSpace(majorVersion))
             return false;
 
-        var parsed = ParseVersion(fullVersion);
-        
-        // Extract the major version from artifact (first segment before '.')
-        var dotIndex = parsed.ArtifactVersion.IndexOf('.');
-        if (dotIndex < 0)
-            return false;
-
-        var artifactMajor = parsed.ArtifactVersion[..dotIndex];
-        return string.Equals(artifactMajor, majorVersion, StringComparison.Ordinal);
+        var artifactMajor = GetMajor(fullVersion);
+        return artifactMajor is not null &&
+               string.Equals(artifactMajor, majorVersion, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -536,6 +526,77 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
 
         var parsed = ParseVersion(version);
         return parsed.ArtifactVersion;
+    }
+
+    /// <summary>
+    /// Strips build metadata (everything from the first '+') from a version string.
+    /// </summary>
+    /// <param name="version">Version string (e.g., "1.5.6-pkg.1.1.56+core")</param>
+    /// <returns>The version without build metadata (e.g., "1.5.6-pkg.1.1.56")</returns>
+    /// <remarks>
+    /// Build metadata (+PKG_NAME, +build.xxx) does not participate in comparison, so two versions that
+    /// differ only in build metadata are the same version. This is the canonical identity to key a
+    /// version by: "1.5.6-pkg.1.1.56" and "1.5.6-pkg.1.1.56+core" both canonicalize to the former.
+    /// </remarks>
+    public static string CanonicalFullVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return version ?? string.Empty;
+
+        var buildMetadataIndex = version.IndexOf('+');
+        return buildMetadataIndex >= 0
+            ? version[..buildMetadataIndex]
+            : version;
+    }
+
+    /// <summary>
+    /// Normalizes a requested version into the canonical spelling used to identify a resolution.
+    /// </summary>
+    /// <param name="version">The version as requested by the caller (may be null, empty or "latest")</param>
+    /// <returns><see cref="LatestKeyword"/> for latest-requests, otherwise the trimmed, lowercased request</returns>
+    /// <remarks>
+    /// Two requests that resolve to the same entity must normalize to the same spelling, otherwise a
+    /// cache keyed on the request would hold duplicate — and independently staleable — entries.
+    /// Lowercasing is safe because every spelling comparison in <see cref="FindBestMatch"/> that can
+    /// see letters (exact match, <see cref="MatchesArtifact"/>) is case-insensitive; the numeric forms
+    /// have no case to lose.
+    /// </remarks>
+    public static string NormalizeRequest(string? version)
+    {
+        return IsRequestingLatest(version)
+            ? LatestKeyword
+            : version!.Trim().ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Extracts the major component of a version's artifact part.
+    /// </summary>
+    /// <param name="version">Version string (e.g., "1.2.3-pkg.1.0.0+account")</param>
+    /// <returns>The major component (e.g., "1"), or null when the artifact part has no major.minor separator</returns>
+    public static string? GetMajor(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return null;
+
+        var artifactVersion = ParseVersion(version).ArtifactVersion;
+
+        // Extract the major version from artifact (first segment before '.')
+        var dotIndex = artifactVersion.IndexOf('.');
+        return dotIndex < 0 ? null : artifactVersion[..dotIndex];
+    }
+
+    /// <summary>
+    /// Extracts the MAJOR.MINOR components of a version's artifact part.
+    /// </summary>
+    /// <param name="version">Version string (e.g., "1.2.3-pkg.1.0.0+account")</param>
+    /// <returns>The MAJOR.MINOR components (e.g., "1.2"), or null when the artifact part has fewer than two segments</returns>
+    public static string? GetMajorMinor(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return null;
+
+        var parts = ParseVersion(version).ArtifactVersion.Split('.');
+        return parts.Length < 2 ? null : $"{parts[0]}.{parts[1]}";
     }
 
     /// <summary>

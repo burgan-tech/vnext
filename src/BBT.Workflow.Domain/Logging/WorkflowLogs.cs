@@ -3117,4 +3117,129 @@ public static partial class WorkflowLogs
         string schemaKey);
 
     #endregion
+
+    #region Component Cache
+
+    /// <summary>
+    /// Logs when a component's generation token is replaced, making every prior resolution entry for
+    /// that component unreachable.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70001,
+        Level = LogLevel.Debug,
+        Message = "Component cache generation bumped for {ComponentType} {Domain}/{Key} (token {Token})")]
+    public static partial void ComponentCacheGenerationBumped(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string token);
+
+    /// <summary>
+    /// Logs when writing a new generation token failed but the token was successfully removed instead.
+    /// An absent token forces the next reader to bootstrap a fresh one, so invalidation still holds.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70002,
+        Level = LogLevel.Warning,
+        Message = "Component cache generation write failed for {ComponentType} {Domain}/{Key}; removed the token instead, invalidation still applies")]
+    public static partial void ComponentCacheGenerationBumpFellBackToRemove(
+        this ILogger logger,
+        Exception exception,
+        string componentType,
+        string domain,
+        string key);
+
+    /// <summary>
+    /// Logs when a generation token could be neither written nor removed. This is the only condition
+    /// that leaves stale resolution entries reachable, so it is an error rather than a warning.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70003,
+        Level = LogLevel.Error,
+        Message = "Component cache generation could not be bumped or removed for {ComponentType} {Domain}/{Key}; previously cached version resolutions remain reachable until the generation TTL expires")]
+    public static partial void ComponentCacheGenerationBumpFailed(
+        this ILogger logger,
+        Exception exception,
+        string componentType,
+        string domain,
+        string key);
+
+    /// <summary>
+    /// Logs when a component's generation token was absent and a fresh one was created.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70004,
+        Level = LogLevel.Debug,
+        Message = "Component cache generation bootstrapped for {ComponentType} {Domain}/{Key} (token {Token})")]
+    public static partial void ComponentCacheGenerationBootstrapped(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string token);
+
+    /// <summary>
+    /// Logs when a version request was resolved from the backend because no cached resolution existed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70010,
+        Level = LogLevel.Debug,
+        Message = "Component cache resolved {ComponentType} {Domain}/{Key}@{Requested} to {Resolved}")]
+    public static partial void ComponentCacheResolvedFromBackend(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string requested,
+        string resolved);
+
+    /// <summary>
+    /// Logs when a version request matched no published version and a short-lived negative entry
+    /// was cached to stop repeated backend loads.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70011,
+        Level = LogLevel.Debug,
+        Message = "Component cache stored a negative entry for {ComponentType} {Domain}/{Key}@{Requested}")]
+    public static partial void ComponentCacheNegativeStored(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string requested);
+
+    /// <summary>
+    /// Logs when more than one stored version shares an artifact and package version, differing only in
+    /// build metadata. Build metadata does not participate in ordering, so such versions are
+    /// indistinguishable to version resolution and one is chosen deterministically.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70012,
+        Level = LogLevel.Warning,
+        Message = "Component {ComponentType} {Domain}/{Key} has {Count} versions matching {CanonicalVersion} that differ only in build metadata; resolved to {Resolved}")]
+    public static partial void ComponentCacheBuildMetadataAmbiguity(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        int count,
+        string canonicalVersion,
+        string resolved);
+
+    /// <summary>
+    /// Logs when a component cache read or write failed. Reads degrade to a backend load and writes
+    /// are dropped, so neither is fatal.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70020,
+        Level = LogLevel.Warning,
+        Message = "Component cache {Operation} failed for key {CacheKey}")]
+    public static partial void ComponentCacheOperationFailed(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    #endregion
 }
