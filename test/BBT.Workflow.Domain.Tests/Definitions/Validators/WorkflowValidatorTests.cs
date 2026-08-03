@@ -880,5 +880,177 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     """;
 
     #endregion
+
+    #region Well-Known Transition (updateData / exit) Validation Tests
+
+    [Fact]
+    public void Validate_ShouldFail_WhenExitTransitionHasInvalidDynamicRole()
+    {
+        var workflow = DeserializeWorkflow(WellKnownTransitionsWorkflowJson(
+            exitRolesJson: """[ { "role": "$user.customer", "grant": "allow" } ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("Dynamic role", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Workflow.Exit.Roles", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenUpdateDataTransitionHasInvalidDynamicRole()
+    {
+        var workflow = DeserializeWorkflow(WellKnownTransitionsWorkflowJson(
+            updateDataRolesJson: """[ { "role": "$role.$.context.", "grant": "allow" } ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("Dynamic role", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Workflow.UpdateData.Roles", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Static role names, all four predefined instance roles and well-formed dynamic roles must all
+    /// pass. Only dynamic-role *intent* is validated — a static name is free-form.
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldPass_WhenExitAndUpdateDataRolesAreValid()
+    {
+        var workflow = DeserializeWorkflow(WellKnownTransitionsWorkflowJson(
+            exitRolesJson: """
+                [ { "role": "backoffice.operator", "grant": "allow" },
+                  { "role": "$InstanceStarter", "grant": "allow" },
+                  { "role": "$PreviousUser", "grant": "allow" },
+                  { "role": "$InstanceBehalfOfStarter", "grant": "allow" },
+                  { "role": "$PreviousBehalfOfUser", "grant": "allow" },
+                  { "role": "$user.$.context.Instance.Data.ownerId", "grant": "allow" },
+                  { "role": "$userBehalfOf.$.context.Instance.Data.behalfOfId", "grant": "allow" },
+                  { "role": "$role.$.context.Instance.Data.requiredRole", "grant": "allow" },
+                  { "role": "$user.$.context.Instance.Data.assignedUsers[*].userId", "grant": "allow" } ]
+                """,
+            updateDataRolesJson: """[ { "role": "backoffice.supervisor", "grant": "deny" } ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e =>
+            e.ErrorMessage!.Contains("Workflow.Exit", StringComparison.Ordinal) ||
+            e.ErrorMessage.Contains("Workflow.UpdateData", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A case variant of the '$.context.' literal is rejected: DynamicRoleGrant.TryParse compares it
+    /// with Ordinal, so the runtime would silently treat the grant as a static role name that can
+    /// never match. Validation must not be more permissive than the parser.
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldFail_WhenDynamicRoleContextPrefixHasWrongCase()
+    {
+        var workflow = DeserializeWorkflow(WellKnownTransitionsWorkflowJson(
+            exitRolesJson: """[ { "role": "$user.$.Context.Instance.Data.ownerId", "grant": "allow" } ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("case-sensitive", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("Workflow.Exit.Roles", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The same rule applies to every transition carrying roles, not just the well-known three —
+    /// here a plain state transition.
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldFail_WhenStateTransitionHasMalformedDynamicRole()
+    {
+        var workflow = DeserializeWorkflow($$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "submit",
+                            "target": "initial",
+                            "triggerType": "manual",
+                            "labels": [{"label": "Submit", "language": "en"}],
+                            "roles": [ { "role": "$user.customer", "grant": "allow" } ]
+                        }
+                    ]
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("Dynamic role '$user.customer'", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("States[initial].Transitions[submit].Roles", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Builds an otherwise-valid workflow carrying well-known <c>exit</c> and <c>updateData</c>
+    /// transitions with the supplied role grants.
+    /// </summary>
+    private static string WellKnownTransitionsWorkflowJson(
+        string exitRolesJson = "[]",
+        string updateDataRolesJson = "[]") => $$"""
+    {
+        "type": "F",
+        "labels": [{"label": "Test", "language": "en"}],
+        "states": [
+            {
+                "key": "initial",
+                "stateType": "initial",
+                "labels": [{"label": "Initial", "language": "en"}],
+                "transitions": []
+            },
+            {
+                "key": "exited",
+                "stateType": "finish",
+                "labels": [{"label": "Exited", "language": "en"}],
+                "transitions": []
+            }
+        ],
+        "sharedTransitions": [],
+        "startTransition": {
+            "key": "start",
+            "target": "initial",
+            "triggerType": "manual",
+            "labels": [{"label": "Start", "language": "en"}]
+        },
+        "exit": {
+            "key": "exit",
+            "target": "exited",
+            "triggerType": "manual",
+            "labels": [{"label": "Exit", "language": "en"}],
+            "roles": {{exitRolesJson}}
+        },
+        "updateData": {
+            "key": "update-data",
+            "target": "$self",
+            "triggerType": "manual",
+            "labels": [{"label": "Update Data", "language": "en"}],
+            "roles": {{updateDataRolesJson}}
+        }
+    }
+    """;
+
+    #endregion
 }
 

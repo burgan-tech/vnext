@@ -24,7 +24,19 @@ public sealed class StateFunctionCache(
     ILogger<StateFunctionCache> logger) : IStateFunctionCache
 {
     private const string ComponentType = "state-fn";
-    private const string KeyPrefix = "state-fn:";
+
+    /// <summary>
+    /// Response-shape version of the state function body. The ETag material below is derived from the
+    /// instance fingerprint and the caller scope only — it does not cover the response body's shape.
+    /// So whenever a runtime change alters what the body contains for an unchanged instance (for
+    /// example v2, which started listing the workflow-level <c>updateData</c> and <c>exit</c>
+    /// transitions), this constant must be bumped: it invalidates every previously issued ETag and
+    /// every cached body, and without it a client long-polling an instance whose state never changes
+    /// would keep receiving <c>304 Not Modified</c> and never observe the new shape.
+    /// </summary>
+    private const string ResponseShapeVersion = "v2";
+
+    private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 
     /// <summary>
     /// Length of the fingerprint ETag (hex chars of the SHA-256 digest — 128 bits).
@@ -57,6 +69,7 @@ public sealed class StateFunctionCache(
         // set: a sub item starting, terminating or advancing its state changes the body without
         // touching the instance's own state or status, and must still invalidate the caller's ETag.
         var material = string.Join('|',
+            ResponseShapeVersion,
             fingerprint.Id,
             fingerprint.EffectiveState ?? string.Empty,
             fingerprint.Status.Code,

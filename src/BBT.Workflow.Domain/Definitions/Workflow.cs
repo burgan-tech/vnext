@@ -500,22 +500,49 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         var manualSharedTransitions = GetAvailableSharedTransitionKeysOnly(currentState);
         manualTransitions.AddRange(manualSharedTransitions);
 
-        AppendCancelTransitionKey(manualTransitions, currentState);
+        // Well-known workflow-level transitions (cancel, updateData, exit) are exposed to clients
+        // from every state, so the Client Workflow Manager SDK can discover and drive them the
+        // same way it drives state and shared transitions. The configured key is appended (not the
+        // well-known alias) so that role filtering can resolve them via FindTransitionInContext.
+        AppendWellKnownTransitionKey(manualTransitions, Cancel, currentState);
+        AppendWellKnownTransitionKey(manualTransitions, UpdateData, currentState);
+        AppendWellKnownTransitionKey(manualTransitions, Exit, currentState);
 
         return manualTransitions;
     }
 
     /// <summary>
-    /// Appends the cancel transition key if configured with Manual or Event trigger type
-    /// and the current state satisfies the AvailableIn constraint.
+    /// Appends a well-known workflow-level transition key (cancel, updateData, exit) if it is
+    /// configured with Manual or Event trigger type and the current state satisfies the
+    /// AvailableIn constraint.
     /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
     /// </summary>
-    private void AppendCancelTransitionKey(List<string> transitions, State currentState)
+    private static void AppendWellKnownTransitionKey(
+        List<string> transitions,
+        Transition? transition,
+        State currentState)
     {
-        if (Cancel is { TriggerType: TriggerType.Manual or TriggerType.Event }
-            && (Cancel.AvailableIn == null || !Cancel.AvailableIn.Any() || Cancel.AvailableIn.Contains(currentState.Key))
-            && !transitions.Contains(Cancel.Key))
-            transitions.Add(Cancel.Key);
+        var key = ResolveWellKnownTransitionKey(transition, currentState);
+        if (key != null && !transitions.Contains(key))
+            transitions.Add(key);
+    }
+
+    /// <summary>
+    /// Resolves the key of a well-known workflow-level transition (cancel, updateData, exit)
+    /// when it is configured with Manual or Event trigger type and the given state satisfies
+    /// the AvailableIn constraint; otherwise null.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// </summary>
+    private static string? ResolveWellKnownTransitionKey(Transition? transition, State currentState)
+    {
+        if (transition is not { TriggerType: TriggerType.Manual or TriggerType.Event })
+            return null;
+
+        if (transition.AvailableIn != null && transition.AvailableIn.Any() &&
+            !transition.AvailableIn.Contains(currentState.Key))
+            return null;
+
+        return transition.Key;
     }
 
     /// <summary>
@@ -537,16 +564,27 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
     /// Used when merging parent transitions into SubFlow available transitions.
     /// </summary>
-    public string? GetCancelTransitionKey(State currentState)
-    {
-        if (Cancel is not { TriggerType: TriggerType.Manual or TriggerType.Event })
-            return null;
+    public string? GetCancelTransitionKey(State currentState) =>
+        ResolveWellKnownTransitionKey(Cancel, currentState);
 
-        if (Cancel.AvailableIn != null && Cancel.AvailableIn.Any() && !Cancel.AvailableIn.Contains(currentState.Key))
-            return null;
+    /// <summary>
+    /// Gets the updateData transition key if configured with Manual or Event trigger type
+    /// and the given state satisfies the AvailableIn constraint.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// Used when merging parent transitions into SubFlow available transitions — the parent-in-subflow
+    /// case is exactly where <c>HandleUpdateDataPreflightStep</c> applies.
+    /// </summary>
+    public string? GetUpdateDataTransitionKey(State currentState) =>
+        ResolveWellKnownTransitionKey(UpdateData, currentState);
 
-        return Cancel.Key;
-    }
+    /// <summary>
+    /// Gets the exit transition key if configured with Manual or Event trigger type
+    /// and the given state satisfies the AvailableIn constraint.
+    /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
+    /// Used when merging parent transitions into SubFlow available transitions.
+    /// </summary>
+    public string? GetExitTransitionKey(State currentState) =>
+        ResolveWellKnownTransitionKey(Exit, currentState);
 
     public static Workflow Create()
     {

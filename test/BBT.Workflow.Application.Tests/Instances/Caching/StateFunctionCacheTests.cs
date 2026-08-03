@@ -61,11 +61,14 @@ public class StateFunctionCacheTests
     }
 
     [Fact]
-    public void BuildKey_ContainsDomainWorkflowAndInstance()
+    public void BuildKey_ContainsResponseShapeVersionDomainWorkflowAndInstance()
     {
         var key = CreateSut().BuildKey(CreateInput());
 
-        key.ShouldStartWith($"state-fn:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        // The response-shape version segment is part of the key so that a runtime change to the
+        // state body (e.g. v2, which added the workflow-level updateData/exit transitions) cannot
+        // be served from entries written by an earlier build.
+        key.ShouldStartWith($"state-fn:v2:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]

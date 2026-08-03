@@ -429,10 +429,22 @@ public class WorkflowValidator
             ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false);
         }
 
-        // Validate Cancel transition — AvailableIn is allowed (same as shared transitions)
+        // Validate well-known workflow-level transitions — AvailableIn is allowed (same as shared transitions).
+        // These carry role grants that the runtime now enforces when building availableTransitions,
+        // so they must go through the same role-grant and trigger-type validation as every other transition.
         if (workflow.Cancel != null)
         {
             ValidateSingleTransition(workflow.Cancel, "Cancel", result, isSharedTransition: true);
+        }
+
+        if (workflow.UpdateData != null)
+        {
+            ValidateSingleTransition(workflow.UpdateData, "UpdateData", result, isSharedTransition: true);
+        }
+
+        if (workflow.Exit != null)
+        {
+            ValidateSingleTransition(workflow.Exit, "Exit", result, isSharedTransition: true);
         }
 
         // Validate SharedTransitions - AvailableIn is allowed here
@@ -652,6 +664,15 @@ public class WorkflowValidator
 
     /// <summary>
     /// Validates a collection of role grants, checking dynamic role references for correct format.
+    /// <para>
+    /// Static role names (<c>backoffice.operator</c>) and the four predefined instance roles
+    /// (<c>$InstanceStarter</c>, <c>$PreviousUser</c>, <c>$InstanceBehalfOfStarter</c>,
+    /// <c>$PreviousBehalfOfUser</c>) are free-form and carry nothing to validate — only grants that
+    /// declare dynamic-role intent via a qualifier prefix are checked, and only against the exact
+    /// rules the runtime parser applies. Classification lives in
+    /// <see cref="DynamicRoleGrant.Classify"/> so this rule cannot drift from
+    /// <see cref="DynamicRoleGrant.TryParse"/>.
+    /// </para>
     /// </summary>
     private static void ValidateRoleGrants(
         IReadOnlyCollection<RoleGrant> roleGrants,
@@ -661,29 +682,21 @@ public class WorkflowValidator
         if (roleGrants.Count == 0)
             return;
 
+        const string contextPrefix = "$.context.";
+
         foreach (var grant in roleGrants)
         {
-            if (!DynamicRoleGrant.IsDynamicRole(grant.Role))
-                continue;
-
-            var dynamic = DynamicRoleGrant.TryParse(grant.Role)!;
-            const string contextPrefix = "$.context.";
-
-            if (!dynamic.ContextPath.StartsWith(contextPrefix, StringComparison.OrdinalIgnoreCase))
+            var message = DynamicRoleGrant.Classify(grant.Role) switch
             {
-                result.AddError(new ValidationResult(
-                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}'.",
-                    [$"{context}"]));
-                continue;
-            }
-
-            var navPath = dynamic.ContextPath[contextPrefix.Length..];
-            if (string.IsNullOrWhiteSpace(navPath))
-            {
-                result.AddError(new ValidationResult(
+                DynamicRoleFormat.MissingContextPrefix =>
+                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
+                DynamicRoleFormat.EmptyNavigationPath =>
                     $"Dynamic role '{grant.Role}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
-                    [$"{context}"]));
-            }
+                _ => null
+            };
+
+            if (message != null)
+                result.AddError(new ValidationResult(message, [context]));
         }
     }
 

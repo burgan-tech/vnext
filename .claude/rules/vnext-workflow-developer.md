@@ -63,6 +63,45 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+
+## Well-Known Transitions (`cancel` / `updateData` / `exit`)
+
+- All three are workflow-level `Transition` objects (`Workflow.Cancel/UpdateData/Exit`) — full surface
+  including `roles`, `view`, `schema`, `annotations`.
+- **Listed in `availableTransitions`** from every state (subject to `triggerType` Manual/Event and
+  `availableIn`), and merged from the **parent** into a subflow's list — that merge is `updateData`'s
+  primary surface, since `HandleUpdateDataPreflightStep` only acts while the current state is `SubFlow`.
+- The **configured key** is listed, never the alias (`cancel` / `update-parent-data` / `exit`): role
+  filtering resolves via `FindTransitionInContext`, which matches these three on the configured key.
+  Aliases stay accepted on the request side (`ResolveWellKnownKey`).
+- `kind` discriminator mirrors the JSON field names: `cancel` | `updateData` | `exit` — note
+  `updateData`, *not* the `update-parent-data` alias.
+- `roles` are enforced at discovery (state function filtering, `/functions/authorize`,
+  authorization-matrix) — **not** at `POST .../transitions/{key}`, which is true for every transition
+  type, not just these.
+- `WorkflowValidator` runs all three through `ValidateSingleTransition` (role-grant syntax +
+  trigger-type rules); `updateData.target` must be `$self`.
+- Schema (`vnext-schema` `cancelTransition`/`exitTransition`/`updateDataTransition`) accepts both
+  `roles` and `availableIn` — `availableIn` was added in 0.0.79 to match runtime behavior that had
+  always been there but was unauthorable under `additionalProperties: false`.
+- Full guide: `docs/domain/well-known-transitions.md`.
+
+## Role Grant Validation
+
+- Three role forms: **static** (`backoffice.operator`), **predefined** (`$InstanceStarter`,
+  `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`), **dynamic**
+  (`$user.` / `$userBehalfOf.` / `$role.` + `$.context.<path>`). Only dynamic is validated; the
+  other two are free-form.
+- A qualifier prefix ⇒ dynamic *intent*. The remainder must be the literal `$.context.`
+  (**Ordinal — case-sensitive**) plus a non-empty nav path. `$user.customer`,
+  `$user.$.Context.x` and `$role.$.context.` are all errors.
+- Why strict: `DynamicRoleGrant.TryParse` returns null on any deviation, and runtime `IsMatch` then
+  falls through to the **static** comparison — the grant becomes silently inert (an ALLOW that never
+  grants, a DENY that never denies). Definition time is the only place it is visible.
+- Never re-implement the parse rules in a validator. Use `DynamicRoleGrant.Classify`, which shares
+  `TryParse`'s constants and comparisons; the `Classify == WellFormed ⟺ TryParse != null` invariant
+  is pinned by `DynamicRoleGrantTests`.
 
 ## Sync vs Async
 

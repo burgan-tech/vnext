@@ -80,7 +80,7 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
 Computed by `IStateFunctionCache.ComputeEtag` — a deterministic SHA-256 hash (32 hex chars):
 
 ```
-etag = h(instanceId | effectiveState | status | flowVersion | callerHash
+etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersion | callerHash
          | correlationCount | completedCorrelationCount
          | lastCorrelationCompletedAt | lastSubFlowStateChangedAt)
 ```
@@ -88,6 +88,14 @@ etag = h(instanceId | effectiveState | status | flowVersion | callerHash
 - **Deterministic across pods**: any instance of the service computes the same ETag for the
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
+- **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
+  currently `v2`). The material is derived from instance facts and caller scope only — it says nothing
+  about what the body *contains*. So when a runtime release changes the body for an unchanged instance
+  (v2 started listing the workflow-level `updateData` and `exit` transitions), every previously issued
+  ETag must be invalidated: otherwise a client long-polling an instance parked in a human state would
+  keep receiving 304 and never observe the new shape. The same constant is a segment of the cache key,
+  so bumping it also discards bodies written by the previous build. **Bump it in the same commit as any
+  change to what the state body carries.**
 - **`callerHash` is inside the hash**: the response is authorization- and localization-scoped,
   so a caller switching role, actor, or culture must never receive a false 304.
 - **Subflow variant**: when an active subflow exists, the response content comes from a live
@@ -109,7 +117,7 @@ etag = h(instanceId | effectiveState | status | flowVersion | callerHash
 `IStateFunctionCache` over Aether `IDistributedCacheService` (Redis):
 
 ```
-key   = state-fn:{domain}:{workflow}:{instance}:{callerHash}
+key   = state-fn:{responseShapeVersion}:{domain}:{workflow}:{instance}:{callerHash}
 value = { Etag, EntityEtag, Output }          # full role-scoped response body
 TTL   = StateFunctionCache:TtlSeconds         # default 60s = client long-poll timeout
 callerHash = h(role | roles | actor identity | culture | extensions | version)
