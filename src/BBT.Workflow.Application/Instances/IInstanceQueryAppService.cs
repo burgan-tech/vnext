@@ -90,7 +90,15 @@ public interface IInstanceQueryAppService : IApplicationService
     /// Retrieves active instances with Human state subtype across all workflow schemas,
     /// filtered by transition role authorization.
     /// </summary>
+    /// <param name="domain">The runtime domain to enumerate.</param>
+    /// <param name="headers">
+    /// Request headers, used to resolve the caller's roles — <c>ICurrentUser.Roles</c> when present,
+    /// otherwise the legacy <c>role</c> header — and to supply the <c>$.context.Headers.*</c> namespace
+    /// for dynamic role grants.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
         string domain,
+        IReadOnlyDictionary<string, string?>? headers = null,
         CancellationToken cancellationToken = default);
 }

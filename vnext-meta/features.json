@@ -81,6 +81,19 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorize",
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorization-matrix"
       ]
+    },
+    "roleGrantAuthorization": {
+      "since": "0.0.79",
+      "status": "stable",
+      "description": "All role grant evaluation funnels through a single batch-scoped evaluator (IRoleGrantEvaluator, created via ITransitionAuthorizationManager.CreateEvaluatorAsync), so every authorization surface applies the identical rule: DENY wins over the whole grant set; with no matching DENY any matching ALLOW allows; a set with no ALLOW grant is a blacklist (allowed unless explicitly denied); an empty set is allowed. Multi-role callers resolve as any-allowed-role-grants-access, and a caller with no roles is still evaluated once so predefined and dynamic grants apply. Surfaces covered: custom function 'roles' (403 on deny), state/workflow 'queryRoles' for the built-in state/view/data/schema functions (403), transition 'roles' for availableTransitions discovery, the authorize function, the human-task list, long-poll acknowledge roles (403), and schema field-level 'x-roles'. Transition execution (POST instances/{instance}/transitions/{key}) deliberately does NOT evaluate transition 'roles': roles are a discovery control describing what a client should offer, not a capability boundary, and TransitionExecutionPolicy contains no role specification. Callers needing a pre-flight decision use the authorize function. Predefined and dynamic grants are matched on the grant side rather than by synthesizing pseudo-roles into the caller's role list, so schema 'x-roles' now honors $InstanceStarter/$PreviousUser/$InstanceBehalfOfStarter/$PreviousBehalfOfUser and $user./$userBehalfOf./$role. dynamic references at runtime. Predefined actor roles resolve ICurrentUser.ActorUserName against Instance.CreatedBy; behalf-of roles resolve ICurrentUser.UserName against Instance.CreatedByBehalfOf. The evaluator resolves the previous manual transition at most once per batch and memoizes the dynamic-role authorization context per transition key, built lazily so a grant set without dynamic grants never serializes instance data.",
+      "schemaPath": "transition.roles | function.attributes.roles | workflow.queryRoles | states[].queryRoles | schema.properties[].x-roles",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorize",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/data",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/schema",
+        "GET {domain}/functions/human-task"
+      ]
     }
   }
 }

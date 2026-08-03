@@ -103,6 +103,39 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
   `TryParse`'s constants and comparisons; the `Classify == WellFormed ⟺ TryParse != null` invariant
   is pinned by `DynamicRoleGrantTests`.
 
+## Role Grant Evaluation (runtime)
+
+- **One evaluator, no exceptions.** All instance-bound evaluation goes through `IRoleGrantEvaluator`
+  (`ITransitionAuthorizationManager.CreateEvaluatorAsync`). The manager's other methods are thin
+  wrappers. Never add a second matcher — three diverged inside the manager once and the surfaces
+  disagreed about the same transition. `RoleGrantEvaluatorTests` pins the equivalence.
+- Canonical rule over the **whole** grant set: DENY wins → matching ALLOW allows → a set with no ALLOW
+  grant is a blacklist (allow unless denied) → empty set allows. Multi-role: any allowed role wins.
+  A caller with **no** roles is still evaluated once so predefined/dynamic grants apply.
+- **`CreatedBy` pairs with the actor (`ActorUserName`); `BehalfOf` pairs with `UserName`.** Predefined
+  and dynamic grants match on the *grant* side, independent of the caller role being evaluated — that
+  is what makes `[deny: $InstanceStarter]` bind regardless of the caller's other roles.
+- **Batch, don't loop.** Create one evaluator per instance/schema and query it. `grantsForPrefetchHint`
+  must cover every grant you will evaluate: a `$PreviousUser` / `$PreviousBehalfOfUser` grant missing
+  from the hint can never match. The auth context is built lazily and memoized per transition key —
+  building it serializes the instance's full latest data.
+- **Every surface evaluating a grant set must be given the same `AuthorizationRequestContext`.** Omitting
+  it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
+  grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
+  function, which does pass the context, still answers *allowed* for it.
+- **`transition.roles` is not enforced at execution, by design.** `POST .../transitions/{key}` runs
+  schema validation + `TransitionExecutionPolicy`, and no specification there reads `Roles`;
+  `IsTransitionAllowedForRoleAsync`'s only production caller is `AuthorizeAppService`. Roles describe
+  what a client should *offer*, not a capability boundary — put real boundaries in `queryRoles`, a
+  function's `roles`, or the transition's task logic. Do not "fix" this; it is a deliberate decision.
+- **Never read `currentUser.Roles` directly at a decision point.** Use
+  `currentUser.ResolveCallerRoles(headers)`: `ChangeFromHeaders` is *not* in the HTTP pipeline (only
+  `TransitionRunner`), so a legacy-`role`-header caller would be treated as role-less — 403 from an
+  allowlist, or every guarded field pruned. Resolution is `ICurrentUser.Roles` first, header as
+  **fallback, not merge**. The same role set must feed the decision, the field filtering, and
+  `CallerScopeHash`.
+- Full guide: `docs/domain/role-grant-authorization.md`.
+
 ## Sync vs Async
 
 - `sync=true`: blocks until pipeline completes; full instance returned.

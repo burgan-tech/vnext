@@ -5,8 +5,14 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 namespace BBT.Workflow.Monitor.Authorization;
 
 /// <summary>
-/// Pure projection of a workflow definition into permission DTOs and DENY-overrides-ALLOW evaluation.
-/// No I/O, no rule evaluation — read-only authorization view.
+/// Pure projection of a workflow definition into permission DTOs. No I/O and no rule evaluation —
+/// this is a read-only authorization view.
+/// <para>
+/// Deliberately carries no grant evaluator: the canonical rule lives in
+/// <c>ITransitionAuthorizationManager</c> (DENY wins, allowlist when any ALLOW exists, blacklist
+/// otherwise, plus predefined and dynamic role forms). A second local implementation drifted from it,
+/// so any monitor surface that needs an actual decision must call the manager instead.
+/// </para>
 /// </summary>
 public static class AuthorizationMatrixMapper
 {
@@ -52,19 +58,6 @@ public static class AuthorizationMatrixMapper
                 QueryRoles = Map(s.QueryRoles)
             })
             .ToList();
-
-    /// <summary>
-    /// Evaluates whether the supplied roles are granted access given a set of role grants.
-    /// DENY overrides ALLOW; default deny when no grant matches the supplied roles.
-    /// </summary>
-    public static bool IsAllowed(IEnumerable<MonitorRoleGrant> grants, IEnumerable<string> roles)
-    {
-        var roleSet = new HashSet<string>(roles, StringComparer.OrdinalIgnoreCase);
-        var matched = grants.Where(g => roleSet.Contains(g.Role)).ToList();
-        if (matched.Count == 0) return false;
-        if (matched.Any(g => string.Equals(g.Grant, "deny", StringComparison.OrdinalIgnoreCase))) return false;
-        return matched.Any(g => string.Equals(g.Grant, "allow", StringComparison.OrdinalIgnoreCase));
-    }
 
     /// <summary>
     /// Returns a copy of <paramref name="response"/> retaining only the entries where <paramref name="role"/> appears.

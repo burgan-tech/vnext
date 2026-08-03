@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Gateway;
@@ -127,5 +128,6 @@ public sealed class InstanceControllerChildCancelTests
         Substitute.For<ITransitionJobEnqueuer>(),
         Substitute.For<IInstanceCommandGateway>(),
         Substitute.For<IEventAppService>(),
-        relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>());
+        relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>(),
+        Substitute.For<ICurrentUser>());
 }

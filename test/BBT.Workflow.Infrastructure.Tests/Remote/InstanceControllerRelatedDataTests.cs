@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Gateway;
@@ -181,7 +182,8 @@ public sealed class InstanceControllerRelatedDataTests
             Substitute.For<ITransitionJobEnqueuer>(),
             Substitute.For<IInstanceCommandGateway>(),
             Substitute.For<IEventAppService>(),
-            relatedInstanceQueryAppService)
+            relatedInstanceQueryAppService,
+            Substitute.For<ICurrentUser>())
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext }
         };

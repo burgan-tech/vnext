@@ -115,7 +115,8 @@ public sealed class EventPayloadBindingTests
             transitionJobEnqueuer: Substitute.For<ITransitionJobEnqueuer>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             eventAppService: Substitute.For<IEventAppService>(),
-            relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>());
+            relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
+            currentUser: Substitute.For<BBT.Aether.Users.ICurrentUser>());
 
         // AetherControllerBase resolves its Logger through the request services.
         var services = new ServiceCollection();
