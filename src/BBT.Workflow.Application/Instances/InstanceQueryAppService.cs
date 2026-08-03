@@ -475,8 +475,11 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Merges subflow transition names with the parent workflow's shared transitions and cancel transition (manual/event, available in current state).
-    /// When in active subflow, clients see subflow transitions plus parent's shared transitions and cancel; state-level parent transitions are not included.
+    /// Merges subflow transition names with the parent workflow's shared transitions and its well-known
+    /// workflow-level transitions — cancel, updateData and exit (manual/event, available in current state).
+    /// When in active subflow, clients see subflow transitions plus those parent transitions; state-level
+    /// parent transitions are not included. updateData in particular only does work while the parent sits
+    /// in a SubFlow state (see <c>HandleUpdateDataPreflightStep</c>), so this merge is its primary surface.
     /// </summary>
     private static List<string> MergeWithParentAvailableTransitions(
         List<string> subflowTransitionNames,
@@ -491,9 +494,18 @@ public sealed class InstanceQueryAppService(
         var parentSharedOnly = currentWorkflow.GetAvailableSharedTransitionKeysOnly(currentState);
         var merged = subflowTransitionNames.Union(parentSharedOnly);
 
-        var cancelKey = currentWorkflow.GetCancelTransitionKey(currentState);
-        if (cancelKey != null)
-            merged = merged.Union(new[] { cancelKey });
+        string?[] wellKnownKeys =
+        [
+            currentWorkflow.GetCancelTransitionKey(currentState),
+            currentWorkflow.GetUpdateDataTransitionKey(currentState),
+            currentWorkflow.GetExitTransitionKey(currentState)
+        ];
+
+        foreach (var key in wellKnownKeys)
+        {
+            if (key != null)
+                merged = merged.Union([key]);
+        }
 
         return merged.ToList();
     }
@@ -857,6 +869,14 @@ public sealed class InstanceQueryAppService(
             : char.ToLowerInvariant(name[0]) + name[1..];
     }
 
+    /// <summary>
+    /// Client-facing <see cref="TransitionItem.Kind"/> value for the updateData transition.
+    /// Deliberately not <see cref="WellKnownTransitionKeys.UpdateData"/> ("update-parent-data"):
+    /// the kind vocabulary mirrors the workflow-definition field names (cancel, exit, updateData),
+    /// while the request-side well-known alias stays unchanged.
+    /// </summary>
+    private const string UpdateDataTransitionKind = "updateData";
+
     private static string ResolveTransitionKind(
         Definitions.Workflow workflow,
         State currentState,
@@ -872,7 +892,7 @@ public sealed class InstanceQueryAppService(
 
         if (IsTransitionKey(workflow.UpdateData, transitionKey) ||
             transitionKey.Equals(WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase))
-            return WellKnownTransitionKeys.UpdateData;
+            return UpdateDataTransitionKind;
 
         if (workflow.Timeout?.Key.Equals(transitionKey, StringComparison.OrdinalIgnoreCase) == true ||
             transitionKey.Equals(WellKnownTransitionKeys.Timeout, StringComparison.OrdinalIgnoreCase))

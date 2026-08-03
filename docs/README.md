@@ -35,6 +35,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 13. Read [Script Related Instance Access](runtime/script-related-instance-access.md) before using or changing `context.Related` in mapping scripts (parent/correlation reads, unfiltered `x-roles` behavior, internal endpoint security posture).
 14. Read [View Display Modes](domain/view-display-modes.md) before changing a view's `display` declaration or how clients present views (SDI / MDI shapes, response `modes` contract).
 15. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
+16. Read [Well-Known Transitions](domain/well-known-transitions.md) before changing `cancel` / `updateData` / `exit` behavior, what `availableTransitions` contains, or the `kind` discriminator clients switch on.
 
 ## Documentation Rules
 

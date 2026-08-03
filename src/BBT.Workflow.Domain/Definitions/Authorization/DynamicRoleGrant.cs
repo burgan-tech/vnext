@@ -94,4 +94,76 @@ public sealed record DynamicRoleGrant(DynamicRoleQualifier Qualifier, string Con
 
     /// <summary>Returns true if the given role string matches the dynamic role grant pattern.</summary>
     public static bool IsDynamicRole([NotNullWhen(true)] string? role) => TryParse(role) != null;
+
+    /// <summary>
+    /// Classifies a role grant string for definition-time validation.
+    /// <para>
+    /// <see cref="TryParse"/> cannot serve validation on its own: it collapses "not a dynamic role"
+    /// and "a dynamic role the author got wrong" into the same null result, so a typo such as
+    /// <c>$user.customer</c> is indistinguishable from a plain static role name — and at runtime it
+    /// silently degrades into one (<c>IsMatch</c> falls through to the static comparison, which such a
+    /// value can never satisfy). This method recognises the author's intent from the qualifier prefix
+    /// first, then reports what is wrong with the remainder.
+    /// </para>
+    /// <para>
+    /// It deliberately reuses the same prefix constants and the same <see cref="StringComparison.Ordinal"/>
+    /// comparisons as <see cref="TryParse"/>, so the two can never disagree: for any role,
+    /// <c>Classify(role) == <see cref="DynamicRoleFormat.WellFormed"/></c> exactly when
+    /// <c>TryParse(role) != null</c>. Validating with a looser comparison would accept values the
+    /// runtime then ignores — a case variant like <c>$user.$.Context.x</c> is rejected here precisely
+    /// because <see cref="TryParse"/> rejects it too.
+    /// </para>
+    /// </summary>
+    public static DynamicRoleFormat Classify(string? role)
+    {
+        if (string.IsNullOrWhiteSpace(role))
+            return DynamicRoleFormat.NotDynamic;
+
+        string? remainder = null;
+
+        // Check $userBehalfOf BEFORE $user to avoid prefix collision
+        foreach (var prefix in new[] { UserBehalfOfPrefix, UserPrefix, RolePrefix })
+        {
+            if (!role.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+
+            remainder = role[prefix.Length..];
+            break;
+        }
+
+        // No qualifier prefix: a static role name or one of the four predefined instance roles.
+        if (remainder is null)
+            return DynamicRoleFormat.NotDynamic;
+
+        if (!remainder.StartsWith(ContextPrefix, StringComparison.Ordinal))
+            return DynamicRoleFormat.MissingContextPrefix;
+
+        return string.IsNullOrWhiteSpace(remainder[ContextPrefix.Length..])
+            ? DynamicRoleFormat.EmptyNavigationPath
+            : DynamicRoleFormat.WellFormed;
+    }
+}
+
+/// <summary>
+/// Outcome of classifying a role grant string via <see cref="DynamicRoleGrant.Classify"/>.
+/// </summary>
+public enum DynamicRoleFormat
+{
+    /// <summary>
+    /// No dynamic-role qualifier prefix — a static role name or a predefined instance role.
+    /// Nothing to validate.
+    /// </summary>
+    NotDynamic,
+
+    /// <summary>A well-formed dynamic role: <c>$&lt;qualifier&gt;.$.context.&lt;path&gt;</c>.</summary>
+    WellFormed,
+
+    /// <summary>
+    /// Dynamic-role intent, but the part after the qualifier does not open with the literal
+    /// <c>$.context.</c> (including a case variant, which the runtime parser also rejects).
+    /// </summary>
+    MissingContextPrefix,
+
+    /// <summary>Dynamic-role intent with <c>$.context.</c> but no navigation path after it.</summary>
+    EmptyNavigationPath
 }

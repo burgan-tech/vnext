@@ -165,6 +165,7 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 - Conditional GET with ETag: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
 - ETag sources: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
+- **Well-known transitions**: `cancel`, `updateData` and `exit` are listed in `availableTransitions` (configured key, not the well-known alias) with `kind` = `cancel` / `updateData` / `exit`, and their `roles` are role-filtered like any other transition. Full guide: `docs/domain/well-known-transitions.md`.
 - No server-side hold — 304 response drives client-side polling.
 - Subflow completion window: while parent correlation is open, State function shows **parent** main-flow transitions instead of subflow terminal view.
 

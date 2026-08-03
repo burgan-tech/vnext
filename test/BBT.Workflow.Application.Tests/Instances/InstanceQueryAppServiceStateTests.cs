@@ -1447,6 +1447,92 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         return (instance, workflow);
     }
 
+    /// <summary>
+    /// The workflow-level updateData and exit transitions are surfaced to clients as regular
+    /// available transitions, each carrying its own kind so the Client Workflow Manager SDK can
+    /// tell them apart from state and shared transitions.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ExposesUpdateDataAndExit_WithTheirOwnKinds()
+    {
+        // Arrange
+        var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
+        SetupCommonMocks(instance, workflow);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var transitions = result.Result.Value!.Transitions!;
+
+        transitions.Select(t => t.Name).ShouldBe(
+            ["submit", "cancel", "update-data", "exit"], ignoreOrder: true);
+        transitions.Single(t => t.Name == "submit").Kind.ShouldBe("stateTransition");
+        transitions.Single(t => t.Name == "cancel").Kind.ShouldBe("cancel");
+        transitions.Single(t => t.Name == "exit").Kind.ShouldBe("exit");
+        // Deliberately "updateData" (the workflow-definition field name), not the
+        // "update-parent-data" well-known request alias.
+        transitions.Single(t => t.Name == "update-data").Kind.ShouldBe("updateData");
+    }
+
+    /// <summary>
+    /// Role grants on updateData/exit are now live: a caller the authorization manager rejects
+    /// must not see them in availableTransitions.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_OmitsUpdateDataAndExit_WhenCallerIsNotAuthorized()
+    {
+        // Arrange
+        var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
+        SetupCommonMocks(instance, workflow);
+
+        _transitionAuthorizationManager
+            .FilterAuthorizedTransitionKeysAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<State>(),
+                Arg.Any<Instance?>(),
+                Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult<IReadOnlyList<string>>(
+                [.. callInfo.ArgAt<IReadOnlyList<string>>(3)
+                    .Where(k => k is not ("update-data" or "exit"))]));
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Transitions!.Select(t => t.Name).ShouldBe(["submit", "cancel"], ignoreOrder: true);
+    }
+
+    /// <summary>
+    /// Builds an Active instance in an intermediate state whose workflow declares one state
+    /// transition plus all three well-known workflow-level transitions.
+    /// </summary>
+    private static (Instance Instance, Definitions.Workflow Workflow) CreateActiveInstanceWithWellKnownTransitions()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddTransition(Transition.Create("submit", TestState, "done", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        workflow.SetCancel(Transition.Create("cancel", null, "cancelled", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        workflow.SetUpdateData(Transition.Create("update-data", null, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        workflow.SetExit(Transition.Create("exit", null, "exited", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+
+        return (instance, workflow);
+    }
+
     private static GetInstanceStateInput CreateInput(string instanceId) => new()
     {
         Domain = TestDomain,
