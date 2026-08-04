@@ -29,6 +29,13 @@ public sealed class LazyScriptContext(Func<CancellationToken, Task<ScriptContext
     /// Returns the script context, building it on first access. A build failure is surfaced as a
     /// failed <see cref="Result{T}"/> rather than an exception so callers stay on the railway.
     /// </summary>
+    /// <remarks>
+    /// Caller cancellation propagates as <see cref="OperationCanceledException"/> instead of being
+    /// converted to a failure: a client that hung up has not encountered an application error, and
+    /// reporting one would log noise and mask the real outcome. An <c>OperationCanceledException</c>
+    /// raised while our own token is still live (an internal timeout, say) is a genuine failure and
+    /// does fall through to the <see cref="Result{T}"/> path.
+    /// </remarks>
     public async Task<Result<ScriptContext>> GetAsync(CancellationToken cancellationToken = default)
     {
         if (built is not null)
@@ -38,6 +45,10 @@ public sealed class LazyScriptContext(Func<CancellationToken, Task<ScriptContext
         {
             built = await factory(cancellationToken);
             return Result<ScriptContext>.Ok(built);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

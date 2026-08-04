@@ -150,6 +150,49 @@ public sealed class FunctionContractResolverTests
             .ExecuteConditionAsync(default!, default!, default);
     }
 
+    /// <summary>
+    /// Caller cancellation must propagate, not be reported as an application failure: a client that
+    /// hung up has not hit an error, and converting it would log noise and hide the real outcome.
+    /// </summary>
+    [Fact]
+    public async Task CallerCancellation_PropagatesInsteadOfBecomingAFailure()
+    {
+        var function = Function($$"""
+            "inputView": [ { "rule": {{Rule()}}, "view": {{Ref("v1", "sys-views")}} } ]
+            """);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var lazy = new LazyScriptContext(ct =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ScriptContext(NullLogger<ScriptContext>.Instance));
+        });
+
+        await Should.ThrowAsync<OperationCanceledException>(() =>
+            _resolver.ResolveAsync(function, FunctionContractSlot.InputView, lazy, cts.Token));
+    }
+
+    /// <summary>
+    /// An <c>OperationCanceledException</c> raised while the caller's token is still live — an internal
+    /// timeout, for instance — is a genuine failure and must stay on the Result railway rather than
+    /// masquerading as caller cancellation.
+    /// </summary>
+    [Fact]
+    public async Task InternalCancellation_WithALiveCallerToken_StaysAFailure()
+    {
+        var function = Function($$"""
+            "inputView": [ { "rule": {{Rule()}}, "view": {{Ref("v1", "sys-views")}} } ]
+            """);
+        var lazy = new LazyScriptContext(_ =>
+            throw new OperationCanceledException("inner timeout"));
+
+        var result = await _resolver.ResolveAsync(
+            function, FunctionContractSlot.InputView, lazy, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+    }
+
     [Fact]
     public async Task ScriptContextIsBuiltOnce_AcrossAllFourSlots()
     {
