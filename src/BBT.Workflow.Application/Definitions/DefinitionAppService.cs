@@ -25,6 +25,7 @@ public sealed class DefinitionAppService(
     IInstanceRepository instanceRepository,
     ComponentValidatorProcessor componentValidatorProcessor,
     WorkflowCastProcessor castProcessor,
+    IDomainCacheContext cacheContext,
     IWorkflowMetrics workflowMetrics,
     IServiceScopeFactory scopeFactory,
     IServiceProvider serviceProvider)
@@ -302,6 +303,14 @@ public sealed class DefinitionAppService(
                 return Result.Fail(WorkflowErrors.InstanceDataNotFound(input.Key, input.Version));
             }
 
+            // Drop cached version resolutions first. Re-casting alone is not enough: it writes the body
+            // of this version, but what "latest" or "1" should resolve to may have changed to a
+            // different version entirely — including to an older one, if this version was deactivated.
+            if (cacheContext.Set(input.Flow) is { } cacheSet)
+            {
+                await cacheSet.InvalidateAsync(input.Domain, input.Key, input.Version, cancellationToken);
+            }
+
             if (instanceData.Data.JsonElement.ValueKind != JsonValueKind.Null)
             {
                 await castProcessor.ProcessAsync(
@@ -311,6 +320,8 @@ public sealed class DefinitionAppService(
                     cancellationToken
                 );
             }
+
+            // A null body is the delete case; the invalidation above is the whole point of the call.
 
             return Result.Ok();
         }

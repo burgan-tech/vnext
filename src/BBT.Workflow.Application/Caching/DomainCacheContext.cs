@@ -1,6 +1,7 @@
 using BBT.Aether.DistributedCache;
 using BBT.Workflow.Definitions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Caching;
 
@@ -10,6 +11,8 @@ namespace BBT.Workflow.Caching;
 /// </summary>
 public class DomainCacheContext : IDomainCacheContext, IDisposable
 {
+    private readonly Dictionary<string, ICacheSet> _setsByComponentTypeKey;
+
     public ICacheSet<Definitions.Workflow> Workflows { get; }
     public ICacheSet<WorkflowTask> Tasks { get; }
     public ICacheSet<SchemaDefinition> Schemas { get; }
@@ -27,42 +30,77 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         ICacheBackend<View> viewBackend,
         ICacheBackend<Extension> extensionBackend,
         ICacheBackend<Mapping> mappingBackend,
+        IComponentGenerationProvider generationProvider,
+        IOptions<ComponentCacheOptions> options,
+        TimeProvider timeProvider,
         ILoggerFactory loggerFactory)
     {
         Workflows = new CacheSet<Definitions.Workflow>(
             distributedCache,
             workflowBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>());
 
         Tasks = new CacheSet<WorkflowTask>(
             distributedCache,
             taskBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<WorkflowTask>>());
 
         Schemas = new CacheSet<SchemaDefinition>(
             distributedCache,
             schemaBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>());
 
         Functions = new CacheSet<Function>(
             distributedCache,
             functionBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<Function>>());
 
         Views = new CacheSet<View>(
             distributedCache,
             viewBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<View>>());
 
         Extensions = new CacheSet<Extension>(
             distributedCache,
             extensionBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<Extension>>());
 
         Mappings = new CacheSet<Mapping>(
             distributedCache,
             mappingBackend,
+            generationProvider,
+            options,
+            timeProvider,
             loggerFactory.CreateLogger<CacheSet<Mapping>>());
+
+        _setsByComponentTypeKey = new Dictionary<string, ICacheSet>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Definitions.Workflow.ComponentTypeKey] = Workflows,
+            [WorkflowTask.ComponentTypeKey] = Tasks,
+            [SchemaDefinition.ComponentTypeKey] = Schemas,
+            [Function.ComponentTypeKey] = Functions,
+            [View.ComponentTypeKey] = Views,
+            [Extension.ComponentTypeKey] = Extensions,
+            [Mapping.ComponentTypeKey] = Mappings
+        };
     }
 
     public ICacheSet<T> Set<T>() where T : class, IDomainEntity, IReferenceSetter
@@ -76,6 +114,15 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         if (typeof(T) == typeof(Mapping)) return (ICacheSet<T>)Mappings;
 
         throw new NotSupportedException($"Type {typeof(T).Name} is not supported in DomainCacheContext.");
+    }
+
+    /// <inheritdoc />
+    public ICacheSet? Set(string componentTypeKey)
+    {
+        if (string.IsNullOrWhiteSpace(componentTypeKey))
+            return null;
+
+        return _setsByComponentTypeKey.GetValueOrDefault(componentTypeKey);
     }
 
     public void Dispose()

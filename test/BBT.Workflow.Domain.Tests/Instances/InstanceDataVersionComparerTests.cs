@@ -802,6 +802,197 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region Cache Key Algebra (NormalizeRequest / CanonicalFullVersion / GetMajor / GetMajorMinor)
+
+    [Theory]
+    [InlineData(null, "latest")]
+    [InlineData("", "latest")]
+    [InlineData("   ", "latest")]
+    [InlineData("latest", "latest")]
+    [InlineData("LATEST", "latest")]
+    [InlineData("  Latest  ", "latest")]
+    [InlineData("1", "1")]
+    [InlineData(" 1.2 ", "1.2")]
+    [InlineData("2.3.5", "2.3.5")]
+    [InlineData(" 1.5.6-PKG.1.1.56+Core ", "1.5.6-pkg.1.1.56+core")]
+    public void NormalizeRequest_ShouldCollapseEquivalentSpellings(string? requested, string expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.NormalizeRequest(requested);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void NormalizeRequest_ShouldAgreeWithCaseInsensitiveMatching()
+    {
+        // Arrange - FindBestMatch resolves these two spellings identically (exact match is
+        // case-insensitive), so they must normalize to the same cache key.
+        var versions = new List<string> { "1.0.0-alpha.1" };
+
+        // Act
+        var lower = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-alpha.1");
+        var upper = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-ALPHA.1");
+
+        // Assert
+        Assert.Equal(lower, upper);
+        Assert.Equal(
+            InstanceDataVersionComparer.NormalizeRequest("1.0.0-alpha.1"),
+            InstanceDataVersionComparer.NormalizeRequest("1.0.0-ALPHA.1"));
+    }
+
+    [Theory]
+    [InlineData("1.5.6-pkg.1.1.56+core", "1.5.6-pkg.1.1.56")]
+    [InlineData("1.5.6-pkg.1.1.56", "1.5.6-pkg.1.1.56")]
+    [InlineData("1.0.0-pkg.1.17.0+account+build.123", "1.0.0-pkg.1.17.0")]
+    [InlineData("1.0.0", "1.0.0")]
+    [InlineData("1", "1")]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    public void CanonicalFullVersion_ShouldStripBuildMetadata(string? version, string expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.CanonicalFullVersion(version);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void CanonicalFullVersion_ShouldGiveSameIdentityToVersionsThatCompareEqual()
+    {
+        // Arrange - build metadata does not affect ordering, so these are the same version and must
+        // therefore canonicalize to a single identity.
+        const string withMetadata = "1.5.6-pkg.1.1.56+core";
+        const string withoutMetadata = "1.5.6-pkg.1.1.56";
+
+        // Act & Assert
+        Assert.Equal(0, InstanceDataVersionComparer.StringVersionComparer.Instance
+            .Compare(withMetadata, withoutMetadata));
+        Assert.Equal(
+            InstanceDataVersionComparer.CanonicalFullVersion(withMetadata),
+            InstanceDataVersionComparer.CanonicalFullVersion(withoutMetadata));
+    }
+
+    [Theory]
+    [InlineData("1.2.3-pkg.1.0.0+account", "1")]
+    [InlineData("12.0.0-pkg.1.0.0+account", "12")]
+    [InlineData("1.0.0-alpha.1-pkg.1.17.0+account", "1")]
+    [InlineData("2.3.5", "2")]
+    [InlineData("1", null)]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    public void GetMajor_ShouldExtractArtifactMajor(string? version, string? expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.GetMajor(version);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("1.2.3-pkg.1.0.0+account", "1.2")]
+    [InlineData("1.20.0-pkg.1.0.0+account", "1.20")]
+    [InlineData("1.0.0-alpha.1-pkg.1.17.0+account", "1.0")]
+    [InlineData("2.3.5", "2.3")]
+    [InlineData("1", null)]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    public void GetMajorMinor_ShouldExtractArtifactMajorMinor(string? version, string? expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.GetMajorMinor(version);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("1.2.3-pkg.1.0.0+account", "1", true)]
+    [InlineData("12.0.0-pkg.1.0.0+account", "1", false)] // must not be a prefix false-positive
+    [InlineData("12.0.0-pkg.1.0.0+account", "12", true)]
+    public void MatchesMajor_ShouldStillAvoidPrefixFalsePositives(string fullVersion, string major, bool expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.MatchesMajor(fullVersion, major);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("1.0.5-pkg.1.0.0+account", "1.0", true)]
+    [InlineData("1.20.0-pkg.1.0.0+account", "1.2", false)] // must not be a prefix false-positive
+    [InlineData("1.2.3-pkg.1.0.0+account", "1.2", true)]
+    public void MatchesPartial_ShouldStillAvoidPrefixFalsePositives(string fullVersion, string partial, bool expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.MatchesPartial(fullVersion, partial);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    #endregion
+
+    #region Artifact-Over-Package Priority
+
+    [Fact]
+    public void StringVersionComparer_ShouldRankArtifactVersionAbovePackageVersion()
+    {
+        // Arrange - a lower artifact with a much higher package version must still lose.
+        const string higherArtifactLowerPackage = "1.6.0-pkg.1.0.0+core";
+        const string lowerArtifactHigherPackage = "1.5.0-pkg.9.9.9+core";
+
+        // Act
+        var comparison = InstanceDataVersionComparer.StringVersionComparer.Instance
+            .Compare(higherArtifactLowerPackage, lowerArtifactHigherPackage);
+
+        // Assert
+        Assert.True(comparison > 0);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("latest")]
+    [InlineData(null)]
+    public void FindBestMatch_ShouldPreferHigherArtifactOverHigherPackage(string? requested)
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.5.0-pkg.9.9.9+core",
+            "1.6.0-pkg.1.0.0+core"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, requested);
+
+        // Assert
+        Assert.Equal("1.6.0-pkg.1.0.0+core", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldPreferHighestPackageWithinTheSameArtifact()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.5.0-pkg.2.0.0+core",
+            "1.5.0-pkg.3.0.0+core"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.5.0");
+
+        // Assert
+        Assert.Equal("1.5.0-pkg.3.0.0+core", result);
+    }
+
+    #endregion
+
     private InstanceData CreateInstanceData(string version)
     {
         var instance = InstanceFactory.CreateDefault();
