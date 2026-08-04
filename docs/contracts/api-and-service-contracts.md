@@ -27,7 +27,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 
 | Endpoint family | Behavior |
 | --- | --- |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
@@ -35,6 +35,12 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | `GET /{domain}/functions` | Lists domain function definitions, including `verbs[]` and input/output schema and view references. |
 | `GET\|POST\|PATCH\|DELETE /{domain}/functions/{function}` | Invokes a custom domain function. `GET /{function}` invokes — it is not a metadata route. |
 | `GET\|POST\|PATCH\|DELETE /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}` | Invokes a custom instance function. |
+| `GET /{domain}/functions/{function}/info` | Describes a custom domain function: verbs, scope, executable href, and view/schema hyperlinks. |
+| `GET /{domain}/functions/{function}/view?target=input\|output` | Returns the view the function's `inputView`/`outputView` resolves to. |
+| `GET /{domain}/functions/{function}/schema?target=input\|output` | Returns the schema the function's `inputSchema`/`outputSchema` resolves to. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/info` | Same description, resolved against the instance. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/view?target=input\|output` | Instance-bound view resolution. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/schema?target=input\|output` | Instance-bound schema resolution. |
 
 ### Custom function verbs and payload validation
 
@@ -46,6 +52,44 @@ declares neither accepts every routed verb and any body, which is the pre-existi
 | Verb not in declared `verbs[]` | `405 Method Not Allowed` with an `Allow` header listing the declared verbs. |
 | Body present and fails `inputSchema` | `400` with field-level validation errors (same shape as transition schema validation). |
 | `outputSchema` | Never enforced; declarative contract for clients only. |
+
+All four contract slots may be authored as a single reference **or** as rule-based entries evaluated
+in declaration order. When no entry matches, no contract applies: the body is not validated, `/info`
+reports `hasView`/`hasSchema` false, and the content routes return `404` (`Function:800004`).
+An unrecognized `target` is `400` (`Function:800005`). See
+[Function Contract Resolution](../runtime/function-contract-resolution.md).
+
+### State response: workflow function links
+
+The state response carries a `functions` array listing the functions the workflow declares, each
+linked to its `info` endpoint so a client discovers them without a second round trip:
+
+```jsonc
+"functions": [
+  { "href": "/core/functions/get-branches/info", "name": "get-branches", "version": "1.0.0", "scope": "D" },
+  { "href": "/core/workflows/onboarding/instances/{id}/functions/calc-limit/info",
+    "name": "calc-limit", "version": "1.0.0", "scope": "F" }
+]
+```
+
+The href **matches the function's scope**: `D` links to the domain route, `F` and `I` to the instance
+route — the domain route rejects the latter two with `403`, so linking them there would be a dead
+link. `scope` is emitted so the client can flag the difference itself.
+
+The list is **not role-filtered** — it is a discovery hint, not an authorization boundary. `roles` are
+still enforced by `/info` and by the function itself, so following a link the caller is not granted
+returns `403`. A function reference whose component cannot be resolved is omitted rather than failing
+the response.
+
+It is **not part of the ETag material**: the list belongs to the flow version, which the fingerprint
+already covers. See [Instance Function Cache and Fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
+### Function discovery (`/info`)
+
+`/info` and the four content routes are `GET`-only and carry no ETag/304. All six run the same scope
+and role gates as execution, so a caller denied on execution gets `403` rather than a description.
+Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
+`hierarchy`, `human-task`, `master`) have no `sys-functions` component and return `404` from `/info`.
 
 The HTTP `QUERY` method is **not supported** — declaring it is a component validation error and no
 route accepts it. Surrounding tooling (Swagger/OpenAPI, gateways, client SDKs) does not handle an

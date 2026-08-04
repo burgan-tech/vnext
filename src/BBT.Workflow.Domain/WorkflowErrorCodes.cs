@@ -135,6 +135,15 @@ public static class WorkflowErrorCodes
     /// <summary>The function does not declare support for the request's HTTP verb. Maps to HTTP 405.</summary>
     public const string FunctionVerbNotAllowed = "Function:800003";
 
+    /// <summary>
+    /// The requested contract slot resolved to nothing: the function declares no view/schema for it, or
+    /// every declared entry carried a rule and none matched this request. Maps to HTTP 404.
+    /// </summary>
+    public const string FunctionContractNotResolved = "Function:800004";
+
+    /// <summary>The <c>target</c> query value is neither <c>input</c> nor <c>output</c>. Maps to HTTP 400.</summary>
+    public const string FunctionContractTargetInvalid = "Function:800005";
+
     #endregion
 
     #region Authorization Errors (110xxx)

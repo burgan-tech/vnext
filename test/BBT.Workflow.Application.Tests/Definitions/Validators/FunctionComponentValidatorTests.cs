@@ -224,4 +224,112 @@ public class FunctionComponentValidatorTests
 
         result.IsValid.ShouldBeTrue();
     }
+
+    // ─── Rule-based contract slots ──────────────────────────────────────────────
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForRuleBasedSlotsWithATrailingFallback()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "verbs": ["POST"]
+        , "inputSchema": [
+            { "rule": { "location": "", "code": "a", "encoding": "NAT" },
+              "schema": { "key": "s1", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" } },
+            { "schema": { "key": "s2", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" } }
+          ]
+        , "inputView": [
+            { "rule": { "location": "", "code": "a", "encoding": "NAT" },
+              "view": { "key": "v1", "domain": "d", "flow": "sys-views", "version": "1.0.0" } },
+            { "view": { "key": "v2", "domain": "d", "flow": "sys-views", "version": "1.0.0" } }
+          ]
+        """));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnIndexedError_WhenARuleBasedEntryReferencesWrongFlow()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "inputView": [
+            { "rule": { "location": "", "code": "a", "encoding": "NAT" },
+              "view": { "key": "v1", "domain": "d", "flow": "sys-views", "version": "1.0.0" } },
+            { "view": { "key": "v2", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" } }
+          ]
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputView[1]"));
+    }
+
+    [Theory]
+    [InlineData("outputSchema", "sys-schemas", "sys-views", "schema")]
+    [InlineData("outputView", "sys-views", "sys-schemas", "view")]
+    public void Validate_ShouldCheckEveryEntryOfEveryOutputSlot(
+        string property, string _, string wrongFlow, string refField)
+    {
+        var result = _validator.Validate(FunctionWith($$"""
+        , "{{property}}": [
+            { "{{refField}}": { "key": "x", "domain": "d", "flow": "{{wrongFlow}}", "version": "1.0.0" } }
+          ]
+        """));
+
+        result.IsValid.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenARuleLessEntryIsNotLast()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "inputView": [
+            { "view": { "key": "v1", "domain": "d", "flow": "sys-views", "version": "1.0.0" } },
+            { "rule": { "location": "", "code": "a", "encoding": "NAT" },
+              "view": { "key": "v2", "domain": "d", "flow": "sys-views", "version": "1.0.0" } }
+          ]
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputView[0]"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenAViewEntryDeclaresExtensions()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "inputView": [
+            { "view": { "key": "v1", "domain": "d", "flow": "sys-views", "version": "1.0.0" },
+              "extensions": ["ext-a"] }
+          ]
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputView"));
+    }
+
+    [Fact]
+    public void Validate_ShouldAllowLoadDataOnAViewEntry()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "inputView": [
+            { "view": { "key": "v1", "domain": "d", "flow": "sys-views", "version": "1.0.0" },
+              "loadData": true }
+          ]
+        """));
+
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldApplyTheBodyVerbRule_ToARuleBasedInputSchema()
+    {
+        var result = _validator.Validate(FunctionWith("""
+        , "verbs": ["GET"]
+        , "inputSchema": [
+            { "schema": { "key": "s1", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" } }
+          ]
+        """));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputSchema"));
+    }
 }

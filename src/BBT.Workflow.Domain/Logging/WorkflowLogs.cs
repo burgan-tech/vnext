@@ -3116,5 +3116,34 @@ public static partial class WorkflowLogs
         string functionKey,
         string schemaKey);
 
+    /// <summary>
+    /// Logs when a rule on a function contract entry could not be evaluated. The entry is skipped and
+    /// evaluation continues with the next one, mirroring state/transition view rule handling.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80004,
+        Level = LogLevel.Warning,
+        Message = "Function {FunctionKey} contract rule evaluation failed for slot {Slot} entry {ReferenceKey}: {ErrorMessage}. Skipping entry.")]
+    public static partial void FunctionContractRuleEvaluationFailed(
+        this ILogger logger,
+        string functionKey,
+        string slot,
+        string referenceKey,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a function reference declared on a workflow cannot be resolved while building the
+    /// state response. The entry is omitted from the response's function list; polling continues.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80005,
+        Level = LogLevel.Warning,
+        Message = "Workflow {WorkflowKey} declares function {FunctionKey} but its component could not be resolved: {ErrorMessage}. Omitting it from the state response.")]
+    public static partial void WorkflowFunctionReferenceUnresolved(
+        this ILogger logger,
+        string workflowKey,
+        string functionKey,
+        string errorMessage);
+
     #endregion
 }

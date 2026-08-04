@@ -70,4 +70,52 @@ public sealed class UrlTemplateOptions
     /// Parameters: {0}=domain, {1}=workflow, {2}=instance
     /// </summary>
     public string Master { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/master";
+
+    /// <summary>
+    /// Template for the domain-scoped function execution endpoint
+    /// Parameters: {0}=domain, {1}=function
+    /// </summary>
+    public string DomainFunction { get; set; } = "/{0}/functions/{1}";
+
+    /// <summary>
+    /// Template for the domain-scoped function info endpoint (GET)
+    /// Parameters: {0}=domain, {1}=function
+    /// </summary>
+    public string DomainFunctionInfo { get; set; } = "/{0}/functions/{1}/info";
+
+    /// <summary>
+    /// Template for the domain-scoped function view endpoint (GET)
+    /// Parameters: {0}=domain, {1}=function, {2}=target (input|output)
+    /// </summary>
+    public string DomainFunctionView { get; set; } = "/{0}/functions/{1}/view?target={2}";
+
+    /// <summary>
+    /// Template for the domain-scoped function schema endpoint (GET)
+    /// Parameters: {0}=domain, {1}=function, {2}=target (input|output)
+    /// </summary>
+    public string DomainFunctionSchema { get; set; } = "/{0}/functions/{1}/schema?target={2}";
+
+    /// <summary>
+    /// Template for the instance-scoped function execution endpoint
+    /// Parameters: {0}=domain, {1}=workflow, {2}=instance, {3}=function
+    /// </summary>
+    public string InstanceFunction { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/{3}";
+
+    /// <summary>
+    /// Template for the instance-scoped function info endpoint (GET)
+    /// Parameters: {0}=domain, {1}=workflow, {2}=instance, {3}=function
+    /// </summary>
+    public string InstanceFunctionInfo { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/{3}/info";
+
+    /// <summary>
+    /// Template for the instance-scoped function view endpoint (GET)
+    /// Parameters: {0}=domain, {1}=workflow, {2}=instance, {3}=function, {4}=target (input|output)
+    /// </summary>
+    public string InstanceFunctionView { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/{3}/view?target={4}";
+
+    /// <summary>
+    /// Template for the instance-scoped function schema endpoint (GET)
+    /// Parameters: {0}=domain, {1}=workflow, {2}=instance, {3}=function, {4}=target (input|output)
+    /// </summary>
+    public string InstanceFunctionSchema { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/{3}/schema?target={4}";
 }

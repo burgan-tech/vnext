@@ -24,11 +24,7 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         List<RoleGrant>? roles = null,
         bool rawResponse = false,
         FunctionCache? cache = null,
-        List<string>? verbs = null,
-        Reference? inputSchema = null,
-        Reference? outputSchema = null,
-        Reference? inputView = null,
-        Reference? outputView = null
+        List<string>? verbs = null
     ) : this()
     {
         Scope = scope;
@@ -39,10 +35,6 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         RawResponse = rawResponse;
         Cache = cache;
         this.verbs = NormalizeVerbs(verbs);
-        InputSchema = inputSchema;
-        OutputSchema = outputSchema;
-        InputView = inputView;
-        OutputView = outputView;
     }
 
     /// <summary>
@@ -113,32 +105,56 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     public IReadOnlyCollection<string> Verbs => verbs.AsReadOnly();
 
     /// <summary>
-    /// Optional reference to the <c>sys-schemas</c> component describing this function's request body.
-    /// When set, the runtime validates the request body against it before executing any task.
+    /// Optional <c>sys-schemas</c> contract describing this function's request body. When set, the
+    /// runtime validates the request body against the winning entry before executing any task.
+    /// Authored either as a single component reference or as rule-based entries evaluated in
+    /// declaration order (first match wins, a trailing rule-less entry is the fallback).
     /// </summary>
     [JsonInclude] [JsonPropertyName("inputSchema")]
-    public Reference? InputSchema { get; private set; }
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    public SchemaSelection?InputSchema { get; private set; }
 
     /// <summary>
-    /// Optional reference to the <c>sys-schemas</c> component describing this function's response body.
+    /// Optional <c>sys-schemas</c> contract describing this function's response body.
     /// Declarative only - the runtime does not validate responses against it.
     /// </summary>
     [JsonInclude] [JsonPropertyName("outputSchema")]
-    public Reference? OutputSchema { get; private set; }
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    public SchemaSelection?OutputSchema { get; private set; }
 
     /// <summary>
-    /// Optional reference to the <c>sys-views</c> component the client renders to collect this
-    /// function's input.
+    /// Optional <c>sys-views</c> contract the client renders to collect this function's input.
+    /// Supports the same single-reference and rule-based forms as <see cref="InputSchema"/>.
     /// </summary>
     [JsonInclude] [JsonPropertyName("inputView")]
-    public Reference? InputView { get; private set; }
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
+    public ViewDefinition? InputView { get; private set; }
 
     /// <summary>
-    /// Optional reference to the <c>sys-views</c> component the client renders to present this
-    /// function's output.
+    /// Optional <c>sys-views</c> contract the client renders to present this function's output.
     /// </summary>
     [JsonInclude] [JsonPropertyName("outputView")]
-    public Reference? OutputView { get; private set; }
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
+    public ViewDefinition? OutputView { get; private set; }
+
+    /// <summary>
+    /// True when the function declares at least one input schema entry. A definition whose entries all
+    /// carry rules can still resolve to no schema at request time; this only reports the declaration.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasInputSchema => InputSchema is { Schemas.Count: > 0 };
+
+    /// <summary>True when the function declares at least one output schema entry.</summary>
+    [JsonIgnore]
+    public bool HasOutputSchema => OutputSchema is { Schemas.Count: > 0 };
+
+    /// <summary>True when the function declares at least one input view entry.</summary>
+    [JsonIgnore]
+    public bool HasInputView => InputView is { Views.Count: > 0 };
+
+    /// <summary>True when the function declares at least one output view entry.</summary>
+    [JsonIgnore]
+    public bool HasOutputView => OutputView is { Views.Count: > 0 };
 
     [JsonInclude] [JsonPropertyName("roles")]
     private List<RoleGrant> roles = new();

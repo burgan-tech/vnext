@@ -11,6 +11,7 @@ using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
@@ -66,6 +67,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             .ValidateRequestAsync(
                 Arg.Any<Function>(),
                 Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
                 Arg.Any<IReadOnlyDictionary<string, string?>?>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
@@ -119,11 +121,14 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             currentSchema: Substitute.For<ICurrentSchema>(),
             taskCoordinator: _taskCoordinator,
             scriptEngine: Substitute.For<IScriptEngine>(),
-            currentUser: Substitute.For<ICurrentUser>(),
-            transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             keyEvaluator: _keyEvaluator,
             cacheGateway: _cacheGateway,
             remoteInvoker: Substitute.For<IRemoteInvokerService>(),
+            // The real policy, so these tests keep covering the scope and role gates end to end
+            // after they moved out of FunctionAppService.
+            functionAccessPolicy: new FunctionAccessPolicy(
+                Substitute.For<ICurrentUser>(),
+                Substitute.For<ITransitionAuthorizationManager>()),
             functionRequestValidationService: _functionRequestValidationService);
     }
 
@@ -230,6 +235,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             .ValidateRequestAsync(
                 Arg.Any<Function>(),
                 Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
                 Arg.Any<IReadOnlyDictionary<string, string?>?>(),
                 Arg.Any<CancellationToken>())
             .Returns(Result.Fail(Error.Validation("schema.invalid", "body does not match schema")));

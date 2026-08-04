@@ -89,13 +89,19 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v2`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v3`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
-  (v2 started listing the workflow-level `updateData` and `exit` transitions), every previously issued
-  ETag must be invalidated: otherwise a client long-polling an instance parked in a human state would
-  keep receiving 304 and never observe the new shape. The same constant is a segment of the cache key,
-  so bumping it also discards bodies written by the previous build. **Bump it in the same commit as any
-  change to what the state body carries.**
+  (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
+  `functions` discovery links), every previously issued ETag must be invalidated: otherwise a client
+  long-polling an instance parked in a human state would keep receiving 304 and never observe the new
+  shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
+  the previous build. **Bump it in the same commit as any change to what the state body carries** —
+  `StateFunctionCacheTests.BuildKey_ContainsResponseShapeVersionDomainWorkflowAndInstance` asserts the
+  literal so the bump cannot be forgotten silently.
+- **The `functions` list is deliberately *not* in the ETag material.** It is a property of the flow
+  version, which `InstanceStateFingerprint.FlowVersion` already covers, so it cannot change while an
+  instance is parked. Adding it to the material would buy nothing and cost a hash input. What needed
+  invalidating was the shape change, once — that is exactly what the `v3` bump did.
 - **`callerHash` is inside the hash**: the response is authorization- and localization-scoped,
   so a caller switching role, actor, or culture must never receive a false 304.
 - **Subflow variant**: when an active subflow exists, the response content comes from a live

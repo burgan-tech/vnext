@@ -483,6 +483,26 @@ public static class WorkflowErrors
             target: allowed);
     }
 
+    /// <summary>
+    /// The requested contract slot produced no reference: either the function declares nothing for it,
+    /// or every declared entry carried a rule and none matched this request.
+    /// </summary>
+    /// <param name="functionKey">The key of the function that was queried.</param>
+    /// <param name="slot">The contract slot name, e.g. <c>inputView</c>.</param>
+    public static Error FunctionContractNotResolved(string functionKey, string slot)
+        => Error.NotFound(
+            WorkflowErrorCodes.FunctionContractNotResolved,
+            $"Function '{functionKey}' has no {slot} for this request.");
+
+    /// <summary>
+    /// The <c>target</c> query value on a function view/schema request was not recognized.
+    /// </summary>
+    /// <param name="target">The rejected target value.</param>
+    public static Error FunctionContractTargetInvalid(string? target)
+        => Error.Validation(
+            WorkflowErrorCodes.FunctionContractTargetInvalid,
+            $"Unknown target '{target}'. Expected 'input' or 'output'.");
+
     #endregion
 
     #region Authorization Errors

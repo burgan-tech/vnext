@@ -30,11 +30,18 @@ public sealed class StateFunctionCache(
     /// instance fingerprint and the caller scope only — it does not cover the response body's shape.
     /// So whenever a runtime change alters what the body contains for an unchanged instance (for
     /// example v2, which started listing the workflow-level <c>updateData</c> and <c>exit</c>
-    /// transitions), this constant must be bumped: it invalidates every previously issued ETag and
-    /// every cached body, and without it a client long-polling an instance whose state never changes
-    /// would keep receiving <c>304 Not Modified</c> and never observe the new shape.
+    /// transitions, or v3, which added the workflow's <c>functions</c> discovery links), this constant
+    /// must be bumped: it invalidates every previously issued ETag and every cached body, and without
+    /// it a client long-polling an instance whose state never changes would keep receiving
+    /// <c>304 Not Modified</c> and never observe the new shape.
     /// </summary>
-    private const string ResponseShapeVersion = "v2";
+    /// <remarks>
+    /// Note the asymmetry this constant exists to cover: the <c>functions</c> list itself is
+    /// deliberately absent from the ETag material, because it is a property of the flow version — which
+    /// <see cref="InstanceStateFingerprint.FlowVersion"/> already covers — and so cannot change while an
+    /// instance is parked. What needed invalidating was the shape change, once, not the value.
+    /// </remarks>
+    private const string ResponseShapeVersion = "v3";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

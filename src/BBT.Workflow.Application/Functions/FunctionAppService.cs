@@ -5,11 +5,9 @@ using System.Globalization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
-using BBT.Aether.Users;
-using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
-using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -35,11 +33,10 @@ public sealed class FunctionAppService(
     ICurrentSchema currentSchema,
     ITaskCoordinator taskCoordinator,
     IScriptEngine scriptEngine,
-    ICurrentUser currentUser,
-    ITransitionAuthorizationManager transitionAuthorizationManager,
     IDynamicExpressoValueEvaluator keyEvaluator,
     IStateStoreCacheGateway cacheGateway,
     IRemoteInvokerService remoteInvoker,
+    IFunctionAccessPolicy functionAccessPolicy,
     IFunctionRequestValidationService functionRequestValidationService)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
@@ -145,37 +142,10 @@ public sealed class FunctionAppService(
         string? httpMethod,
         CancellationToken cancellationToken)
     {
-        // Scope enforcement. Domain is exempt; Instance/Flow require an instance;
-        // Flow additionally requires the function to be declared in the instance's flow.
-        if (!function.Scope.Equals(TaskScope.Domain))
-        {
-            if (instance == null)
-                return Result<FunctionResponseOutput>.Fail(
-                    WorkflowErrors.FunctionScopeNotSatisfied(function.Key, function.Scope.Description));
-
-            if (function.Scope.Equals(TaskScope.Flow) &&
-                !(workflow?.Functions.Any(f => f.Key == function.Key) ?? false))
-            {
-                return Result<FunctionResponseOutput>.Fail(
-                    WorkflowErrors.FunctionScopeNotSatisfied(function.Key, function.Scope.Description));
-            }
-        }
-
-        // Custom-function authorization: when the function defines Roles, the caller must resolve to an allow.
-        // Built-in functions never reach this path (they use their own handlers/authorization).
-        if (function.Roles.Count > 0)
-        {
-            // Honor the legacy `role` header: a caller whose roles arrive only as a header would
-            // otherwise be treated as role-less and rejected with 403 by an allowlist grant set.
-            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                currentUser.ResolveCallerRoles(headers),
-                function.Roles,
-                instance,
-                new AuthorizationRequestContext(headers, queryParameters),
-                cancellationToken);
-            if (!allowed)
-                return Result<FunctionResponseOutput>.Fail(WorkflowErrors.FunctionAccessDenied(function.Key));
-        }
+        var access = await functionAccessPolicy.AuthorizeAsync(
+            function, instance, workflow, headers, queryParameters, cancellationToken);
+        if (!access.IsSuccess)
+            return Result<FunctionResponseOutput>.Fail(access.Error);
 
         // Contract enforcement. Both gates are opt-in: a function that declares no verbs accepts every
         // verb, and one that declares no input schema accepts any body - so definitions authored before
@@ -187,11 +157,6 @@ public sealed class FunctionAppService(
             return Result<FunctionResponseOutput>.Fail(
                 WorkflowErrors.FunctionVerbNotAllowed(function.Key, httpMethod!, function.Verbs));
         }
-
-        var inputValidation = await functionRequestValidationService.ValidateRequestAsync(
-            function, body, headers, cancellationToken);
-        if (!inputValidation.IsSuccess)
-            return Result<FunctionResponseOutput>.Fail(inputValidation.Error);
 
         object scriptBody = body.HasValue
             ? (object)body.Value
@@ -206,7 +171,10 @@ public sealed class FunctionAppService(
             metadata[DynamicExpressoValueEvaluator.VaryByPrefixesMetadataKey] = cacheConfig.VaryByHeaderPrefixes;
         }
 
-        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+        // Built once and shared by input-schema rule evaluation, the cache key expression and the tasks.
+        // Lazy because a function whose input schema declares no rules must not pay for a context it
+        // would only need after validation anyway.
+        var lazyScriptContext = new LazyScriptContext(ct => scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(workflow)
             .WithInstance(instance)
             .WithRuntime(runtimeInfoProvider)
@@ -214,7 +182,18 @@ public sealed class FunctionAppService(
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
             .WithMetadata(metadata)
-            .BuildAsync(cancellationToken);
+            .BuildAsync(ct));
+
+        var inputValidation = await functionRequestValidationService.ValidateRequestAsync(
+            function, body, lazyScriptContext, headers, cancellationToken);
+        if (!inputValidation.IsSuccess)
+            return Result<FunctionResponseOutput>.Fail(inputValidation.Error);
+
+        var scriptContextResult = await lazyScriptContext.GetAsync(cancellationToken);
+        if (!scriptContextResult.IsSuccess)
+            return Result<FunctionResponseOutput>.Fail(scriptContextResult.Error);
+
+        var scriptContext = scriptContextResult.Value!;
 
         // Read-through cache: when the function opts in, serve the cached response on a hit (tasks skipped).
         string? cacheKey = null;

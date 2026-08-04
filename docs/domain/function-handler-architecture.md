@@ -44,18 +44,30 @@ optional, and a function that declares nothing behaves exactly as it did before 
 | Attribute | Purpose |
 | --- | --- |
 | `verbs[]` | HTTP verbs the function accepts: `GET`, `POST`, `PATCH`, `DELETE`. Empty/absent means no restriction. |
-| `inputSchema` | `sys-schemas` reference describing the request body. Enforced at runtime. |
-| `outputSchema` | `sys-schemas` reference describing the response body. Declarative only. |
-| `inputView` | `sys-views` reference the client renders to collect input. |
-| `outputView` | `sys-views` reference the client renders to present output. |
+| `inputSchema` | `sys-schemas` contract describing the request body. Enforced at runtime. |
+| `outputSchema` | `sys-schemas` contract describing the response body. Declarative only. |
+| `inputView` | `sys-views` contract the client renders to collect input. |
+| `outputView` | `sys-views` contract the client renders to present output. |
+
+Each of the four slots is **rule-based**: author it as a single component reference, or as entries
+evaluated in declaration order where the first match wins. See
+[Function contract resolution](../runtime/function-contract-resolution.md) for the full rules.
 
 ```jsonc
 "attributes": {
   "scope": "D",
   "verbs": ["POST"],
+  // Single reference - the common case.
   "inputSchema":  { "key": "search-request",  "domain": "core", "flow": "sys-schemas", "version": "1.0.0" },
   "outputSchema": { "key": "search-response", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" },
-  "inputView":    { "key": "search-form",     "domain": "core", "flow": "sys-views",   "version": "1.0.0" },
+  // Rule-based - first match wins, the trailing rule-less entry is the fallback.
+  "inputView": [
+    {
+      "rule": { "location": "./mobile-rule.csx", "code": "...", "encoding": "B64" },
+      "view": { "key": "search-form-mobile", "domain": "core", "flow": "sys-views", "version": "1.0.0" }
+    },
+    { "view": { "key": "search-form", "domain": "core", "flow": "sys-views", "version": "1.0.0" } }
+  ],
   "task": { }
 }
 ```
@@ -85,24 +97,102 @@ reach this path — they are served by their own handlers — so they are unaffe
 | Verb declared and matched | Request proceeds. |
 | Verb declared and not matched | `405 Method Not Allowed` + `Allow` header listing declared verbs. |
 | `inputSchema` absent | Body not validated. |
-| `inputSchema` set, no body (e.g. `GET`) | Body not validated. |
-| `inputSchema` set, body present | Validated via `IJsonSchemaValidator`; failure → `400` with field-level errors. |
+| `inputSchema` set, no body (e.g. `GET`) | Body not validated - checked before any rule runs. |
+| `inputSchema` rule-based, no entry matched | Body not validated; no contract applies to this request. |
+| `inputSchema` resolved, body present | Validated via `IJsonSchemaValidator`; failure → `400` with field-level errors. |
 
 Comparison is case-insensitive and verbs are normalized to upper case, so `"post"` and `"POST"`
 are equivalent. `outputSchema` is never validated at runtime.
 
 Component validation rejects an unknown verb, a reference pointing at the wrong flow, and an
 `inputSchema` declared alongside verbs that can never carry a body (e.g. `verbs: ["GET"]` only),
-since the schema would be silently dead.
+since the schema would be silently dead. For rule-based slots it additionally rejects a rule-less
+entry that is not last (everything after it is unreachable) and an `extensions` declaration on a
+function view entry (there is no data function to apply extensions to).
 
 ### Discovery
 
-There is no dedicated contract endpoint. `GET {domain}/functions` already returns each function's
-full component definition, including `verbs[]` and the four reference fields, so a client reads the
-contract from the definition it already has and resolves the referenced schema/view components the
-same way it resolves any other reference.
+`GET .../functions/{function}/info` describes a function to a client that is about to call it: may I
+run this, with which verb, at which URL, and which view and schema apply *right now*. The response
+follows the state function's hyperlink style — the client follows hrefs rather than resolving
+component references itself.
 
-Note that `GET {domain}/functions/{function}` **invokes** the function — it is not a metadata route.
+```
+GET {domain}/functions/{function}/info
+GET {domain}/workflows/{workflow}/instances/{instance}/functions/{function}/info
+```
+
+```jsonc
+{
+  "key": "customer-search",
+  "domain": "core",
+  "version": "1.0.0",
+  "scope": "D",
+  "rawResponse": false,
+  "cacheable": true,
+  "function": { "href": "/core/functions/customer-search", "verbs": ["POST"] },
+  "inputView":    { "href": "/core/functions/customer-search/view?target=input",    "hasView": true, "loadData": false },
+  "outputView":   { "href": "/core/functions/customer-search/view?target=output",   "hasView": false, "loadData": false },
+  "inputSchema":  { "href": "/core/functions/customer-search/schema?target=input",  "hasSchema": true },
+  "outputSchema": { "href": "/core/functions/customer-search/schema?target=output", "hasSchema": true }
+}
+```
+
+The `has*` flags say whether following the href *right now* returns content. The href is emitted
+either way, because a rule reads request state and can match on a later call.
+
+The hrefs point at four content routes, which re-evaluate the rules on every call:
+
+```
+GET {domain}/functions/{function}/view?target=input|output
+GET {domain}/functions/{function}/schema?target=input|output
+GET {domain}/workflows/{workflow}/instances/{instance}/functions/{function}/view?target=input|output
+GET {domain}/workflows/{workflow}/instances/{instance}/functions/{function}/schema?target=input|output
+```
+
+`target` defaults to `input`. The view route returns the same payload as the state-level `view`
+function, so clients reuse their existing rendering path.
+
+All six routes run the **same** scope and role gates as execution
+(`IFunctionAccessPolicy`), so a caller who could not invoke the function cannot learn its shape
+either: a denied caller gets `403`, not an empty description. A slot that resolves to nothing on a
+content route is `404` (`Function:800004`); an unrecognized `target` is `400` (`Function:800005`).
+
+**Built-in system functions are not describable.** `state`, `view`, `data`, `schema`, `authorize`,
+`permissions`, `hierarchy`, `human-task` and `master` have no `sys-functions` component, so
+`/info` returns `404` for them.
+
+`GET {domain}/functions` still returns each function's full component definition for tooling that
+wants the raw shape. Note that `GET {domain}/functions/{function}` **invokes** the function — it is
+not a metadata route.
+
+#### From the state function
+
+A client polling an instance does not need to know a function exists in advance: the state response
+carries a `functions` array listing what the workflow declares, each entry linked straight to its
+`info` endpoint.
+
+```jsonc
+"functions": [
+  { "href": "/core/functions/get-branches/info", "name": "get-branches", "version": "1.0.0", "scope": "D" },
+  { "href": "/core/workflows/onboarding/instances/{id}/functions/calc-limit/info",
+    "name": "calc-limit", "version": "1.0.0", "scope": "F" }
+]
+```
+
+The href is built from the function's `scope` — `D` gets the domain route, `F` and `I` the instance
+route, because the domain route rejects those two with `403`. `scope` travels alongside so the client
+can branch on it without inferring anything from the URL.
+
+Building the list reads each function's component to learn its scope; a reference that cannot be
+resolved is logged (`WorkflowFunctionReferenceUnresolved`) and omitted rather than failing the poll.
+The list is **not role-filtered** — a function's `roles` are enforced when the client follows the
+link, not when it is advertised.
+
+The list does **not** participate in the state ETag: it is a property of the flow version, which the
+fingerprint already covers, so it cannot change while an instance is parked. The `v3`
+`ResponseShapeVersion` bump was what made existing clients observe the new field. See
+[Instance Function Cache and Fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
 ## State Alias (Role-Based State Visibility)
 

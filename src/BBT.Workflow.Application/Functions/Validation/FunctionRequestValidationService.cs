@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using BBT.Workflow.Validation;
@@ -17,25 +18,39 @@ namespace BBT.Workflow.Functions.Validation;
 public sealed class FunctionRequestValidationService(
     IJsonSchemaValidator schemaValidator,
     IComponentCacheStore componentCacheStore,
+    IFunctionContractResolver contractResolver,
     ILogger<FunctionRequestValidationService> logger) : IFunctionRequestValidationService
 {
     /// <inheritdoc />
     public async Task<Result> ValidateRequestAsync(
         Function function,
         JsonElement? body,
+        LazyScriptContext scriptContext,
         IReadOnlyDictionary<string, string?>? headers = null,
         CancellationToken cancellationToken = default)
     {
         // Guard: no declared input contract - behave exactly as before contract declaration existed.
-        if (function.InputSchema is null)
+        if (!function.HasInputSchema)
             return Result.Ok();
 
         // Guard: no body to validate. Bodyless verbs (GET) and empty payloads are not the schema's concern;
         // a function that must receive a body should declare it required in the schema of a body-carrying verb.
+        // Checked before rule evaluation so a bodyless request never builds a script context.
         if (!body.HasValue || body.Value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
             return Result.Ok();
 
-        var schemaResult = await componentCacheStore.GetSchemaAsync(function.InputSchema, cancellationToken);
+        var resolution = await contractResolver.ResolveAsync(
+            function, FunctionContractSlot.InputSchema, scriptContext, cancellationToken);
+        if (!resolution.IsSuccess)
+            return Result.Fail(resolution.Error);
+
+        // Every entry carried a rule and none matched: no input contract applies to this request.
+        if (resolution.Value is null)
+            return Result.Ok();
+
+        var inputSchema = resolution.Value.Reference;
+
+        var schemaResult = await componentCacheStore.GetSchemaAsync(inputSchema, cancellationToken);
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);
 
@@ -45,7 +60,7 @@ public sealed class FunctionRequestValidationService(
             CreateSchemaValidationOptions(headers));
 
         if (!validationResult.IsSuccess)
-            logger.FunctionInputSchemaValidationFailed(function.Key, function.InputSchema.Key);
+            logger.FunctionInputSchemaValidationFailed(function.Key, inputSchema.Key);
 
         return validationResult;
     }

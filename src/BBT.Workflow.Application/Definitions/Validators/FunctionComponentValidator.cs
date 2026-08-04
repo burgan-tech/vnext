@@ -75,7 +75,7 @@ public sealed class FunctionComponentValidator : IComponentValidator
 
         // An input schema describes the request body, so a function that only ever answers bodyless
         // verbs can never apply it - the declaration would be silently dead.
-        if (function.InputSchema is not null &&
+        if (function.HasInputSchema &&
             function.Verbs.Count > 0 &&
             function.Verbs.All(v => !FunctionVerb.CarriesBody(v)))
         {
@@ -88,26 +88,87 @@ public sealed class FunctionComponentValidator : IComponentValidator
     }
 
     /// <summary>
-    /// Validates that contract references point at the component type they are meant to describe.
+    /// Validates every entry of every contract slot: the reference points at the component type the
+    /// slot is meant to describe, and the rule-based entries form a reachable chain.
     /// </summary>
     private static void ValidateContractReferences(Function function, ComponentValidationResult result)
     {
-        ValidateReferenceFlow(function.InputSchema, RuntimeSysSchemaInfo.Schemas, nameof(Function.InputSchema), result);
-        ValidateReferenceFlow(function.OutputSchema, RuntimeSysSchemaInfo.Schemas, nameof(Function.OutputSchema), result);
-        ValidateReferenceFlow(function.InputView, RuntimeSysSchemaInfo.Views, nameof(Function.InputView), result);
-        ValidateReferenceFlow(function.OutputView, RuntimeSysSchemaInfo.Views, nameof(Function.OutputView), result);
+        ValidateSlot(
+            function.InputSchema?.Schemas.Select(e => new SlotEntry(e.Rule is not null, e.Schema)).ToList(),
+            RuntimeSysSchemaInfo.Schemas, nameof(Function.InputSchema), allowsViewOptions: false, result);
+
+        ValidateSlot(
+            function.OutputSchema?.Schemas.Select(e => new SlotEntry(e.Rule is not null, e.Schema)).ToList(),
+            RuntimeSysSchemaInfo.Schemas, nameof(Function.OutputSchema), allowsViewOptions: false, result);
+
+        ValidateSlot(
+            function.InputView?.Views
+                .Select(e => new SlotEntry(e.Rule is not null, e.View, e.Extensions is { Length: > 0 })).ToList(),
+            RuntimeSysSchemaInfo.Views, nameof(Function.InputView), allowsViewOptions: true, result);
+
+        ValidateSlot(
+            function.OutputView?.Views
+                .Select(e => new SlotEntry(e.Rule is not null, e.View, e.Extensions is { Length: > 0 })).ToList(),
+            RuntimeSysSchemaInfo.Views, nameof(Function.OutputView), allowsViewOptions: true, result);
+    }
+
+    /// <summary>
+    /// Validates one contract slot. Entries are evaluated in declaration order at runtime and the
+    /// first match wins, so a rule-less entry short-circuits everything after it.
+    /// </summary>
+    private static void ValidateSlot(
+        List<SlotEntry>? entries,
+        string expectedFlow,
+        string propertyName,
+        bool allowsViewOptions,
+        ComponentValidationResult result)
+    {
+        if (entries is null || entries.Count == 0)
+            return;
+
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var entry = entries[index];
+            var member = entries.Count == 1
+                ? $"{nameof(Function)}.{propertyName}"
+                : $"{nameof(Function)}.{propertyName}[{index}]";
+
+            ValidateReferenceFlow(entry.Reference, expectedFlow, propertyName, member, result);
+
+            // A rule-less entry always matches, so nothing declared after it can ever be reached.
+            if (!entry.HasRule && index < entries.Count - 1)
+            {
+                result.AddError(
+                    $"Function {propertyName} entry {index} declares no rule, so it always matches and the " +
+                    $"{entries.Count - index - 1} entry(s) after it are unreachable. Move the rule-less " +
+                    "fallback entry to the end.",
+                    member);
+            }
+
+            // 'extensions' loads instance data alongside a state view; a function has no data function
+            // to apply them to, so honoring them is impossible and ignoring them silently is worse.
+            if (allowsViewOptions && entry.HasExtensions)
+            {
+                result.AddError(
+                    $"Function {propertyName} entry {index} declares 'extensions', which only applies to " +
+                    "state and transition views. Remove it.",
+                    member);
+            }
+        }
     }
 
     private static void ValidateReferenceFlow(
         Reference? reference,
         string expectedFlow,
         string propertyName,
+        string member,
         ComponentValidationResult result)
     {
         if (reference is null)
+        {
+            result.AddError($"Function {propertyName} entry requires a reference.", member);
             return;
-
-        var member = $"{nameof(Function)}.{propertyName}";
+        }
 
         if (string.IsNullOrWhiteSpace(reference.Key))
             result.AddError($"Function {propertyName} reference requires a key.", member);
@@ -125,4 +186,7 @@ public sealed class FunctionComponentValidator : IComponentValidator
                 member);
         }
     }
+
+    /// <summary>Uniform projection of a view or schema entry so both slot families share one check.</summary>
+    private sealed record SlotEntry(bool HasRule, Reference? Reference, bool HasExtensions = false);
 }
