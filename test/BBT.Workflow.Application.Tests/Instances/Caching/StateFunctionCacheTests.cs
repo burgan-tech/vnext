@@ -66,11 +66,12 @@ public class StateFunctionCacheTests
         var key = CreateSut().BuildKey(CreateInput());
 
         // The response-shape version segment is part of the key so that a runtime change to the
-        // state body (v2 added the workflow-level updateData/exit transitions, v3 the workflow's
-        // `functions` discovery links) cannot be served from entries written by an earlier build.
+        // state body (v2 added the workflow-level updateData/exit transitions; v3 the workflow's
+        // `functions` discovery links; v4 replaced that list with a hasFunctions flag plus a catalog
+        // link) cannot be served from entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v3:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v4:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]

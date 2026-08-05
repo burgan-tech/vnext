@@ -1,7 +1,7 @@
-using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Functions.DTOs;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Functions;
 
@@ -37,6 +37,22 @@ public interface IFunctionInfoAppService
         string workflow,
         string instanceKey,
         string key,
+        Dictionary<string, string?>? headers = null,
+        Dictionary<string, string?>? queryParameters = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the functions the instance's workflow declares, each linked to its <c>info</c> endpoint.
+    /// Backs the <c>catalog</c> system function the state response points at.
+    /// </summary>
+    /// <remarks>
+    /// Role-filtered: a function the caller could not invoke is omitted, so every returned link is
+    /// actionable. Declaration order is preserved.
+    /// </remarks>
+    Task<Result<FunctionCatalogOutput>> GetCatalogByInstanceAsync(
+        string domain,
+        string workflow,
+        string instanceKey,
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         CancellationToken cancellationToken = default);

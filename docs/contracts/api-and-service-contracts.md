@@ -41,6 +41,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/info` | Same description, resolved against the instance. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/view?target=input\|output` | Instance-bound view resolution. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/schema?target=input\|output` | Instance-bound schema resolution. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/catalog` | Lists the workflow's declared functions, role-filtered, each linked to its `info` endpoint. |
 
 ### Custom function verbs and payload validation
 
@@ -59,37 +60,49 @@ reports `hasView`/`hasSchema` false, and the content routes return `404` (`Funct
 An unrecognized `target` is `400` (`Function:800005`). See
 [Function Contract Resolution](../runtime/function-contract-resolution.md).
 
-### State response: workflow function links
+### State response: function catalog pointer
 
-The state response carries a `functions` array listing the functions the workflow declares, each
-linked to its `info` endpoint so a client discovers them without a second round trip:
+The state response points at the workflow's function catalog rather than carrying the list:
 
 ```jsonc
-"functions": [
-  { "href": "/core/functions/get-branches/info", "name": "get-branches", "version": "1.0.0", "scope": "D" },
-  { "href": "/core/workflows/onboarding/instances/{id}/functions/calc-limit/info",
-    "name": "calc-limit", "version": "1.0.0", "scope": "F" }
-]
+"functions": {
+  "hasFunctions": true,
+  "href": "/core/workflows/onboarding/instances/{id}/functions/catalog"
+}
 ```
 
-The href **matches the function's scope**: `D` links to the domain route, `F` and `I` to the instance
-route — the domain route rejects the latter two with `403`, so linking them there would be a dead
-link. `scope` is emitted so the client can flag the difference itself.
+`hasFunctions` is `workflow.Functions.Count > 0`. The href is always emitted; the flag lets a client
+skip the call when the flow ships no functions.
 
-The list is **not role-filtered** — it is a discovery hint, not an authorization boundary. `roles` are
-still enforced by `/info` and by the function itself, so following a link the caller is not granted
-returns `403`. A function reference whose component cannot be resolved is omitted rather than failing
-the response.
+The list is **not** inlined because resolving it costs one component read per declared function plus a
+role evaluation each — work that does not belong on a response served on every long-poll, and that is
+wasted for clients which never look at functions.
 
-It is **not part of the ETag material**: the list belongs to the flow version, which the fingerprint
-already covers. See [Instance Function Cache and Fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+`functions` is **not part of the ETag material**: `hasFunctions` belongs to the flow version, which the
+fingerprint already covers. See
+[Instance Function Cache and Fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
+### Function catalog (`catalog`)
+
+```
+GET /{domain}/workflows/{workflow}/instances/{instance}/functions/catalog
+```
+
+Returns `{ "functions": [ { name, version, scope, href } ] }` in declaration order. Each href matches
+the function's `scope`: `D` links to the domain `info` route, `F` and `I` to the instance one — the
+domain route rejects the latter two with `403`, so linking them there would be a dead link.
+
+**Role-filtered** through the same `IFunctionAccessPolicy` as execution and `/info`, so a function the
+caller could not invoke is not advertised and every link is actionable. A reference whose component
+cannot be resolved is omitted rather than failing the catalog.
 
 ### Function discovery (`/info`)
 
 `/info` and the four content routes are `GET`-only and carry no ETag/304. All six run the same scope
 and role gates as execution, so a caller denied on execution gets `403` rather than a description.
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
-`hierarchy`, `human-task`, `master`) have no `sys-functions` component and return `404` from `/info`.
+`hierarchy`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
+from `/info`.
 
 The HTTP `QUERY` method is **not supported** — declaring it is a component validation error and no
 route accepts it. Surrounding tooling (Swagger/OpenAPI, gateways, client SDKs) does not handle an

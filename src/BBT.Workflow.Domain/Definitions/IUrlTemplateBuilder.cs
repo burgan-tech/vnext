@@ -180,6 +180,16 @@ public interface IUrlTemplateBuilder
     string BuildInstanceFunctionInfoUrl(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null);
 
     /// <summary>
+    /// Builds URL for the instance function catalog endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance key or ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated client-facing URL</returns>
+    string BuildFunctionCatalogUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null);
+
+    /// <summary>
     /// Builds URL for the instance-scoped function view endpoint.
     /// </summary>
     /// <param name="domain">The domain name</param>

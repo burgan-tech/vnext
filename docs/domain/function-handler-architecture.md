@@ -35,6 +35,7 @@ Application services own domain behavior and result construction.
 | `permissions` | `AuthorizationMatrixFunctionHandler` | Returns authorization matrix. |
 | `hierarchy` | `HierarchyFunctionHandler` | Returns instance hierarchy. |
 | `humanTask` | `HumanTaskFunctionHandler` | Returns human task state for clients. |
+| `catalog` | `CatalogFunctionHandler` | Lists the workflow's declared functions, role-filtered, each linked to its `info` endpoint. |
 
 ## Custom Function Contract (verbs, schemas, views)
 
@@ -159,39 +160,63 @@ either: a denied caller gets `403`, not an empty description. A slot that resolv
 content route is `404` (`Function:800004`); an unrecognized `target` is `400` (`Function:800005`).
 
 **Built-in system functions are not describable.** `state`, `view`, `data`, `schema`, `authorize`,
-`permissions`, `hierarchy`, `human-task` and `master` have no `sys-functions` component, so
+`permissions`, `hierarchy`, `human-task`, `master` and `catalog` have no `sys-functions` component, so
 `/info` returns `404` for them.
 
 `GET {domain}/functions` still returns each function's full component definition for tooling that
 wants the raw shape. Note that `GET {domain}/functions/{function}` **invokes** the function — it is
 not a metadata route.
 
-#### From the state function
+### The `catalog` function
 
-A client polling an instance does not need to know a function exists in advance: the state response
-carries a `functions` array listing what the workflow declares, each entry linked straight to its
-`info` endpoint.
+A client polling an instance does not need to know in advance which functions exist. The state
+response points at the catalog:
 
 ```jsonc
-"functions": [
-  { "href": "/core/functions/get-branches/info", "name": "get-branches", "version": "1.0.0", "scope": "D" },
-  { "href": "/core/workflows/onboarding/instances/{id}/functions/calc-limit/info",
-    "name": "calc-limit", "version": "1.0.0", "scope": "F" }
-]
+"functions": {
+  "hasFunctions": true,
+  "href": "/core/workflows/onboarding/instances/{id}/functions/catalog"
+}
 ```
 
-The href is built from the function's `scope` — `D` gets the domain route, `F` and `I` the instance
-route, because the domain route rejects those two with `403`. `scope` travels alongside so the client
-can branch on it without inferring anything from the URL.
+`hasFunctions` is `workflow.Functions.Count > 0` — free to compute. The href is always emitted; the
+flag lets a client skip the call entirely when the flow ships no functions.
 
-Building the list reads each function's component to learn its scope; a reference that cannot be
-resolved is logged (`WorkflowFunctionReferenceUnresolved`) and omitted rather than failing the poll.
-The list is **not role-filtered** — a function's `roles` are enforced when the client follows the
-link, not when it is advertised.
+Following it returns the list:
 
-The list does **not** participate in the state ETag: it is a property of the flow version, which the
-fingerprint already covers, so it cannot change while an instance is parked. The `v3`
-`ResponseShapeVersion` bump was what made existing clients observe the new field. See
+```jsonc
+GET {domain}/workflows/{workflow}/instances/{instance}/functions/catalog
+
+{
+  "functions": [
+    { "name": "get-branches", "version": "1.0.0", "scope": "D",
+      "href": "/core/functions/get-branches/info" },
+    { "name": "calc-limit", "version": "1.0.0", "scope": "F",
+      "href": "/core/workflows/onboarding/instances/{id}/functions/calc-limit/info" }
+  ]
+}
+```
+
+Each href matches the function's `scope` — `D` gets the domain route, `F` and `I` the instance route,
+because the domain route rejects those two with `403`. `scope` travels alongside so the client can
+branch on it without inferring anything from the URL. Declaration order is preserved.
+
+**Role-filtered**, through the same `IFunctionAccessPolicy` as execution and `/info`: a function the
+caller could not invoke is not advertised, so every link handed out is actionable. A reference whose
+component cannot be resolved is logged (`WorkflowFunctionReferenceUnresolved`) and omitted rather than
+failing the catalog.
+
+#### Why the list is not inlined in the state response
+
+Resolving it costs one component read per declared function *plus* a role evaluation each. The state
+response is served on every long-poll, so that work does not belong there — and it is wasted anyway
+for the many clients that never look at functions. Behind `catalog` it is paid once, on demand.
+`InstanceQueryAppServiceStateTests.GetInstanceStateAsync_NeverReadsFunctionComponents` pins that the
+state path reads none.
+
+`functions` does **not** participate in the state ETag: `hasFunctions` is a property of the flow
+version, which the fingerprint already covers, so it cannot change while an instance is parked. The
+`v4` `ResponseShapeVersion` bump is what made existing clients observe the new shape. See
 [Instance Function Cache and Fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
 ## State Alias (Role-Based State Visibility)

@@ -1535,151 +1535,54 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         return (instance, workflow);
     }
 
-    // ─── Workflow function discovery links ──────────────────────────────────────
+    // ─── Function catalog pointer ───────────────────────────────────────────────
 
     /// <summary>
-    /// A workflow that declares no functions emits an empty list rather than a null, so clients can
-    /// enumerate unconditionally.
-    /// </summary>
-    [Fact]
-    public async Task GetInstanceStateAsync_WhenWorkflowDeclaresNoFunctions_ReturnsEmptyList()
-    {
-        var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
-        SetupCommonMocks(instance, workflow);
-
-        var result = await _service.GetInstanceStateAsync(
-            CreateInput(instance.Id.ToString()), CancellationToken.None);
-
-        result.Result.IsSuccess.ShouldBeTrue();
-        result.Result.Value!.Functions.ShouldBeEmpty();
-        await _componentCacheStore.DidNotReceiveWithAnyArgs()
-            .GetFunctionAsync(default!, default!, default, default);
-    }
-
-    /// <summary>
-    /// The href must match the function's scope: the domain route rejects Flow- and Instance-scoped
-    /// functions with 403, so linking them there would hand the client a dead link.
+    /// The catalog link is always emitted; <c>hasFunctions</c> tells the client whether calling it
+    /// would return anything, so it can skip the round trip.
     /// </summary>
     [Theory]
-    [InlineData("D", "https://domain-fn-info")]
-    [InlineData("F", "https://instance-fn-info")]
-    [InlineData("I", "https://instance-fn-info")]
-    public async Task GetInstanceStateAsync_BuildsTheInfoHrefFromTheFunctionScope(
-        string scope, string expectedHref)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetInstanceStateAsync_ReportsWhetherTheWorkflowDeclaresFunctions(bool declare)
     {
         var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
-        workflow.AddFunction(new Reference("get-branches", TestDomain, "sys-functions", TestVersion));
+        if (declare)
+            workflow.AddFunction(new Reference("get-branches", TestDomain, "sys-functions", TestVersion));
         SetupCommonMocks(instance, workflow);
-        SetupFunctionInfoUrls();
-        SetupFunction("get-branches", scope);
+        _urlTemplateBuilder
+            .BuildFunctionCatalogUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>())
+            .Returns("https://catalog-url");
 
         var result = await _service.GetInstanceStateAsync(
             CreateInput(instance.Id.ToString()), CancellationToken.None);
 
         result.Result.IsSuccess.ShouldBeTrue();
-        var function = result.Result.Value!.Functions.ShouldHaveSingleItem();
-        function.Name.ShouldBe("get-branches");
-        function.Version.ShouldBe(TestVersion);
-        function.Scope.ShouldBe(scope);
-        function.Href.ShouldBe(expectedHref);
+        var functions = result.Result.Value!.Functions;
+        functions.HasFunctions.ShouldBe(declare);
+        functions.Href.ShouldBe("https://catalog-url");
     }
 
     /// <summary>
-    /// A function reference whose component cannot be resolved is omitted rather than failing the whole
-    /// state response — a broken reference must not take polling down.
+    /// The whole point of moving the list behind the catalog endpoint: the state response — served on
+    /// every long-poll — must not read a single function component. Resolving the list needs one read
+    /// per declared function plus a role evaluation each, and none of that belongs on this path.
     /// </summary>
     [Fact]
-    public async Task GetInstanceStateAsync_SkipsUnresolvableFunctionReferences()
-    {
-        var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
-        workflow.AddFunction(new Reference("missing-fn", TestDomain, "sys-functions", TestVersion));
-        workflow.AddFunction(new Reference("get-branches", TestDomain, "sys-functions", TestVersion));
-        SetupCommonMocks(instance, workflow);
-        SetupFunctionInfoUrls();
-        _componentCacheStore
-            .GetFunctionAsync(TestDomain, "missing-fn", Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(Result<Function>.Fail(Error.NotFound("fn.notfound", "gone")));
-        SetupFunction("get-branches", "D");
-
-        var result = await _service.GetInstanceStateAsync(
-            CreateInput(instance.Id.ToString()), CancellationToken.None);
-
-        result.Result.IsSuccess.ShouldBeTrue();
-        result.Result.Value!.Functions.Select(f => f.Name).ShouldBe(["get-branches"]);
-    }
-
-    /// <summary>
-    /// The list is a discovery hint, not an authorization boundary: a function declaring roles is still
-    /// listed, and the info endpoint enforces those roles when the client follows the link.
-    /// </summary>
-    [Fact]
-    public async Task GetInstanceStateAsync_DoesNotRoleFilterTheFunctionList()
-    {
-        var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
-        workflow.AddFunction(new Reference("guarded-fn", TestDomain, "sys-functions", TestVersion));
-        SetupCommonMocks(instance, workflow);
-        SetupFunctionInfoUrls();
-        SetupFunction("guarded-fn", "D", roles: """, "roles": [ { "role": "ops", "grant": "allow" } ]""");
-
-        var result = await _service.GetInstanceStateAsync(
-            CreateInput(instance.Id.ToString()), CancellationToken.None);
-
-        result.Result.Value!.Functions.Select(f => f.Name).ShouldBe(["guarded-fn"]);
-        await _transitionAuthorizationManager.DidNotReceiveWithAnyArgs()
-            .IsAnyRoleAllowedForGrantsAsync(default!, default!, default, default, default);
-    }
-
-    /// <summary>
-    /// Declaration order is preserved so the client's rendering is stable across polls.
-    /// </summary>
-    [Fact]
-    public async Task GetInstanceStateAsync_PreservesFunctionDeclarationOrder()
+    public async Task GetInstanceStateAsync_NeverReadsFunctionComponents()
     {
         var (instance, workflow) = CreateActiveInstanceWithWellKnownTransitions();
         workflow.AddFunction(new Reference("first-fn", TestDomain, "sys-functions", TestVersion));
         workflow.AddFunction(new Reference("second-fn", TestDomain, "sys-functions", TestVersion));
         SetupCommonMocks(instance, workflow);
-        SetupFunctionInfoUrls();
-        SetupFunction("first-fn", "D");
-        SetupFunction("second-fn", "F");
 
         var result = await _service.GetInstanceStateAsync(
             CreateInput(instance.Id.ToString()), CancellationToken.None);
 
-        result.Result.Value!.Functions.Select(f => f.Name).ShouldBe(["first-fn", "second-fn"]);
-    }
-
-    private void SetupFunctionInfoUrls()
-    {
-        _urlTemplateBuilder
-            .BuildDomainFunctionInfoUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>())
-            .Returns("https://domain-fn-info");
-        _urlTemplateBuilder
-            .BuildInstanceFunctionInfoUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string?>())
-            .Returns("https://instance-fn-info");
-    }
-
-    private void SetupFunction(string key, string scope, string roles = "")
-    {
-        var json = $$"""
-            {
-                "scope": "{{scope}}",
-                "task": {
-                    "order": 1,
-                    "task": { "key": "t", "domain": "{{TestDomain}}", "flow": "sys-tasks", "version": "{{TestVersion}}" },
-                    "mapping": { "location": "", "code": "", "encoding": "NAT" }
-                }{{roles}}
-            }
-            """;
-
-        var function = System.Text.Json.JsonSerializer.Deserialize<Function>(
-            json, JsonSerializerConstants.JsonOptions)!;
-        function.SetReference(new Reference(key, TestDomain, "sys-functions", TestVersion));
-
-        _componentCacheStore
-            .GetFunctionAsync(TestDomain, key, Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(Result<Function>.Ok(function));
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Functions.HasFunctions.ShouldBeTrue();
+        await _componentCacheStore.DidNotReceiveWithAnyArgs()
+            .GetFunctionAsync(default!, default!, default, default);
     }
 
     private static GetInstanceStateInput CreateInput(string instanceId) => new()

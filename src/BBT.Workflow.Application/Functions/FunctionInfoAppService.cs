@@ -83,6 +83,72 @@ public sealed class FunctionInfoAppService(
     }
 
     /// <inheritdoc />
+    public async Task<Result<FunctionCatalogOutput>> GetCatalogByInstanceAsync(
+        string domain,
+        string workflow,
+        string instanceKey,
+        Dictionary<string, string?>? headers = null,
+        Dictionary<string, string?>? queryParameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(domain);
+        using (currentSchema.Change(workflow))
+        {
+            var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
+            if (instance == null)
+                return Result<FunctionCatalogOutput>.Fail(WorkflowErrors.InstanceNotFound(instanceKey));
+
+            var flowResult = await componentCacheStore.GetFlowAsync(
+                domain, workflow, instance.FlowVersion, cancellationToken);
+            if (!flowResult.IsSuccess)
+                return Result<FunctionCatalogOutput>.Fail(flowResult.Error);
+
+            var flow = flowResult.Value!;
+            var instanceId = instance.Id.ToString();
+            var catalog = new FunctionCatalogOutput();
+
+            foreach (var reference in flow.Functions)
+            {
+                var functionResult = await componentCacheStore.GetFunctionAsync(
+                    reference.Domain, reference.Key, reference.Version, cancellationToken);
+
+                // A broken reference must not fail the whole catalog — omit it and keep going.
+                if (!functionResult.IsSuccess)
+                {
+                    Logger.WorkflowFunctionReferenceUnresolved(
+                        flow.Key, reference.Key, functionResult.Error.Message ?? "unknown");
+                    continue;
+                }
+
+                var function = functionResult.Value!;
+
+                // Same gate as execution and /info, so every link handed out is actionable and a
+                // function the caller cannot invoke is not advertised at all.
+                var access = await functionAccessPolicy.AuthorizeAsync(
+                    function, instance, flow, headers, queryParameters, cancellationToken);
+                if (!access.IsSuccess)
+                    continue;
+
+                var scope = function.Scope;
+                catalog.Functions.Add(new WorkflowFunctionHref
+                {
+                    Name = reference.Key,
+                    Version = reference.Version ?? string.Empty,
+                    Scope = scope.Code,
+                    // The href must match the scope: the domain route rejects Flow and Instance
+                    // scopes with 403, so linking them there would be a dead link.
+                    Href = scope.Equals(TaskScope.Domain)
+                        ? urlTemplateBuilder.BuildDomainFunctionInfoUrl(domain, reference.Key)
+                        : urlTemplateBuilder.BuildInstanceFunctionInfoUrl(
+                            domain, workflow, instanceId, reference.Key)
+                });
+            }
+
+            return Result<FunctionCatalogOutput>.Ok(catalog);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<Result<GetViewOutput>> GetViewByKeyAsync(
         string domain,
         string key,
