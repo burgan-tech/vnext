@@ -101,6 +101,62 @@ public sealed class UrlTemplateBuilder : IUrlTemplateBuilder
         return BuildUrl(path, apiVersionPrefix);
     }
     
+    /// <inheritdoc />
+    public string BuildDomainFunctionUrl(string domain, string function, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.DomainFunction, domain, function);
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildDomainFunctionInfoUrl(string domain, string function, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.DomainFunctionInfo, domain, function);
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildDomainFunctionViewUrl(string domain, string function, string target, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.DomainFunctionView, domain, function, Uri.EscapeDataString(target));
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildDomainFunctionSchemaUrl(string domain, string function, string target, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.DomainFunctionSchema, domain, function, Uri.EscapeDataString(target));
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildInstanceFunctionUrl(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.InstanceFunction, domain, workflow, instance, function);
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildInstanceFunctionInfoUrl(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.InstanceFunctionInfo, domain, workflow, instance, function);
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildInstanceFunctionViewUrl(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.InstanceFunctionView, domain, workflow, instance, function, Uri.EscapeDataString(target));
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
+    public string BuildInstanceFunctionSchemaUrl(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.InstanceFunctionSchema, domain, workflow, instance, function, Uri.EscapeDataString(target));
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
     /// <summary>
     /// Combines the relative path with optional API version prefix.
     /// </summary>

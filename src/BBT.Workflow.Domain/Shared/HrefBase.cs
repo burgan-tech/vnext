@@ -96,6 +96,44 @@ public sealed class ViewHref : HrefBase
 }
 
 /// <summary>
+/// Executable href for a function, carrying the HTTP verbs the function accepts. An empty verb list
+/// means the function declares no restriction and answers any verb.
+/// </summary>
+public sealed class FunctionHref : HrefBase
+{
+    /// <summary>
+    /// HTTP verbs the function accepts, upper-cased. Empty means unrestricted.
+    /// </summary>
+    public List<string> Verbs { get; set; } = [];
+}
+
+/// <summary>
+/// A function declared on the workflow, linked to its discovery (<c>info</c>) endpoint.
+/// Emitted in the state response so a client learns which functions the flow ships without a second
+/// round trip.
+/// </summary>
+/// <remarks>
+/// The list is <b>not</b> role-filtered — it is a discovery hint, not an authorization boundary. The
+/// <c>info</c> endpoint and the function itself still enforce the function's <c>roles</c>, so a
+/// caller who follows a link it is not granted receives 403.
+/// </remarks>
+public sealed class WorkflowFunctionHref : HrefBase
+{
+    /// <summary>The function key.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>The function version the workflow pins, or empty when it tracks the latest.</summary>
+    public string Version { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Scope code the function declares: <c>D</c> (Domain), <c>F</c> (Flow) or <c>I</c> (Instance).
+    /// <see cref="HrefBase.Href"/> is built to match — a Domain-scoped function links to the
+    /// domain route, Flow and Instance scopes to the instance route, since the domain route rejects them.
+    /// </summary>
+    public string Scope { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Child correlation with href link and additional properties. Used for both the active-only
 /// <c>activeCorrelations</c> list and the full <c>correlations</c> list (active + completed);
 /// <see cref="IsCompleted"/> distinguishes the two within the full list.

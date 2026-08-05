@@ -136,22 +136,32 @@ public static class ViewDisplayMode
     public static class Mdi
     {
         /// <summary>
-        /// Opens as a tab in the document area
+        /// Full page display
         /// </summary>
-        public const string Tab = "tab";
+        public const string FullPage = "full-page";
 
         /// <summary>
-        /// Opens as a floating/detached window
+        /// Popup/modal display
         /// </summary>
-        public const string Window = "window";
+        public const string Popup = "popup";
 
         /// <summary>
-        /// Opens in a split pane next to the active document
+        /// Bottom sheet display
         /// </summary>
-        public const string Split = "split";
+        public const string BottomSheet = "bottom-sheet";
 
         /// <summary>
-        /// Inline display within the active document
+        /// Top sheet display
+        /// </summary>
+        public const string TopSheet = "top-sheet";
+
+        /// <summary>
+        /// Drawer/side menu display
+        /// </summary>
+        public const string Drawer = "drawer";
+
+        /// <summary>
+        /// Inline display within the page
         /// </summary>
         public const string Inline = "inline";
     }

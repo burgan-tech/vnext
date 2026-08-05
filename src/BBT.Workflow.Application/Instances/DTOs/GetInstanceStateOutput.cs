@@ -59,6 +59,17 @@ public sealed class GetInstanceStateOutput
     public List<TransitionItem> Transitions { get; set; } = [];
 
     /// <summary>
+    /// Functions the workflow declares, each linked to its discovery (<c>info</c>) endpoint. Empty when
+    /// the workflow declares none.
+    /// </summary>
+    /// <remarks>
+    /// Not role-filtered, and deliberately outside the ETag material: the list is a property of the
+    /// flow version, which the fingerprint already covers, so it cannot change while an instance is
+    /// parked. See <c>StateFunctionCache.ResponseShapeVersion</c>.
+    /// </remarks>
+    public List<WorkflowFunctionHref> Functions { get; set; } = [];
+
+    /// <summary>
     /// Client-workflow-manager interaction directives for the current state. Present only when the
     /// state declares an applicable directive for the caller (today: long-poll termination). A generic
     /// container so future interaction directives are grouped under the same key.

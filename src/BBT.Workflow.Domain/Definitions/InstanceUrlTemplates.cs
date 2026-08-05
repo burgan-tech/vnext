@@ -172,6 +172,54 @@ public static class InstanceUrlTemplates
     /// </summary>
     public const string FunctionListTemplate = "/{0}/workflows/{1}/functions/{2}";
 
+    /// <summary>
+    /// URL template for the domain-scoped function execution endpoint.
+    /// Format: /{domain}/functions/{function}
+    /// </summary>
+    public const string DomainFunctionTemplate = "/{0}/functions/{1}";
+
+    /// <summary>
+    /// URL template for the domain-scoped function info endpoint.
+    /// Format: /{domain}/functions/{function}/info
+    /// </summary>
+    public const string DomainFunctionInfoTemplate = "/{0}/functions/{1}/info";
+
+    /// <summary>
+    /// URL template for the domain-scoped function view endpoint.
+    /// Format: /{domain}/functions/{function}/view?target={target}
+    /// </summary>
+    public const string DomainFunctionViewTemplate = "/{0}/functions/{1}/view?target={2}";
+
+    /// <summary>
+    /// URL template for the domain-scoped function schema endpoint.
+    /// Format: /{domain}/functions/{function}/schema?target={target}
+    /// </summary>
+    public const string DomainFunctionSchemaTemplate = "/{0}/functions/{1}/schema?target={2}";
+
+    /// <summary>
+    /// URL template for the instance-scoped function execution endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}
+    /// </summary>
+    public const string InstanceFunctionTemplate = "/{0}/workflows/{1}/instances/{2}/functions/{3}";
+
+    /// <summary>
+    /// URL template for the instance-scoped function info endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/info
+    /// </summary>
+    public const string InstanceFunctionInfoTemplate = "/{0}/workflows/{1}/instances/{2}/functions/{3}/info";
+
+    /// <summary>
+    /// URL template for the instance-scoped function view endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/view?target={target}
+    /// </summary>
+    public const string InstanceFunctionViewTemplate = "/{0}/workflows/{1}/instances/{2}/functions/{3}/view?target={4}";
+
+    /// <summary>
+    /// URL template for the instance-scoped function schema endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/schema?target={target}
+    /// </summary>
+    public const string InstanceFunctionSchemaTemplate = "/{0}/workflows/{1}/instances/{2}/functions/{3}/schema?target={4}";
+
     #endregion
 
     #region Helper Methods
@@ -449,6 +497,54 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string FunctionList(string domain, string workflow, string function, string? apiVersionPrefix = null)
         => BuildUrl(FunctionListTemplate, apiVersionPrefix, domain, workflow, function);
+
+    /// <summary>
+    /// Generates URL for the domain-scoped function execution endpoint.
+    /// </summary>
+    public static string DomainFunction(string domain, string function, string? apiVersionPrefix = null)
+        => BuildUrl(DomainFunctionTemplate, apiVersionPrefix, domain, function);
+
+    /// <summary>
+    /// Generates URL for the domain-scoped function info endpoint.
+    /// </summary>
+    public static string DomainFunctionInfo(string domain, string function, string? apiVersionPrefix = null)
+        => BuildUrl(DomainFunctionInfoTemplate, apiVersionPrefix, domain, function);
+
+    /// <summary>
+    /// Generates URL for the domain-scoped function view endpoint. The target is <c>input</c> or <c>output</c>.
+    /// </summary>
+    public static string DomainFunctionView(string domain, string function, string target, string? apiVersionPrefix = null)
+        => BuildUrl(DomainFunctionViewTemplate, apiVersionPrefix, domain, function, Uri.EscapeDataString(target));
+
+    /// <summary>
+    /// Generates URL for the domain-scoped function schema endpoint. The target is <c>input</c> or <c>output</c>.
+    /// </summary>
+    public static string DomainFunctionSchema(string domain, string function, string target, string? apiVersionPrefix = null)
+        => BuildUrl(DomainFunctionSchemaTemplate, apiVersionPrefix, domain, function, Uri.EscapeDataString(target));
+
+    /// <summary>
+    /// Generates URL for the instance-scoped function execution endpoint.
+    /// </summary>
+    public static string InstanceFunction(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
+        => BuildUrl(InstanceFunctionTemplate, apiVersionPrefix, domain, workflow, instance, function);
+
+    /// <summary>
+    /// Generates URL for the instance-scoped function info endpoint.
+    /// </summary>
+    public static string InstanceFunctionInfo(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
+        => BuildUrl(InstanceFunctionInfoTemplate, apiVersionPrefix, domain, workflow, instance, function);
+
+    /// <summary>
+    /// Generates URL for the instance-scoped function view endpoint. The target is <c>input</c> or <c>output</c>.
+    /// </summary>
+    public static string InstanceFunctionView(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
+        => BuildUrl(InstanceFunctionViewTemplate, apiVersionPrefix, domain, workflow, instance, function, Uri.EscapeDataString(target));
+
+    /// <summary>
+    /// Generates URL for the instance-scoped function schema endpoint. The target is <c>input</c> or <c>output</c>.
+    /// </summary>
+    public static string InstanceFunctionSchema(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
+        => BuildUrl(InstanceFunctionSchemaTemplate, apiVersionPrefix, domain, workflow, instance, function, Uri.EscapeDataString(target));
 
     /// <summary>
     /// Generates API version prefix string.
