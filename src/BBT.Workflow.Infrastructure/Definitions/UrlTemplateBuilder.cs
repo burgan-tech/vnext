@@ -144,6 +144,13 @@ public sealed class UrlTemplateBuilder : IUrlTemplateBuilder
     }
 
     /// <inheritdoc />
+    public string BuildFunctionCatalogUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+    {
+        var path = string.Format(_options.FunctionCatalog, domain, workflow, instance);
+        return BuildUrl(path, apiVersionPrefix);
+    }
+
+    /// <inheritdoc />
     public string BuildInstanceFunctionViewUrl(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
     {
         var path = string.Format(_options.InstanceFunctionView, domain, workflow, instance, function, Uri.EscapeDataString(target));

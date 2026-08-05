@@ -108,6 +108,12 @@ public sealed class UrlTemplateOptions
     public string InstanceFunctionInfo { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/{3}/info";
 
     /// <summary>
+    /// Template for the instance function catalog endpoint (GET)
+    /// Parameters: {0}=domain, {1}=workflow, {2}=instance
+    /// </summary>
+    public string FunctionCatalog { get; set; } = "/{0}/workflows/{1}/instances/{2}/functions/catalog";
+
+    /// <summary>
     /// Template for the instance-scoped function view endpoint (GET)
     /// Parameters: {0}=domain, {1}=workflow, {2}=instance, {3}=function, {4}=target (input|output)
     /// </summary>

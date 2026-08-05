@@ -108,15 +108,23 @@ public sealed class FunctionHref : HrefBase
 }
 
 /// <summary>
-/// A function declared on the workflow, linked to its discovery (<c>info</c>) endpoint.
-/// Emitted in the state response so a client learns which functions the flow ships without a second
-/// round trip.
+/// Pointer to the workflow's function catalog. Emitted in the state response so a client learns
+/// whether the flow ships any functions at all, and where to enumerate them, without the state
+/// response having to carry — or resolve — the list itself.
 /// </summary>
-/// <remarks>
-/// The list is <b>not</b> role-filtered — it is a discovery hint, not an authorization boundary. The
-/// <c>info</c> endpoint and the function itself still enforce the function's <c>roles</c>, so a
-/// caller who follows a link it is not granted receives 403.
-/// </remarks>
+public sealed class FunctionsHref : HrefBase
+{
+    /// <summary>
+    /// Whether the workflow declares any functions. When false the catalog endpoint returns an empty
+    /// list, so a client can skip the call entirely.
+    /// </summary>
+    public bool HasFunctions { get; set; }
+}
+
+/// <summary>
+/// A function declared on the workflow, linked to its discovery (<c>info</c>) endpoint. Returned by
+/// the <c>catalog</c> function.
+/// </summary>
 public sealed class WorkflowFunctionHref : HrefBase
 {
     /// <summary>The function key.</summary>
@@ -131,6 +139,19 @@ public sealed class WorkflowFunctionHref : HrefBase
     /// domain route, Flow and Instance scopes to the instance route, since the domain route rejects them.
     /// </summary>
     public string Scope { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// The workflow's function catalog: every function the flow declares that the caller may actually
+/// invoke, each linked to its <c>info</c> endpoint.
+/// </summary>
+public sealed class FunctionCatalogOutput
+{
+    /// <summary>
+    /// Functions in declaration order. Empty when the workflow declares none, or when the caller's
+    /// roles exclude all of them.
+    /// </summary>
+    public List<WorkflowFunctionHref> Functions { get; set; } = [];
 }
 
 /// <summary>

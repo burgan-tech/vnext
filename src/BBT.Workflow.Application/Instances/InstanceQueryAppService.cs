@@ -1349,8 +1349,14 @@ public sealed class InstanceQueryAppService(
             : await ResolveInteractionAsync(
                 input, instance, currentStateValue, displayedState, cancellationToken);
 
-        var functionHrefs = await BuildWorkflowFunctionHrefsAsync(
-            currentWorkflow, input, instance, cancellationToken);
+        // Only the flag and the link — never the list. Enumerating the functions means one component
+        // read per declared function plus a role evaluation each, which this response cannot afford.
+        var functionsHref = new FunctionsHref
+        {
+            HasFunctions = currentWorkflow.Functions.Count > 0,
+            Href = urlTemplateBuilder.BuildFunctionCatalogUrl(
+                input.Domain, input.Workflow, instance.Id.ToString())
+        };
 
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
@@ -1365,59 +1371,9 @@ public sealed class InstanceQueryAppService(
             ActiveCorrelations = allActiveCorrelations,
             Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
-            Functions = functionHrefs,
+            Functions = functionsHref,
             Interaction = interaction
         });
-    }
-
-    /// <summary>
-    /// Projects the workflow's declared functions into discovery links.
-    /// </summary>
-    /// <remarks>
-    /// Each function's component is read to learn its <c>scope</c>, because the href must match it: the
-    /// domain route rejects Flow- and Instance-scoped functions with 403, so linking them there would
-    /// hand the client a dead link. A reference that cannot be resolved is skipped rather than failing
-    /// the state response — a broken function reference must not take down polling.
-    /// The result is <b>not</b> role-filtered; see <see cref="WorkflowFunctionHref"/>.
-    /// </remarks>
-    private async Task<List<WorkflowFunctionHref>> BuildWorkflowFunctionHrefsAsync(
-        Definitions.Workflow workflow,
-        GetInstanceStateInput input,
-        Instance instance,
-        CancellationToken cancellationToken)
-    {
-        if (workflow.Functions.Count == 0)
-            return [];
-
-        var instanceId = instance.Id.ToString();
-        var hrefs = new List<WorkflowFunctionHref>(workflow.Functions.Count);
-
-        foreach (var reference in workflow.Functions)
-        {
-            var functionResult = await componentCacheStore.GetFunctionAsync(
-                reference.Domain, reference.Key, reference.Version, cancellationToken);
-
-            if (!functionResult.IsSuccess)
-            {
-                logger.WorkflowFunctionReferenceUnresolved(
-                    workflow.Key, reference.Key, functionResult.Error.Message ?? "unknown");
-                continue;
-            }
-
-            var scope = functionResult.Value!.Scope;
-            hrefs.Add(new WorkflowFunctionHref
-            {
-                Name = reference.Key,
-                Version = reference.Version ?? string.Empty,
-                Scope = scope.Code,
-                Href = scope.Equals(TaskScope.Domain)
-                    ? urlTemplateBuilder.BuildDomainFunctionInfoUrl(input.Domain, reference.Key)
-                    : urlTemplateBuilder.BuildInstanceFunctionInfoUrl(
-                        input.Domain, input.Workflow, instanceId, reference.Key)
-            });
-        }
-
-        return hrefs;
     }
 
     /// <summary>

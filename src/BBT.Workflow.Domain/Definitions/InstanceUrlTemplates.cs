@@ -209,6 +209,12 @@ public static class InstanceUrlTemplates
     public const string InstanceFunctionInfoTemplate = "/{0}/workflows/{1}/instances/{2}/functions/{3}/info";
 
     /// <summary>
+    /// URL template for the instance function catalog endpoint.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/functions/catalog
+    /// </summary>
+    public const string FunctionCatalogTemplate = "/{0}/workflows/{1}/instances/{2}/functions/catalog";
+
+    /// <summary>
     /// URL template for the instance-scoped function view endpoint.
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}/view?target={target}
     /// </summary>
@@ -533,6 +539,12 @@ public static class InstanceUrlTemplates
     /// </summary>
     public static string InstanceFunctionInfo(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
         => BuildUrl(InstanceFunctionInfoTemplate, apiVersionPrefix, domain, workflow, instance, function);
+
+    /// <summary>
+    /// Generates URL for the instance function catalog endpoint.
+    /// </summary>
+    public static string FunctionCatalog(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(FunctionCatalogTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for the instance-scoped function view endpoint. The target is <c>input</c> or <c>output</c>.

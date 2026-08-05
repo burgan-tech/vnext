@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -311,7 +312,156 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         result.Value.Type.ShouldBe("json");
     }
 
+    // ─── Catalog ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Catalog_WhenWorkflowDeclaresNoFunctions_IsEmpty()
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions();
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Functions.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// The href must match the function's scope: the domain route rejects Flow- and Instance-scoped
+    /// functions with 403, so linking them there would hand the client a dead link.
+    /// </summary>
+    [Theory]
+    [InlineData("D", false)]
+    [InlineData("F", true)]
+    [InlineData("I", true)]
+    public async Task Catalog_BuildsTheInfoHrefFromTheFunctionScope(string scope, bool instanceScoped)
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions("get-branches");
+        SetupCatalogFunction("get-branches", scope);
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        var entry = result.Value.ShouldNotBeNull().Functions.ShouldHaveSingleItem();
+        entry.Name.ShouldBe("get-branches");
+        entry.Version.ShouldBe(TestVersion);
+        entry.Scope.ShouldBe(scope);
+        entry.Href.ShouldBe(instanceScoped
+            ? $"/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/get-branches/info"
+            : $"/{TestDomain}/functions/get-branches/info");
+    }
+
+    /// <summary>
+    /// Role-filtered, so every link handed out is actionable: a function the caller could not invoke is
+    /// not advertised at all.
+    /// </summary>
+    [Fact]
+    public async Task Catalog_OmitsFunctionsTheCallerCannotInvoke()
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions("open-fn", "guarded-fn");
+        SetupCatalogFunction("open-fn", "I");
+        SetupCatalogFunction("guarded-fn", "I",
+            roles: """, "roles": [ { "role": "ops", "grant": "allow" } ]""");
+        _authorizationManager
+            .IsAnyRoleAllowedForGrantsAsync(
+                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        result.Value!.Functions.Select(f => f.Name).ShouldBe(["open-fn"]);
+    }
+
+    [Fact]
+    public async Task Catalog_IncludesGuardedFunctionsWhenTheCallerIsAllowed()
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions("guarded-fn");
+        SetupCatalogFunction("guarded-fn", "I",
+            roles: """, "roles": [ { "role": "ops", "grant": "allow" } ]""");
+        _authorizationManager
+            .IsAnyRoleAllowedForGrantsAsync(
+                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        result.Value!.Functions.Select(f => f.Name).ShouldBe(["guarded-fn"]);
+    }
+
+    /// <summary>
+    /// A broken function reference is omitted rather than failing the whole catalog.
+    /// </summary>
+    [Fact]
+    public async Task Catalog_SkipsUnresolvableReferences()
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions("missing-fn", "get-branches");
+        _componentCacheStore
+            .GetFunctionAsync(TestDomain, "missing-fn", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Function>.Fail(Error.NotFound("fn.notfound", "gone")));
+        SetupCatalogFunction("get-branches", "I");
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Functions.Select(f => f.Name).ShouldBe(["get-branches"]);
+    }
+
+    [Fact]
+    public async Task Catalog_PreservesDeclarationOrder()
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions("first-fn", "second-fn");
+        SetupCatalogFunction("first-fn", "D");
+        SetupCatalogFunction("second-fn", "I");
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        result.Value!.Functions.Select(f => f.Name).ShouldBe(["first-fn", "second-fn"]);
+    }
+
+    [Fact]
+    public async Task Catalog_WhenInstanceIsMissing_IsNotFound()
+    {
+        _instanceRepository
+            .FindByIdentifierAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns((Instance?)null);
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, "nope");
+
+        result.IsSuccess.ShouldBeFalse();
+    }
+
     // ─── Setup helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>Registers a flow declaring the given function keys, in order.</summary>
+    private void SetupFlowWithFunctions(params string[] functionKeys)
+    {
+        var workflow = Definitions.Workflow.Create();
+        workflow.SetReference(new Reference(TestFlow, TestDomain, "sys-flows", TestVersion));
+        workflow.SetType("F");
+        foreach (var key in functionKeys)
+            workflow.AddFunction(new Reference(key, TestDomain, "sys-functions", TestVersion));
+
+        _componentCacheStore
+            .GetFlowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(workflow));
+    }
+
+    /// <summary>Registers a single function component keyed by name, so a catalog can span several.</summary>
+    private void SetupCatalogFunction(string key, string scope, string roles = "")
+    {
+        var function = FunctionTestFactory.FromJson(
+            FunctionTestFactory.Attributes(roles.TrimStart(',', ' '), scope: scope), key);
+
+        _componentCacheStore
+            .GetFunctionAsync(TestDomain, key, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Function>.Ok(function));
+    }
 
     private void SetupFunction(string attributesJson)
     {
@@ -394,6 +544,9 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
 
         public string BuildMasterUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
             => string.Format(_options.Master, domain, workflow, instance);
+
+        public string BuildFunctionCatalogUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+            => string.Format(_options.FunctionCatalog, domain, workflow, instance);
 
         public string BuildDomainFunctionUrl(string domain, string function, string? apiVersionPrefix = null)
             => string.Format(_options.DomainFunction, domain, function);
