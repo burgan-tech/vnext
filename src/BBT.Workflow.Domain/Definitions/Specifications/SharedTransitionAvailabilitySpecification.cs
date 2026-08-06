@@ -47,18 +47,14 @@ public sealed class SharedTransitionAvailabilitySpecification : ITransitionSpeci
         if (context.IsErrorBoundaryTransition)
             return Result.Ok();
         
-        // If AvailableIn is empty or null, transition is available in all states
-        if (transition.AvailableIn == null || !transition.AvailableIn.Any())
+        // State-only gate: an empty AvailableIn means every state, otherwise the current state must be
+        // listed. Per-state role grants are deliberately NOT evaluated here — the execution policy has
+        // never enforced roles for any transition type (see docs/domain/well-known-transitions.md).
+        if (transition.IsAvailableInState(context.Current.Key))
         {
             return Result.Ok();
         }
-        
-        // Check if current state is in AvailableIn list
-        if (transition.AvailableIn.Contains(context.Current.Key))
-        {
-            return Result.Ok();
-        }
-        
+
         // Current state not in AvailableIn list
         return Result.Fail(WorkflowErrors.SharedTransitionNotAvailableInState(
             transition.Key, 

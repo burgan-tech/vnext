@@ -881,6 +881,113 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region availableIn Validation Tests
+
+    [Fact]
+    public void Validate_ShouldFail_WhenAvailableInStateDoesNotExist()
+    {
+        var workflow = DeserializeWorkflow(AvailableInWorkflowJson("""[ "review", "no-such-state" ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("does not match any state 'no-such-state'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenAvailableInListsSameStateTwice()
+    {
+        // FindAvailableIn takes the first match, so a second entry for the same state is dead — and if
+        // it is the one carrying the role narrowing, the restriction silently never applies.
+        var workflow = DeserializeWorkflow(AvailableInWorkflowJson("""
+            [ "review", { "state": "review", "roles": [ { "role": "supervisor", "grant": "allow" } ] } ]
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("more than once", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("review", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenAvailableInRolesHaveMalformedDynamicRole()
+    {
+        var workflow = DeserializeWorkflow(AvailableInWorkflowJson("""
+            [ { "state": "review", "roles": [ { "role": "$user.customer", "grant": "allow" } ] } ]
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("Dynamic role '$user.customer'", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("AvailableIn[review].Roles", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenAvailableInMixesBothFormsValidly()
+    {
+        var workflow = DeserializeWorkflow(AvailableInWorkflowJson("""
+            [ "review",
+              { "state": "pending", "roles": [ { "role": "backoffice.supervisor", "grant": "allow" },
+                                               { "role": "$InstanceStarter", "grant": "deny" } ] } ]
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e =>
+            e.ErrorMessage!.Contains("AvailableIn", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenWellKnownExitAvailableInStateDoesNotExist()
+    {
+        // availableIn on the well-known transitions was previously never validated at all.
+        var workflow = DeserializeWorkflow(WellKnownTransitionsWorkflowJson(
+            exitAvailableInJson: """[ "ghost-state" ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("exit transition", StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("ghost-state", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Builds an otherwise-valid workflow whose shared transition carries the supplied availableIn list.
+    /// </summary>
+    private static string AvailableInWorkflowJson(string availableInJson) => $$"""
+    {
+        "type": "F",
+        "labels": [{"label": "Test", "language": "en"}],
+        "states": [
+            { "key": "review", "stateType": "initial", "labels": [{"label": "Review", "language": "en"}], "transitions": [] },
+            { "key": "pending", "stateType": "intermediate", "labels": [{"label": "Pending", "language": "en"}], "transitions": [] }
+        ],
+        "sharedTransitions": [
+            {
+                "key": "escalate",
+                "target": "$self",
+                "triggerType": "manual",
+                "labels": [{"label": "Escalate", "language": "en"}],
+                "availableIn": {{availableInJson}}
+            }
+        ],
+        "startTransition": {
+            "key": "start",
+            "target": "review",
+            "triggerType": "manual",
+            "labels": [{"label": "Start", "language": "en"}]
+        }
+    }
+    """;
+
+    #endregion
+
     #region Well-Known Transition (updateData / exit) Validation Tests
 
     [Fact]
@@ -1009,7 +1116,8 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     /// </summary>
     private static string WellKnownTransitionsWorkflowJson(
         string exitRolesJson = "[]",
-        string updateDataRolesJson = "[]") => $$"""
+        string updateDataRolesJson = "[]",
+        string exitAvailableInJson = "[]") => $$"""
     {
         "type": "F",
         "labels": [{"label": "Test", "language": "en"}],
@@ -1039,7 +1147,8 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
             "target": "exited",
             "triggerType": "manual",
             "labels": [{"label": "Exit", "language": "en"}],
-            "roles": {{exitRolesJson}}
+            "roles": {{exitRolesJson}},
+            "availableIn": {{exitAvailableInJson}}
         },
         "updateData": {
             "key": "update-data",

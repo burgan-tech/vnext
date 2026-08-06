@@ -63,9 +63,11 @@ public sealed class MonitorAuthorizationQueryService(
         var currentState = flow.FindState(instance.CurrentState ?? string.Empty);
 
         var stateTransitions = currentState?.Transitions ?? [];
-        var availableShared = flow.SharedTransitions.Where(t =>
-            t.AvailableIn.Count == 0
-            || t.AvailableIn.Any(s => string.Equals(s, instance.CurrentState, StringComparison.OrdinalIgnoreCase)));
+        // Ordinal via IsAvailableInState — this used to compare OrdinalIgnoreCase, the only site that
+        // did, so a definition could be reported here and rejected by the runtime. State keys are
+        // ^[a-z0-9-]+$, so aligning on the runtime's comparison loses nothing.
+        var availableShared = flow.SharedTransitions
+            .Where(t => t.IsAvailableInState(instance.CurrentState ?? string.Empty));
 
         var transitions = stateTransitions
             .Select(t => new MonitorTransitionPermission

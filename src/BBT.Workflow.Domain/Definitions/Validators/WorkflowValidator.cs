@@ -124,15 +124,24 @@ public class WorkflowValidator
     private void ValidateTransitionInStates(Workflow workflow, WorkflowValidationResult result, HashSet<string> stateKeys)
     {
         // Validate StartTransition availableIn
-        foreach (var availableState in workflow.StartTransition.AvailableIn)
-        {
-            if (!stateKeys.Contains(availableState))
-            {
-                result.AddError(new ValidationResult(
-                    $"The 'availableIn' value in StartTransition does not match any state '{availableState}'.",
-                    [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.AvailableIn)}"]));
-            }
-        }
+        ValidateAvailableIn(
+            workflow.StartTransition,
+            "StartTransition",
+            $"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}",
+            result,
+            stateKeys);
+
+        // Validate the well-known workflow-level transitions' availableIn. These carry role grants
+        // that the discovery and authorize surfaces now enforce, so their state keys and grants must
+        // be validated exactly like a shared transition's.
+        if (workflow.Cancel != null)
+            ValidateAvailableIn(workflow.Cancel, "cancel transition", $"{nameof(Workflow)}.{nameof(Workflow.Cancel)}", result, stateKeys);
+
+        if (workflow.UpdateData != null)
+            ValidateAvailableIn(workflow.UpdateData, "updateData transition", $"{nameof(Workflow)}.{nameof(Workflow.UpdateData)}", result, stateKeys);
+
+        if (workflow.Exit != null)
+            ValidateAvailableIn(workflow.Exit, "exit transition", $"{nameof(Workflow)}.{nameof(Workflow.Exit)}", result, stateKeys);
 
         // Validate StartTransition target
         if (!workflow.StartTransition.Target.IsNullOrEmpty())
@@ -148,15 +157,12 @@ public class WorkflowValidator
         // Validate SharedTransitions availableIn
         foreach (var transition in workflow.SharedTransitions)
         {
-            foreach (var availableState in transition.AvailableIn)
-            {
-                if (!stateKeys.Contains(availableState))
-                {
-                    result.AddError(new ValidationResult(
-                        $"The 'availableIn' value in shared transition '{transition.Key}' does not match any state '{availableState}'.",
-                        [$"{nameof(Workflow)}.{nameof(Workflow.SharedTransitions)}[{transition.Key}].{nameof(Transition.AvailableIn)}"]));
-                }
-            }
+            ValidateAvailableIn(
+                transition,
+                $"shared transition '{transition.Key}'",
+                $"{nameof(Workflow)}.{nameof(Workflow.SharedTransitions)}[{transition.Key}]",
+                result,
+                stateKeys);
 
             // Validate SharedTransitions target
             if (!string.IsNullOrEmpty(transition.Target) && !stateKeys.Contains(transition.Target))
@@ -660,6 +666,53 @@ public class WorkflowValidator
         }
 
         // Schema, View, Mapping are optional - no validation needed
+    }
+
+    /// <summary>
+    /// Validates a transition's <c>availableIn</c> list: every entry must name an existing state, no
+    /// state may be listed twice, and any per-state role grants must be well formed.
+    /// <para>
+    /// Duplicates matter because <see cref="Transition.FindAvailableIn"/> takes the first match — a
+    /// second entry for the same state is silently dead, and if it is the one carrying the role
+    /// narrowing the restriction never applies.
+    /// </para>
+    /// </summary>
+    /// <param name="transition">Transition whose availableIn is validated.</param>
+    /// <param name="contextLabel">Human-readable transition description used in error messages.</param>
+    /// <param name="basePath">Dotted member path of the transition, without the trailing member name.</param>
+    /// <param name="result">Accumulating validation result.</param>
+    /// <param name="stateKeys">All state keys declared by the workflow, plus reserved target keys.</param>
+    private static void ValidateAvailableIn(
+        Transition transition,
+        string contextLabel,
+        string basePath,
+        WorkflowValidationResult result,
+        HashSet<string> stateKeys)
+    {
+        if (transition.AvailableIn.Count == 0)
+            return;
+
+        var memberPath = $"{basePath}.{nameof(Transition.AvailableIn)}";
+        var seenStates = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var entry in transition.AvailableIn)
+        {
+            if (!stateKeys.Contains(entry.State))
+            {
+                result.AddError(new ValidationResult(
+                    $"The 'availableIn' value in {contextLabel} does not match any state '{entry.State}'.",
+                    [memberPath]));
+            }
+
+            if (!seenStates.Add(entry.State))
+            {
+                result.AddError(new ValidationResult(
+                    $"The 'availableIn' list in {contextLabel} lists state '{entry.State}' more than once. Only the first entry takes effect.",
+                    [memberPath]));
+            }
+
+            ValidateRoleGrants(entry.Roles, $"{memberPath}[{entry.State}].{nameof(AvailableInEntry.Roles)}", result);
+        }
     }
 
     /// <summary>

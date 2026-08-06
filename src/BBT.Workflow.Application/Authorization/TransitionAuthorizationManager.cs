@@ -75,6 +75,65 @@ public sealed class TransitionAuthorizationManager(
     }
 
     /// <inheritdoc />
+    public async Task<bool> IsTransitionAllowedInStateAsync(
+        WorkflowDefinition workflow,
+        Transition transition,
+        string? currentStateKey,
+        Instance? instance,
+        string? role,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Without a current state there is no availableIn entry to resolve, so this degrades to the
+        // transition-level grant check (workflow-scoped authorize keeps its previous behaviour).
+        if (string.IsNullOrEmpty(currentStateKey))
+            return await IsTransitionAllowedForRoleAsync(
+                workflow, transition, instance, role, requestContext, cancellationToken);
+
+        // State gate first: a transition not offered in this state is denied without evaluating roles.
+        if (!transition.IsAvailableInState(currentStateKey))
+            return false;
+
+        var stateEntry = transition.FindAvailableIn(currentStateKey);
+
+        if (transition.Roles.Count == 0 && stateEntry is not { HasRoles: true })
+            return true; // No grants on either level → allow
+
+        var evaluator = await CreateEvaluatorAsync(
+            instance,
+            workflow,
+            requestContext,
+            transition.Roles.Concat(stateEntry?.Roles ?? []),
+            cancellationToken);
+
+        return IsAllowedWithStateNarrowing(evaluator, role, transition, stateEntry);
+    }
+
+    /// <summary>
+    /// Applies the canonical composition of the two grant levels: the transition's own grants are the
+    /// global gate and a matching <c>availableIn</c> entry's grants are an additional, state-specific
+    /// narrowing — <b>both</b> must allow (AND).
+    /// <para>
+    /// Each level is evaluated by the shared <see cref="IRoleGrantEvaluator"/>, so DENY-wins,
+    /// allowlist/blacklist and predefined/dynamic resolution behave identically at both levels. An
+    /// empty grant set is allowed, which is what makes a role-less entry — and therefore the legacy
+    /// bare-string <c>availableIn</c> form — behave exactly as before.
+    /// </para>
+    /// </summary>
+    private static bool IsAllowedWithStateNarrowing(
+        IRoleGrantEvaluator evaluator,
+        string? role,
+        Transition transition,
+        AvailableInEntry? stateEntry)
+    {
+        if (!evaluator.IsRoleAllowed(role, transition.Roles, transition))
+            return false;
+
+        return stateEntry is not { HasRoles: true }
+               || evaluator.IsRoleAllowed(role, stateEntry.Roles, transition);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<string>> FilterAuthorizedTransitionKeysAsync(
         WorkflowDefinition workflow,
         State currentState,
@@ -88,12 +147,15 @@ public sealed class TransitionAuthorizationManager(
             return transitionKeys;
 
         // Resolve first so the prefetch hint covers every grant this batch will evaluate.
-        var candidates = new List<(string Key, Transition Transition)>(transitionKeys.Count);
+        // AvailableInEntry is captured alongside the transition because a per-state grant set narrows
+        // the transition-level one, and its grants must be in the hint too — a $PreviousUser grant
+        // missing from the hint can never match.
+        var candidates = new List<(string Key, Transition Transition, AvailableInEntry? StateEntry)>(transitionKeys.Count);
         foreach (var key in transitionKeys)
         {
             var transition = workflow.FindTransitionInContext(key);
             if (transition != null)
-                candidates.Add((key, transition));
+                candidates.Add((key, transition, transition.FindAvailableIn(currentState.Key)));
         }
 
         if (candidates.Count == 0)
@@ -103,13 +165,13 @@ public sealed class TransitionAuthorizationManager(
             instance,
             workflow,
             requestContext,
-            candidates.SelectMany(c => c.Transition.Roles),
+            candidates.SelectMany(c => c.Transition.Roles.Concat(c.StateEntry?.Roles ?? [])),
             cancellationToken);
 
         var result = new List<string>(candidates.Count);
-        foreach (var (key, transition) in candidates)
+        foreach (var (key, transition, stateEntry) in candidates)
         {
-            if (evaluator.IsRoleAllowed(role, transition.Roles, transition))
+            if (IsAllowedWithStateNarrowing(evaluator, role, transition, stateEntry))
                 result.Add(key);
         }
         return result;

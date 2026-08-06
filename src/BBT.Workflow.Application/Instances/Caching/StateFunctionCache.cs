@@ -43,7 +43,7 @@ public sealed class StateFunctionCache(
     /// <see cref="InstanceStateFingerprint.FlowVersion"/> already covers — and so cannot change while an
     /// instance is parked. What needed invalidating was the shape change, once, not the value.
     /// </remarks>
-    private const string ResponseShapeVersion = "v4";
+    private const string ResponseShapeVersion = "v5";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

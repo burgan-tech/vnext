@@ -189,6 +189,16 @@ public static class WorkflowErrors
             target: transitionKey);
 
     /// <summary>
+    /// A well-known workflow-level transition (cancel / updateData / exit) was requested from a state its
+    /// <c>availableIn</c> list does not cover.
+    /// </summary>
+    public static Error WellKnownTransitionNotAvailableInState(string transitionKey, string currentState)
+        => Error.Validation(
+            WorkflowErrorCodes.WellKnownTransitionNotAvailableInState,
+            $"Transition '{transitionKey}' is not available in state '{currentState}'. Check AvailableIn configuration.",
+            target: transitionKey);
+
+    /// <summary>
     /// When the instance has an active SubFlow, a shared transition's target must be $self so the state does not change.
     /// </summary>
     /// <param name="transitionKey">The shared transition key.</param>

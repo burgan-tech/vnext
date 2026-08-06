@@ -86,12 +86,21 @@ public sealed class Transition : IHasKey
     [JsonInclude] public Reference? Schema { get; private set; }
 
     /// <summary>
-    /// Optional list of state keys restricting where this shared transition can be executed.
+    /// Optional list restricting where this transition can be executed, and optionally which roles
+    /// may execute it in each of those states.
     /// When empty or null, the transition is available from all states.
     /// When populated, the transition is only available in the listed states.
-    /// Only valid for shared transitions and cancel; ignored for state-level transitions.
+    /// Only valid for shared transitions and the well-known cancel/updateData/exit transitions;
+    /// ignored for state-level transitions.
+    /// <para>
+    /// Authorable as bare state keys, as <c>{ state, roles }</c> objects, or a mix of both — see
+    /// <see cref="AvailableInJsonConverter"/>. Prefer the <see cref="IsAvailableInState"/> and
+    /// <see cref="FindAvailableIn"/> helpers over inspecting this list directly.
+    /// </para>
     /// </summary>
-    [JsonInclude] public List<string> AvailableIn { get; private set; }
+    [JsonInclude]
+    [JsonConverter(typeof(AvailableInJsonConverter))]
+    public List<AvailableInEntry> AvailableIn { get; private set; }
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
     [JsonInclude] public ResourceLockDefinition? ResourceLock { get; private set; }
 
@@ -188,11 +197,45 @@ public sealed class Transition : IHasKey
 
     public void AddAvailableIn(string stateKey)
     {
-        if (!AvailableIn.Contains(stateKey))
+        if (FindAvailableIn(stateKey) == null)
         {
-            AvailableIn.Add(stateKey);
+            AvailableIn.Add(AvailableInEntry.FromState(stateKey));
         }
     }
+
+    /// <summary>
+    /// Adds an availability entry narrowing <paramref name="stateKey"/> to a set of role grants.
+    /// </summary>
+    public void AddAvailableIn(string stateKey, IEnumerable<RoleGrant>? roles)
+    {
+        if (FindAvailableIn(stateKey) == null)
+        {
+            AvailableIn.Add(AvailableInEntry.FromState(stateKey, roles));
+        }
+    }
+
+    /// <summary>
+    /// Returns true when this transition is offered in <paramref name="stateKey"/> — i.e. either it
+    /// declares no <c>availableIn</c> restriction at all (available everywhere) or the state is listed.
+    /// <para>
+    /// This is the <b>state-only</b> check. It deliberately ignores any per-state role grants, because
+    /// the transition execution policy gates on state alone; role evaluation happens on the discovery
+    /// and authorize surfaces via <see cref="FindAvailableIn"/>.
+    /// </para>
+    /// </summary>
+    public bool IsAvailableInState(string stateKey) =>
+        AvailableIn.Count == 0 || FindAvailableIn(stateKey) != null;
+
+    /// <summary>
+    /// Finds the <c>availableIn</c> entry for <paramref name="stateKey"/>, or null when the state is
+    /// not listed (including when the list is empty, i.e. available everywhere with no role narrowing).
+    /// <para>
+    /// First match wins if a definition lists the same state more than once, mirroring rule-based
+    /// <c>views[]</c> selection. <c>WorkflowValidator</c> reports duplicates.
+    /// </para>
+    /// </summary>
+    public AvailableInEntry? FindAvailableIn(string stateKey) =>
+        AvailableIn.FirstOrDefault(e => string.Equals(e.State, stateKey, StringComparison.Ordinal));
 
     public void SetView(ViewDefinition viewDefinition)
     {

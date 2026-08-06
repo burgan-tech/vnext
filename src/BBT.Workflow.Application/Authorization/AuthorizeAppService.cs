@@ -289,8 +289,23 @@ public sealed class AuthorizeAppService(
                 Key = t.Key,
                 From = t.From,
                 Target = t.Target,
-                Roles = ToRoleGrantDtos(t.Roles)
+                Roles = ToRoleGrantDtos(t.Roles),
+                AvailableIn = ToAvailableInDtos(t.AvailableIn)
             });
+    }
+
+    /// <summary>Maps availableIn entries to DTOs; returns empty list when none (schema consistency).</summary>
+    private static List<AuthorizationMatrixAvailableInDto> ToAvailableInDtos(IReadOnlyCollection<AvailableInEntry> entries)
+    {
+        if (entries.Count == 0)
+            return [];
+        return entries
+            .Select(e => new AuthorizationMatrixAvailableInDto
+            {
+                State = e.State,
+                Roles = ToRoleGrantDtos(e.Roles)
+            })
+            .ToList();
     }
 
     /// <summary>
@@ -381,7 +396,24 @@ public sealed class AuthorizeAppService(
             var transition = workflow.FindTransitionInContext(transitionKey);
             if (transition == null)
                 return false;
-            return await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(workflow, transition, instance, role, requestContext, cancellationToken);
+
+            // State-aware: the transition's availableIn must offer the instance's current state, and any
+            // grants that entry adds for the state narrow the transition's own grants (AND). Previously
+            // this ignored the state entirely, so authorize answered "allowed" for a transition the
+            // execution policy then rejected with Transition:100021 — the two surfaces disagreed.
+            // A null instance (workflow-scoped authorize) has no state in scope and is unaffected.
+            // CurrentState, not GetEffectiveState: availableIn lists states of THIS workflow, while
+            // EffectiveState can carry an active subflow's state key, which the parent definition does
+            // not contain — that would deny every parent transition. The discovery surface keys off
+            // CurrentState too (GetMainFlowTransitions / MergeWithParentAvailableTransitions).
+            return await transitionAuthorizationManager.IsTransitionAllowedInStateAsync(
+                workflow,
+                transition,
+                instance?.CurrentState,
+                instance,
+                role,
+                requestContext,
+                cancellationToken);
         }
 
         if (!string.IsNullOrWhiteSpace(functionKey))
