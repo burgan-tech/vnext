@@ -310,7 +310,7 @@ Kullanıcıya dönük yetenek dokümanı: `docs/features/monitoring-features.md`
 | `ApplicationName` | `vnext-monitor` |
 | `ConnectionStrings:Default` | PostgreSQL (same DB as orchestration) |
 | `Redis` | Distributed cache (`Mode`, `InstanceName`, `Standalone`) |
-| `UrlTemplates` | HATEOAS URL templates for link generation |
+| `UrlTemplates` | HATEOAS link generation. One key — `BasePath: "/api/v1/monitor"` — because the monitor serves its endpoints under that route prefix; per-endpoint templates are optional overrides |
 | `Telemetry` | OpenTelemetry config (OTLP, tracing, metrics, logging) |
 | `Vault:Enabled` | Dapr secret store toggle (default: false) |
 

@@ -13,12 +13,14 @@ using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
+using BBT.Workflow.Infrastructure.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -37,6 +39,12 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
     private const string TestVersion = FunctionTestFactory.Version;
     private const string FunctionKey = "my-fn";
     private const string TestFlow = "my-flow";
+
+    /// <summary>
+    /// The prefix the real builder emits when nothing is configured — the same one a client sees from a
+    /// host that declares no <c>UrlTemplates</c> section.
+    /// </summary>
+    private const string BasePath = UrlTemplateDefaults.BasePath;
 
     private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
     private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
@@ -79,7 +87,7 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
             scriptContextFactory: scriptContextFactory,
             componentCacheStore: _componentCacheStore,
             currentSchema: Substitute.For<ICurrentSchema>(),
-            urlTemplateBuilder: new StubUrlTemplateBuilder(),
+            urlTemplateBuilder: new UrlTemplateBuilder(Options.Create(new UrlTemplateOptions())),
             functionAccessPolicy: new FunctionAccessPolicy(
                 Substitute.For<ICurrentUser>(), _authorizationManager),
             contractResolver: new FunctionContractResolver(
@@ -165,7 +173,7 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         info.RawResponse.ShouldBeTrue();
         info.Cacheable.ShouldBeFalse();
         info.Function.Verbs.ShouldBe(["POST", "PATCH"]);
-        info.Function.Href.ShouldBe($"/{TestDomain}/functions/{FunctionKey}");
+        info.Function.Href.ShouldBe($"{BasePath}/{TestDomain}/functions/{FunctionKey}");
     }
 
     [Fact]
@@ -180,10 +188,10 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         info.InputSchema.HasSchema.ShouldBeFalse();
         info.OutputSchema.HasSchema.ShouldBeFalse();
 
-        info.InputView.Href.ShouldBe($"/{TestDomain}/functions/{FunctionKey}/view?target=input");
-        info.OutputView.Href.ShouldBe($"/{TestDomain}/functions/{FunctionKey}/view?target=output");
-        info.InputSchema.Href.ShouldBe($"/{TestDomain}/functions/{FunctionKey}/schema?target=input");
-        info.OutputSchema.Href.ShouldBe($"/{TestDomain}/functions/{FunctionKey}/schema?target=output");
+        info.InputView.Href.ShouldBe($"{BasePath}/{TestDomain}/functions/{FunctionKey}/view?target=input");
+        info.OutputView.Href.ShouldBe($"{BasePath}/{TestDomain}/functions/{FunctionKey}/view?target=output");
+        info.InputSchema.Href.ShouldBe($"{BasePath}/{TestDomain}/functions/{FunctionKey}/schema?target=input");
+        info.OutputSchema.Href.ShouldBe($"{BasePath}/{TestDomain}/functions/{FunctionKey}/schema?target=output");
     }
 
     [Fact]
@@ -247,9 +255,9 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
             TestDomain, TestFlow, instance.Id.ToString(), FunctionKey)).Value.ShouldNotBeNull();
 
         info.Function.Href.ShouldBe(
-            $"/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/{FunctionKey}");
+            $"{BasePath}/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/{FunctionKey}");
         info.InputView.Href.ShouldBe(
-            $"/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/{FunctionKey}/view?target=input");
+            $"{BasePath}/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/{FunctionKey}/view?target=input");
     }
 
     // ─── Content endpoints ──────────────────────────────────────────────────────
@@ -347,8 +355,8 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         entry.Version.ShouldBe(TestVersion);
         entry.Scope.ShouldBe(scope);
         entry.Href.ShouldBe(instanceScoped
-            ? $"/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/get-branches/info"
-            : $"/{TestDomain}/functions/get-branches/info");
+            ? $"{BasePath}/{TestDomain}/workflows/{TestFlow}/instances/{instance.Id}/functions/get-branches/info"
+            : $"{BasePath}/{TestDomain}/functions/get-branches/info");
     }
 
     /// <summary>
@@ -502,81 +510,5 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         _componentCacheStore
             .GetSchemaAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Result<SchemaDefinition>.Ok(schema));
-    }
-
-    /// <summary>
-    /// Emits the default templates verbatim so the tests assert the shape clients actually receive
-    /// rather than a mock's placeholder.
-    /// <para>
-    /// It formats the <see cref="UrlTemplateOptions"/> defaults, which are base paths with no gateway
-    /// prefix — the prefix is supplied per host by the <c>UrlTemplates</c> config section and is not in
-    /// scope here. So the expectations above are correctly prefix-less; what a client receives in a
-    /// deployment additionally carries that host's prefix. Config completeness is pinned separately by
-    /// <c>UrlTemplateConfigCompletenessTests</c>.
-    /// </para>
-    /// </summary>
-    private sealed class StubUrlTemplateBuilder : IUrlTemplateBuilder
-    {
-        private readonly UrlTemplateOptions _options = new();
-
-        public string BuildStartUrl(string domain, string workflow, string? apiVersionPrefix = null)
-            => string.Format(_options.Start, domain, workflow);
-
-        public string BuildTransitionUrl(string domain, string workflow, string instanceId, string transitionKey, string? apiVersionPrefix = null)
-            => string.Format(_options.Transition, domain, workflow, instanceId, transitionKey);
-
-        public string BuildFunctionListUrl(string domain, string workflow, string function, string? apiVersionPrefix = null)
-            => string.Format(_options.FunctionList, domain, workflow, function);
-
-        public string BuildInstanceListUrl(string domain, string workflow, string? apiVersionPrefix = null)
-            => string.Format(_options.InstanceList, domain, workflow);
-
-        public string BuildInstanceUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
-            => string.Format(_options.Instance, domain, workflow, instance);
-
-        public string BuildInstanceHistoryUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
-            => string.Format(_options.InstanceHistory, domain, workflow, instance);
-
-        public string BuildDataUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
-            => string.Format(_options.Data, domain, workflow, instance);
-
-        public string BuildDataWithExtensionsUrl(string domain, string workflow, string instance, IEnumerable<string> extensions, string? apiVersionPrefix = null)
-            => BuildDataUrl(domain, workflow, instance, apiVersionPrefix);
-
-        public string BuildViewUrl(string domain, string workflow, string instance, string? transitionKey = null, string? apiVersionPrefix = null)
-            => string.Format(_options.View, domain, workflow, instance);
-
-        public string BuildSchemaUrl(string domain, string workflow, string instanceId, string transitionKey, string? apiVersionPrefix = null)
-            => string.Format(_options.Schema, domain, workflow, instanceId, transitionKey);
-
-        public string BuildMasterUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
-            => string.Format(_options.Master, domain, workflow, instance);
-
-        public string BuildFunctionCatalogUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
-            => string.Format(_options.FunctionCatalog, domain, workflow, instance);
-
-        public string BuildDomainFunctionUrl(string domain, string function, string? apiVersionPrefix = null)
-            => string.Format(_options.DomainFunction, domain, function);
-
-        public string BuildDomainFunctionInfoUrl(string domain, string function, string? apiVersionPrefix = null)
-            => string.Format(_options.DomainFunctionInfo, domain, function);
-
-        public string BuildDomainFunctionViewUrl(string domain, string function, string target, string? apiVersionPrefix = null)
-            => string.Format(_options.DomainFunctionView, domain, function, target);
-
-        public string BuildDomainFunctionSchemaUrl(string domain, string function, string target, string? apiVersionPrefix = null)
-            => string.Format(_options.DomainFunctionSchema, domain, function, target);
-
-        public string BuildInstanceFunctionUrl(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
-            => string.Format(_options.InstanceFunction, domain, workflow, instance, function);
-
-        public string BuildInstanceFunctionInfoUrl(string domain, string workflow, string instance, string function, string? apiVersionPrefix = null)
-            => string.Format(_options.InstanceFunctionInfo, domain, workflow, instance, function);
-
-        public string BuildInstanceFunctionViewUrl(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
-            => string.Format(_options.InstanceFunctionView, domain, workflow, instance, function, target);
-
-        public string BuildInstanceFunctionSchemaUrl(string domain, string workflow, string instance, string function, string target, string? apiVersionPrefix = null)
-            => string.Format(_options.InstanceFunctionSchema, domain, workflow, instance, function, target);
     }
 }

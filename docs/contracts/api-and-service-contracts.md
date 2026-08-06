@@ -131,6 +131,35 @@ concurrent completion its active subset can be a moment fresher than `activeCorr
 Changes to the correlation set participate in the state ETag — see
 [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+### Client-facing hrefs and the `UrlTemplates` section
+
+Every `href` a client receives — `availableTransitions[].href`, `data`, `view`, `schema`, `master`,
+the function catalog entries, the long-poll `ack` — is a **relative path** built by
+`IUrlTemplateBuilder`. The path below the prefix is fixed by the controller routes and lives in code
+(`UrlTemplateDefaults`); the only per-deployment variable is the prefix, because an href must point at
+the API gateway route rather than at the pod.
+
+So a host configures **one key**:
+
+```json
+"UrlTemplates": { "BasePath": "/api/v1/monitor" }
+```
+
+Omit the section entirely and the application serves its own prefix, `/api/v1` — the same one its
+controllers are routed under (`[Route("api/v{version:apiVersion}")]`). The orchestration host relies
+on exactly that and declares nothing. An empty `BasePath` emits prefix-less paths, for a host mounted
+at the root; a leading slash is added and a trailing one trimmed, so `api/v1/` and `/api/v1` are
+equivalent.
+
+The nineteen per-endpoint keys (`Start`, `Transition`, `Data`, …) remain available as optional
+overrides for a gateway that routes one endpoint differently from its siblings. **An override is a
+complete path and is used verbatim — `BasePath` is not prepended to it.** Overriding a template with
+exactly what `BasePath` already yields is a test failure, so the section cannot drift back into
+restating every route.
+
+Note that `InstanceUrlTemplates` is a separate mechanism for internal service-to-service calls and
+takes its version prefix from `vNextApi:ApiVersion`; it is unaffected by this section.
+
 ## Internal-Only Endpoints
 
 Several routes on `InstanceController` exist purely for runtime-to-runtime calls and carry
@@ -202,6 +231,8 @@ available. Current-user and correlation headers should be forwarded across remot
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Instances/InstanceController.cs`
 - `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Controllers/Functions/FunctionController.cs`
 - `src/BBT.Workflow.Domain/Definitions/InstanceUrlTemplates.cs`
+- `src/BBT.Workflow.Domain/Definitions/UrlTemplateOptions.cs`
+- `src/BBT.Workflow.Domain/Definitions/UrlTemplateDefaults.cs`
 - `src/BBT.Workflow.Execution.Abstractions/TaskEnvelope.cs`
 - `src/BBT.Workflow.Events.Contracts/`
 - `src/BBT.Workflow.Domain/Validation/SchemaValidationProblemDetails.cs`
