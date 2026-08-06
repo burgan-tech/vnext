@@ -66,21 +66,11 @@ public sealed class StateTransitionListSpecification : ITransitionSpecification
     }
     
     /// <summary>
-    /// Determines if a transition key is a well-known transition.
-    /// Checks both static well-known keys and custom keys configured on the workflow's
-    /// well-known transitions (Cancel, UpdateData, Exit).
+    /// Determines if a transition key is a well-known transition (reserved alias or configured key).
+    /// Shares <see cref="Workflow.IsWellKnownTransitionKey"/> with
+    /// <see cref="WellKnownTransitionSpecification"/> so the two specifications cannot disagree about
+    /// which keys they own — a key excluded here but not claimed there would be ungated.
     /// </summary>
     private static bool IsWellKnownTransition(TransitionExecutionContext context)
-    {
-        if (context.TransitionKey == WellKnownTransitionKeys.Cancel
-            || context.TransitionKey == WellKnownTransitionKeys.UpdateData
-            || context.TransitionKey == WellKnownTransitionKeys.Exit)
-        {
-            return true;
-        }
-
-        return context.Workflow.Cancel?.Key == context.TransitionKey
-               || context.Workflow.UpdateData?.Key == context.TransitionKey
-               || context.Workflow.Exit?.Key == context.TransitionKey;
-    }
+        => context.Workflow.IsWellKnownTransitionKey(context.TransitionKey);
 }

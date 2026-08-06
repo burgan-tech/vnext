@@ -71,7 +71,7 @@ public class StateFunctionCacheTests
         // link) cannot be served from entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v4:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v5:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]

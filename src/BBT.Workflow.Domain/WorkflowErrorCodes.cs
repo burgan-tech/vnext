@@ -67,6 +67,7 @@ public static class WorkflowErrorCodes
     public const string SharedTransitionNotAvailableInState = "Transition:100021";
     public const string StartTransitionNotFromInitialState = "Transition:100022";
     public const string SharedTransitionTargetMustBeSelfWhenInSubFlow = "Transition:100023";
+    public const string WellKnownTransitionNotAvailableInState = "Transition:100024";
 
     #endregion
     

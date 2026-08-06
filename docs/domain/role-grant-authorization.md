@@ -28,6 +28,10 @@ Consequences to design around:
 
 - A caller who knows a transition key can execute it even when `roles` would exclude it from their
   `availableTransitions`. Treat `roles` as *what the client should offer*, not as a capability boundary.
+- The **state** half of `availableIn` *is* enforced at execution, by `TransitionExecutionPolicy`
+  (`SharedTransitionAvailabilitySpecification`, `WellKnownTransitionSpecification`). Only the role half
+  is discovery-only. So `availableIn` is the one place where a definition can impose a real
+  server-side restriction on *where* a transition may run, even though it cannot restrict *who*.
 - Anything that must be an actual boundary belongs in `queryRoles` (which **is** enforced, with 403),
   in a function's `roles` (also 403), or in the transition's own task logic.
 - Clients that need a pre-flight answer call the `authorize` function; that is what it exists for.
@@ -90,6 +94,11 @@ instance's full latest data).
 be asked about: a `$PreviousUser` / `$PreviousBehalfOfUser` grant evaluated but absent from the hint
 can never match. Derive the hint from exactly the grants you will evaluate — the union of a state's
 transitions, of a schema's guarded paths, of an instance's candidate transitions.
+
+Note that a transition can contribute **two** grant sets: its own `roles` and the `roles` on the
+`availableIn` entry matching the current state. Both are evaluated, so both belong in the hint —
+`FilterAuthorizedTransitionKeysAsync` unions `Transition.Roles` with `FindAvailableIn(state)?.Roles`
+for exactly this reason.
 
 ```csharp
 var evaluator = await transitionAuthorizationManager.CreateEvaluatorAsync(

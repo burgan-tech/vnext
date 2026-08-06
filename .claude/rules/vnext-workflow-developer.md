@@ -87,6 +87,31 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
   always been there but was unauthorable under `additionalProperties: false`.
 - Full guide: `docs/domain/well-known-transitions.md`.
 
+## `availableIn` (shared + cancel/updateData/exit)
+
+- Two authorable shapes, mixable in one array: bare state key, or `{ state, roles }`
+  (`AvailableInJsonConverter`, modelled on `ViewDisplayJsonConverter`). Role-less entry ⇔ bare string.
+- `Write` derives the shape from `HasRoles`, it does **not** remember how the entry was authored: the
+  string form and the roles-bearing object form round-trip byte-for-byte, while a role-less *object*
+  (`{state}` or `{state, roles: []}`) normalizes to the equivalent string. Lossless and deliberate —
+  same rule as `ViewDisplayJsonConverter` collapsing SDI-only to a bare string. Don't add an
+  "authored shape" flag to defeat it.
+- Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
+  empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
+  duplicate states ⇒ first match wins, validator errors.
+- **Roles compose as AND**: `transition.roles` is the global gate, `availableIn[state].roles` narrows
+  it for that state; both must allow. Empty set allows, so legacy definitions are unaffected.
+- Three surfaces, and they must not diverge: state function **state+roles**, `authorize`
+  **state+roles**, execution policy **state only** (roles have never been enforced at execution for
+  any transition type). Both role-aware surfaces go through
+  `IsTransitionAllowedInStateAsync` / `FilterAuthorizedTransitionKeysAsync` — do not add a third path.
+- `grantsForPrefetchHint` must include the per-state grants too, or a `$PreviousUser` grant living only
+  on an `availableIn` entry can never match.
+- Execution gate for the well-known three is `WellKnownTransitionSpecification` (error code
+  `Transition:100024`); it claims keys via `Workflow.IsWellKnownTransitionKey`, which matches reserved
+  aliases **and** configured custom keys — matching aliases only leaves a custom-keyed transition
+  ungated by every spec.
+
 ## Role Grant Validation
 
 - Three role forms: **static** (`backoffice.operator`), **predefined** (`$InstanceStarter`,

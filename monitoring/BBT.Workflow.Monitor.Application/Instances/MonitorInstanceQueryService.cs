@@ -295,8 +295,12 @@ public sealed class MonitorInstanceQueryService(
             }
 
             var stateTransitions = currentStateDef?.Transitions ?? Enumerable.Empty<Transition>();
+            // Shared transitions must respect availableIn: without this filter the operator view
+            // reported transitions the runtime would reject from the instance's current state.
+            // Role narrowing is deliberately not applied — this is the operator's definition view,
+            // not a caller-scoped list.
             available = stateTransitions
-                .Concat(flow.SharedTransitions)
+                .Concat(flow.SharedTransitions.Where(t => t.IsAvailableInState(instance.CurrentState ?? string.Empty)))
                 .Select(t => new MonitorAvailableTransition
                 {
                     Key = t.Key,

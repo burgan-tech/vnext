@@ -746,7 +746,7 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
         var pending = workflow.GetAvailableUserTransitionKeys(workflow.FindState("pending")!);
 
         // Assert — availableIn bound from JSON and gates exit; an empty list means every state
-        Assert.Equal(["review"], workflow.Exit!.AvailableIn);
+        Assert.Equal(["review"], workflow.Exit!.AvailableIn.Select(e => e.State));
         Assert.Contains("exit", review);
         Assert.DoesNotContain("exit", pending);
         Assert.Contains("update-data", review);

@@ -73,6 +73,37 @@ public interface ITransitionAuthorizationManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Evaluates a transition for a caller <b>in a specific state</b>: the state must be offered by the
+    /// transition's <c>availableIn</c>, and both the transition's own grants and any grants the matching
+    /// <c>availableIn</c> entry adds for that state must allow the caller (AND).
+    /// <para>
+    /// This is the state-aware counterpart to <see cref="IsTransitionAllowedForRoleAsync"/> and should be
+    /// preferred wherever the instance's current state is known, so that the discovery surface
+    /// (<c>availableTransitions</c>) and the <c>authorize</c> function cannot disagree about the same
+    /// transition.
+    /// </para>
+    /// </summary>
+    /// <param name="workflow">The workflow definition (provides the <c>$.context.Workflow.*</c> namespace).</param>
+    /// <param name="transition">The transition being evaluated.</param>
+    /// <param name="currentStateKey">
+    /// The instance's current state key. Null or empty means "no state in scope": the state gate and any
+    /// per-state narrowing are skipped and only <c>transition.Roles</c> is evaluated.
+    /// </param>
+    /// <param name="instance">Optional instance for resolving predefined and dynamic roles.</param>
+    /// <param name="role">The caller's role to check. Null is allowed; predefined/dynamic grants still apply.</param>
+    /// <param name="requestContext">Optional request context for <c>$.context.Headers/QueryParameters/RouteValues</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when the transition is available in the state and both grant levels allow the caller.</returns>
+    Task<bool> IsTransitionAllowedInStateAsync(
+        WorkflowDefinition workflow,
+        Transition transition,
+        string? currentStateKey,
+        Instance? instance,
+        string? role,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Filters a list of transition keys to only those allowed for the given role.
     /// Uses the same evaluation as <see cref="IsTransitionAllowedForRoleAsync"/> per transition.
     /// When role is null, only predefined/dynamic role grants are evaluated; transitions with no roles pass through.

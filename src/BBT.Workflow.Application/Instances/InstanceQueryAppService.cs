@@ -1130,7 +1130,9 @@ public sealed class InstanceQueryAppService(
                     if (parentTransitionOverrides.TryGetValue(key, out var tOverride) &&
                         tOverride.Roles is { Count: > 0 })
                     {
-                        // Parent override (replace mode): use parent-defined grants
+                        // Parent override (replace mode): use parent-defined grants verbatim.
+                        // No availableIn narrowing here — these overrides key off the SUBFLOW's
+                        // transitions, so the parent's availableIn states would not apply to them.
                         var allowed = await transitionAuthorizationManager
                             .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, authRequestContext, cancellationToken);
                         if (allowed) filteredKeys.Add(key);
