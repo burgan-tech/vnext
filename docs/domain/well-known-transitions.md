@@ -87,8 +87,23 @@ two forms may be mixed in one array:
 
 An entry with no `roles` is exactly equivalent to the bare string form, so definitions authored before
 per-state role scoping behave identically — this is why the extension is not a breaking change.
-`AvailableInJsonConverter` writes each entry back in the shape it was authored (role-less ⇒ string),
-so component JSON round-trips unchanged.
+
+`AvailableInJsonConverter` derives the written shape from whether the entry carries roles, rather than
+remembering how it was authored:
+
+| Authored | Re-serialized |
+|----------|---------------|
+| `"review"` | `"review"` |
+| `{ "state": "review" }` | `"review"` |
+| `{ "state": "review", "roles": [] }` | `"review"` |
+| `{ "state": "review", "roles": [ … ] }` | `{ "state": "review", "roles": [ … ] }` |
+
+So the **string form and the roles-bearing object form round-trip byte-for-byte**, while a role-less
+*object* is normalized to the equivalent string. That is lossless — the two encode the same thing — and
+it is the same rule `ViewDisplayJsonConverter` applies when it writes an SDI-only `ViewDisplay` back as
+a bare string instead of `{ "sdi": … }`. Do not add an "authored as object" flag to
+`AvailableInEntry` to defeat this: it would carry a serialization detail into the domain model for no
+semantic gain and diverge from the converter this one is modelled on.
 
 ### Role composition is AND
 

@@ -10,10 +10,18 @@ namespace BBT.Workflow.Definitions;
 /// The two forms may be mixed freely within one array.
 /// </summary>
 /// <remarks>
-/// Writing mirrors the authored shape: an entry with no role grants is written back as a bare string
-/// so component JSON round-trips unchanged; an entry carrying roles is written as an object. The
-/// shape is inferred from <see cref="AvailableInEntry.HasRoles"/> rather than stored, the same
-/// invariant <see cref="ViewDisplayJsonConverter"/> relies on.
+/// The written shape is derived from <see cref="AvailableInEntry.HasRoles"/>; it is not a record of how
+/// the entry was authored. So the bare-string form and the roles-bearing object form round-trip
+/// byte-for-byte, while a role-less <i>object</i> (<c>{ "state": "x" }</c> or
+/// <c>{ "state": "x", "roles": [] }</c>) is normalized to the equivalent <c>"x"</c>. That is lossless —
+/// both encode "available in x, no role narrowing" — and it is the same rule
+/// <see cref="ViewDisplayJsonConverter"/> applies when it writes an SDI-only display back as a bare
+/// string rather than <c>{ "sdi": … }</c>.
+/// <para>
+/// Deliberately no "authored as object" flag on <see cref="AvailableInEntry"/>: it would carry a
+/// serialization detail into the domain model to buy byte-exactness on a shape that has no distinct
+/// meaning, and would diverge from the converter this one is modelled on.
+/// </para>
 /// </remarks>
 public sealed class AvailableInJsonConverter : JsonConverter<List<AvailableInEntry>>
 {
@@ -89,7 +97,8 @@ public sealed class AvailableInJsonConverter : JsonConverter<List<AvailableInEnt
 
         foreach (var entry in value)
         {
-            // Role-less entries round-trip as the legacy bare-string shape
+            // Role-less entries are written as the legacy bare-string shape, whether they were authored
+            // that way or as a role-less object — the two are equivalent, so this is a normalization.
             if (!entry.HasRoles)
             {
                 writer.WriteStringValue(entry.State);

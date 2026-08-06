@@ -125,13 +125,14 @@ public class AvailableInJsonConverterTests
     }
 
     /// <summary>
-    /// Byte-exact round-trip: a definition re-serialized after deserialization must be re-authorable.
+    /// Byte-exact round-trip for the two shapes that carry distinct information: a bare string and a
+    /// roles-bearing object. A definition re-serialized after deserialization must be re-authorable.
     /// This also pins RoleGrant's <c>[JsonIgnore]</c> on IsDeny/IsAllow — without it the grant is
     /// written with "isDeny"/"isAllow" siblings, which <c>roleGrant</c>'s
     /// <c>additionalProperties: false</c> rejects on re-validation.
     /// </summary>
     [Fact]
-    public void RoundTrip_PreservesBothFormsExactly()
+    public void RoundTrip_IsByteExact_ForStringAndRolesBearingObject()
     {
         const string authored = """
             ["review",{"state":"approval","roles":[{"role":"backoffice.supervisor","grant":"allow"}]}]
@@ -140,6 +141,54 @@ public class AvailableInJsonConverterTests
         var reserialized = Write(Read(authored));
 
         reserialized.ShouldBe($"{{\"availableIn\":{authored.Trim()}}}");
+    }
+
+    /// <summary>
+    /// A role-less <i>object</i> is normalized to the equivalent bare string rather than preserved.
+    /// The written shape is derived from <see cref="AvailableInEntry.HasRoles"/>, not remembered, so
+    /// `{state}` and `{state, roles: []}` both collapse — they encode exactly what `"state"` encodes.
+    /// Same rule as <see cref="ViewDisplayJsonConverter"/> writing an SDI-only display as a bare string.
+    /// <para>
+    /// Asserted explicitly so the normalization is a pinned decision rather than an accident: if someone
+    /// later adds an "authored as object" flag to defeat it, this test fails and forces the discussion.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("""[{"state":"review"}]""")]
+    [InlineData("""[{"state":"review","roles":[]}]""")]
+    public void Write_RoleLessObject_NormalizesToBareString(string authored)
+    {
+        var entry = Read(authored).ShouldHaveSingleItem();
+        entry.State.ShouldBe("review");
+        entry.HasRoles.ShouldBeFalse();
+
+        Write(Read(authored)).ShouldBe("""{"availableIn":["review"]}""");
+    }
+
+    /// <summary>
+    /// Normalization is idempotent and semantically lossless: whichever of the three equivalent role-less
+    /// spellings is authored, the deserialized model and the re-serialized JSON are identical.
+    /// </summary>
+    [Fact]
+    public void RoleLessForms_AreSemanticallyIdentical()
+    {
+        string[] spellings =
+        [
+            """["review"]""",
+            """[{"state":"review"}]""",
+            """[{"state":"review","roles":[]}]"""
+        ];
+
+        var outputs = spellings.Select(s => Write(Read(s))).Distinct().ToList();
+        outputs.ShouldHaveSingleItem().ShouldBe("""{"availableIn":["review"]}""");
+
+        // ...and the models agree, so nothing downstream can tell them apart either.
+        foreach (var spelling in spellings)
+        {
+            var entry = Read(spelling).ShouldHaveSingleItem();
+            entry.State.ShouldBe("review");
+            entry.HasRoles.ShouldBeFalse();
+        }
     }
 
     #endregion

@@ -90,8 +90,12 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 ## `availableIn` (shared + cancel/updateData/exit)
 
 - Two authorable shapes, mixable in one array: bare state key, or `{ state, roles }`
-  (`AvailableInJsonConverter`, modelled on `ViewDisplayJsonConverter`). Role-less entry ⇔ bare string,
-  and `Write` infers the shape from `HasRoles`, so component JSON round-trips unchanged.
+  (`AvailableInJsonConverter`, modelled on `ViewDisplayJsonConverter`). Role-less entry ⇔ bare string.
+- `Write` derives the shape from `HasRoles`, it does **not** remember how the entry was authored: the
+  string form and the roles-bearing object form round-trip byte-for-byte, while a role-less *object*
+  (`{state}` or `{state, roles: []}`) normalizes to the equivalent string. Lossless and deliberate —
+  same rule as `ViewDisplayJsonConverter` collapsing SDI-only to a bare string. Don't add an
+  "authored shape" flag to defeat it.
 - Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
   empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
   duplicate states ⇒ first match wins, validator errors.
