@@ -507,6 +507,13 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
     /// <summary>
     /// Emits the default templates verbatim so the tests assert the shape clients actually receive
     /// rather than a mock's placeholder.
+    /// <para>
+    /// It formats the <see cref="UrlTemplateOptions"/> defaults, which are base paths with no gateway
+    /// prefix — the prefix is supplied per host by the <c>UrlTemplates</c> config section and is not in
+    /// scope here. So the expectations above are correctly prefix-less; what a client receives in a
+    /// deployment additionally carries that host's prefix. Config completeness is pinned separately by
+    /// <c>UrlTemplateConfigCompletenessTests</c>.
+    /// </para>
     /// </summary>
     private sealed class StubUrlTemplateBuilder : IUrlTemplateBuilder
     {

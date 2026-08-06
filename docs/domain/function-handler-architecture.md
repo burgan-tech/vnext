@@ -131,11 +131,11 @@ GET {domain}/workflows/{workflow}/instances/{instance}/functions/{function}/info
   "scope": "D",
   "rawResponse": false,
   "cacheable": true,
-  "function": { "href": "/core/functions/customer-search", "verbs": ["POST"] },
-  "inputView":    { "href": "/core/functions/customer-search/view?target=input",    "hasView": true, "loadData": false },
-  "outputView":   { "href": "/core/functions/customer-search/view?target=output",   "hasView": false, "loadData": false },
-  "inputSchema":  { "href": "/core/functions/customer-search/schema?target=input",  "hasSchema": true },
-  "outputSchema": { "href": "/core/functions/customer-search/schema?target=output", "hasSchema": true }
+  "function": { "href": "/api/core/functions/customer-search", "verbs": ["POST"] },
+  "inputView":    { "href": "/api/core/functions/customer-search/view?target=input",    "hasView": true, "loadData": false },
+  "outputView":   { "href": "/api/core/functions/customer-search/view?target=output",   "hasView": false, "loadData": false },
+  "inputSchema":  { "href": "/api/core/functions/customer-search/schema?target=input",  "hasSchema": true },
+  "outputSchema": { "href": "/api/core/functions/customer-search/schema?target=output", "hasSchema": true }
 }
 ```
 
@@ -175,7 +175,7 @@ response points at the catalog:
 ```jsonc
 "functions": {
   "hasFunctions": true,
-  "href": "/core/workflows/onboarding/instances/{id}/functions/catalog"
+  "href": "/api/core/workflows/onboarding/instances/{id}/functions/catalog"
 }
 ```
 
@@ -190,9 +190,9 @@ GET {domain}/workflows/{workflow}/instances/{instance}/functions/catalog
 {
   "functions": [
     { "name": "get-branches", "version": "1.0.0", "scope": "D",
-      "href": "/core/functions/get-branches/info" },
+      "href": "/api/core/functions/get-branches/info" },
     { "name": "calc-limit", "version": "1.0.0", "scope": "F",
-      "href": "/core/workflows/onboarding/instances/{id}/functions/calc-limit/info" }
+      "href": "/api/core/workflows/onboarding/instances/{id}/functions/calc-limit/info" }
   ]
 }
 ```

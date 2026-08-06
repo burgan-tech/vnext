@@ -3,6 +3,21 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Configuration for client-facing URL templates used in HATEOAS responses.
 /// Internal service-to-service URLs remain static in InstanceUrlTemplates as they map to controller routes.
+/// <para>
+/// These defaults are the <b>base paths only</b> — deliberately with no gateway prefix. The prefix is a
+/// deployment concern the operator declares in the <c>UrlTemplates</c> config section, and it differs
+/// per host: the orchestration host serves <c>/api/{domain}/…</c> while the monitor host serves
+/// <c>/api/v1/monitor/{domain}/…</c>. Hard-coding either here would be wrong for the other and would
+/// put a hosting detail into the domain layer.
+/// </para>
+/// <para>
+/// <b>Consequence when adding a template:</b> add the matching key to every host's <c>UrlTemplates</c>
+/// section as well. A template present here but missing from config silently falls back to the
+/// prefix-less base path, which is how the function catalog / info / view / schema hrefs came to be
+/// emitted as <c>/{domain}/…</c> while every sibling href carried the prefix.
+/// <c>UrlTemplateConfigCompletenessTests</c> pins that every property here has a key in each host's
+/// configuration, so the omission fails the build instead of reaching a client.
+/// </para>
 /// </summary>
 public sealed class UrlTemplateOptions
 {

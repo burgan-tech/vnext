@@ -67,7 +67,7 @@ The state response points at the workflow's function catalog rather than carryin
 ```jsonc
 "functions": {
   "hasFunctions": true,
-  "href": "/core/workflows/onboarding/instances/{id}/functions/catalog"
+  "href": "/api/core/workflows/onboarding/instances/{id}/functions/catalog"
 }
 ```
 
