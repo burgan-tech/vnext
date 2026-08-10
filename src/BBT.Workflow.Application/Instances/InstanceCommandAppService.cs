@@ -608,7 +608,7 @@ public sealed class InstanceCommandAppService(
         // forwards non-parent-shared transitions to the child after commit, so rejecting that
         // Busy status here would make ForwardToActiveSubflowStep unreachable.
         var isAsyncIdempotencyReplay = !input.Sync && HasIdempotencyKey(input.Headers);
-        var forwardsToActiveSubflow = ShouldForwardToActiveSubflow(transitionContext);
+        var forwardsToActiveSubflow = transitionContext.ForwardsToActiveSubflow();
         if (resolvedInstance.IsBusy
             && !reservedTransitionResolver.IsReserved(transitionContext)
             && !forwardsToActiveSubflow
@@ -686,15 +686,6 @@ public sealed class InstanceCommandAppService(
         headers.Any(item =>
             string.Equals(item.Key, "idempotency-key", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(item.Value));
-
-    private static bool ShouldForwardToActiveSubflow(TransitionExecutionContext context)
-    {
-        if (!context.Instance.HasActiveSubFlow)
-            return false;
-
-        var parentShared = context.Workflow.FindSharedTransition(context.TransitionKey);
-        return parentShared is null || !parentShared.IsAvailableInState(context.Current.Key);
-    }
 
     /// <summary>
     /// Adds workflow header to the transition response using instance flow and version.

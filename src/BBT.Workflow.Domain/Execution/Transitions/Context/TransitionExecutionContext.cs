@@ -220,4 +220,19 @@ public sealed class TransitionExecutionContext
         Instance.ClearDomainEvents();
     }
 
+    /// <summary>
+    /// True when this request targets a parent whose active blocking SubFlow owns execution and
+    /// the requested transition is not a parent shared transition available in the current state.
+    /// Admission must then accept the request as a proxy hop (despite the parent being Busy) so
+    /// <c>ForwardToActiveSubflowStep</c> can forward it to the child after commit. The step itself
+    /// applies a post-validation variant of this predicate and must not be rewired onto it.
+    /// </summary>
+    public bool ForwardsToActiveSubflow()
+    {
+        if (!Instance.HasActiveSubFlow)
+            return false;
+
+        var parentShared = Workflow.FindSharedTransition(TransitionKey);
+        return parentShared is null || !parentShared.IsAvailableInState(Current.Key);
+    }
 }

@@ -138,7 +138,7 @@ public sealed class AsyncTransitionStrategy(
         // distinct from the execution lock the job consumer acquires in TransitionPipeline —
         // the Dapr job fires while this lock is still held, so sharing the key would race.
         var isReserved = reservedTransitionResolver.IsReserved(ctx);
-        var forwardsToActiveSubflow = ShouldForwardToActiveSubflow(ctx);
+        var forwardsToActiveSubflow = ctx.ForwardsToActiveSubflow();
         // The idempotency uniqueness constraint is instance-wide. Requests carrying the same key
         // must therefore share one admission lock even when they target different reserved
         // transition types; otherwise both can observe lookup-miss and race into a unique-index
@@ -451,15 +451,6 @@ public sealed class AsyncTransitionStrategy(
                    context.TransitionKey,
                    context.Workflow.StartTransition.Key,
                    StringComparison.Ordinal);
-    }
-
-    private static bool ShouldForwardToActiveSubflow(TransitionExecutionContext context)
-    {
-        if (!context.Instance.HasActiveSubFlow)
-            return false;
-
-        var parentShared = context.Workflow.FindSharedTransition(context.TransitionKey);
-        return parentShared is null || !parentShared.IsAvailableInState(context.Current.Key);
     }
 
     /// <summary>
