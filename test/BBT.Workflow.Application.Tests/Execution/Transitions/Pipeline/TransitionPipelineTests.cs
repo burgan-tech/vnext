@@ -215,6 +215,9 @@ public class TransitionPipelineTests
     public async Task RunAsync_WhenPostCommitJobsAreQueuedForEnqueueContinuation_ShouldDispatchBeforeReturning()
     {
         var context = CreateTransitionExecutionContext();
+        var chainToken = Guid.NewGuid();
+        context.Instance.BeginChain(chainToken);
+        context.ChainToken = chainToken;
         var workflowContext = CreateWorkflowExecutionContext(context);
         workflowContext.EnqueueContinuations = true;
         var postCommitJob = Substitute.For<IPostCommitJob>();
@@ -231,7 +234,13 @@ public class TransitionPipelineTests
                 Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        var enqueueStrategy = new EnqueueContinuationStrategy(jobRepository, enqueueGateway);
+        var handoffUow = Substitute.For<IUnitOfWork>();
+        var handoffUowManager = Substitute.For<IUnitOfWorkManager>();
+        handoffUowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(handoffUow);
+        var enqueueStrategy = new EnqueueContinuationStrategy(
+            jobRepository,
+            enqueueGateway,
+            handoffUowManager);
 
         var jobsVisibleDuringEnqueue = false;
         enqueueGateway.EnqueueAsync(
@@ -257,8 +266,11 @@ public class TransitionPipelineTests
         jobsVisibleDuringEnqueue.ShouldBeTrue();
         await jobRepository.Received(1).InsertAsync(
             Arg.Any<InstanceJob>(),
-            true,
+            false,
             Arg.Any<CancellationToken>());
+        handoffUowManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
+            options.Scope == UnitOfWorkScopeOption.RequiresNew && options.IsTransactional));
+        await handoffUow.Received(1).CommitAsync(Arg.Any<CancellationToken>());
         await enqueueGateway.Received(1).EnqueueAsync(
             Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
             Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
@@ -268,7 +280,7 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_ShouldMarkBusyImmediatelyAfterLockAcquisition()
+    public async Task RunAsync_ShouldNotReloadInstanceToMarkBusyAfterLockAcquisition()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
@@ -281,7 +293,7 @@ public class TransitionPipelineTests
         await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         // Assert
-        await _mockBusyMarker.Received(1)
+        await _mockBusyMarker.DidNotReceive()
             .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
     }
 

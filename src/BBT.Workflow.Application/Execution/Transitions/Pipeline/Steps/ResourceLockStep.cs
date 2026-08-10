@@ -134,7 +134,14 @@ public sealed class ResourceLockStep(
                 .WithInstance(context.Instance)
                 .WithTransition(context.Transition)
                 .WithBody(context.Data)
-                .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+                .WithHeaders(context.Headers.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => kvp.Value,
+                    StringComparer.OrdinalIgnoreCase))
+                .WithRouteValues(context.RouteValues.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => kvp.Value,
+                    StringComparer.OrdinalIgnoreCase))
                 .BuildAsync(ct),
             cancellationToken);
     }

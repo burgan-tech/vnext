@@ -21,9 +21,10 @@ public sealed class WorkflowExecutionOptions
     /// <summary>
     /// Governs how <c>EnqueueContinuationStrategy</c> realizes a chained continuation.
     /// <para>
-    /// ON (default): enqueue the Dapr job DIRECTLY (no outbox/inbox poll hop) for lower latency;
-    /// if the direct Dapr enqueue fails, fall back to publishing a <c>TransitionContinuationRequested</c>
-    /// event through the transactional outbox so durability is preserved.
+    /// ON (default): stage an Aether scheduler intent directly (no outbox/inbox poll hop) for lower
+    /// latency. Synchronous staging failure falls back to a transactional
+    /// <c>TransitionContinuationRequested</c> event; post-commit Dapr arm failures are retried by
+    /// Aether's background-job lifecycle.
     /// </para>
     /// <para>
     /// OFF: always publish the continuation via the transactional outbox (legacy behavior) — fully

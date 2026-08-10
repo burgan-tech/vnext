@@ -122,6 +122,9 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public Guid? ChainToken { get; set; }
 
+    /// <summary>Revision expected by the admission that created this execution.</summary>
+    public long? ExpectedRevision { get; set; }
+
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
 
@@ -217,46 +220,4 @@ public sealed class TransitionExecutionContext
         Instance.ClearDomainEvents();
     }
 
-    /// <summary>
-    /// Applies changes made within the provided <see cref="ScriptContext"/> back to the live transition context.
-    /// </summary>
-    /// <param name="scriptContext">The script context containing potential instance updates.</param>
-    public void ApplyScriptContextChanges(ScriptContext scriptContext)
-    {
-        ArgumentNullException.ThrowIfNull(scriptContext);
-
-        var scriptInstance = scriptContext.Instance;
-        if (scriptInstance == null || Instance == null)
-        {
-            return;
-        }
-
-        var applied = false;
-        var existingIds = new HashSet<Guid>(Instance.DataList.Select(data => data.Id));
-
-        foreach (var data in scriptInstance.DataList)
-        {
-            if (!existingIds.Add(data.Id))
-            {
-                continue;
-            }
-
-            Instance.AddDataWithVersion(
-                data.Id,
-                new JsonData(data.Data.Json),
-                data.Version);
-
-            applied = true;
-        }
-
-        if (applied)
-        {
-            Data = Instance.Data;
-        }
-
-        if (scriptContext.Mutations.HasChanges)
-        {
-            scriptContext.Mutations.ApplyTo(Instance);
-        }
-    }
 }

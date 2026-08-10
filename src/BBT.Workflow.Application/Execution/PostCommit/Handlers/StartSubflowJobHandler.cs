@@ -122,8 +122,14 @@ public sealed class StartSubflowJobHandler(
             .WithTransition(context.Transition!)
             .WithRuntime(runtimeInfoProvider)
             .WithBody(context.Data)
-            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+            .WithHeaders(context.Headers.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
+            .WithRouteValues(context.RouteValues.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
             .BuildAsync(cancellationToken);
     }
 }
-

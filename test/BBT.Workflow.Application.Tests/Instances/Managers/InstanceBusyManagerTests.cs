@@ -98,6 +98,14 @@ public sealed class InstanceBusyManagerTests
         _uowManager.Verify(m => m.Begin(It.Is<UnitOfWorkOptions>(o =>
             o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
         _instanceRepository.Verify(r => r.UpdateAsync(instance, false, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.GetResultAsync(
+            instanceId.ToString(),
+            false,
+            It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.GetResultAsync(
+            instanceId.ToString(),
+            true,
+            It.IsAny<CancellationToken>()), Times.Never);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
         instance.IsBusy.ShouldBeTrue();
     }

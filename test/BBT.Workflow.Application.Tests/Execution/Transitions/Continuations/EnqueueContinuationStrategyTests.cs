@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -24,6 +26,8 @@ public class EnqueueContinuationStrategyTests
 {
     private readonly Mock<IInstanceJobRepository> _jobRepository = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
+    private readonly Mock<IUnitOfWorkManager> _unitOfWorkManager = new();
+    private readonly Mock<IUnitOfWork> _unitOfWork = new();
 
     public EnqueueContinuationStrategyTests()
     {
@@ -37,10 +41,17 @@ public class EnqueueContinuationStrategyTests
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
+
+        _unitOfWorkManager
+            .Setup(manager => manager.Begin(It.IsAny<UnitOfWorkOptions>()))
+            .Returns(_unitOfWork.Object);
+        _unitOfWork
+            .Setup(unit => unit.CommitAsync(It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
     }
 
     private EnqueueContinuationStrategy CreateStrategy() =>
-        new(_jobRepository.Object, _mockEnqueueGateway.Object);
+        new(_jobRepository.Object, _mockEnqueueGateway.Object, _unitOfWorkManager.Object);
 
     [Fact]
     public async Task WhenNextTransitionExists_ShouldInsertJobAndCallEnqueueGateway()
@@ -54,7 +65,15 @@ public class EnqueueContinuationStrategyTests
         result.Value.ShouldBeNull(); // ends the in-process loop
 
         _jobRepository.Verify(
-            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        _unitOfWorkManager.Verify(manager => manager.Begin(
+            It.Is<UnitOfWorkOptions>(options =>
+                options.Scope == UnitOfWorkScopeOption.RequiresNew
+                && options.IsTransactional)), Times.Once);
+        _unitOfWork.Verify(
+            unit => unit.CommitAsync(It.IsAny<CancellationToken>()),
             Times.Once);
 
         _mockEnqueueGateway.Verify(
@@ -124,6 +143,15 @@ public class EnqueueContinuationStrategyTests
         // InstanceJob.Id == JobId == the id carried in the outbox event for cancellation-by-id to work
         insertedJob!.Id.ShouldBe(insertedJob.JobId);
         insertedJob.JobId.ShouldBe(capturedEvent!.JobId);
+        insertedJob.AdmissionToken.ShouldBe(context.ChainToken);
+        insertedJob.Payload.ShouldNotBeNullOrWhiteSpace();
+        var durablePayload = System.Text.Json.JsonSerializer.Deserialize<TransitionJobPayload>(
+            insertedJob.Payload!,
+            System.Text.Json.JsonSerializerOptions.Web);
+        durablePayload.ShouldNotBeNull();
+        durablePayload!.JobId.ShouldBe(insertedJob.JobId);
+        durablePayload.Headers.ShouldContainKey("x-correlation-id");
+        durablePayload.Headers.ShouldNotContainKey("authorization");
     }
 
     [Fact]
@@ -164,6 +192,8 @@ public class EnqueueContinuationStrategyTests
 
         var workflow = CreateMockWorkflow(workflowKey, domain);
         var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
+        var chainToken = Guid.NewGuid();
+        instance.BeginChain(chainToken);
         var state = workflow.GetState("state1").Value!;
         var transition = Transition.Create("test-transition", null, "state1", TriggerType.Automatic, "Patch");
 
@@ -182,6 +212,12 @@ public class EnqueueContinuationStrategyTests
             Current = state,
             Transition = transition,
             Instance = instance,
+            ChainToken = chainToken,
+            Headers = new Dictionary<string, string?>
+            {
+                ["x-correlation-id"] = "correlation",
+                ["authorization"] = "Bearer must-not-persist"
+            },
             Data = new { test = "data" },
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]

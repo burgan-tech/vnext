@@ -121,6 +121,7 @@ public sealed class TransitionRunnerEventDurabilityTests
         services.AddSingleton(cacheStore);
         services.AddSingleton(Substitute.For<IWorkflowContext>());
         services.AddSingleton(Substitute.For<ICurrentUser>());
+        services.AddScoped<ITransitionCommitLeaseManager, TransitionCommitLeaseManager>();
 
         var provider = services.BuildServiceProvider();
         var runner = new TransitionRunner(

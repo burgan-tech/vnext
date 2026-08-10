@@ -1199,7 +1199,9 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
         CancellationToken cancellationToken = default)
     {
-        var instance = await FindByIdentifierAsync(identifier, cancellationToken);
+        var instance = includeDetails
+            ? await FindByIdentifierAsync(identifier, cancellationToken)
+            : await FindByIdentifierWithoutDetailsAsync(identifier, cancellationToken);
 
         if (instance is null)
         {
@@ -1210,6 +1212,34 @@ public sealed class EfCoreInstanceRepository(
         }
 
         return Result<Instance>.Ok(instance);
+    }
+
+    /// <summary>
+    /// Resolves an instance by id or key without eager-loading data or correlations.
+    /// This is the write-capable lightweight path used by status-only operations such as
+    /// the Busy marker, so the entity remains tracked while avoiding collection round trips.
+    /// </summary>
+    private async Task<Instance?> FindByIdentifierWithoutDetailsAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        var dbSet = await GetDbSetAsync();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await dbSet.FirstOrDefaultAsync(
+                instance => instance.Id == instanceId,
+                cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Keys are reusable after an instance becomes terminal. Match the detailed finder by
+        // resolving the most recently created row deterministically.
+        return await dbSet
+            .Where(instance => instance.Key == identifier)
+            .OrderByDescending(instance => instance.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default)

@@ -1,4 +1,5 @@
 using BBT.Workflow.Caching;
+using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -12,7 +13,8 @@ namespace BBT.Workflow.Execution.Transitions.Factory;
 public sealed class TransitionContextFactory(
     IInstanceRepository instanceRepository,
     IComponentCacheStore componentCacheStore,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionContextFactory
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IWorkflowContext? workflowContext = null) : ITransitionContextFactory
 {
     /// <inheritdoc />
     /// <summary>
@@ -55,11 +57,32 @@ public sealed class TransitionContextFactory(
         WorkflowExecutionContext input,
         CancellationToken cancellationToken)
     {
-        return componentCacheStore.GetFlowAsync(
-                input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken)
+        return ResolveWorkflowAsync(input, cancellationToken)
             .BindAsync(workflow =>
                 instanceRepository.GetActiveAsync(input.InstanceId, cancellationToken)
                     .MapAsync(instance => (workflow, instance)));
+    }
+
+    /// <summary>
+    /// Reuses the workflow already loaded for the current execution scope when it matches the
+    /// requested identity. Callers outside a workflow scope retain the existing cache lookup.
+    /// </summary>
+    private Task<Result<Definitions.Workflow>> ResolveWorkflowAsync(
+        WorkflowExecutionContext input,
+        CancellationToken cancellationToken)
+    {
+        var ambientWorkflow = workflowContext?.Workflow;
+        if (ambientWorkflow is not null
+            && string.Equals(ambientWorkflow.Domain, input.Domain, StringComparison.Ordinal)
+            && string.Equals(ambientWorkflow.Key, input.WorkflowKey, StringComparison.Ordinal)
+            && (input.WorkflowVersion is null
+                || string.Equals(ambientWorkflow.Version, input.WorkflowVersion, StringComparison.Ordinal)))
+        {
+            return Task.FromResult(Result<Definitions.Workflow>.Ok(ambientWorkflow));
+        }
+
+        return componentCacheStore.GetFlowAsync(
+            input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken);
     }
 
     /// <summary>
@@ -129,7 +152,10 @@ public sealed class TransitionContextFactory(
             // Telemetry
             TraceId = traceId,
             SpanId = spanId,
-            Headers = ToCaseInsensitiveHeaders(input.Headers)
+            Headers = ToCaseInsensitiveDictionary(input.Headers),
+            RouteValues = ToCaseInsensitiveDictionary(input.RouteValues),
+            ChainToken = input.ChainToken,
+            ExpectedRevision = input.ExpectedRevision
         };
 
         // Configure pipeline directives
@@ -149,20 +175,18 @@ public sealed class TransitionContextFactory(
     }
 
     /// <summary>
-    /// Builds a case-insensitive view of the request headers. HTTP headers are case-insensitive,
-    /// but upstream hops may lower-case keys (e.g. <c>x-parent-instance-id</c>) while the runtime
-    /// stamps the canonical form (<c>X-Parent-Instance-Id</c>). A case-insensitive dictionary makes
-    /// both lookups (e.g. <c>TryGetValue</c>) and writes (replace, not duplicate) behave correctly.
-    /// Copy uses last-wins so any case-variant duplicates collapse into a single entry.
+    /// Builds a case-insensitive copy of request metadata. Upstream hops may alter key casing, so
+    /// both lookups (e.g. <c>TryGetValue</c>) and writes (replace, not duplicate) must behave
+    /// consistently for headers and route values. Copy uses last-wins for case-variant duplicates.
     /// </summary>
-    private static IReadOnlyDictionary<string, string?> ToCaseInsensitiveHeaders(
-        IReadOnlyDictionary<string, string?>? headers)
+    private static IReadOnlyDictionary<string, string?> ToCaseInsensitiveDictionary(
+        IReadOnlyDictionary<string, string?>? values)
     {
         var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        if (headers is null)
+        if (values is null)
             return result;
 
-        foreach (var kv in headers)
+        foreach (var kv in values)
             result[kv.Key] = kv.Value;
 
         return result;

@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
+using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Transitions.Factory;
@@ -219,6 +220,209 @@ public class TransitionContextFactoryTests
         // Canonical (mixed-case) lookup must resolve the lower-cased incoming header.
         result.Value!.Headers.TryGetValue("X-Parent-Instance-Id", out var resolved).ShouldBeTrue();
         resolved.ShouldBe(parentId);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithMatchingWorkflowContext_ShouldSkipDuplicateCacheLookup()
+    {
+        const string domain = "test-domain";
+        const string workflowKey = "test-workflow";
+        var workflow = CreateWorkflow(workflowKey, domain);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var chainToken = Guid.NewGuid();
+        var input = new WorkflowExecutionContext
+        {
+            Domain = domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = workflowKey,
+            WorkflowVersion = workflow.Version,
+            TransitionKey = "resume",
+            TriggerType = TriggerType.Manual,
+            Mode = ExecMode.Resume,
+            Headers = new Dictionary<string, string?> { ["x-request-id"] = "ambient-request" },
+            RouteValues = new Dictionary<string, string?> { ["OrderId"] = "order-17" },
+            ChainToken = chainToken,
+            ExpectedRevision = 17
+        };
+
+        var instanceRepository = new Mock<IInstanceRepository>();
+        instanceRepository
+            .Setup(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(instance));
+        var componentCacheStore = new Mock<IComponentCacheStore>(MockBehavior.Strict);
+        var workflowContext = new Mock<IWorkflowContext>();
+        workflowContext.SetupGet(x => x.Workflow).Returns(workflow);
+        var sut = new TransitionContextFactory(
+            instanceRepository.Object,
+            componentCacheStore.Object,
+            Mock.Of<IRuntimeInfoProvider>(),
+            workflowContext.Object);
+
+        var result = await sut.CreateAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Workflow.ShouldBeSameAs(workflow);
+        result.Value.Headers["X-Request-Id"].ShouldBe("ambient-request");
+        result.Value.RouteValues["orderid"].ShouldBe("order-17");
+        result.Value.ChainToken.ShouldBe(chainToken);
+        result.Value.ExpectedRevision.ShouldBe(input.ExpectedRevision);
+        componentCacheStore.Verify(
+            x => x.GetFlowAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithMismatchedWorkflowContext_ShouldFallbackToCache()
+    {
+        const string domain = "test-domain";
+        const string workflowKey = "test-workflow";
+        var workflow = CreateWorkflow(workflowKey, domain);
+        var ambientWorkflow = CreateWorkflow("different-workflow", domain);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var input = new WorkflowExecutionContext
+        {
+            Domain = domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = workflowKey,
+            WorkflowVersion = workflow.Version,
+            TransitionKey = "resume",
+            TriggerType = TriggerType.Manual,
+            Mode = ExecMode.Resume
+        };
+
+        var instanceRepository = new Mock<IInstanceRepository>();
+        instanceRepository
+            .Setup(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(instance));
+        var componentCacheStore = new Mock<IComponentCacheStore>();
+        componentCacheStore
+            .Setup(x => x.GetFlowAsync(domain, workflowKey, workflow.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        var workflowContext = new Mock<IWorkflowContext>();
+        workflowContext.SetupGet(x => x.Workflow).Returns(ambientWorkflow);
+        var sut = new TransitionContextFactory(
+            instanceRepository.Object,
+            componentCacheStore.Object,
+            Mock.Of<IRuntimeInfoProvider>(),
+            workflowContext.Object);
+
+        var result = await sut.CreateAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Workflow.ShouldBeSameAs(workflow);
+        componentCacheStore.Verify(
+            x => x.GetFlowAsync(domain, workflowKey, workflow.Version, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldPreserveRequestAndExecutionMetadata()
+    {
+        const string domain = "test-domain";
+        const string workflowKey = "test-workflow";
+        var workflow = CreateWorkflow(workflowKey, domain);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var requestedAt = new DateTimeOffset(2026, 8, 10, 12, 30, 0, TimeSpan.Zero);
+        var chainToken = Guid.NewGuid();
+        var input = new WorkflowExecutionContext
+        {
+            Domain = domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = workflowKey,
+            WorkflowVersion = workflow.Version,
+            TransitionKey = "resume",
+            TriggerType = TriggerType.Manual,
+            Mode = ExecMode.Resume,
+            CallerMode = ExecMode.Async,
+            CorrelationId = "correlation-id",
+            CausationId = "causation-id",
+            RequestedAt = requestedAt,
+            Headers = new Dictionary<string, string?> { ["x-request-id"] = "request-id" },
+            RouteValues = new Dictionary<string, string?> { ["OrderId"] = "order-42" },
+            ChainToken = chainToken,
+            ExpectedRevision = 42,
+            Execution = new ExecutionInfo
+            {
+                ExecutionChainId = "execution-chain-id",
+                ChainDepth = 7,
+                ResumeFrom = 79,
+                IsSubFlowResume = true,
+                SubFlowResumeInstanceId = Guid.NewGuid(),
+                IsLongPollAckResume = true,
+                IsTimeoutTransition = true
+            }
+        };
+
+        var instanceRepository = new Mock<IInstanceRepository>();
+        instanceRepository
+            .Setup(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(instance));
+        var componentCacheStore = new Mock<IComponentCacheStore>();
+        componentCacheStore
+            .Setup(x => x.GetFlowAsync(domain, workflowKey, workflow.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        var sut = new TransitionContextFactory(
+            instanceRepository.Object,
+            componentCacheStore.Object,
+            Mock.Of<IRuntimeInfoProvider>());
+
+        var result = await sut.CreateAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var context = result.Value!;
+        context.CorrelationId.ShouldBe(input.CorrelationId);
+        context.CausationId.ShouldBe(input.CausationId);
+        context.RequestedAt.ShouldBe(requestedAt);
+        context.ExecutionChainId.ShouldBe(input.Execution.ExecutionChainId);
+        context.ChainDepth.ShouldBe(input.Execution.ChainDepth);
+        context.ChainToken.ShouldBe(chainToken);
+        context.ExpectedRevision.ShouldBe(input.ExpectedRevision);
+        context.Headers["X-Request-Id"].ShouldBe("request-id");
+        context.RouteValues["orderid"].ShouldBe("order-42");
+        context.Directives.ResumeFromOrder.ShouldBe(input.Execution.ResumeFrom);
+        context.Directives.IsSubFlowResume.ShouldBeTrue();
+        context.Directives.SubFlowResumeInstanceId.ShouldBe(input.Execution.SubFlowResumeInstanceId);
+        context.Directives.IsLongPollAckResume.ShouldBeTrue();
+        context.Directives.IsTimeoutTransition.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void CreateFromPreloaded_ShouldPreserveRouteValuesAndChainToken()
+    {
+        const string domain = "test-domain";
+        const string workflowKey = "test-workflow";
+        var workflow = CreateWorkflow(workflowKey, domain);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var chainToken = Guid.NewGuid();
+        var input = new WorkflowExecutionContext
+        {
+            Domain = domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = workflowKey,
+            WorkflowVersion = workflow.Version,
+            TransitionKey = "resume",
+            TriggerType = TriggerType.Manual,
+            Mode = ExecMode.Resume,
+            RouteValues = new Dictionary<string, string?> { ["Tenant"] = "tenant-a" },
+            ChainToken = chainToken,
+            ExpectedRevision = 17
+        };
+        var sut = new TransitionContextFactory(
+            Mock.Of<IInstanceRepository>(),
+            Mock.Of<IComponentCacheStore>(),
+            Mock.Of<IRuntimeInfoProvider>());
+
+        var result = sut.CreateFromPreloaded(input, workflow, instance);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.RouteValues["tenant"].ShouldBe("tenant-a");
+        result.Value.ChainToken.ShouldBe(chainToken);
+        result.Value.ExpectedRevision.ShouldBe(input.ExpectedRevision);
     }
 
     private static Definitions.Workflow CreateWorkflow(string key, string domain)

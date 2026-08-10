@@ -244,4 +244,40 @@ public sealed class TransitionAuthorizationManagerAvailableInTests
         (await _sut.IsTransitionAllowedInStateAsync(workflow, transition, null, instance: null, "nobody"))
             .ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task CommandAdmission_AllowsCallerRoleSetThatSatisfiesBothGrantLevels()
+    {
+        var (workflow, transition) = BuildWorkflow(
+            """[{"role":"maker","grant":"allow"}]""",
+            """[{"role":"supervisor","grant":"allow"}]""");
+
+        var allowed = await _sut.IsAnyRoleAllowedInStateAsync(
+            workflow,
+            transition,
+            ApprovalState,
+            NewInstance(),
+            ["maker", "supervisor"]);
+
+        allowed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task CommandAdmission_PrefetchesPreviousTransitionOnlyOnceForWholeRoleSet()
+    {
+        var (workflow, transition) = BuildWorkflow(
+            """[{"role":"$PreviousUser","grant":"allow"}]""",
+            """[{"role":"$PreviousUser","grant":"allow"}]""");
+        _repo.ClearReceivedCalls();
+
+        await _sut.IsAnyRoleAllowedInStateAsync(
+            workflow,
+            transition,
+            ApprovalState,
+            NewInstance(),
+            ["maker", "supervisor"]);
+
+        await _repo.Received(1).GetLastCompletedManualTransitionAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
 }

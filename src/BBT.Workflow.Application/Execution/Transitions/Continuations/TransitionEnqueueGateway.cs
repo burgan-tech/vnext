@@ -13,9 +13,10 @@ namespace BBT.Workflow.Execution.Continuations;
 /// <summary>
 /// Routes a transition enqueue request to the direct Dapr path or the transactional outbox.
 /// <para>
-/// When <c>DirectEnqueueContinuations</c> is ON (default), the job is submitted directly via
-/// <see cref="ITransitionJobEnqueuer"/>. A failure falls back to the outbox so the continuation
-/// is never lost. When OFF, the outbox path is always used (at-least-once via Inbox).
+/// When <c>DirectEnqueueContinuations</c> is ON (default), an Aether scheduler intent is staged via
+/// <see cref="ITransitionJobEnqueuer"/>. A synchronous staging failure falls back to the outbox.
+/// Scheduler-arm failures that occur after commit are owned by Aether's pending/retry lifecycle.
+/// When OFF, the outbox path is always used (at-least-once via Inbox).
 /// </para>
 /// <para>
 /// The caller owns the ambient unit of work and the durable <c>InstanceJob</c> insert. This
@@ -53,9 +54,9 @@ public sealed class TransitionEnqueueGateway(
     }
 
     /// <summary>
-    /// Attempts to enqueue the job directly via <see cref="ITransitionJobEnqueuer"/>.
-    /// Uses TryAsync because Dapr is an external dependency; failures are safe to catch here
-    /// as the intent has already been persisted by the caller.
+    /// Attempts to stage the direct scheduler intent via <see cref="ITransitionJobEnqueuer"/>.
+    /// Uses TryAsync so synchronous staging failures can fall back to the outbox. The actual Dapr
+    /// arm is a post-commit concern and is not observable from this call.
     /// </summary>
     private Task<Result<bool>> TryEnqueueDirectlyAsync(
         TransitionJobPayload payload,

@@ -76,6 +76,19 @@ public sealed class WorkflowExecutionContext
     /// </summary>
     public Guid? ChainToken { get; set; }
 
+    /// <summary>
+    /// Optimistic-concurrency revision expected by an admitted background transition. Null for
+    /// callers that have not gone through the admission protocol.
+    /// </summary>
+    public long? ExpectedRevision { get; set; }
+
+    /// <summary>
+    /// True when the transition request body has already passed its input schema at the HTTP
+    /// admission boundary. Authoritative execution still re-checks state policy, but skips the
+    /// same immutable schema/cache work.
+    /// </summary>
+    public bool TransitionSchemaValidated { get; set; }
+
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
 

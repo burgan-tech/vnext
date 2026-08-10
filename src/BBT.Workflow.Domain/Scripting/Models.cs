@@ -348,8 +348,9 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
 
     /// <summary>
     /// Accumulates controlled mutations for <see cref="Instance"/> properties
-    /// that scripts are allowed to change (e.g. Stage). Mutations are applied
-    /// atomically by <c>ApplyScriptContextChanges</c> after script execution.
+    /// that scripts are allowed to change (e.g. Stage). Mutations are applied atomically by the
+    /// application-layer instance-data mutation service after script data has passed master-schema
+    /// validation.
     /// </summary>
     public InstanceMutations Mutations { get; } = new();
 

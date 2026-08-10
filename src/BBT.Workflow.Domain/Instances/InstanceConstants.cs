@@ -18,4 +18,7 @@ public class InstanceActionConstants
 public class InstanceJobConstants
 {
     public const int MaxJobNameLength = 500;
+    public const int MaxIdempotencyKeyLength = 128;
+    public const int MaxRequestFingerprintLength = 64;
+    public const int MaxErrorCodeLength = 200;
 }

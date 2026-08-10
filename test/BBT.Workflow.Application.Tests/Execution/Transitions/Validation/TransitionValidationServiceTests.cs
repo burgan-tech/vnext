@@ -68,27 +68,84 @@ public class TransitionValidationServiceTests
         result.IsSuccess.ShouldBeTrue();
     }
 
-    [Fact(Skip = "Policy validation failure is now covered by individual specification unit tests (ActorAuthorizationSpecificationTests, StateTransitionListSpecificationTests, etc.)")]
+    [Fact]
+    public async Task ValidatePolicyAsync_WithSchema_ShouldNotResolveOrValidateSchema()
+    {
+        var schemaRef = new Reference("test-schema", "test-domain", "sys-schemas", "1.0.0");
+        var context = CreateTransitionContextWithSchema(schemaRef);
+
+        var result = await _service.ValidatePolicyAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockComponentCacheStore.Verify(
+            x => x.GetSchemaAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockSchemaValidator.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task ValidateInputSchemaAsync_ShouldNotExecuteTransitionPolicy()
+    {
+        var failingSpecification = new Mock<ITransitionSpecification>();
+        failingSpecification.SetupGet(x => x.Priority).Returns(1);
+        failingSpecification
+            .Setup(x => x.IsApplicable(It.IsAny<TransitionExecutionContext>()))
+            .Returns(true);
+        failingSpecification
+            .Setup(x => x.IsSatisfiedBy(It.IsAny<TransitionExecutionContext>()))
+            .Returns(Result.Fail(Error.Validation("policy.failed", "Policy failed")));
+        var composite = new CompositeTransitionSpecification(
+            new[] { failingSpecification.Object },
+            Substitute.For<ILogger<CompositeTransitionSpecification>>());
+        var service = new TransitionValidationService(
+            new TransitionExecutionPolicy(composite),
+            _mockSchemaValidator.Object,
+            _mockComponentCacheStore.Object);
+
+        var result = await service.ValidateInputSchemaAsync(
+            CreateValidTransitionContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        failingSpecification.Verify(
+            x => x.IsSatisfiedBy(It.IsAny<TransitionExecutionContext>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task ValidateAsync_WhenPolicyValidationFails_ShouldReturnFailure()
     {
-        // Arrange
         var context = CreateValidTransitionContext();
         var errorCode = "POLICY_ERROR";
         var errorMessage = "Policy validation failed";
+        var failingSpecification = new Mock<ITransitionSpecification>();
+        failingSpecification.SetupGet(x => x.Priority).Returns(1);
+        failingSpecification
+            .Setup(x => x.IsApplicable(It.IsAny<TransitionExecutionContext>()))
+            .Returns(true);
+        failingSpecification
+            .Setup(x => x.IsSatisfiedBy(It.IsAny<TransitionExecutionContext>()))
+            .Returns(Result.Fail(Error.Validation(errorCode, errorMessage)));
+        var composite = new CompositeTransitionSpecification(
+            new[] { failingSpecification.Object },
+            Substitute.For<ILogger<CompositeTransitionSpecification>>());
+        var service = new TransitionValidationService(
+            new TransitionExecutionPolicy(composite),
+            _mockSchemaValidator.Object,
+            _mockComponentCacheStore.Object);
 
-        SetupFailedPolicyValidation(context, errorCode, errorMessage);
+        var result = await service.ValidateAsync(context, CancellationToken.None);
 
-        // Act
-        var result = await _service.ValidateAsync(context, CancellationToken.None);
-
-        // Assert
         result.IsSuccess.ShouldBeFalse();
         result.Error.ShouldNotBe(default);
         result.Error.Code.ShouldBe(errorCode);
         result.Error.Message.ShouldBe(errorMessage);
     }
 
-    [Fact(Skip = "Extension methods cannot be mocked")]
+    [Fact]
     public async Task ValidateAsync_WithSchema_ShouldValidateDataAgainstSchema()
     {
         // Arrange
@@ -103,7 +160,10 @@ public class TransitionValidationServiceTests
             .ReturnsAsync(Result<SchemaDefinition>.Ok(schemaDefinition));
 
         _mockSchemaValidator
-            .Setup(x => x.Validate(schemaDefinition.Schema, context.DataElement))
+            .Setup(x => x.Validate(
+                schemaDefinition.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()))
             .Returns(Result.Ok());
 
         // Act
@@ -112,11 +172,14 @@ public class TransitionValidationServiceTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         _mockSchemaValidator.Verify(
-            x => x.Validate(schemaDefinition.Schema, context.DataElement),
+            x => x.Validate(
+                schemaDefinition.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()),
             Times.Once);
     }
 
-    [Fact(Skip = "Extension methods cannot be mocked")]
+    [Fact]
     public async Task ValidateAsync_WhenSchemaValidationFails_ShouldReturnFailure()
     {
         // Arrange
@@ -137,7 +200,10 @@ public class TransitionValidationServiceTests
                 ["field1"]) });
 
         _mockSchemaValidator
-            .Setup(x => x.Validate(schemaDefinition.Schema, context.DataElement))
+            .Setup(x => x.Validate(
+                schemaDefinition.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()))
             .Returns(Result.Fail(validationError));
 
         // Act
@@ -146,18 +212,6 @@ public class TransitionValidationServiceTests
         // Assert
         result.IsSuccess.ShouldBeFalse();
         result.Error.ShouldNotBe(default!);
-    }
-
-    [Fact(Skip = "Logger verification removed - logging tested in specification tests")]
-    public async Task ValidateAsync_ShouldLogDebugMessages()
-    {
-        // Obsolete - logging is now tested in specification unit tests
-    }
-
-    [Fact(Skip = "Logger verification removed - logging tested in specification tests")]
-    public async Task ValidateAsync_WhenValidationFails_ShouldLogWarning()
-    {
-        // Obsolete - logging is now tested in specification unit tests
     }
 
     [Fact]
@@ -195,7 +249,7 @@ public class TransitionValidationServiceTests
         capturedOptions.CustomValidationEnabled.ShouldBeTrue();
     }
 
-    [Fact(Skip = "Extension methods cannot be mocked")]
+    [Fact]
     public async Task ValidateAsync_WithValidationErrors_ShouldIncludeTransitionKey()
     {
         // Arrange
@@ -218,7 +272,10 @@ public class TransitionValidationServiceTests
             validationErrors: validationErrors);
 
         _mockSchemaValidator
-            .Setup(x => x.Validate(schemaDefinition.Schema, context.DataElement))
+            .Setup(x => x.Validate(
+                schemaDefinition.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()))
             .Returns(Result.Fail(validationError));
 
         // Act
@@ -229,7 +286,7 @@ public class TransitionValidationServiceTests
         result.Error.ValidationErrors.ShouldBe(validationErrors);
     }
 
-    [Fact(Skip = "Cancellation propagation test needs adjustment")]
+    [Fact]
     public async Task ValidateAsync_WithCancellation_ShouldPropagateCancellation()
     {
         // Arrange
@@ -261,7 +318,7 @@ public class TransitionValidationServiceTests
         result.IsSuccess.ShouldBeTrue();
     }
 
-    [Fact(Skip = "Extension methods cannot be mocked")]
+    [Fact]
     public async Task ValidateAsync_WithMultipleValidationErrors_ShouldReturnAllErrors()
     {
         // Arrange
@@ -286,7 +343,10 @@ public class TransitionValidationServiceTests
             code: "SCHEMA_ERROR", message: "Multiple validation errors", validationErrors: validationErrors);
 
         _mockSchemaValidator
-            .Setup(x => x.Validate(schemaDefinition.Schema, context.DataElement))
+            .Setup(x => x.Validate(
+                schemaDefinition.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()))
             .Returns(Result.Fail(validationError));
 
         // Act
@@ -524,12 +584,6 @@ public class TransitionValidationServiceTests
     {
         // Policy is initialized with default successful behavior
         // No additional setup needed
-    }
-
-    private void SetupFailedPolicyValidation(TransitionExecutionContext context, string errorCode, string errorMessage)
-    {
-        // For this test, we would need to inject a failing specification
-        // Skipping policy validation tests as they're covered by specification unit tests
     }
 
     private TransitionExecutionContext CreateValidTransitionContext(

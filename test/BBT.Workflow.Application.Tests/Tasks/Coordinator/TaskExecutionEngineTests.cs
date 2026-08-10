@@ -33,6 +33,7 @@ public sealed class TaskExecutionEngineTests
     private readonly ITaskFactory _taskFactory = Substitute.For<ITaskFactory>();
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory = Substitute.For<ITaskPersistenceStrategyFactory>();
     private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
+    private readonly IInstanceDataMutationService _instanceDataMutationService = Substitute.For<IInstanceDataMutationService>();
     private readonly IWorkflowMetrics _workflowMetrics = Substitute.For<IWorkflowMetrics>();
 
     // Real error-handling collaborators so boundary resolution is authentic.
@@ -50,6 +51,7 @@ public sealed class TaskExecutionEngineTests
         _taskFactory,
         _persistenceStrategyFactory,
         _guidGenerator,
+        _instanceDataMutationService,
         _workflowMetrics,
         _boundaryResolver,
         _actionExecutor,

@@ -27,13 +27,13 @@ public class TransitionValidationService(
         CancellationToken cancellationToken = default)
     {
         // 1. Schema Validation
-        var schemaResult = await ValidateTransitionSchemaAsync(context, cancellationToken);
+        var schemaResult = await ValidateInputSchemaAsync(context, cancellationToken);
         if (!schemaResult.IsSuccess)
             return schemaResult;
 
         // 2. State Machine Validation using Specification Pattern
         // Includes: Actor authorization, state transition rules, SubFlow bypass, etc.
-        var policyResult = transitionExecutionPolicy.Validate(context);
+        var policyResult = await ValidatePolicyAsync(context, cancellationToken);
         if (!policyResult.IsSuccess)
             return policyResult;
 
@@ -44,10 +44,12 @@ public class TransitionValidationService(
     /// Validates transition data against JSON schema.
     /// Chains GetSchemaAsync Result into validation.
     /// </summary>
-    private async Task<Result> ValidateTransitionSchemaAsync(
+    public async Task<Result> ValidateInputSchemaAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // Guard: No schema defined
         if (context.Transition?.Schema is null)
             return Result.Ok();
@@ -63,6 +65,12 @@ public class TransitionValidationService(
             context.DataElement,
             CreateSchemaValidationOptions(context.Headers));
     }
+
+    /// <inheritdoc />
+    public Task<Result> ValidatePolicyAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(transitionExecutionPolicy.Validate(context));
 
     private static SchemaValidationOptions CreateSchemaValidationOptions(IReadOnlyDictionary<string, string?>? headers)
     {

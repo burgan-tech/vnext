@@ -105,4 +105,36 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
         builder.ConfigureWorkflow(schema);
         builder.ConfigureBackgroundJob(schema);
     }
+
+    /// <inheritdoc />
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        AdvanceInstanceRevisions();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    /// <inheritdoc />
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        AdvanceInstanceRevisions();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    /// <summary>
+    /// Advances the revision in one central persistence hook so every write path participates in
+    /// optimistic concurrency, including background jobs and reserved transitions.
+    /// </summary>
+    private void AdvanceInstanceRevisions()
+    {
+        ChangeTracker.DetectChanges();
+
+        foreach (var entry in ChangeTracker.Entries<Instance>()
+                     .Where(entry => entry.State == EntityState.Modified))
+        {
+            var revision = entry.Property(instance => instance.Revision);
+            revision.CurrentValue = checked(revision.OriginalValue + 1);
+        }
+    }
 }

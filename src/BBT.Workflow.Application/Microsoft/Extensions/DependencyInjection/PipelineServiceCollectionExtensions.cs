@@ -13,6 +13,7 @@ using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Transitions.Factory;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Instances;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -32,6 +33,7 @@ public static class PipelineServiceCollectionExtensions
         
         // Transition Runner (owns chaining with isolated scope + UoW per hop)
         services.AddScoped<ITransitionRunner, TransitionRunner>();
+        services.AddScoped<ITransitionCommitLeaseManager, TransitionCommitLeaseManager>();
         
         // Execution Strategies
         services.AddScoped<IExecutionStrategyFactory, ExecutionStrategyFactory>();
@@ -47,6 +49,7 @@ public static class PipelineServiceCollectionExtensions
 
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
+        services.AddScoped<IInstanceDataMutationService, InstanceDataMutationService>();
 
         services.AddSingleton<IPipelineProfileResolver, PipelineProfileResolver>();
         services.AddSingleton<IReservedTransitionResolver, ReservedTransitionResolver>();

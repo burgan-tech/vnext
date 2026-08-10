@@ -32,7 +32,8 @@ public sealed class ChainReaperService(
         // Staleness threshold must comfortably exceed the job execution budget so the reaper
         // never races a live job (default 3x the job timeout).
         var thresholdSeconds = Math.Max(60, options.Value.TransitionJobTimeoutSeconds * 3);
-        var olderThan = DateTime.UtcNow.AddSeconds(-thresholdSeconds);
+        var now = DateTime.UtcNow;
+        var olderThan = now.AddSeconds(-thresholdSeconds);
 
         var faulted = 0;
         var skippedActive = 0;
@@ -44,11 +45,12 @@ public sealed class ChainReaperService(
 
         // Bulk-check which candidates still have a live job — avoids N+1 round-trips.
         var instancesWithActiveJob = await jobRepository.GetInstanceIdsWithActiveJobAsync(
-            candidates.Select(i => i.Id), cancellationToken);
+            candidates.Select(i => i.Id), olderThan, now, cancellationToken);
 
         foreach (var instance in candidates)
         {
-            // A live/pending job means the chain is still progressing — leave it alone.
+            // A recent async-transition delivery or processing job with an unexpired lease means
+            // the chain may still progress. Stale/unrelated jobs must not mask a stuck Busy chain.
             if (instancesWithActiveJob.Contains(instance.Id))
             {
                 skippedActive++;

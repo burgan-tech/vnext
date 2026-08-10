@@ -1,7 +1,6 @@
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
-using BBT.Workflow.Aspects;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
 
@@ -124,6 +123,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Status
     /// </summary>
     public InstanceStatus Status { get; private set; }
+
+    /// <summary>
+    /// Monotonically increasing optimistic-concurrency revision. Every persisted update to the
+    /// aggregate advances this value; transition admission uses it to reject stale snapshots
+    /// instead of accepting work for a state that has already changed.
+    /// </summary>
+    public long Revision { get; private set; }
 
     /// <summary>
     /// Durable ownership token for an in-flight auto-chain. While set (and the instance is Busy),
@@ -947,7 +953,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
     }
 
-    [SchemaValidation]
     public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)
     {
         lock (_dataListLock)
@@ -1004,7 +1009,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
     }
 
-    [SchemaValidation]
     public InstanceData AddData(Guid id, JsonData inputData, VersionStrategy? versionStrategy = null)
     {
         lock (_dataListLock)

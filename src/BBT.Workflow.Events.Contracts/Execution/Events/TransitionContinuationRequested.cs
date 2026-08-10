@@ -48,6 +48,9 @@ public sealed class TransitionContinuationRequested : IDistributedEvent
     /// <summary>The transition payload data (JSON), if any.</summary>
     public JsonElement? Data { get; init; }
 
+    /// <summary>Original request bytes represented as text for background signature validation.</summary>
+    public string? RawBody { get; init; }
+
     /// <summary>Optional instance key.</summary>
     public string? InstanceKey { get; init; }
 
@@ -78,8 +81,19 @@ public sealed class TransitionContinuationRequested : IDistributedEvent
     /// </summary>
     public Guid? ChainToken { get; init; }
 
+    /// <summary>Instance revision committed by admission, when this is the first async hop.</summary>
+    public long? AdmittedRevision { get; init; }
+
+    /// <summary>Whether the original request body already passed transition input validation.</summary>
+    public bool TransitionSchemaValidated { get; init; }
+
     /// <summary>The chain depth of the continuation (for the chain-depth guard).</summary>
     public int ChainDepth { get; init; }
+
+    /// <summary>Numeric trigger classification; kept primitive to preserve contracts-layer isolation.</summary>
+    public int TriggerType { get; init; }
+    public bool IsReentry { get; init; }
+    public bool IsErrorBoundaryTransition { get; init; }
 
     public override string ToString() =>
         $"{nameof(TransitionContinuationRequested)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} TransitionKey={TransitionKey} JobName={JobName} ChainDepth={ChainDepth}";

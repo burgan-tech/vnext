@@ -104,6 +104,19 @@ public interface ITransitionAuthorizationManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Multi-role variant used by command admission. The evaluator (including any
+    /// $PreviousUser lookup) is created once for the whole caller role set.
+    /// </summary>
+    Task<bool> IsAnyRoleAllowedInStateAsync(
+        WorkflowDefinition workflow,
+        Transition transition,
+        string? currentStateKey,
+        Instance? instance,
+        IReadOnlyCollection<string>? callerRoles,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Filters a list of transition keys to only those allowed for the given role.
     /// Uses the same evaluation as <see cref="IsTransitionAllowedForRoleAsync"/> per transition.
     /// When role is null, only predefined/dynamic role grants are evaluated; transitions with no roles pass through.

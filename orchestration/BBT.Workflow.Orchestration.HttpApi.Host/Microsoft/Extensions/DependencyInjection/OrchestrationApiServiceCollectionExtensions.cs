@@ -123,7 +123,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddHostedService<MultiSchemaMigrationHostedService>();
         #endif
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
-        // services.AddHostedService<ChainReaperHostedService>();
+        services.AddHostedService<ChainReaperHostedService>();
         return services;
     }
 }

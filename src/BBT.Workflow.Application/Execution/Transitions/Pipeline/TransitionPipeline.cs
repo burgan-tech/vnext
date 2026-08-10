@@ -158,10 +158,8 @@ public class TransitionPipeline
         // starts only after that handoff, once the lock registration has ended.
         ChainLockRegistry.Register(context.LockKey);
 
-        // 4) Mark instance Busy immediately after lock acquisition
-        await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
-
-        // 5) Run the entire chain under this lock scope
+        // 4) Run the chain. SetBusyStep uses this already-loaded aggregate and persists the
+        // reservation as the first mutating lifecycle step; avoid a second repository reload.
         return await RunChainAsync(context, lockScope, cancellationToken);
     }
 
@@ -300,7 +298,21 @@ public class TransitionPipeline
 
         var context = contextResult.Value!;
 
-        var validationResult = await _validationService.ValidateAsync(context, cancellationToken);
+        if (workflowContext.ExpectedRevision is { } expectedRevision
+            && context.Instance.Revision != expectedRevision)
+        {
+            return Result<TransitionExecutionContext>.Fail(
+                WorkflowErrors.InstanceRevisionConflict(
+                    context.InstanceId,
+                    expectedRevision,
+                    context.Instance.Revision));
+        }
+
+        // Admission already validated the immutable request payload. The execution reload must
+        // still re-check state/actor policy, but repeating schema resolution here adds no safety.
+        var validationResult = workflowContext.TransitionSchemaValidated
+            ? await _validationService.ValidatePolicyAsync(context, cancellationToken)
+            : await _validationService.ValidateAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 

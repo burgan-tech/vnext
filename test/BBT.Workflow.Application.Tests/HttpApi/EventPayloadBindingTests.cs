@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -5,7 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Events;
+using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Related;
@@ -94,11 +98,133 @@ public sealed class EventPayloadBindingTests
         response.Reason!.ShouldContain(expectedCode);
     }
 
+    [Theory]
+    [InlineData("not-an-actor")]
+    [InlineData("999")]
+    public async Task EnqueueTransition_InvalidExecutionActor_ReturnsBadRequestWithoutEnqueueing(
+        string actor)
+    {
+        var enqueuer = Substitute.For<ITransitionJobEnqueuer>();
+        var controller = BuildController(string.Empty, enqueuer);
+        var instanceId = Guid.NewGuid();
+        var continuation = new TransitionContinuationRequested
+        {
+            JobId = Guid.NewGuid(),
+            JobName = "job",
+            InstanceId = instanceId,
+            Domain = "orders",
+            Flow = "order-flow",
+            Version = "1.0.0",
+            TransitionKey = "approve",
+            ExecutionActor = actor
+        };
+
+        var result = await controller.EnqueueTransitionAsync(
+            continuation.Domain,
+            continuation.Flow,
+            continuation.InstanceId,
+            continuation.TransitionKey,
+            continuation,
+            CancellationToken.None);
+
+        result.ShouldBeOfType<BadRequestObjectResult>();
+        await enqueuer.DidNotReceive().EnqueueAsync(
+            Arg.Any<TransitionJobPayload>(),
+            Arg.Any<Guid>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(999)]
+    public async Task EnqueueTransition_InvalidTriggerType_ReturnsBadRequestWithoutEnqueueing(
+        int triggerType)
+    {
+        var enqueuer = Substitute.For<ITransitionJobEnqueuer>();
+        var controller = BuildController(string.Empty, enqueuer);
+        var continuation = CreateContinuation();
+        continuation = new TransitionContinuationRequested
+        {
+            JobId = continuation.JobId,
+            JobName = continuation.JobName,
+            InstanceId = continuation.InstanceId,
+            Domain = continuation.Domain,
+            Flow = continuation.Flow,
+            Version = continuation.Version,
+            TransitionKey = continuation.TransitionKey,
+            ExecutionActor = continuation.ExecutionActor,
+            TriggerType = triggerType
+        };
+
+        var result = await controller.EnqueueTransitionAsync(
+            continuation.Domain,
+            continuation.Flow,
+            continuation.InstanceId,
+            continuation.TransitionKey,
+            continuation,
+            CancellationToken.None);
+
+        result.ShouldBeOfType<BadRequestObjectResult>();
+        await enqueuer.DidNotReceive().EnqueueAsync(
+            Arg.Any<TransitionJobPayload>(),
+            Arg.Any<Guid>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task EnqueueTransition_ValidDelivery_FiltersSensitiveHeadersBeforeScheduling()
+    {
+        var enqueuer = Substitute.For<ITransitionJobEnqueuer>();
+        TransitionJobPayload? captured = null;
+        await enqueuer.EnqueueAsync(
+            Arg.Do<TransitionJobPayload>(payload => captured = payload),
+            Arg.Any<Guid>(),
+            Arg.Any<CancellationToken>());
+        var controller = BuildController(string.Empty, enqueuer);
+        var continuation = CreateContinuation(new Dictionary<string, string?>
+        {
+            ["Authorization"] = "Bearer secret",
+            ["x-flow-context"] = "keep"
+        });
+
+        var result = await controller.EnqueueTransitionAsync(
+            continuation.Domain,
+            continuation.Flow,
+            continuation.InstanceId,
+            continuation.TransitionKey,
+            continuation,
+            CancellationToken.None);
+
+        result.ShouldBeOfType<OkResult>();
+        captured.ShouldNotBeNull();
+        captured.Headers.ShouldNotContainKey("Authorization");
+        captured.Headers["x-flow-context"].ShouldBe("keep");
+        captured.TriggerType.ShouldBe(BBT.Workflow.Definitions.TriggerType.Automatic);
+    }
+
+    private static TransitionContinuationRequested CreateContinuation(
+        Dictionary<string, string?>? headers = null)
+        => new()
+        {
+            JobId = Guid.NewGuid(),
+            JobName = "job",
+            InstanceId = Guid.NewGuid(),
+            Domain = "orders",
+            Flow = "order-flow",
+            Version = "1.0.0",
+            TransitionKey = "approve",
+            ExecutionActor = "System",
+            TriggerType = (int)BBT.Workflow.Definitions.TriggerType.Automatic,
+            Headers = headers ?? new Dictionary<string, string?>()
+        };
+
     /// <summary>
     /// Builds a controller wired only far enough to reach the two pre-service guards; the event app
     /// service is never invoked on those paths.
     /// </summary>
-    private static InstanceController BuildController(string body)
+    private static InstanceController BuildController(
+        string body,
+        ITransitionJobEnqueuer? transitionJobEnqueuer = null)
     {
         var controller = new InstanceController(
             commandAppService: Substitute.For<IInstanceCommandAppService>(),
@@ -112,7 +238,7 @@ public sealed class EventPayloadBindingTests
             cancellationService: Substitute.For<IInstanceCancellationService>(),
             childSubflowCancellationService: Substitute.For<IChildSubflowCancellationService>(),
             childSubflowFaultService: Substitute.For<IChildSubflowFaultService>(),
-            transitionJobEnqueuer: Substitute.For<ITransitionJobEnqueuer>(),
+            transitionJobEnqueuer: transitionJobEnqueuer ?? Substitute.For<ITransitionJobEnqueuer>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             eventAppService: Substitute.For<IEventAppService>(),
             relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),

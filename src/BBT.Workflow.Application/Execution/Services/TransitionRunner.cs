@@ -1,4 +1,5 @@
 using BBT.Aether.Events;
+using BBT.Aether;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
@@ -152,21 +153,53 @@ public sealed class TransitionRunner(
                 var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 var core = sp.GetRequiredService<IWorkflowExecutionCore>();
                 var currentUser = sp.GetRequiredService<ICurrentUser>();
+                var commitLeaseManager = sp.GetRequiredService<ITransitionCommitLeaseManager>();
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
-                    await using var uow = uowManager.Begin(
-                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                    long? executionRevision = null;
+                    try
+                    {
+                        // The HTTP async-admission stage contains only the Busy reservation,
+                        // InstanceJob and scheduler/outbox intent, so those writes must share one
+                        // transaction. Sync/background execution deliberately uses independent
+                        // checkpoint transactions around task journals and remote side effects;
+                        // wrapping that whole pipeline in an outer transaction would deadlock its
+                        // RequiresNew FK writes and break crash-recovery semantics.
+                        //
+                        // Keep the UoW inside the lease-protected try so DisposeAsync (including
+                        // rollback) completes before the enqueue lock is released in finally.
+                        await using (var uow = uowManager.Begin(
+                                         new UnitOfWorkOptions
+                                         {
+                                             Scope = UnitOfWorkScopeOption.RequiresNew,
+                                             IsTransactional = context.Mode == ExecMode.Async
+                                         }))
+                        {
+                            var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
+                            if (!coreResult.IsSuccess)
+                                return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    var coreResult = await core.ExecuteTransitionCoreAsync(context, ct);
-                    if (!coreResult.IsSuccess)
-                        return Result<TransitionCoreOutput>.Fail(coreResult.Error);
+                            executionRevision = coreResult.Value?.ExecutionContext?.Instance?.Revision;
+                            await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
+                            await uow.CommitAsync(ct);
 
-                    await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
-                    
-                    await uow.CommitAsync(ct);
-                    
-                    return coreResult;
+                            return coreResult;
+                        }
+                    }
+                    catch (AetherDbConcurrencyException)
+                    {
+                        return Result<TransitionCoreOutput>.Fail(
+                            WorkflowErrors.InstanceRevisionConflict(
+                                Guid.Parse(context.InstanceId),
+                                context.ExpectedRevision ?? executionRevision ?? 0));
+                    }
+                    finally
+                    {
+                        // Async admission transfers its enqueue lock here. Keep it held through
+                        // database commit and post-commit scheduler arming, then release it.
+                        await commitLeaseManager.ReleaseAsync();
+                    }
                 }
             }, cancellationToken);
     }

@@ -44,6 +44,23 @@ public static class WorkflowErrors
             $"Instance data not found for key {key} and version {version}",
             target: $"{key}@{version}");
 
+    /// <summary>
+    /// The instance changed after transition admission. The admitted work is stale and must not
+    /// run against the newer state.
+    /// </summary>
+    public static Error InstanceRevisionConflict(Guid instanceId, long expected, long actual)
+        => Error.Conflict(
+            WorkflowErrorCodes.InstanceRevisionConflict,
+            $"Instance '{instanceId}' revision changed after admission. Expected {expected}, actual {actual}.",
+            target: instanceId.ToString());
+
+    /// <summary>The instance was concurrently updated while the admitted revision was committed.</summary>
+    public static Error InstanceRevisionConflict(Guid instanceId, long expected)
+        => Error.Conflict(
+            WorkflowErrorCodes.InstanceRevisionConflict,
+            $"Instance '{instanceId}' was modified concurrently while revision {expected} was being committed.",
+            target: instanceId.ToString());
+
     #endregion
 
     #region Workflow Definition Errors
@@ -88,6 +105,24 @@ public static class WorkflowErrors
         => Error.Forbidden(
             WorkflowErrorCodes.UnauthorizedTransition,
             $"Transition '{transitionKey}' with trigger type '{triggerType}' cannot be executed by '{executionActor}' context");
+
+    /// <summary>Caller roles are not granted for the requested transition.</summary>
+    public static Error TransitionAccessDenied(string transitionKey)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"Access to transition '{transitionKey}' is not permitted for the current roles.");
+
+    public static Error InvalidIdempotencyKey(int maxLength)
+        => Error.Validation(
+            WorkflowErrorCodes.InvalidIdempotencyKey,
+            $"The Idempotency-Key header must not exceed {maxLength} characters.",
+            target: "idempotency-key");
+
+    public static Error IdempotencyKeyConflict(Guid instanceId, string idempotencyKey)
+        => Error.Conflict(
+            WorkflowErrorCodes.IdempotencyKeyConflict,
+            $"Idempotency key '{idempotencyKey}' was already used for a different transition request.",
+            target: instanceId.ToString());
 
     /// <summary>
     /// No automatic transition succeeded.
@@ -583,4 +618,3 @@ public static class WorkflowErrors
 
     #endregion
 }
-

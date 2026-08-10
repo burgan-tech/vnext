@@ -4,15 +4,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
-using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
+using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Scripting;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -32,32 +33,21 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IDistributedLockService> _mockDistributedLockService = new();
     private readonly ReservedTransitionResolver _reservedTransitionResolver = new();
     private readonly Mock<ITransitionValidationService> _mockValidationService = new();
-    private readonly Mock<IUnitOfWorkManager> _uowManager = new();
-    private readonly Mock<IInstanceBusyManager> _mockBusyManager = new();
+    private readonly Mock<IInstanceRepository> _mockInstanceRepository = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
+    private readonly Mock<IRequestRawBodyProvider> _mockRawBodyProvider = new();
+    private readonly Mock<ITransitionCommitLeaseManager> _mockCommitLeaseManager = new();
+    private readonly Mock<IDistributedLockHandle> _mockLockHandle = new();
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger = new();
     private readonly AsyncTransitionStrategy _strategy;
 
     public AsyncTransitionStrategyTests()
     {
-        var innerUow = new Mock<IUnitOfWork>();
-        innerUow.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask);
-        innerUow.Setup(x => x.CommitAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        _uowManager
-            .Setup(x => x.Begin(It.IsAny<UnitOfWorkOptions>()))
-            .Returns(innerUow.Object);
-
         _mockValidationService
             .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
 
-        _mockBusyManager
-            .Setup(x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BusyMarkOutcome.Marked);
+        _mockRawBodyProvider.Setup(x => x.GetRawBody()).Returns("{\"amount\":42}");
 
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
@@ -71,16 +61,11 @@ public class AsyncTransitionStrategyTests
             .ReturnsAsync(It.IsAny<InstanceJob>());
 
         _mockDistributedLockService
-            .Setup(x => x.ExecuteWithLockAsync(
+            .Setup(x => x.TryAcquireLockAsync(
                 It.IsAny<string>(),
-                It.IsAny<Func<Task>>(),
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
-            .Returns<string, Func<Task>, int, CancellationToken>(async (_, action, _, _) =>
-            {
-                await action();
-                return true;
-            });
+            .ReturnsAsync(_mockLockHandle.Object);
 
         _strategy = new AsyncTransitionStrategy(
             _mockContextFactory.Object,
@@ -88,9 +73,10 @@ public class AsyncTransitionStrategyTests
             _mockDistributedLockService.Object,
             _reservedTransitionResolver,
             _mockValidationService.Object,
-            _uowManager.Object,
-            _mockBusyManager.Object,
+            _mockInstanceRepository.Object,
             _mockEnqueueGateway.Object,
+            _mockRawBodyProvider.Object,
+            _mockCommitLeaseManager.Object,
             _mockLogger.Object);
     }
 
@@ -115,29 +101,53 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldCallBusyManagerBeforeEnqueue()
+    public async Task ExecuteAsync_WhenSchemaWasValidatedAtBoundary_ShouldRecheckOnlyPolicy()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        wfCtx.TransitionSchemaValidated = true;
+        _mockValidationService
+            .Setup(x => x.ValidatePolicyAsync(
+                It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockValidationService.Verify(
+            x => x.ValidatePolicyAsync(
+                It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockValidationService.Verify(
+            x => x.ValidateAsync(
+                It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldPersistBusyReservationBeforeEnqueue()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
-        var busyManagerCalled = false;
-        var enqueueCalledAfterBusy = false;
+        var reservationPersisted = false;
+        var enqueueCalledAfterReservation = false;
 
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
-            .Callback(() => busyManagerCalled = true)
-            .ReturnsAsync(BusyMarkOutcome.Marked);
+        _mockInstanceRepository
+            .Setup(x => x.UpdateAsync(txCtx.Instance, false, It.IsAny<CancellationToken>()))
+            .Callback(() => reservationPersisted =
+                txCtx.Instance.IsBusy && txCtx.Instance.ChainToken.HasValue)
+            .ReturnsAsync(txCtx.Instance);
 
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()))
-            .Callback(() => enqueueCalledAfterBusy = busyManagerCalled)
+            .Callback(() => enqueueCalledAfterReservation = reservationPersisted)
             .Returns(Task.CompletedTask);
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        busyManagerCalled.ShouldBeTrue();
-        enqueueCalledAfterBusy.ShouldBeTrue();
+        reservationPersisted.ShouldBeTrue();
+        enqueueCalledAfterReservation.ShouldBeTrue();
     }
 
     #endregion
@@ -190,9 +200,8 @@ public class AsyncTransitionStrategyTests
             Times.Never);
 
         _mockDistributedLockService.Verify(
-            x => x.ExecuteWithLockAsync(
+            x => x.TryAcquireLockAsync(
                 It.IsAny<string>(),
-                It.IsAny<Func<Task>>(),
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
@@ -233,53 +242,68 @@ public class AsyncTransitionStrategyTests
 
     #endregion
 
-    #region Busy manager delegation
+    #region Atomic admission
 
     [Fact]
-    public async Task ExecuteAsync_WithNormalTransition_ShouldTryMarkBusyViaManager()
+    public async Task ExecuteAsync_WithNormalTransition_ShouldReserveAndPersistDurableJob()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
+        InstanceJob? insertedJob = null;
+        _mockJobRepository
+            .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()))
+            .Callback<InstanceJob, bool, CancellationToken>((job, _, _) => insertedJob = job)
+            .ReturnsAsync((InstanceJob job, bool _, CancellationToken _) => job);
 
-        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _mockBusyManager.Verify(
-            x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()),
+        result.IsSuccess.ShouldBeTrue();
+        txCtx.Instance.IsBusy.ShouldBeTrue();
+        txCtx.Instance.ChainToken.ShouldNotBeNull();
+        txCtx.ExpectedRevision.ShouldBe(txCtx.Instance.Revision + 1);
+        insertedJob.ShouldNotBeNull();
+        insertedJob!.AdmissionToken.ShouldBe(txCtx.Instance.ChainToken);
+        insertedJob.AdmittedRevision.ShouldBe(txCtx.ExpectedRevision);
+        insertedJob.Payload.ShouldNotBeNullOrWhiteSpace();
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(txCtx.Instance, false, It.IsAny<CancellationToken>()),
             Times.Once);
-        _mockBusyManager.Verify(
-            x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+        _mockInstanceRepository.Verify(
+            x => x.GetResultAsync(
+                It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithReservedTransition_ShouldMarkBusyUnconditionally()
+    public async Task ExecuteAsync_WithReservedTransition_ShouldReuseExistingBusyChain()
     {
-        // Reserved transitions (cancel/exit/...) are accepted while the instance is Busy by design,
-        // so they must not go through the Try guard.
         var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "cancel");
+        var existingToken = Guid.NewGuid();
+        txCtx.Instance.BeginChain(existingToken);
 
-        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _mockBusyManager.Verify(
-            x => x.MarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()),
-            Times.Once);
-        _mockBusyManager.Verify(
-            x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+        result.IsSuccess.ShouldBeTrue();
+        txCtx.ChainToken.ShouldBe(existingToken);
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenIsInternalResume_ShouldSkipBusyManager()
+    public async Task ExecuteAsync_WhenIsInternalResume_ShouldPreserveChainWithoutSecondInstanceWrite()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
+        var existingToken = Guid.NewGuid();
+        txCtx.Instance.BeginChain(existingToken);
+        txCtx.ChainToken = existingToken;
         txCtx.Directives.MarkAsSubFlowResume();
 
-        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _mockBusyManager.Verify(
-            x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-        _mockBusyManager.Verify(
-            x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+        result.IsSuccess.ShouldBeTrue();
+        txCtx.ChainToken.ShouldBe(existingToken);
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -287,16 +311,112 @@ public class AsyncTransitionStrategyTests
     public async Task ExecuteAsync_WhenInstanceAlreadyBusy_ShouldReturn409WithoutEnqueue()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
-
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BusyMarkOutcome.AlreadyBusy);
+        txCtx.Instance.BeginChain(Guid.NewGuid());
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 
+    [Theory]
+    [InlineData("S")]
+    [InlineData("P")]
+    public async Task ExecuteAsync_WithPreparedBusySubItemStart_ShouldAdoptChainAndEnqueue(string flowType)
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "start");
+        txCtx.Instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = flowType;
+        txCtx.Instance.Busy();
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        txCtx.Instance.IsBusy.ShouldBeTrue();
+        txCtx.Instance.ChainToken.ShouldNotBeNull();
+        txCtx.ExpectedRevision.ShouldBe(1);
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(txCtx.Instance, false, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithBusySubItemStartThatAlreadyOwnsChain_ShouldRejectDuplicate()
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "start");
+        txCtx.Instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = "S";
+        txCtx.Instance.BeginChain(Guid.NewGuid());
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBusyParentHasActiveSubflow_ShouldReuseChainAndEnqueueForwardHop()
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "child-go");
+        txCtx.Instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            txCtx.InstanceId,
+            txCtx.Current.Key,
+            Guid.NewGuid(),
+            SubFlowType.SubFlow.Code,
+            "child-domain",
+            "child-flow",
+            "1.0.0"));
+        var chainToken = Guid.NewGuid();
+        txCtx.Instance.BeginChain(chainToken);
+        InstanceJob? insertedJob = null;
+        _mockJobRepository
+            .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()))
+            .Callback<InstanceJob, bool, CancellationToken>((job, _, _) => insertedJob = job)
+            .ReturnsAsync((InstanceJob job, bool _, CancellationToken _) => job);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        txCtx.ChainToken.ShouldBe(chainToken);
+        txCtx.ExpectedRevision.ShouldBe(txCtx.Instance.Revision);
+        insertedJob.ShouldNotBeNull();
+        insertedJob!.AdmissionToken.ShouldBe(chainToken);
+        insertedJob.AdmittedRevision.ShouldBe(txCtx.Instance.Revision);
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAdmissionSnapshotRevisionChanged_ShouldRejectWithoutEnqueue()
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        wfCtx.ExpectedRevision = txCtx.Instance.Revision + 1;
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceRevisionConflict);
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
@@ -306,26 +426,92 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenBusyMarkSkipped_ShouldStillEnqueue()
+    public async Task ExecuteAsync_WithSameIdempotencyKeyAndFingerprint_ShouldReturnExistingAdmission()
     {
-        // Skipped = instance not found or completed — preserves the previous silent no-op
-        // semantics; upstream instance resolution gates those states.
         var (wfCtx, txCtx) = SetupSuccessfulContext();
-
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BusyMarkOutcome.Skipped);
+        wfCtx.Headers["Idempotency-Key"] = "request-42";
+        const string rawBody = "{\"amount\":42}";
+        var fingerprint = AsyncTransitionStrategy.CreateRequestFingerprint(wfCtx, rawBody);
+        var existingJob = InstanceJob.CreateTransitionAdmission(
+            Guid.NewGuid(),
+            JobName.ForAsyncTransition(txCtx.InstanceId, "state1", txCtx.TransitionKey),
+            Guid.NewGuid(),
+            wfCtx.Domain,
+            wfCtx.WorkflowKey,
+            txCtx.InstanceId,
+            "{}",
+            Guid.NewGuid(),
+            7,
+            "request-42",
+            fingerprint);
+        _mockJobRepository
+            .Setup(x => x.FindByIdempotencyKeyAsReadOnlyAsync(
+                txCtx.InstanceId, "request-42", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingJob);
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-
+        txCtx.ExpectedRevision.ShouldBe(7);
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenIdempotencyKeyWasUsedForDifferentBody_ShouldReturnConflict()
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        wfCtx.Headers["idempotency-key"] = "request-42";
+        var existingJob = InstanceJob.CreateTransitionAdmission(
+            Guid.NewGuid(),
+            JobName.ForAsyncTransition(txCtx.InstanceId, "state1", txCtx.TransitionKey),
+            Guid.NewGuid(),
+            wfCtx.Domain,
+            wfCtx.WorkflowKey,
+            txCtx.InstanceId,
+            "{}",
+            Guid.NewGuid(),
+            7,
+            "request-42",
+            new string('A', InstanceJobConstants.MaxRequestFingerprintLength));
+        _mockJobRepository
+            .Setup(x => x.FindByIdempotencyKeyAsReadOnlyAsync(
+                txCtx.InstanceId, "request-42", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingJob);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.IdempotencyKeyConflict);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenIdempotencyKeyIsTooLong_ShouldFailBeforeDatabaseAdmission()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        wfCtx.Headers["idempotency-key"] = new string('x', InstanceJobConstants.MaxIdempotencyKeyLength + 1);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InvalidIdempotencyKey);
+        _mockInstanceRepository.Verify(
+            x => x.GetResultAsync(
+                It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     #endregion
@@ -369,16 +555,14 @@ public class AsyncTransitionStrategyTests
     {
         string? captured = null;
         _mockDistributedLockService
-            .Setup(x => x.ExecuteWithLockAsync(
+            .Setup(x => x.TryAcquireLockAsync(
                 It.IsAny<string>(),
-                It.IsAny<Func<Task>>(),
                 It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
-            .Returns<string, Func<Task>, int, CancellationToken>(async (key, action, _, _) =>
+            .Returns<string, int, CancellationToken>((key, _, _) =>
             {
                 captured = key;
-                await action();
-                return true;
+                return Task.FromResult<IDistributedLockHandle?>(_mockLockHandle.Object);
             });
         return () => captured;
     }
@@ -392,6 +576,10 @@ public class AsyncTransitionStrategyTests
         _mockContextFactory
             .Setup(x => x.CreateAsync(wfCtx, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<TransitionExecutionContext>.Ok(txCtx));
+        _mockInstanceRepository
+            .Setup(x => x.UpdateAsync(
+                It.IsAny<Instance>(), false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance instance, bool _, CancellationToken _) => instance);
 
         return (wfCtx, txCtx);
     }
@@ -418,7 +606,9 @@ public class AsyncTransitionStrategyTests
         var workflow = CreateMockWorkflow(workflowKey, domain);
         var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
-        var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
+        var transition = string.Equals(transitionKey, workflow.StartTransition.Key, StringComparison.Ordinal)
+            ? workflow.StartTransition
+            : Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
 
         return new TransitionExecutionContext
         {

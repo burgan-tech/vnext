@@ -6,8 +6,57 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
 {
     Task<List<InstanceJob>> GetListActiveAsync(Guid instanceId, CancellationToken cancellationToken = default);
     Task MarkAsProcessedAsync(Guid instanceId, string jobName, CancellationToken cancellationToken = default);
+    Task<bool> MarkAsProcessedByJobIdAsync(
+        Guid jobId,
+        Guid processingToken,
+        CancellationToken cancellationToken = default);
     Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId, CancellationToken cancellationToken = default);
+    Task<InstanceJob?> FindByIdempotencyKeyAsReadOnlyAsync(
+        Guid instanceId,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default);
     Task<bool> AnyActiveByJobNameAsync(Guid instanceId, string jobName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically claims an active job for one delivery. A crashed claim becomes eligible again
+    /// after <paramref name="leaseDuration"/>; concurrent/redelivered jobs receive <c>false</c>.
+    /// </summary>
+    Task<bool> TryClaimAsync(
+        Guid jobId,
+        Guid processingToken,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns whether the active, unexpired processing lease is still owned by
+    /// <paramref name="processingToken"/>. Used to fence recovery side effects.
+    /// </summary>
+    Task<bool> IsClaimOwnerAsync(
+        Guid jobId,
+        Guid processingToken,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Releases a processing claim without making the job terminal. Used during host shutdown so
+    /// the dispatcher retry can reclaim immediately instead of waiting for the old lease to expire.
+    /// </summary>
+    Task<bool> ReleaseClaimAsync(
+        Guid jobId,
+        Guid processingToken,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> MarkAsFailedAsync(
+        Guid jobId,
+        Guid processingToken,
+        string errorCode,
+        string? errorDetails = null,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> MarkAsSupersededAsync(
+        Guid jobId,
+        Guid processingToken,
+        string? reason = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-only: active jobs for a given flow (workflow) in the current schema, optionally
@@ -54,8 +103,15 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
     Task<List<InstanceJob>> GetActiveByDomainAsync(string domain, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the subset of <paramref name="instanceIds"/> that have at least one active job.
-    /// Used by the chain reaper to avoid N+1 queries when checking a batch of stuck instances.
+    /// Returns the subset of <paramref name="instanceIds"/> that have at least one live job.
+    /// Only chain-driving async-transition jobs qualify. Scheduled/pending-dispatch jobs are live
+    /// only when last touched on or after <paramref name="pendingDispatchCutoff"/>; processing jobs
+    /// are live only while their lease extends past <paramref name="utcNow"/>. Used by the chain
+    /// reaper to avoid N+1 queries.
     /// </summary>
-    Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default);
+    Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(
+        IEnumerable<Guid> instanceIds,
+        DateTime pendingDispatchCutoff,
+        DateTime utcNow,
+        CancellationToken cancellationToken = default);
 }

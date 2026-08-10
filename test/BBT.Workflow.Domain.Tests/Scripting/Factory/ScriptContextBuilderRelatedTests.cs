@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether;
@@ -103,5 +104,23 @@ public class ScriptContextBuilderRelatedTests
         var context = await builder.BuildAsync(CancellationToken.None);
 
         context.Related.ShouldBeSameAs(NullRelatedInstanceAccessor.Instance);
+    }
+
+    [Fact]
+    public async Task RequestMetadataDictionaries_ShouldRetainCaseInsensitiveLookup()
+    {
+        var builder = CreateBuilder();
+
+        var context = await builder
+            .WithHeaders(new Dictionary<string, string?> { ["X-Request-Id"] = "request-42" })
+            .WithRouteValues(new Dictionary<string, string?> { ["OrderId"] = "order-42" })
+            .BuildAsync(CancellationToken.None);
+
+        var headers = ((object?)context.Headers)
+            .ShouldBeOfType<Dictionary<string, string?>>();
+        var routeValues = ((object?)context.RouteValues)
+            .ShouldBeOfType<Dictionary<string, object?>>();
+        headers["x-request-id"].ShouldBe("request-42");
+        routeValues["ORDERID"].ShouldBe("order-42");
     }
 }

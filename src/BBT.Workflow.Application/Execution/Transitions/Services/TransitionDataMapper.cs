@@ -29,6 +29,28 @@ public sealed class TransitionDataMapper(
         IReadOnlyDictionary<string, string?>? headers = null,
         CancellationToken cancellationToken = default)
     {
+        return MapTransitionDataAsync(
+            payload,
+            transition,
+            workflow,
+            instance,
+            runtimeInfoProvider,
+            headers,
+            routeValues: null,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<Result<object?>> MapTransitionDataAsync(
+        object? payload,
+        Transition? transition,
+        Definitions.Workflow workflow,
+        Instance instance,
+        IRuntimeInfoProvider runtimeInfoProvider,
+        IReadOnlyDictionary<string, string?>? headers,
+        IReadOnlyDictionary<string, string?>? routeValues,
+        CancellationToken cancellationToken = default)
+    {
         // Guard: No mapping defined - return payload as-is
         if (transition?.Mapping is null)
             return Task.FromResult(Result<object?>.Ok(payload));
@@ -36,7 +58,7 @@ public sealed class TransitionDataMapper(
         // Execute mapping script safely using TryAsync
         return ExecuteMappingScriptAsync(
             payload, transition, workflow, instance,
-            runtimeInfoProvider, headers, cancellationToken);
+            runtimeInfoProvider, headers, routeValues, cancellationToken);
     }
 
     /// <summary>
@@ -50,6 +72,7 @@ public sealed class TransitionDataMapper(
         Instance instance,
         IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers,
+        IReadOnlyDictionary<string, string?>? routeValues,
         CancellationToken cancellationToken)
     {
         var result = await ResultExtensions.TryAsync(
@@ -57,7 +80,7 @@ public sealed class TransitionDataMapper(
             {
                 var mappingInstance = await CompileMappingScriptAsync(transition, workflow.Scripts, ct);
                 var scriptContext = await BuildScriptContextAsync(
-                    payload, transition, workflow, instance, runtimeInfoProvider, headers, ct);
+                    payload, transition, workflow, instance, runtimeInfoProvider, headers, routeValues, ct);
 
                 return await mappingInstance.Handler(scriptContext);
             },
@@ -94,6 +117,7 @@ public sealed class TransitionDataMapper(
         Instance instance,
         IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers,
+        IReadOnlyDictionary<string, string?>? routeValues,
         CancellationToken cancellationToken)
     {
         return scriptContextFactory.NewBuilder(instanceRepository)
@@ -102,7 +126,14 @@ public sealed class TransitionDataMapper(
             .WithInstance(instance)
             .WithTransition(transition)
             .WithBody(payload)
-            .WithHeaders(headers?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+            .WithHeaders(headers?.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
+            .WithRouteValues(routeValues?.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
             .BuildAsync(cancellationToken);
     }
 

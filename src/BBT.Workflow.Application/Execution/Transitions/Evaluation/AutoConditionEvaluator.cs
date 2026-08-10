@@ -120,7 +120,14 @@ public sealed class AutoConditionEvaluator(
             .WithInstance(context.Instance)
             .WithBody(context.Data)
             .WithRuntime(runtimeInfoProvider)
-            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
+            .WithHeaders(context.Headers.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
+            .WithRouteValues(context.RouteValues.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase));
 
         if (context.Transition != null)
             builder.WithTransition(context.Transition);
@@ -128,4 +135,3 @@ public sealed class AutoConditionEvaluator(
         return await builder.BuildAsync(cancellationToken);
     }
 }
-

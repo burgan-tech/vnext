@@ -17,6 +17,7 @@ public sealed class SubflowOutputMappingService(
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
     IGuidGenerator guidGenerator,
+    IInstanceDataMutationService instanceDataMutationService,
     ILogger<SubflowOutputMappingService> logger)
     : ISubflowOutputMappingService
 {
@@ -62,10 +63,15 @@ public sealed class SubflowOutputMappingService(
             var hasData = outputMappingResult?.Data != null;
             if (hasData)
             {
-                parentInstance.AddData(
+                var addResult = await instanceDataMutationService.AddDataAsync(
+                    parentWorkflow,
+                    parentInstance,
                     guidGenerator.Create(),
                     new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
-                    parentState.VersionStrategy);
+                    parentState.VersionStrategy,
+                    cancellationToken);
+                if (!addResult.IsSuccess)
+                    return Result.Fail(addResult.Error);
             }
 
             if (scriptContext.Mutations.HasChanges)

@@ -87,6 +87,22 @@ public class ResourceLockStepTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldForwardRouteValuesCaseInsensitivelyToKeyScript()
+    {
+        var context = CreateContext(ResourceLockAction.Acquire);
+        var builder = SetupScriptEngine(TestResourceKey);
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        builder.Received(1).WithRouteValues(Arg.Is<Dictionary<string, string?>>(values =>
+            values.ContainsKey("ORDERID") && values["ORDERID"] == "order-42"));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Acquire_WhenConflict_ShouldNotTrackAndShouldFail()
     {
         var context = CreateContext(ResourceLockAction.Acquire);
@@ -200,7 +216,7 @@ public class ResourceLockStepTests
 
     #region Helpers
 
-    private void SetupScriptEngine(string keyResult)
+    private IScriptContextBuilder SetupScriptEngine(string keyResult)
     {
         var mapping = Substitute.For<ITransitionMapping>();
         mapping.Handler(Arg.Any<ScriptContext>())
@@ -210,10 +226,10 @@ public class ResourceLockStepTests
             .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
             .ReturnsForAnyArgs(Task.FromResult(mapping));
 
-        SetupScriptContextFactory();
+        return SetupScriptContextFactory();
     }
 
-    private void SetupScriptContextFactory()
+    private IScriptContextBuilder SetupScriptContextFactory()
     {
         var builder = Substitute.For<IScriptContextBuilder>();
         builder.WithRuntime(Arg.Any<IRuntimeInfoProvider>()).Returns(builder);
@@ -222,10 +238,12 @@ public class ResourceLockStepTests
         builder.WithTransition(Arg.Any<Transition>()).Returns(builder);
         builder.WithBody(Arg.Any<object>()).Returns(builder);
         builder.WithHeaders(Arg.Any<Dictionary<string, string?>>()).Returns(builder);
+        builder.WithRouteValues(Arg.Any<Dictionary<string, string?>>()).Returns(builder);
         builder.BuildAsync(Arg.Any<CancellationToken>())
             .Returns(new ScriptContext(Substitute.For<ILogger<ScriptContext>>()));
 
         _scriptContextFactory.NewBuilder(Arg.Any<IInstanceRepository>()).Returns(builder);
+        return builder;
     }
 
     private static TransitionExecutionContext CreateContext(ResourceLockAction action)
@@ -306,7 +324,8 @@ public class ResourceLockStepTests
             Transition = transition,
             Instance = instance,
             TraceId = Guid.NewGuid().ToString("N"),
-            SpanId = Guid.NewGuid().ToString("N")[..16]
+            SpanId = Guid.NewGuid().ToString("N")[..16],
+            RouteValues = new Dictionary<string, string?> { ["OrderId"] = "order-42" }
         };
     }
 

@@ -7,6 +7,7 @@ using System.Text.Json;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -19,7 +20,8 @@ public sealed class CreateTransitionRecordStep(
     IInstanceRepository instanceRepository,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IInstanceDataMutationService instanceDataMutationService) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.CreateTransition;
@@ -43,9 +45,15 @@ public sealed class CreateTransitionRecordStep(
 
         // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist
         return await MapTransitionDataAsync(context, transition, cancellationToken)
-            .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition, instanceTransition))
+            .BindAsync(mappedData => AddMappedDataToInstanceAsync(
+                context,
+                mappedData,
+                transition,
+                instanceTransition,
+                cancellationToken))
             .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
-            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, true, cancellationToken))
+            // Aggregate update + transition audit row share one SaveChanges batch.
+            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
             .TapAsync(_ =>
                 instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition))
@@ -82,7 +90,8 @@ public sealed class CreateTransitionRecordStep(
             context.Instance.GetCurrentState,
             context.Trigger,
             new JsonData(context.Data),
-            new JsonData(JsonSerializer.Serialize(context.Headers)));
+            new JsonData(JsonSerializer.Serialize(
+                DurableHeaderFilter.ForPersistence(context.Headers))));
 
         var state = context.Workflow.GetState(context.Instance.GetCurrentState).Value!;
         var transition = context.Workflow.ResolveTransition(transitionKey, state);
@@ -105,24 +114,35 @@ public sealed class CreateTransitionRecordStep(
             context.Instance,
             runtimeInfoProvider,
             context.Headers,
+            context.RouteValues,
             cancellationToken);
     }
 
     /// <summary>
     /// Adds mapped data to instance and updates the transition body when a mapping script was applied.
     /// </summary>
-    private void AddMappedDataToInstance(
+    private async Task<Result<object?>> AddMappedDataToInstanceAsync(
         TransitionExecutionContext context,
         object? mappedData,
         Definitions.Transition? transition,
-        InstanceTransition instanceTransition)
+        InstanceTransition instanceTransition,
+        CancellationToken cancellationToken)
     {
         if (mappedData != null)
         {
-            context.Instance.AddData(
+            var addDataResult = await instanceDataMutationService.AddDataAsync(
+                context.Workflow,
+                context.Instance,
                 guidGenerator.Create(),
                 new JsonData(mappedData),
-                transition?.VersionStrategy);
+                transition?.VersionStrategy,
+                cancellationToken,
+                context.Headers);
+
+            if (!addDataResult.IsSuccess)
+            {
+                return Result<object?>.Fail(addDataResult.Error);
+            }
 
             if (transition?.Mapping is not null)
             {
@@ -139,6 +159,8 @@ public sealed class CreateTransitionRecordStep(
         {
             context.Instance.SetStage(context.Stage);
         }
+
+        return Result<object?>.Ok(mappedData);
     }
 
     /// <summary>

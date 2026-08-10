@@ -21,6 +21,7 @@ public sealed class RunOnEntryTasksStep(
     ITaskCoordinatorExtended taskCoordinator,
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
+    IInstanceDataMutationService instanceDataMutationService,
     IInstanceTaskRepository instanceTaskRepository,
     IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
 {
@@ -73,7 +74,10 @@ public sealed class RunOnEntryTasksStep(
                 context.Items[TaskExecutionErrorKey] = tasksResult.TaskError;
 
             // Apply script context changes before handling boundary
-            context.ApplyScriptContextChanges(scriptContext);
+            var applyResult = await instanceDataMutationService.ApplyScriptContextChangesAsync(
+                context.Workflow, context, scriptContext, cancellationToken);
+            if (!applyResult.IsSuccess)
+                return Result<StepOutcome>.Fail(applyResult.Error);
             await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
             return BoundaryOutcomeHandler.Handle(context, tasksResult);
@@ -117,7 +121,10 @@ public sealed class RunOnEntryTasksStep(
             }
         }
         
-        context.ApplyScriptContextChanges(scriptContext);
+        var finalApplyResult = await instanceDataMutationService.ApplyScriptContextChangesAsync(
+            context.Workflow, context, scriptContext, cancellationToken);
+        if (!finalApplyResult.IsSuccess)
+            return Result<StepOutcome>.Fail(finalApplyResult.Error);
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
         
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
@@ -203,7 +210,14 @@ public sealed class RunOnEntryTasksStep(
             .WithInstance(context.Instance)
             .WithBody(context.Data)
             .WithRuntime(runtimeInfoProvider)
-            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+            .WithHeaders(context.Headers.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
+            .WithRouteValues(context.RouteValues.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
             .WithCurrentTransition(instanceTransition);
 
         if (context.Transition != null)

@@ -51,6 +51,9 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
     private readonly ILongPollAckResumeService _resumeService = Substitute.For<ILongPollAckResumeService>();
     private readonly IInstanceCommandGateway _gateway = Substitute.For<IInstanceCommandGateway>();
     private readonly IWorkflowContext _workflowContext = Substitute.For<IWorkflowContext>();
+    private readonly IWorkflowExecutionService _workflowExecutionService = Substitute.For<IWorkflowExecutionService>();
+    private readonly ITransitionValidationService _transitionValidationService = Substitute.For<ITransitionValidationService>();
+    private readonly ITransitionContextFactory _transitionContextFactory = Substitute.For<ITransitionContextFactory>();
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -71,11 +74,32 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             .Returns(Result.Ok());
         _gateway.AcknowledgeLongPollAsync(Arg.Any<AcknowledgeLongPollInput>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
+        _transitionValidationService
+            .ValidateAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+        _authManager
+            .IsAnyRoleAllowedInStateAsync(
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Transition>(),
+                Arg.Any<string?>(),
+                Arg.Any<Instance>(),
+                Arg.Any<IReadOnlyCollection<string>>(),
+                Arg.Any<AuthorizationRequestContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        _workflowExecutionService
+            .ExecuteTransitionAsync(
+                Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Status = InstanceStatus.Busy
+            }));
 
         _service = new InstanceCommandAppService(
             serviceProvider: _ambient,
             runtimeInfoProvider: Substitute.For<IRuntimeInfoProvider>(),
-            workflowExecutionService: Substitute.For<IWorkflowExecutionService>(),
+            workflowExecutionService: _workflowExecutionService,
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
@@ -83,8 +107,10 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             guidGenerator: Substitute.For<IGuidGenerator>(),
             headerService: Substitute.For<IHeaderService>(),
             transitionDataMapper: Substitute.For<ITransitionDataMapper>(),
-            transitionValidationService: Substitute.For<ITransitionValidationService>(),
-            transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
+            instanceDataMutationService: Substitute.For<IInstanceDataMutationService>(),
+            transitionValidationService: _transitionValidationService,
+            transitionContextFactory: _transitionContextFactory,
+            reservedTransitionResolver: new ReservedTransitionResolver(),
             workflowContext: _workflowContext,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
@@ -151,6 +177,149 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         await _gateway.DidNotReceiveWithAnyArgs().AcknowledgeLongPollAsync(default!, default);
         await _resumeService.DidNotReceiveWithAnyArgs().ResumeAsync(default!, default!, default, default, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WhenNormalTransitionInstanceIsBusy_RejectsBeforeSchemaValidation()
+    {
+        var instance = CreateInstance(awaiting: false, withSubflow: false);
+        instance.BeginChain(Guid.NewGuid());
+        var workflow = BuildWorkflow();
+        var transition = Transition.Create(
+            "go",
+            StateKey,
+            StateKey,
+            TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        var transitionContext = new TransitionExecutionContext
+        {
+            Domain = Domain,
+            WorkflowKey = Workflow,
+            InstanceId = instance.Id,
+            TransitionKey = transition.Key,
+            Workflow = workflow,
+            Instance = instance,
+            Current = workflow.GetState(StateKey).Value!,
+            Transition = transition
+        };
+
+        _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(instance));
+        _componentCacheStore.GetFlowAsync(Domain, Workflow, Version, Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(workflow));
+        _transitionContextFactory.CreateFromPreloaded(
+                Arg.Any<WorkflowExecutionContext>(), workflow, instance)
+            .Returns(Result<TransitionExecutionContext>.Ok(transitionContext));
+
+        var result = await _service.TransitionAsync(
+            instance.Id.ToString(),
+            transition.Key,
+            new TransitionInput(Domain, Workflow),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+        await _transitionValidationService.DidNotReceiveWithAnyArgs()
+            .ValidateAsync(default!, default);
+        await _workflowExecutionService.DidNotReceiveWithAnyArgs()
+            .ExecuteTransitionAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WhenBusyAsyncRequestHasIdempotencyKey_AllowsReplayResolution()
+    {
+        var instance = CreateInstance(awaiting: false, withSubflow: false);
+        instance.BeginChain(Guid.NewGuid());
+        var workflow = BuildWorkflow();
+        var transition = Transition.Create(
+            "go",
+            StateKey,
+            StateKey,
+            TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        var transitionContext = new TransitionExecutionContext
+        {
+            Domain = Domain,
+            WorkflowKey = Workflow,
+            InstanceId = instance.Id,
+            TransitionKey = transition.Key,
+            Workflow = workflow,
+            Instance = instance,
+            Current = workflow.GetState(StateKey).Value!,
+            Transition = transition
+        };
+
+        _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(instance));
+        _componentCacheStore.GetFlowAsync(Domain, Workflow, Version, Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(workflow));
+        _transitionContextFactory.CreateFromPreloaded(
+                Arg.Any<WorkflowExecutionContext>(), workflow, instance)
+            .Returns(Result<TransitionExecutionContext>.Ok(transitionContext));
+        var input = new TransitionInput(Domain, Workflow)
+        {
+            Headers = new Dictionary<string, string?>
+            {
+                ["Idempotency-Key"] = "retry-42"
+            }
+        };
+
+        var result = await _service.TransitionAsync(
+            instance.Id.ToString(),
+            transition.Key,
+            input,
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _transitionValidationService.Received(1)
+            .ValidateAsync(transitionContext, Arg.Any<CancellationToken>());
+        await _workflowExecutionService.Received(1)
+            .ExecuteTransitionAsync(
+                Arg.Is<WorkflowExecutionContext>(context =>
+                    context.Headers.ContainsKey("Idempotency-Key")),
+                Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WhenBusyParentHasActiveSubflow_AllowsPipelineForwarding()
+    {
+        var instance = CreateInstance(awaiting: false, withSubflow: true);
+        instance.BeginChain(Guid.NewGuid());
+        var workflow = BuildWorkflow();
+        const string childTransition = "child-go";
+        var transitionContext = new TransitionExecutionContext
+        {
+            Domain = Domain,
+            WorkflowKey = Workflow,
+            InstanceId = instance.Id,
+            TransitionKey = childTransition,
+            Workflow = workflow,
+            Instance = instance,
+            Current = workflow.GetState(StateKey).Value!,
+            Transition = null
+        };
+
+        _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(instance));
+        _componentCacheStore.GetFlowAsync(Domain, Workflow, Version, Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(workflow));
+        _transitionContextFactory.CreateFromPreloaded(
+                Arg.Any<WorkflowExecutionContext>(), workflow, instance)
+            .Returns(Result<TransitionExecutionContext>.Ok(transitionContext));
+
+        var result = await _service.TransitionAsync(
+            instance.Id.ToString(),
+            childTransition,
+            new TransitionInput(Domain, Workflow),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _transitionValidationService.Received(1)
+            .ValidateAsync(transitionContext, Arg.Any<CancellationToken>());
+        await _workflowExecutionService.Received(1)
+            .ExecuteTransitionAsync(
+                Arg.Is<WorkflowExecutionContext>(context => context.TransitionKey == childTransition),
+                Arg.Any<CancellationToken>());
     }
 
     private static Instance CreateInstance(bool awaiting, bool withSubflow)

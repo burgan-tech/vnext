@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.BackgroundJobs.Payloads;
@@ -9,6 +10,9 @@ namespace BBT.Workflow.BackgroundJobs.Payloads;
 /// </summary>
 public sealed class TransitionJobPayload : ITraceableJobPayload
 {
+    /// <summary>Durable tracking id shared with <c>InstanceJob</c> and the scheduler.</summary>
+    public Guid JobId { get; set; }
+
     public string JobName { get; set; }
     
     /// <summary>
@@ -106,4 +110,22 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// admitted past the Busy chain-token gate as the chain's own work.
     /// </summary>
     public Guid? ChainToken { get; set; }
+
+    /// <summary>Busy reservation owner minted during admission.</summary>
+    public Guid? AdmissionToken { get; set; }
+
+    /// <summary>Instance revision after the admission reservation was committed.</summary>
+    public long? AdmittedRevision { get; set; }
+
+    /// <summary>Whether the transition request body already passed its input schema at admission.</summary>
+    public bool TransitionSchemaValidated { get; set; }
+
+    /// <summary>Depth of this hop in an automatic transition chain.</summary>
+    public int ChainDepth { get; set; }
+
+    /// <summary>Original trigger classification.</summary>
+    public TriggerType TriggerType { get; set; } = TriggerType.Manual;
+
+    public bool IsReentry { get; set; }
+    public bool IsErrorBoundaryTransition { get; set; }
 }

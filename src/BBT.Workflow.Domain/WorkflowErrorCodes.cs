@@ -49,6 +49,7 @@ public static class WorkflowErrorCodes
     public const string SubflowOutputMappingFailed = "Instance:100030";
     public const string InstanceBusy = "Instance:100031";
     public const string RelatedInstanceReadFailed = "Instance:100033";
+    public const string InstanceRevisionConflict = "Instance:100034";
 
     #endregion
     
@@ -68,6 +69,8 @@ public static class WorkflowErrorCodes
     public const string StartTransitionNotFromInitialState = "Transition:100022";
     public const string SharedTransitionTargetMustBeSelfWhenInSubFlow = "Transition:100023";
     public const string WellKnownTransitionNotAvailableInState = "Transition:100024";
+    public const string InvalidIdempotencyKey = "Transition:100025";
+    public const string IdempotencyKeyConflict = "Transition:100026";
 
     #endregion
     

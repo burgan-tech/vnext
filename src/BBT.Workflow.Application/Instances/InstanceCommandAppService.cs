@@ -18,6 +18,7 @@ using BBT.Workflow.CurrentUser;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Execution.Transitions.Services;
@@ -48,8 +49,10 @@ public sealed class InstanceCommandAppService(
     IGuidGenerator guidGenerator,
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
+    IInstanceDataMutationService instanceDataMutationService,
     ITransitionValidationService transitionValidationService,
     ITransitionContextFactory transitionContextFactory,
+    IReservedTransitionResolver reservedTransitionResolver,
     IWorkflowContext workflowContext,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
@@ -252,7 +255,11 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken)
     {
         var workflowInScope = workflowContext.Workflow;
-        if (workflowInScope != null && workflowInScope.Key == workflow)
+        if (workflowInScope is not null
+            && string.Equals(workflowInScope.Domain, domain, StringComparison.Ordinal)
+            && string.Equals(workflowInScope.Key, workflow, StringComparison.Ordinal)
+            && (version is null
+                || string.Equals(workflowInScope.Version, version, StringComparison.Ordinal)))
         {
             return Result<Definitions.Workflow>.Ok(workflowInScope);
         }
@@ -346,16 +353,24 @@ public sealed class InstanceCommandAppService(
                 instance,
                 runtimeInfoProvider,
                 input.Headers,
+                input.RouteValues,
                 cancellationToken)
-            .Tap(mappedData =>
+            .BindAsync(async mappedData =>
             {
-                if (mappedData != null)
-                {
-                    instance.AddData(
-                        guidGenerator.Create(),
-                        new JsonData(mappedData),
-                        workflow.StartTransition.VersionStrategy);
-                }
+                if (mappedData is null)
+                    return Result<object?>.Ok(null);
+
+                var addResult = await instanceDataMutationService.AddDataAsync(
+                    workflow,
+                    instance,
+                    guidGenerator.Create(),
+                    new JsonData(mappedData),
+                    workflow.StartTransition.VersionStrategy,
+                    cancellationToken,
+                    input.Headers);
+                return addResult.IsSuccess
+                    ? Result<object?>.Ok(mappedData)
+                    : Result<object?>.Fail(addResult.Error);
             })
             .MapAsync(_ => instance);
     }
@@ -384,6 +399,12 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken)
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
+        // Start requests may ask for "latest" (null version). Pin execution to the exact
+        // definition that was validated/prepared so a later scope cannot resolve a newer flow
+        // version and incorrectly reuse the schema-validation receipt.
+        context.WorkflowVersion = data.Workflow.Version;
+        context.TransitionSchemaValidated = true;
+        context.ExpectedRevision = data.Instance.Revision;
 
         // Execute transition - lock is managed by TransitionPipeline
         return workflowExecutionService
@@ -569,7 +590,33 @@ public sealed class InstanceCommandAppService(
 
         var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
 
-        var workflowDefinition = workflowResult.Value;
+        var workflowDefinition = workflowResult.Value!;
+
+        // Resolve once from the already-loaded workflow + instance. This is also the cheapest
+        // point at which reserved transitions can be distinguished from normal transitions.
+        var transitionContextResult = transitionContextFactory.CreateFromPreloaded(
+            context, workflowDefinition, resolvedInstance);
+        if (!transitionContextResult.IsSuccess)
+            return Result<TransitionOutput>.Fail(transitionContextResult.Error);
+
+        var transitionContext = transitionContextResult.Value!;
+
+        // Busy is the first admission guard. In particular, do not resolve a schema or run
+        // mappings for a normal request that cannot be admitted. Reserved lifecycle commands
+        // retain their dedicated lock semantics and may proceed while the main chain is Busy.
+        // A parent with an active blocking SubFlow is also an intentional proxy: its pipeline
+        // forwards non-parent-shared transitions to the child after commit, so rejecting that
+        // Busy status here would make ForwardToActiveSubflowStep unreachable.
+        var isAsyncIdempotencyReplay = !input.Sync && HasIdempotencyKey(input.Headers);
+        var forwardsToActiveSubflow = ShouldForwardToActiveSubflow(transitionContext);
+        if (resolvedInstance.IsBusy
+            && !reservedTransitionResolver.IsReserved(transitionContext)
+            && !forwardsToActiveSubflow
+            && !isAsyncIdempotencyReplay)
+        {
+            return Result<TransitionOutput>.Fail(
+                WorkflowErrors.InstanceBusy(resolvedInstance.Id, transitionKey));
+        }
 
         // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
         // dispatching to the execution service. This guarantees consistent 400 Bad Request
@@ -578,12 +625,42 @@ public sealed class InstanceCommandAppService(
         // later in the background job (leaving the instance Faulted). The same check is also
         // performed inside AsyncTransitionStrategy as defense in depth for callers that
         // bypass the AppService and invoke WorkflowExecutionService directly.
-        var preValidation = await ValidateTransitionRequestAsync(
-            context, resolvedInstance, workflowDefinition!, cancellationToken);
+        var preValidation = await transitionValidationService.ValidateAsync(
+            transitionContext, cancellationToken);
         if (!preValidation.IsSuccess)
         {
             logger.TransitionValidationFailed(resolvedInstance.Id, transitionKey, preValidation.Error.Code);
             return Result<TransitionOutput>.Fail(preValidation.Error);
+        }
+
+        // Downstream strategy/pipeline reloads still re-check authoritative state policy, while
+        // this marker prevents the exact same transition input schema from running 2-3 times.
+        context.TransitionSchemaValidated = true;
+
+        var transition = transitionContext.Transition;
+        if (transition is not null)
+        {
+            var currentState = resolvedInstance.GetCurrentState;
+            // Availability itself is owned by the transition policy. Only apply state-specific
+            // role narrowing when the definition actually has an entry for this state; this keeps
+            // reserved/well-known transitions compatible while still enforcing their global grants.
+            var authorizationState = transition.FindAvailableIn(currentState) is null
+                ? null
+                : currentState;
+            var requestContext = new AuthorizationRequestContext(
+                input.Headers,
+                QueryParameters: null,
+                RouteValues: input.RouteValues);
+            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedInStateAsync(
+                workflowDefinition,
+                transition,
+                authorizationState,
+                resolvedInstance,
+                BuildCallerRoles(explicitRole: null, headers: input.Headers),
+                requestContext,
+                cancellationToken);
+            if (!allowed)
+                return Result<TransitionOutput>.Fail(WorkflowErrors.TransitionAccessDenied(transitionKey));
         }
 
         return await workflowExecutionService
@@ -596,26 +673,6 @@ public sealed class InstanceCommandAppService(
                 output.Key = resolvedInstance.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
-    }
-
-    /// <summary>
-    /// Pre-dispatch schema + state-machine validation for a transition request.
-    /// Builds the execution context from pre-loaded instance and workflow (zero DB calls)
-    /// and runs the same <see cref="ITransitionValidationService.ValidateAsync"/>
-    /// that the sync pipeline uses, so both sync=true and sync=false callers get the same
-    /// validation error contract before any state mutation or background-job enqueue.
-    /// </summary>
-    private async Task<Result> ValidateTransitionRequestAsync(
-        WorkflowExecutionContext context,
-        Instance instance,
-        Definitions.Workflow workflow,
-        CancellationToken cancellationToken)
-    {
-        var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
-        if (!contextResult.IsSuccess)
-            return Result.Fail(contextResult.Error);
-
-        return await transitionValidationService.ValidateAsync(contextResult.Value!, cancellationToken);
     }
 
     /// <summary>
@@ -641,6 +698,7 @@ public sealed class InstanceCommandAppService(
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = input.Headers,
             RouteValues = input.RouteValues,
+            ExpectedRevision = resolvedInstance.Revision,
             Data = new TransitionDataInfo(input.Data?.Key, input.Data?.Attributes)
             {
                 Stage = input.Data?.Stage,
@@ -648,6 +706,20 @@ public sealed class InstanceCommandAppService(
             },
             IsReentry = false
         };
+    }
+
+    private static bool HasIdempotencyKey(IReadOnlyDictionary<string, string?> headers) =>
+        headers.Any(item =>
+            string.Equals(item.Key, "idempotency-key", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(item.Value));
+
+    private static bool ShouldForwardToActiveSubflow(TransitionExecutionContext context)
+    {
+        if (!context.Instance.HasActiveSubFlow)
+            return false;
+
+        var parentShared = context.Workflow.FindSharedTransition(context.TransitionKey);
+        return parentShared is null || !parentShared.IsAvailableInState(context.Current.Key);
     }
 
     /// <summary>

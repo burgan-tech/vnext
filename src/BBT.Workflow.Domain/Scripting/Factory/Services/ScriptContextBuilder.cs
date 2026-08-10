@@ -137,19 +137,28 @@ internal sealed class ScriptContextBuilder(
 
     public IScriptContextBuilder WithHeaders(Dictionary<string, string?>? headers)
     {
-        _headers = headers;
+        _headers = headers?.ToDictionary(
+            kvp => kvp.Key,
+            kvp => kvp.Value,
+            StringComparer.OrdinalIgnoreCase);
         return this;
     }
 
     public IScriptContextBuilder WithRouteValues(Dictionary<string, object?>? routeValues)
     {
-        _routeValues = routeValues;
+        _routeValues = routeValues?.ToDictionary(
+            kvp => kvp.Key,
+            kvp => kvp.Value,
+            StringComparer.OrdinalIgnoreCase);
         return this;
     }
 
     public IScriptContextBuilder WithRouteValues(Dictionary<string, string?>? routeValues)
     {
-        _routeValues = routeValues?.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value);
+        _routeValues = routeValues?.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (object?)kvp.Value,
+            StringComparer.OrdinalIgnoreCase);
         return this;
     }
 

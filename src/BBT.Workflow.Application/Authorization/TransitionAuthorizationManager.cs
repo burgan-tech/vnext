@@ -109,6 +109,39 @@ public sealed class TransitionAuthorizationManager(
         return IsAllowedWithStateNarrowing(evaluator, role, transition, stateEntry);
     }
 
+    /// <inheritdoc />
+    public async Task<bool> IsAnyRoleAllowedInStateAsync(
+        WorkflowDefinition workflow,
+        Transition transition,
+        string? currentStateKey,
+        Instance? instance,
+        IReadOnlyCollection<string>? callerRoles,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(currentStateKey))
+        {
+            var evaluator = await CreateEvaluatorAsync(
+                instance, workflow, requestContext, transition.Roles, cancellationToken);
+            return evaluator.IsAnyRoleAllowed(callerRoles, transition.Roles, transition);
+        }
+
+        if (!transition.IsAvailableInState(currentStateKey))
+            return false;
+
+        var stateEntry = transition.FindAvailableIn(currentStateKey);
+        var evaluatorForState = await CreateEvaluatorAsync(
+            instance,
+            workflow,
+            requestContext,
+            transition.Roles.Concat(stateEntry?.Roles ?? []),
+            cancellationToken);
+
+        return evaluatorForState.IsAnyRoleAllowed(callerRoles, transition.Roles, transition)
+               && (stateEntry is not { HasRoles: true }
+                   || evaluatorForState.IsAnyRoleAllowed(callerRoles, stateEntry.Roles, transition));
+    }
+
     /// <summary>
     /// Applies the canonical composition of the two grant levels: the transition's own grants are the
     /// global gate and a matching <c>availableIn</c> entry's grants are an additional, state-specific

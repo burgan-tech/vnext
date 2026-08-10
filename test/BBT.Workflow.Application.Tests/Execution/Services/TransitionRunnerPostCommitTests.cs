@@ -60,7 +60,9 @@ public sealed class TransitionRunnerPostCommitTests
         foreach (var uowManager in harness.UowManagers)
         {
             uowManager.Received(1).Begin(
-                Arg.Is<UnitOfWorkOptions>(options => options.Scope == UnitOfWorkScopeOption.RequiresNew));
+                Arg.Is<UnitOfWorkOptions>(options =>
+                    options.Scope == UnitOfWorkScopeOption.RequiresNew
+                    && !options.IsTransactional));
         }
         harness.PostCommitObservedDisposedStage.ShouldBeTrue();
         harness.PostCommitObservedReleasedTransitionLock.ShouldBeTrue();
@@ -76,16 +78,45 @@ public sealed class TransitionRunnerPostCommitTests
             HasDeferredEvent: true,
             PostCommitBehavior: PostCommitContinuationBehavior.ContinueParent,
             NextTransition: "must-not-run",
-            FailCommit: true));
+            FailCommit: true,
+            HoldCommitLease: true));
 
         var exception = await Should.ThrowAsync<InvalidOperationException>(
-            () => harness.Runner.RunAsync(harness.CreateInput("first")));
+            () => harness.Runner.RunAsync(harness.CreateInput("first", ExecMode.Async)));
 
         exception.Message.ShouldBe("commit failed");
-        harness.BusinessCalls.ShouldBe(["pipeline", "stage-events", "commit"]);
+        harness.BusinessCalls.ShouldBe([
+            "pipeline",
+            "stage-events",
+            "commit",
+            "commit-lease-released"
+        ]);
         harness.PostCommitExecutions.ShouldBe(0);
         harness.StageScopes.Single().IsDisposed.ShouldBeTrue();
         harness.StageScopes.Single().UowDisposed.ShouldBeTrue();
+        harness.CommitLeaseObservedDisposedUow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task RunAsync_HoldsAdmissionLeaseUntilStageCommitCompletes()
+    {
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            HoldCommitLease: true));
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first", ExecMode.Async));
+
+        result.IsSuccess.ShouldBeTrue();
+        harness.BusinessCalls.ShouldBe([
+            "pipeline",
+            "commit",
+            "commit-lease-released"
+        ]);
+        harness.CommitLeaseObservedDisposedUow.ShouldBeTrue();
+        harness.UowManagers.Single().Received(1).Begin(
+            Arg.Is<UnitOfWorkOptions>(options =>
+                options.Scope == UnitOfWorkScopeOption.RequiresNew
+                && options.IsTransactional));
     }
 
     [Fact]
@@ -247,19 +278,22 @@ public sealed class TransitionRunnerPostCommitTests
         public int PostCommitExecutions { get; private set; }
         public bool PostCommitObservedDisposedStage { get; private set; }
         public bool PostCommitObservedReleasedTransitionLock { get; private set; }
+        public bool CommitLeaseObservedDisposedUow { get; private set; }
         public TaskCompletionSource PostCommitStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource? PostCommitGate { get; init; }
         public PostCommitResult PostCommitResult { get; init; } = PostCommitResult.Ok();
 
-        public WorkflowExecutionContext CreateInput(string transitionKey) => new()
+        public WorkflowExecutionContext CreateInput(
+            string transitionKey,
+            ExecMode mode = ExecMode.Sync) => new()
         {
             Domain = Domain,
             WorkflowKey = WorkflowKey,
             WorkflowVersion = WorkflowVersion,
             InstanceId = InstanceId.ToString(),
             TransitionKey = transitionKey,
-            Mode = ExecMode.Sync,
+            Mode = mode,
             CallerMode = ExecMode.Sync,
             Headers = new Dictionary<string, string?> { ["userId"] = "42" }
         };
@@ -323,11 +357,13 @@ public sealed class TransitionRunnerPostCommitTests
                 var core = new RecordingCore(
                     this,
                     sp.GetRequiredService<ITransitionLockScopeFactory>(),
+                    sp.GetRequiredService<ITransitionCommitLeaseManager>(),
                     _plans[probe.Id - 1],
                     _workflow);
                 CoreInstances.Add(core);
                 return core;
             });
+            services.AddScoped<ITransitionCommitLeaseManager, TransitionCommitLeaseManager>();
             services.AddScoped<IUnitOfWorkManager>(sp =>
             {
                 var probe = sp.GetRequiredService<StageScopeProbe>();
@@ -405,6 +441,7 @@ public sealed class TransitionRunnerPostCommitTests
         private sealed class RecordingCore(
             RunnerHarness owner,
             ITransitionLockScopeFactory lockScopeFactory,
+            ITransitionCommitLeaseManager commitLeaseManager,
             StagePlan plan,
             WorkflowDefinition workflow) : IWorkflowExecutionCore
         {
@@ -416,6 +453,9 @@ public sealed class TransitionRunnerPostCommitTests
                 owner.CoreChainDepths.Add(context.Execution?.ChainDepth ?? 0);
                 context.Headers["x-transition"] = context.TransitionKey;
                 owner.BusinessCalls.Add(plan.Label);
+
+                if (plan.HoldCommitLease)
+                    commitLeaseManager.Hold(new RecordingCommitLease(owner));
 
                 var instance = Instance.Create(owner.InstanceId, WorkflowKey, WorkflowVersion, "instance-key");
                 instance.BeginChain(Guid.NewGuid());
@@ -467,6 +507,21 @@ public sealed class TransitionRunnerPostCommitTests
                     events,
                     executionContext.Directives.ToContinuations(),
                     executionContext));
+            }
+        }
+
+        private sealed class RecordingCommitLease(RunnerHarness owner) : IAsyncDisposable
+        {
+            private int _disposed;
+
+            public ValueTask DisposeAsync()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                {
+                    owner.CommitLeaseObservedDisposedUow = owner.StageScopes.Last().UowDisposed;
+                    owner.BusinessCalls.Add("commit-lease-released");
+                }
+                return ValueTask.CompletedTask;
             }
         }
 
@@ -531,7 +586,8 @@ public sealed class TransitionRunnerPostCommitTests
         bool HasDeferredEvent = false,
         PostCommitContinuationBehavior? PostCommitBehavior = null,
         string? NextTransition = null,
-        bool FailCommit = false);
+        bool FailCommit = false,
+        bool HoldCommitLease = false);
 
     private sealed record TestJob(PostCommitContinuationBehavior ContinuationBehavior)
         : IPostCommitContinuationJob;

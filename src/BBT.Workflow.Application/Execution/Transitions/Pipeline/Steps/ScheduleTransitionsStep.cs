@@ -101,8 +101,14 @@ public sealed class ScheduleTransitionsStep(
             .WithInstance(context.Instance)
             .WithRuntime(runtimeInfoProvider)
             .WithTransition(scheduledTransition)
-            .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
-            .WithRouteValues(context.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+            .WithHeaders(context.Headers.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
+            .WithRouteValues(context.RouteValues.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value,
+                StringComparer.OrdinalIgnoreCase))
             .BuildAsync(cancellationToken);
     }
 

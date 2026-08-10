@@ -62,6 +62,10 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
+            b.Property(p => p.Revision)
+                .IsRequired()
+                .IsConcurrencyToken();
+
             // Durable auto-chain ownership token (S6). Nullable; filtered by the chain-token gate.
             b.Property(p => p.ChainToken);
             b.HasIndex(p => p.ChainToken)
@@ -483,6 +487,27 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasMaxLength(WorkflowConstants.MaxFlowLength);
 
+            b.Property(p => p.DispatchStatus)
+                .IsRequired()
+                .HasConversion<int>();
+
+            b.Property(p => p.Payload)
+                .HasColumnType("jsonb");
+
+            b.Property(p => p.IdempotencyKey)
+                .HasMaxLength(InstanceJobConstants.MaxIdempotencyKeyLength);
+
+            b.Property(p => p.RequestFingerprint)
+                .HasMaxLength(InstanceJobConstants.MaxRequestFingerprintLength);
+
+            b.Property(p => p.ErrorCode)
+                .HasMaxLength(InstanceJobConstants.MaxErrorCodeLength);
+
+            b.Property(p => p.ErrorDetails)
+                .HasColumnType("text");
+
+            b.Property(p => p.ProcessingToken);
+
             b.HasIndex(i => i.JobId)
                 .IsUnique();
 
@@ -493,7 +518,17 @@ public static class InstancesModelCreatingExtensions
             // via the (InstanceId, JobName) leftmost prefix.
             b.HasIndex(i => new { i.InstanceId, i.JobName })
                 .HasFilter("\"IsActive\" = true")
+                .IsUnique()
                 .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");
+
+            b.HasIndex(i => new { i.InstanceId, i.IdempotencyKey })
+                .HasFilter("\"IdempotencyKey\" IS NOT NULL")
+                .IsUnique()
+                .HasDatabaseName("UX_InstanceJobs_Instance_IdempotencyKey");
+
+            b.HasIndex(i => new { i.DispatchStatus, i.NextAttemptAt })
+                .HasFilter("\"IsActive\" = true")
+                .HasDatabaseName("IX_InstanceJobs_Dispatch_NextAttemptAt");
         });
     }
 }

@@ -22,7 +22,8 @@ public sealed class HandleUpdateDataPreflightStep(
     IInstanceRepository instanceRepository,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IInstanceDataMutationService instanceDataMutationService) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.CheckParentUpdateDataTransition;
@@ -79,7 +80,8 @@ public sealed class HandleUpdateDataPreflightStep(
 
         // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist
         return await MapTransitionDataAsync(context, transition, cancellationToken)
-            .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition))
+            .BindAsync(mappedData => AddMappedDataToInstanceAsync(
+                context, mappedData, transition, cancellationToken))
             .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
             .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
             .TapAsync(_ =>
@@ -137,23 +139,31 @@ public sealed class HandleUpdateDataPreflightStep(
             context.Instance,
             runtimeInfoProvider,
             context.Headers,
+            context.RouteValues,
             cancellationToken);
     }
 
     /// <summary>
     /// Adds mapped data to instance if available.
     /// </summary>
-    private void AddMappedDataToInstance(
+    private async Task<Result<object?>> AddMappedDataToInstanceAsync(
         TransitionExecutionContext context,
         object? mappedData,
-        Definitions.Transition? transition)
+        Definitions.Transition? transition,
+        CancellationToken cancellationToken)
     {
         if (mappedData != null)
         {
-            context.Instance.AddData(
+            var addResult = await instanceDataMutationService.AddDataAsync(
+                context.Workflow,
+                context.Instance,
                 guidGenerator.Create(),
                 new JsonData(mappedData),
-                transition?.VersionStrategy);
+                transition?.VersionStrategy,
+                cancellationToken,
+                context.Headers);
+            if (!addResult.IsSuccess)
+                return Result<object?>.Fail(addResult.Error);
         }
 
         if (context.Tags != null)
@@ -165,6 +175,8 @@ public sealed class HandleUpdateDataPreflightStep(
         {
             context.Instance.SetStage(context.Stage);
         }
+
+        return Result<object?>.Ok(mappedData);
     }
 
     /// <summary>
@@ -217,5 +229,3 @@ public sealed class HandleUpdateDataPreflightStep(
         };
     }
 }
-
-

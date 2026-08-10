@@ -30,6 +30,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private readonly ITaskFactory _taskFactory;
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory;
     private readonly IGuidGenerator _guidGenerator;
+    private readonly IInstanceDataMutationService _instanceDataMutationService;
     private readonly IWorkflowMetrics _workflowMetrics;
     private readonly IErrorBoundaryResolver _boundaryResolver;
     private readonly IErrorActionExecutor _actionExecutor;
@@ -44,6 +45,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         ITaskFactory taskFactory,
         ITaskPersistenceStrategyFactory persistenceStrategyFactory,
         IGuidGenerator guidGenerator,
+        IInstanceDataMutationService instanceDataMutationService,
         IWorkflowMetrics workflowMetrics,
         IErrorBoundaryResolver boundaryResolver,
         IErrorActionExecutor actionExecutor,
@@ -54,6 +56,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         _taskFactory = taskFactory;
         _persistenceStrategyFactory = persistenceStrategyFactory;
         _guidGenerator = guidGenerator;
+        _instanceDataMutationService = instanceDataMutationService;
         _workflowMetrics = workflowMetrics;
         _boundaryResolver = boundaryResolver;
         _actionExecutor = actionExecutor;
@@ -468,18 +471,26 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Applies the output response to the script context.
     /// </summary>
-    private void ApplyOutputToContext(
+    private async Task<Result> ApplyOutputToContextAsync(
         StandardTaskResponse response,
         TaskTrigger taskTrigger,
-        ScriptContext context)
+        ScriptContext context,
+        CancellationToken cancellationToken)
     {
-        if (taskTrigger != TaskTrigger.Extension && response.Data is not null)
-        {
-            context.Instance?.AddData(
-                _guidGenerator.Create(),
-                new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions)),
-                VersionStrategy.IncreasePatch);
-        }
+        if (taskTrigger == TaskTrigger.Extension || response.Data is null
+            || context.Instance is null || context.Workflow is null)
+            return Result.Ok();
+
+        var result = await _instanceDataMutationService.AddDataAsync(
+            context.Workflow,
+            context.Instance,
+            _guidGenerator.Create(),
+            new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions)),
+            VersionStrategy.IncreasePatch,
+            cancellationToken,
+            context.Headers as IReadOnlyDictionary<string, string?>);
+
+        return result.IsSuccess ? Result.Ok() : Result.Fail(result.Error);
     }
 
     /// <summary>
@@ -603,7 +614,23 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var responseJson = new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
 
         // ALWAYS apply output to context
-        ApplyOutputToContext(response, taskTrigger, context);
+        var applyOutputResult = await ApplyOutputToContextAsync(
+            response,
+            taskTrigger,
+            context,
+            cancellationToken);
+        if (!applyOutputResult.IsSuccess)
+        {
+            await RecordFailureAsync(
+                instanceTask,
+                persistenceStrategy,
+                taskTypeStr,
+                workflowKey,
+                stopwatch,
+                applyOutputResult.Error.Message,
+                cancellationToken);
+            return Result<TasksExecutionResult>.Fail(applyOutputResult.Error);
+        }
 
         // Mark task completed with business status
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);

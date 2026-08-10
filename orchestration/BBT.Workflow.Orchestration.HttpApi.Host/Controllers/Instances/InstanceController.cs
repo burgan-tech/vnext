@@ -7,6 +7,7 @@ using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.CurrentUser;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Events;
@@ -46,6 +47,15 @@ public sealed class InstanceController(
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
     ICurrentUser currentUser) : AetherControllerBase
 {
+    private const int MaxForwardedHeaderCount = 100;
+    private const int MaxForwardedHeaderBytes = 32 * 1024;
+
+    private static readonly HashSet<string> HopByHopHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+        "trailer", "transfer-encoding", "upgrade", "host", "content-length"
+    };
+
     /// <summary>
     /// Starts a new workflow instance.
     /// </summary>
@@ -73,6 +83,9 @@ public sealed class InstanceController(
         var httpContext = httpContextAccessor.HttpContext;
         var headers = httpContext?.Request.Headers ?? new HeaderDictionary();
 
+        if (!TryCaptureRequestHeaders(headers, out var forwardedHeaders, out var headerError))
+            return BadRequest(headerError);
+
         CreateInstanceDto request;
         if (PayloadModeDetector.IsStandard(headers, body))
         {
@@ -98,12 +111,47 @@ public sealed class InstanceController(
         };
         if (httpContext is not null)
         {
-            input.Headers = httpContext.Request.Headers.ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());
+            input.Headers = forwardedHeaders;
             input.RouteValues = httpContext.Request.RouteValues.ToDictionary(s => s.Key, s => s.Value?.ToString());
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
         return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+    }
+
+    private static bool TryCaptureRequestHeaders(
+        IHeaderDictionary headers,
+        out Dictionary<string, string?> captured,
+        out string? error)
+    {
+        captured = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        error = null;
+
+        if (headers.Count > MaxForwardedHeaderCount)
+        {
+            error = $"At most {MaxForwardedHeaderCount} request headers can be forwarded to a transition.";
+            return false;
+        }
+
+        var totalBytes = 0;
+        foreach (var (key, values) in headers)
+        {
+            var value = values.FirstOrDefault();
+            totalBytes += System.Text.Encoding.UTF8.GetByteCount(key);
+            if (value is not null)
+                totalBytes += System.Text.Encoding.UTF8.GetByteCount(value);
+
+            if (totalBytes > MaxForwardedHeaderBytes)
+            {
+                error = $"Transition request headers exceed the {MaxForwardedHeaderBytes}-byte forwarding limit.";
+                return false;
+            }
+
+            if (!HopByHopHeaders.Contains(key) && !DurableHeaderFilter.IsSensitive(key))
+                captured[key.ToLowerInvariant()] = value;
+        }
+
+        return true;
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -367,12 +415,29 @@ public sealed class InstanceController(
         [FromBody] TransitionContinuationRequested continuation,
         CancellationToken cancellationToken = default)
     {
-        var actor = Enum.TryParse<ExecutionActor>(continuation.ExecutionActor, ignoreCase: true, out var parsed)
-            ? parsed
-            : ExecutionActor.System;
+        if (continuation.JobId == Guid.Empty)
+            return BadRequest("A durable transition JobId is required.");
+
+        if (continuation.InstanceId != instance
+            || !string.Equals(continuation.Domain, domain, StringComparison.Ordinal)
+            || !string.Equals(continuation.Flow, workflow, StringComparison.Ordinal)
+            || !string.Equals(continuation.TransitionKey, transitionKey, StringComparison.Ordinal))
+        {
+            return BadRequest("Continuation identity does not match the enqueue route.");
+        }
+
+        if (!Enum.TryParse<ExecutionActor>(continuation.ExecutionActor, ignoreCase: true, out var actor)
+            || !Enum.IsDefined(actor))
+        {
+            return BadRequest($"Execution actor '{continuation.ExecutionActor}' is invalid.");
+        }
+
+        if (!Enum.IsDefined(typeof(TriggerType), continuation.TriggerType))
+            return BadRequest($"Trigger type '{continuation.TriggerType}' is invalid.");
 
         var payload = new TransitionJobPayload
         {
+            JobId = continuation.JobId,
             JobName = continuation.JobName,
             InstanceId = continuation.InstanceId,
             TransitionKey = continuation.TransitionKey,
@@ -380,16 +445,24 @@ public sealed class InstanceController(
             Workflow = continuation.Flow,
             Version = continuation.Version,
             Data = continuation.Data,
+            RawBody = continuation.RawBody,
             InstanceKey = continuation.InstanceKey,
             Tags = continuation.Tags,
             Stage = continuation.Stage,
-            Headers = continuation.Headers,
+            Headers = DurableHeaderFilter.ForPersistence(continuation.Headers),
             RouteValues = continuation.RouteValues,
             ExecutionActor = actor,
             CallerSync = false,
             TraceParent = continuation.TraceParent,
             TraceState = continuation.TraceState,
-            ChainToken = continuation.ChainToken
+            ChainToken = continuation.ChainToken,
+            AdmissionToken = continuation.ChainToken,
+            AdmittedRevision = continuation.AdmittedRevision,
+            TransitionSchemaValidated = continuation.TransitionSchemaValidated,
+            ChainDepth = continuation.ChainDepth,
+            TriggerType = (TriggerType)continuation.TriggerType,
+            IsReentry = continuation.IsReentry,
+            IsErrorBoundaryTransition = continuation.IsErrorBoundaryTransition
         };
 
         await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);
@@ -428,6 +501,9 @@ public sealed class InstanceController(
         var httpContext = httpContextAccessor.HttpContext;
         var headers = httpContext?.Request.Headers ?? new HeaderDictionary();
 
+        if (!TryCaptureRequestHeaders(headers, out var forwardedHeaders, out var headerError))
+            return BadRequest(headerError);
+
         TransitionDataInput? data;
         if (body is null)
         {
@@ -448,7 +524,7 @@ public sealed class InstanceController(
         };
         if (httpContext is not null)
         {
-            input.Headers = httpContext.Request.Headers.ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());
+            input.Headers = forwardedHeaders;
             input.RouteValues = httpContext.Request.RouteValues.ToDictionary(s => s.Key, s => s.Value?.ToString());
         }
 
