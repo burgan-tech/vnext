@@ -387,6 +387,14 @@ public sealed class InstanceCommandAppService(
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
 
+        // Creation is the reservation: a sub-item is persisted Busy at creation (IsSubItem seed
+        // in CreateAndPrepareInstanceAsync), and this request — the one that just created the
+        // row — owns it. Without this, the child's own start transition classifies as Normal
+        // and rejects itself with 409 against its birth-Busy status. Regular instances are
+        // created Active and keep the normal reserve path. Applies uniformly to sync/async and
+        // local/cross-domain subflow starts, since every start funnels through here.
+        context.IsPreReserved = data.Instance.IsBusy;
+
         // Execute transition - lock is managed by TransitionPipeline
         return workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)

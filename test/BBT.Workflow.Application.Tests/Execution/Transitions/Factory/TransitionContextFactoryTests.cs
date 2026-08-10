@@ -179,6 +179,49 @@ public class TransitionContextFactoryTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldPreserveIsPreReserved()
+    {
+        // A birth-Busy sub-item's start (and every job re-entry) carries IsPreReserved so the
+        // Busy-as-mutex admission classifies it as owner re-entry instead of rejecting it with
+        // 409 against its own reservation. The async accept path classifies on the FACTORY
+        // output, so the flag must survive this mapping.
+        const string domain = "test-domain";
+        const string workflowKey = "test-workflow";
+        var workflow = CreateWorkflow(workflowKey, domain);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var input = new WorkflowExecutionContext
+        {
+            Domain = domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = workflowKey,
+            WorkflowVersion = workflow.Version,
+            TransitionKey = "resume",
+            TriggerType = TriggerType.Manual,
+            Mode = ExecMode.Sync,
+            IsPreReserved = true
+        };
+
+        var instanceRepository = new Mock<IInstanceRepository>();
+        instanceRepository
+            .Setup(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(instance));
+        var componentCacheStore = new Mock<IComponentCacheStore>();
+        componentCacheStore
+            .Setup(x => x.GetFlowAsync(domain, workflowKey, workflow.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        var sut = new TransitionContextFactory(
+            instanceRepository.Object,
+            componentCacheStore.Object,
+            Mock.Of<IRuntimeInfoProvider>());
+
+        var result = await sut.CreateAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.IsPreReserved.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldNormalizeHeadersCaseInsensitively()
     {
         const string domain = "test-domain";

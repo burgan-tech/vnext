@@ -123,6 +123,7 @@ public sealed class TransitionContextFactory(
             Mode = input.Mode,
             CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
+            IsPreReserved = input.IsPreReserved,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
             Termination = input.Termination,
 
