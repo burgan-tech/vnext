@@ -1161,5 +1161,239 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     """;
 
     #endregion
+
+    #region Script Slot Validation Tests
+
+    /// <summary>
+    /// The regression these tests exist for: a script slot published with only a 'location' (the domain
+    /// build step never inlined the .csx body) used to pass validation and then silently no-op at runtime.
+    /// </summary>
+    [Theory]
+    [InlineData("Transitions[submit].Mapping")]
+    [InlineData("Transitions[submit].Rule")]
+    [InlineData("OnEntries[0].Mapping")]
+    [InlineData("OnExits[0].Mapping")]
+    [InlineData("Notifications[0].Mapping")]
+    [InlineData("View[0].Rule")]
+    [InlineData("SubFlow.Mapping")]
+    public void Validate_ShouldFail_WhenStateScriptSlotDeclaresOnlyLocation(string slotPath)
+    {
+        // Arrange
+        var workflow = DeserializeWorkflow(ScriptSlotWorkflowJson(slotPath));
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        result.ValidationErrors.ShouldContain(
+            e => e.MemberNames.Contains($"Workflow.States[waiting].{slotPath}"),
+            $"No location-only error for '{slotPath}'. Errors: " +
+            string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenWorkflowOutputDeclaresOnlyLocation()
+    {
+        // Arrange
+        var workflow = DeserializeWorkflow($$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "output": { "location": "./src/Output.csx" },
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Workflow.Output"));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenStartTransitionMappingDeclaresOnlyLocation()
+    {
+        // Arrange - StartTransition is validated on its own path, not under a state.
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}],
+                "mapping": { "location": "./src/StartMapping.csx" }
+            }
+        }
+        """);
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Workflow.StartTransition.Mapping"));
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenScriptSlotsCarryCode()
+    {
+        // Arrange - same shape as the failing cases, with the body inlined as the build step would.
+        var workflow = DeserializeWorkflow(ScriptSlotWorkflowJson(slotPath: null));
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        var scriptErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.StartsWith("Script "))
+            .ToList();
+        scriptErrors.ShouldBeEmpty($"Unexpected script errors: {string.Join(" | ", scriptErrors.Select(e => e.ErrorMessage))}");
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenMappingIsGlobalTypeWithoutCode()
+    {
+        // Arrange - type "G" declares the body lives elsewhere; the runtime never compiles it.
+        var workflow = DeserializeWorkflow("""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "onEntries": [
+                        {
+                            "order": 1,
+                            "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                            "mapping": { "type": "G", "location": "./src/Noop.csx" }
+                        }
+                    ],
+                    "transitions": []
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """);
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        result.ValidationErrors
+            .ShouldNotContain(e => e.MemberNames.Contains("Workflow.States[initial].OnEntries[0].Mapping"));
+    }
+
+    /// <summary>
+    /// Builds a workflow whose 'waiting' state carries every script slot family. The slot named by
+    /// <paramref name="slotPath"/> is authored location-only; all others carry an inlined body.
+    /// Passing null makes every slot valid.
+    /// </summary>
+    private static string ScriptSlotWorkflowJson(string? slotPath)
+    {
+        // "cmV0dXJuIHRydWU7" == "return true;"
+        string Slot(string path) =>
+            path == slotPath
+                ? """{ "location": "./src/X.csx" }"""
+                : """{ "location": "./src/X.csx", "code": "cmV0dXJuIHRydWU7" }""";
+
+        return $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "waiting",
+                    "stateType": "subflow",
+                    "labels": [{"label": "Waiting", "language": "en"}],
+                    "subFlow": {
+                        "type": "S",
+                        "process": {"key": "sub", "domain": "d", "flow": "sys-flows", "version": "1.0.0"},
+                        "mapping": {{Slot("SubFlow.Mapping")}}
+                    },
+                    "onEntries": [
+                        {
+                            "order": 1,
+                            "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                            "mapping": {{Slot("OnEntries[0].Mapping")}}
+                        }
+                    ],
+                    "onExits": [
+                        {
+                            "order": 1,
+                            "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                            "mapping": {{Slot("OnExits[0].Mapping")}}
+                        }
+                    ],
+                    "notifications": [
+                        {
+                            "type": "state",
+                            "mapping": {{Slot("Notifications[0].Mapping")}}
+                        }
+                    ],
+                    "views": [
+                        {
+                            "view": {"key": "v", "domain": "d", "flow": "sys-views", "version": "1.0.0"},
+                            "rule": {{Slot("View[0].Rule")}}
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "key": "submit",
+                            "target": "done",
+                            "triggerType": "manual",
+                            "labels": [{"label": "Submit", "language": "en"}],
+                            "mapping": {{Slot("Transitions[submit].Mapping")}},
+                            "rule": {{Slot("Transitions[submit].Rule")}}
+                        }
+                    ]
+                },
+                {
+                    "key": "done",
+                    "stateType": "finish",
+                    "labels": [{"label": "Done", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "startTransition": {
+                "key": "start",
+                "target": "waiting",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """;
+    }
+
+    #endregion
 }
 

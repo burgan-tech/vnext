@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using BBT.Workflow.Runtime;
 
@@ -48,6 +49,7 @@ public sealed class FunctionComponentValidator : IComponentValidator
 
             ValidateVerbs(function, result);
             ValidateContractReferences(function, result);
+            ValidateScriptCodes(function, result);
 
             return result;
         }
@@ -84,6 +86,79 @@ public sealed class FunctionComponentValidator : IComponentValidator
                 "carry a request body, so the schema would never be applied. Declare a body-carrying " +
                 $"verb ({FunctionVerb.Post}, {FunctionVerb.Patch} or {FunctionVerb.Delete}) or remove inputSchema.",
                 $"{nameof(Function)}.{nameof(Function.InputSchema)}");
+        }
+    }
+
+    /// <summary>
+    /// Validates every script slot a function can carry. A slot published with only a <c>location</c> is
+    /// silently skipped (mappings) or fails mid-request (rules and key expressions) — see
+    /// <see cref="ScriptCodeValidator"/>.
+    /// </summary>
+    private static void ValidateScriptCodes(Function function, ComponentValidationResult result)
+    {
+        var errors = result.ValidationErrors;
+
+        ScriptCodeValidator.Validate(
+            function.Task?.Mapping,
+            $"{nameof(Function)}.{nameof(Function.Task)}.{nameof(OnExecuteTask.Mapping)}",
+            errors);
+
+        foreach (var (task, index) in function.OnExecutionTasks.Select((t, i) => (t, i)))
+        {
+            ScriptCodeValidator.Validate(
+                task.Mapping,
+                $"{nameof(Function)}.{nameof(Function.OnExecutionTasks)}[{index}].{nameof(OnExecuteTask.Mapping)}",
+                errors);
+        }
+
+        ScriptCodeValidator.Validate(
+            function.Output, $"{nameof(Function)}.{nameof(Function.Output)}", errors);
+
+        ScriptCodeValidator.Validate(
+            function.Cache?.KeyExpression,
+            $"{nameof(Function)}.{nameof(Function.Cache)}.{nameof(FunctionCache.KeyExpression)}",
+            errors);
+
+        ScriptCodeValidator.Validate(
+            function.Cache?.GenerationKeyExpression,
+            $"{nameof(Function)}.{nameof(Function.Cache)}.{nameof(FunctionCache.GenerationKeyExpression)}",
+            errors);
+
+        ValidateSchemaSlotRules(function.InputSchema, nameof(Function.InputSchema), errors);
+        ValidateSchemaSlotRules(function.OutputSchema, nameof(Function.OutputSchema), errors);
+        ValidateViewSlotRules(function.InputView, nameof(Function.InputView), errors);
+        ValidateViewSlotRules(function.OutputView, nameof(Function.OutputView), errors);
+    }
+
+    /// <summary>Validates the selection rule of each entry in a schema contract slot.</summary>
+    private static void ValidateSchemaSlotRules(
+        SchemaSelection? selection,
+        string propertyName,
+        IList<ValidationResult> errors)
+    {
+        if (selection is null)
+            return;
+
+        foreach (var (entry, index) in selection.Schemas.Select((e, i) => (e, i)))
+        {
+            ScriptCodeValidator.Validate(
+                entry.Rule, $"{nameof(Function)}.{propertyName}[{index}].{nameof(SchemaEntry.Rule)}", errors);
+        }
+    }
+
+    /// <summary>Validates the selection rule of each entry in a view contract slot.</summary>
+    private static void ValidateViewSlotRules(
+        ViewDefinition? definition,
+        string propertyName,
+        IList<ValidationResult> errors)
+    {
+        if (definition is null)
+            return;
+
+        foreach (var (entry, index) in definition.Views.Select((e, i) => (e, i)))
+        {
+            ScriptCodeValidator.Validate(
+                entry.Rule, $"{nameof(Function)}.{propertyName}[{index}].{nameof(ViewEntry.Rule)}", errors);
         }
     }
 

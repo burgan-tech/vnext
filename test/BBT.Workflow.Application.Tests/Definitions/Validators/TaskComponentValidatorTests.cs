@@ -83,6 +83,59 @@ public class TaskComponentValidatorTests
         result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("WorkflowTask.Type"));
     }
 
+    [Theory]
+    [InlineData("sourceMapping", "CacheAsideTask.SourceMapping")]
+    [InlineData("keyExpression", "CacheAsideTask.KeyExpression")]
+    public void Validate_ShouldReturnError_WhenCacheAsideScriptSlotDeclaresOnlyLocation(
+        string slot,
+        string expectedMember)
+    {
+        // Arrange - CacheAside (type 18) is the only task whose own config carries script slots.
+        var taskJson = $$"""
+        {
+            "type": "18",
+            "config": {
+                "key": "customer-profile",
+                "storeName": "statestore",
+                "sourceTask": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "{{slot}}": { "location": "./src/CacheMapping.csx" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(taskJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains(expectedMember));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_WhenCacheAsideScriptSlotsCarryCode()
+    {
+        // Arrange - "cmV0dXJuIHRydWU7" == "return true;"
+        var taskJson = """
+        {
+            "type": "18",
+            "config": {
+                "key": "customer-profile",
+                "storeName": "statestore",
+                "sourceTask": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "sourceMapping": { "location": "./src/CacheMapping.csx", "code": "cmV0dXJuIHRydWU7" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(taskJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
+
     [Fact]
     public void Validate_ShouldReturnError_ForInvalidJson()
     {
