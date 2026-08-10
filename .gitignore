@@ -6,6 +6,7 @@
 *.user
 *.userosscache
 *.sln.docstates
+switch.json
 
 
 # User-specific files (MonoDevelop/Xamarin Studio)
