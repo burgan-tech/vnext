@@ -25,7 +25,6 @@ public sealed class TransitionExecutor
 {
     private readonly IReadOnlyList<ITransitionStep> _steps;
     private readonly ILogger<TransitionExecutor> _logger;
-
     /// <summary>
     /// Initializes a new instance of the <see cref="TransitionExecutor"/>.
     /// </summary>
@@ -176,6 +175,8 @@ public sealed class TransitionExecutor
         activity.SetTag(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
         activity.SetTag(TelemetryConstants.TagNames.TransitionKey, context.TransitionKey);
+        activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         if (context.Transition != null)
         {
             activity.SetTag(TelemetryConstants.TagNames.TriggerType, context.Transition.TriggerType.ToString());
