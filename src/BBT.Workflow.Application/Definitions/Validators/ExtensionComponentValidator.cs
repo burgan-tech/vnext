@@ -43,6 +43,13 @@ public sealed class ExtensionComponentValidator : IComponentValidator
             {
                 result.AddError("Extension task is required.", $"{nameof(Extension)}.{nameof(Extension.Task)}");
             }
+            else
+            {
+                ScriptCodeValidator.Validate(
+                    extension.Task.Mapping,
+                    $"{nameof(Extension)}.{nameof(Extension.Task)}.{nameof(OnExecuteTask.Mapping)}",
+                    result.ValidationErrors);
+            }
 
             return result;
         }

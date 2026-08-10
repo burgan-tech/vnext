@@ -67,6 +67,95 @@ public class FunctionComponentValidatorTests
     }
 
     [Fact]
+    public void Validate_ShouldReturnError_WhenTaskMappingDeclaresOnlyLocation()
+    {
+        // Arrange
+        var functionJson = """
+        {
+            "scope": "F",
+            "task": {
+                "order": 1,
+                "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "mapping": { "location": "./src/FnMapping.csx" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(functionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Task.Mapping"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenOutputAndCacheKeyExpressionDeclareOnlyLocation()
+    {
+        // Arrange - a multi-task function reports every broken slot in one pass.
+        var functionJson = """
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                {
+                    "order": 1,
+                    "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                    "mapping": { "location": "./src/Step1.csx" }
+                }
+            ],
+            "output": { "location": "./src/Output.csx" },
+            "cache": {
+                "storeName": "statestore",
+                "keyExpression": { "location": "dynamicExpresso" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(functionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OnExecutionTasks[0].Mapping"));
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Output"));
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Cache.KeyExpression"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenContractSlotRuleDeclaresOnlyLocation()
+    {
+        // Arrange - a view-selection rule with no body throws mid-request instead of being skipped.
+        var functionJson = """
+        {
+            "scope": "F",
+            "task": {
+                "order": 1,
+                "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "mapping": { "location": "./src/FnMapping.csx", "code": "cmV0dXJuIHRydWU7" }
+            },
+            "outputView": [
+                {
+                    "view": {"key": "v1", "domain": "d", "flow": "sys-views", "version": "1.0.0"},
+                    "rule": { "location": "./src/ViewRule.csx" }
+                },
+                {
+                    "view": {"key": "v2", "domain": "d", "flow": "sys-views", "version": "1.0.0"}
+                }
+            ]
+        }
+        """;
+        var attributes = JsonDocument.Parse(functionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OutputView[0].Rule"));
+    }
+
+    [Fact]
     public void Validate_ShouldReturnError_ForMissingTask()
     {
         // Arrange

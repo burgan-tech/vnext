@@ -90,6 +90,39 @@ plain `NAT`/`B64` — no REF chaining). This lets tasks reuse published mapping 
 }
 ```
 
+### Every script slot must resolve to a body
+
+`location` is authoring metadata only — the runtime never reads the `.csx` file it names. The body is
+inlined into `code` by the domain build step, so a slot published with **only** a `location` has no body
+at all, and nothing downstream is able to say so: the encoding defaults to `B64`, empty Base64 decodes
+without error, and `HasMappingCode` turns false. A bodyless *mapping* is then silently skipped (the HTTP
+task fires with no body mapping, a script task returns null), while a bodyless *rule* blows up
+mid-transition when Roslyn compiles an empty script.
+
+`ScriptCodeValidator` closes that gap at publish time for every slot a definition can carry — transition
+`timer`/`rule`/`mapping`, `onExecutionTasks[].mapping`, state `onEntries`/`onExits`/`notifications`,
+`subFlow.mapping`, view- and schema-selection `rule`s, workflow and function `output`, function
+`cache.keyExpression`/`generationKeyExpression`, and `CacheAsideTask`'s `sourceMapping`/`keyExpression`.
+Matching the `vnext-schema` guard:
+
+| Slot | Verdict |
+|------|---------|
+| `{ "location": "./src/X.csx" }` | ✗ no `code` — never executed |
+| `{ "type": "L", "location": "./x.csx" }` | ✗ same, `L` is the default type |
+| `{ "type": "G", "location": "./x.csx" }` | ✓ `G` declares the body lives elsewhere |
+| `{ "location": "./x.csx", "code": "<base64>" }` | ✓ |
+| `code` present but not decodable under `encoding` | ✗ |
+| `code` decoding to whitespace | ✗ |
+| `encoding: "REF"` without a `sys-mappings` reference (key/domain/version) | ✗ unresolvable at compile time |
+
+When a definition object gains a new `ScriptCode` property, add its path to the traversal in
+`WorkflowValidator.ValidateWorkflowScriptCodes` / `ValidateTransitionScriptCodes` (or the matching
+component validator) — an unlisted slot is an unguarded slot.
+
+One deliberate exception: a transition `rule` whose `location` is `dynamicExpresso` is an inline boolean
+expression, not a `.csx` body, so `ValidateDynamicExpressoRule` owns its emptiness check and reports it
+in Dynamic Expresso terms instead.
+
 ## 3. Configuration
 
 ```json
