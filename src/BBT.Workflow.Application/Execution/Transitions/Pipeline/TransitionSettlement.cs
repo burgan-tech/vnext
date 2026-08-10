@@ -1,6 +1,7 @@
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
@@ -19,8 +20,26 @@ internal static class TransitionSettlement
         IInstanceRepository instanceRepository,
         IStateNotificationScheduler stateNotificationScheduler,
         ILogger logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool guardChainOwnership = false)
     {
+        // Busy-as-mutex: the chain runs with no held lease, so before settling verify that this
+        // chain still owns the instance — a takeover (cancel/exit/timeout) or the reaper rotates
+        // the durable token, and settling on top of the new owner would corrupt its status.
+        // (The commit happens with the enclosing UoW; this guard closes the practical window —
+        // the takeover side serializes its own flip under the short status lock.)
+        if (guardChainOwnership && context.ChainToken.HasValue)
+        {
+            var snapshot = await instanceRepository.GetExecutionSnapshotAsync(
+                context.InstanceId.ToString(), cancellationToken);
+
+            if (snapshot is null || !snapshot.MatchesChain(context.ChainToken.Value))
+            {
+                logger.ChainOwnershipLost(context.InstanceId, context.ChainToken, snapshot?.ChainToken);
+                return;
+            }
+        }
+
         var updated = false;
         if (context.Instance.IsBusy &&
             resolvedStatus is not null &&

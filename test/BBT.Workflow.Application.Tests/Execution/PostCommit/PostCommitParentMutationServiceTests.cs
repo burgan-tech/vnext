@@ -334,6 +334,9 @@ public sealed class PostCommitParentMutationServiceTests
             uowManager,
             repository,
             lockFactory,
+            Substitute.For<BBT.Workflow.Execution.Pipeline.IInstanceStatusLock>(),
+            Microsoft.Extensions.Options.Options.Create(
+                new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             workflowContext,
             notificationScheduler,
             NullLogger<PostCommitParentMutationService>.Instance);

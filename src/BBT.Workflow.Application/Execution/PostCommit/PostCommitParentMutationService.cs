@@ -1,12 +1,14 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.PostCommit;
 
@@ -17,6 +19,8 @@ public sealed class PostCommitParentMutationService(
     IUnitOfWorkManager uowManager,
     IInstanceRepository instanceRepository,
     ITransitionLockScopeFactory transitionLockScopeFactory,
+    IInstanceStatusLock instanceStatusLock,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     IWorkflowContext workflowContext,
     IStateNotificationScheduler stateNotificationScheduler,
     ILogger<PostCommitParentMutationService> logger) : IPostCommitParentMutationService
@@ -87,9 +91,12 @@ public sealed class PostCommitParentMutationService(
         Func<Instance, CancellationToken, Task> mutation,
         CancellationToken cancellationToken)
     {
-        await using var lockScope = await transitionLockScopeFactory.AcquireAsync(
-            source.LockKey,
-            cancellationToken);
+        // Busy-as-mutex: post-commit mutations are status flips — the short status lock replaces
+        // the chain-lease lock, and the mutation commits inside this scope before release.
+        var useBusyAsMutex = executionOptions.Value.UseBusyAsMutex;
+        await using var lockScope = useBusyAsMutex
+            ? await instanceStatusLock.AcquireAsync(source.LockKey, cancellationToken)
+            : await transitionLockScopeFactory.AcquireAsync(source.LockKey, cancellationToken);
         if (!lockScope.IsAcquired)
             return Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(source.InstanceId));
 
@@ -103,6 +110,23 @@ public sealed class PostCommitParentMutationService(
             cancellationToken);
         if (instance is null)
             return Result<TransitionOutput>.Fail(WorkflowErrors.InstanceNotFound(source.InstanceId.ToString()));
+
+        // Chain-ownership guard: a takeover (cancel/exit/timeout) rotates the durable token;
+        // its settle is authoritative, so a stale post-commit mutation must be skipped.
+        if (useBusyAsMutex
+            && source.ChainToken.HasValue
+            && !instance.MatchesChain(source.ChainToken.Value)
+            && instance.ChainToken.HasValue)
+        {
+            logger.ChainOwnershipLost(source.InstanceId, source.ChainToken, instance.ChainToken);
+            return Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = instance.Id,
+                Key = instance.Key,
+                Status = instance.Status,
+                PipelineInstance = instance
+            });
+        }
 
         await mutation(instance, cancellationToken);
         await uow.CommitAsync(cancellationToken);

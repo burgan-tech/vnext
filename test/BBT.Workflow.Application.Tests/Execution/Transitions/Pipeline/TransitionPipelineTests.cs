@@ -38,6 +38,7 @@ public class TransitionPipelineTests
     private readonly ITransitionValidationService _mockValidationService;
     private readonly IStateNotificationScheduler _mockStateNotificationScheduler;
     private readonly ITransitionAdmissionService _mockAdmissionService;
+    private readonly IInstanceStatusLock _mockStatusLock;
     private readonly List<ITransitionStep> _mockSteps;
     private readonly TransitionPipeline _pipeline;
 
@@ -55,6 +56,7 @@ public class TransitionPipelineTests
         _mockAdmissionService = Substitute.For<ITransitionAdmissionService>();
         _mockAdmissionService.CheckAdmission(Arg.Any<TransitionExecutionContext>())
             .Returns(Result.Ok());
+        _mockStatusLock = Substitute.For<IInstanceStatusLock>();
         _mockSteps = new List<ITransitionStep>();
 
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
@@ -127,6 +129,7 @@ public class TransitionPipelineTests
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
             _mockAdmissionService,
+            _mockStatusLock,
             Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }
@@ -562,6 +565,7 @@ public class TransitionPipelineTests
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
             _mockAdmissionService,
+            _mockStatusLock,
             Microsoft.Extensions.Options.Options.Create(options),
             _mockLogger);
     }
@@ -587,6 +591,7 @@ public class TransitionPipelineTests
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
             _mockAdmissionService,
+            _mockStatusLock,
             Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }

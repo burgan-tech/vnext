@@ -31,6 +31,7 @@ public class TransitionPipeline
     private readonly IPipelineProfileResolver _profileResolver;
     private readonly IStateNotificationScheduler _stateNotificationScheduler;
     private readonly ITransitionAdmissionService _admissionService;
+    private readonly IInstanceStatusLock _statusLock;
     private readonly WorkflowExecutionOptions _executionOptions;
     private readonly ILogger<TransitionPipeline> _logger;
 
@@ -72,6 +73,7 @@ public class TransitionPipeline
         IPipelineProfileResolver profileResolver,
         IStateNotificationScheduler stateNotificationScheduler,
         ITransitionAdmissionService admissionService,
+        IInstanceStatusLock statusLock,
         Microsoft.Extensions.Options.IOptions<WorkflowExecutionOptions> executionOptions,
         ILogger<TransitionPipeline> logger)
     {
@@ -87,6 +89,7 @@ public class TransitionPipeline
         _profileResolver = profileResolver;
         _stateNotificationScheduler = stateNotificationScheduler;
         _admissionService = admissionService;
+        _statusLock = statusLock;
         _executionOptions = executionOptions.Value;
         _logger = logger;
     }
@@ -373,7 +376,8 @@ public class TransitionPipeline
                     _instanceRepository,
                     _stateNotificationScheduler,
                     _logger,
-                    cancellationToken);
+                    cancellationToken,
+                    guardChainOwnership: _executionOptions.UseBusyAsMutex && lockScope is null);
 
                 return Result<TransitionExecutionContext>.Ok(context);
             }
@@ -447,12 +451,34 @@ public class TransitionPipeline
     {
         _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
+        // Busy-as-mutex: faulting is a status flip on an unlocked chain — serialize it under the
+        // short status lock and verify chain ownership first. A rotated token means a takeover
+        // (cancel/exit) already owns the instance; faulting on top would overwrite its settle.
+        ITransitionLockScope? statusScope = null;
+        if (_executionOptions.UseBusyAsMutex)
+        {
+            statusScope = await _statusLock.AcquireAsync(context.LockKey, cancellationToken);
+            // On acquisition failure proceed unguarded: leaving a failed pipeline invisible
+            // (not Faulted) is worse than the narrow double-write window.
+        }
+
+        await using var _ = statusScope;
+
         await using var faultUow = _uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
         // Reload in the new scope so we operate on a clean, tracked entity.
         var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)
                        ?? context.Instance;
+
+        if (_executionOptions.UseBusyAsMutex
+            && context.ChainToken.HasValue
+            && !instance.MatchesChain(context.ChainToken.Value)
+            && instance.ChainToken.HasValue)
+        {
+            _logger.ChainOwnershipLost(context.InstanceId, context.ChainToken, instance.ChainToken);
+            return;
+        }
 
         if (!instance.HasActiveIncident)
         {
