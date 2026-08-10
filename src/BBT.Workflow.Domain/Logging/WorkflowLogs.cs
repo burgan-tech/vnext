@@ -215,6 +215,19 @@ public static partial class WorkflowLogs
         string lockKey);
 
     /// <summary>
+    /// Logs when the compensation that releases an accept-time reservation failed. The
+    /// instance stays Busy until the chain reaper reclaims it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10140,
+        Level = LogLevel.Warning,
+        Message = "Failed to release reservation for instance {InstanceId}; chain reaper will recover")]
+    public static partial void ReservationReleaseFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when a foreign transition is rejected by the chain-token gate because the instance
     /// is Busy with an active auto-chain owned by a different token.
     /// </summary>

@@ -37,6 +37,7 @@ public class TransitionPipelineTests
     private readonly IUnitOfWorkManager _mockUowManager;
     private readonly ITransitionValidationService _mockValidationService;
     private readonly IStateNotificationScheduler _mockStateNotificationScheduler;
+    private readonly ITransitionAdmissionService _mockAdmissionService;
     private readonly List<ITransitionStep> _mockSteps;
     private readonly TransitionPipeline _pipeline;
 
@@ -51,6 +52,9 @@ public class TransitionPipelineTests
         _mockUowManager = Substitute.For<IUnitOfWorkManager>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
         _mockStateNotificationScheduler = Substitute.For<IStateNotificationScheduler>();
+        _mockAdmissionService = Substitute.For<ITransitionAdmissionService>();
+        _mockAdmissionService.CheckAdmission(Arg.Any<TransitionExecutionContext>())
+            .Returns(Result.Ok());
         _mockSteps = new List<ITransitionStep>();
 
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
@@ -122,6 +126,7 @@ public class TransitionPipelineTests
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
+            _mockAdmissionService,
             Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }
@@ -556,6 +561,7 @@ public class TransitionPipelineTests
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
+            _mockAdmissionService,
             Microsoft.Extensions.Options.Options.Create(options),
             _mockLogger);
     }
@@ -580,6 +586,7 @@ public class TransitionPipelineTests
             _mockValidationService,
             new PipelineProfileResolver(),
             _mockStateNotificationScheduler,
+            _mockAdmissionService,
             Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }

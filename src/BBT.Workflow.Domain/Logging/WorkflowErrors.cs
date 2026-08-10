@@ -329,6 +329,18 @@ public static class WorkflowErrors
             target: instanceId.ToString());
 
     /// <summary>
+    /// The executing chain no longer owns the instance: its chain token was rotated by a
+    /// takeover (cancel/exit/timeout) or reclaimed by the chain reaper. The chain must stop
+    /// without faulting the instance — the new owner has already settled it.
+    /// </summary>
+    /// <param name="instanceId">The instance whose ownership was lost.</param>
+    public static Error ChainOwnershipLost(Guid instanceId)
+        => Error.Conflict(
+            WorkflowErrorCodes.ChainOwnershipLost,
+            "Chain ownership lost: the instance was taken over by another transition",
+            target: instanceId.ToString());
+
+    /// <summary>
     /// A background job for this transition is already active.
     /// Returned when sync=false is requested but an active job with the same
     /// instance and transition key already exists in the queue.

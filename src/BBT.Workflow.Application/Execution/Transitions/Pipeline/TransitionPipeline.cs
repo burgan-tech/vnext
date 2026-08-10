@@ -30,6 +30,7 @@ public class TransitionPipeline
     private readonly ITransitionValidationService _validationService;
     private readonly IPipelineProfileResolver _profileResolver;
     private readonly IStateNotificationScheduler _stateNotificationScheduler;
+    private readonly ITransitionAdmissionService _admissionService;
     private readonly WorkflowExecutionOptions _executionOptions;
     private readonly ILogger<TransitionPipeline> _logger;
 
@@ -70,6 +71,7 @@ public class TransitionPipeline
         ITransitionValidationService validationService,
         IPipelineProfileResolver profileResolver,
         IStateNotificationScheduler stateNotificationScheduler,
+        ITransitionAdmissionService admissionService,
         Microsoft.Extensions.Options.IOptions<WorkflowExecutionOptions> executionOptions,
         ILogger<TransitionPipeline> logger)
     {
@@ -84,6 +86,7 @@ public class TransitionPipeline
         _validationService = validationService;
         _profileResolver = profileResolver;
         _stateNotificationScheduler = stateNotificationScheduler;
+        _admissionService = admissionService;
         _executionOptions = executionOptions.Value;
         _logger = logger;
     }
@@ -97,6 +100,11 @@ public class TransitionPipeline
         WorkflowExecutionContext workflowContext,
         CancellationToken cancellationToken)
     {
+        // Busy-as-mutex model: admission (Busy 409 / short-lock reserve) replaces the
+        // whole-chain lock entirely — the chain runs with no held lease.
+        if (_executionOptions.UseBusyAsMutex)
+            return await RunWithBusyAdmissionAsync(workflowContext, cancellationToken);
+
         // 1) Build the first context to decide reserved vs normal path
         var contextResult = await CreateAndValidateContextAsync(workflowContext, cancellationToken);
         if (!contextResult.IsSuccess)
@@ -167,6 +175,94 @@ public class TransitionPipeline
     }
 
     /// <summary>
+    /// Busy-as-mutex prologue (<see cref="WorkflowExecutionOptions.UseBusyAsMutex"/>):
+    /// context creation → cheap Busy pre-check → policy validation → per-kind admission
+    /// (reserve / takeover / ownership verify / unconditional), then the chain runs with
+    /// <c>lockScope: null</c> — the Busy flag plus the durable chain token carry mutual
+    /// exclusion instead of a held lease.
+    /// </summary>
+    private async Task<Result<TransitionExecutionContext>> RunWithBusyAdmissionAsync(
+        WorkflowExecutionContext workflowContext,
+        CancellationToken cancellationToken)
+    {
+        // 1) Create the context WITHOUT validation — the Busy pre-check runs first so a
+        //    Busy instance is rejected before any validation work.
+        var contextResult = await _contextFactory.CreateAsync(workflowContext, cancellationToken);
+        if (!contextResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(contextResult.Error);
+
+        var context = contextResult.Value!;
+        context.Profile = _profileResolver.Resolve(workflowContext);
+        context.EnqueueContinuations = workflowContext.EnqueueContinuations;
+        context.ChainToken = workflowContext.ChainToken;
+
+        // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip).
+        var admission = _admissionService.CheckAdmission(context);
+        if (!admission.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(admission.Error);
+
+        // 3) Policy validation (schema is intake-only; see CreateAndValidateContextAsync).
+        var validationResult = await _validationService.ValidatePolicyAsync(context, cancellationToken);
+        if (!validationResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(validationResult.Error);
+
+        if (context.SkipImmediateExecution)
+            return Result<TransitionExecutionContext>.Ok(context);
+
+        // 4) Admission by kind — the only place a distributed lock is taken, and only for
+        //    the milliseconds of the status check-and-set.
+        switch (_admissionService.Classify(context))
+        {
+            case AdmissionKind.Unconditional:
+                // updateData: no lock, no Busy — instance-data writes are ordered by the DB
+                // versioning trigger. Clear any foreign S8 checkpoint (see reserved path note).
+                context.Instance.ClearResumePoint();
+                return await RunChainAsync(context, lockScope: null, cancellationToken);
+
+            case AdmissionKind.BypassBusyCheck:
+            {
+                var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                if (!takeover.IsSuccess)
+                    return Result<TransitionExecutionContext>.Fail(takeover.Error);
+
+                context.ChainToken = takeover.Value;
+                context.Instance.ClearResumePoint();
+                return await RunChainAsync(context, lockScope: null, cancellationToken);
+            }
+
+            case AdmissionKind.OwnerReentry:
+            {
+                var ownership = await _admissionService.VerifyOwnershipAsync(context, cancellationToken);
+                if (!ownership.IsSuccess)
+                    return Result<TransitionExecutionContext>.Fail(ownership.Error);
+
+                // Directive-driven resumes never resume from a foreign MAIN-transition
+                // checkpoint (their explicit ResumeFrom directive takes precedence); a job
+                // re-entry keeps the checkpoint for S8 crash-resume.
+                if (context.Directives.IsInternalResume)
+                    context.Instance.ClearResumePoint();
+
+                // SubFlow resume resumes an already-Busy instance; confirm the busy mark
+                // (mirrors the legacy reserved path).
+                if (context.Directives.IsSubFlowResume)
+                    await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
+
+                return await RunChainAsync(context, lockScope: null, cancellationToken);
+            }
+
+            default: // AdmissionKind.Normal
+            {
+                var reserve = await _admissionService.ReserveAsync(context, cancellationToken);
+                if (!reserve.IsSuccess)
+                    return Result<TransitionExecutionContext>.Fail(reserve.Error);
+
+                context.ChainToken = reserve.Value;
+                return await RunChainAsync(context, lockScope: null, cancellationToken);
+            }
+        }
+    }
+
+    /// <summary>
     /// Runs the full transition chain (first + auto-chained) under a single lock scope.
     /// The lease is sized to cover the whole chain budget; between-hop TTL extension is
     /// opt-in (<see cref="WorkflowExecutionOptions.EnableLockLeaseExtension"/>) and only
@@ -178,9 +274,31 @@ public class TransitionPipeline
         CancellationToken cancellationToken)
     {
         var context = initialContext;
+        var isFirstHop = true;
 
         while (true)
         {
+            // Busy-as-mutex: with no held lease, re-assert chain ownership at each hop after
+            // the first (the first hop just reserved / verified). A rotated token means a
+            // takeover (cancel/exit/timeout) or the reaper owns the instance now — stop
+            // WITHOUT faulting; the new owner has already settled the status.
+            if (!isFirstHop
+                && _executionOptions.UseBusyAsMutex
+                && lockScope is null
+                && context.ChainToken.HasValue)
+            {
+                var snapshot = await _instanceRepository.GetExecutionSnapshotAsync(
+                    context.InstanceId.ToString(), cancellationToken);
+
+                if (snapshot is null || !snapshot.MatchesChain(context.ChainToken.Value))
+                {
+                    _logger.ChainOwnershipLost(context.InstanceId, context.ChainToken, snapshot?.ChainToken);
+                    return Result<TransitionExecutionContext>.Ok(context);
+                }
+            }
+
+            isFirstHop = false;
+
             // Guard: Prevent infinite chain loops
             if (context.ChainDepth > MaxChainDepth)
             {

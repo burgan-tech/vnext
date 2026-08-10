@@ -1,6 +1,7 @@
 using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Admission;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.LongPoll;
@@ -47,6 +48,9 @@ public static class PipelineServiceCollectionExtensions
 
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
+
+        // Busy-as-mutex admission gate (flag-aware; no-ops when UseBusyAsMutex is off)
+        services.AddScoped<ITransitionAdmissionService, TransitionAdmissionService>();
 
         services.AddSingleton<IPipelineProfileResolver, PipelineProfileResolver>();
         services.AddSingleton<IReservedTransitionResolver, ReservedTransitionResolver>();

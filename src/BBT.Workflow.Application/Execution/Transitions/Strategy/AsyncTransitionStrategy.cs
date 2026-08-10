@@ -3,6 +3,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -11,6 +12,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
@@ -45,6 +47,8 @@ public sealed class AsyncTransitionStrategy(
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
     IInstanceBusyManager instanceBusyManager,
+    ITransitionAdmissionService admissionService,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ITransitionEnqueueGateway enqueueGateway,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
@@ -143,43 +147,61 @@ public sealed class AsyncTransitionStrategy(
                     return;
                 }
 
+                Guid? reservedToken = null;
+
                 if (!ctx.Directives.IsInternalResume)
                 {
-                    await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
-                    // if (isReserved)
-                    // {
-                    //     // Reserved transitions are accepted while the instance is Busy by design.
-                    //     await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
-                    // }
-                    // else
-                    // {
-                    //     // Explicit Busy admission guard: with the accept lock scoped away from the
-                    //     // execution lock, an in-flight transition no longer blocks this key — reject
-                    //     // here so a normal transition cannot be accepted while another is queued/running.
-                    //     var busyOutcome = await instanceBusyManager.TryMarkBusyWithPropagationAsync(
-                    //         ctx.Instance.Id, cancellationToken);
-                    //     if (busyOutcome == BusyMarkOutcome.AlreadyBusy)
-                    //     {
-                    //         logger.AsyncTransitionRejectedInstanceBusy(ctx.TransitionKey, ctx.InstanceId);
-                    //         lockScopeResult = Result<TransitionExecutionContext>.Fail(
-                    //             WorkflowErrors.InstanceBusy(ctx.InstanceId, ctx.TransitionKey));
-                    //         return;
-                    //     }
-                    // }
+                    if (executionOptions.Value.UseBusyAsMutex)
+                    {
+                        // Busy-as-mutex accept: Normal requests reserve the instance NOW
+                        // (Busy + chain token under the short status lock) so a competing
+                        // request gets 409 immediately; the job re-enters as the owner via
+                        // the token stamped into the payload. Bypass/unconditional kinds are
+                        // accepted without a reserve — the job's pipeline prologue performs
+                        // the takeover / unconditional run.
+                        if (admissionService.Classify(ctx) == AdmissionKind.Normal)
+                        {
+                            var admission = admissionService.CheckAdmission(ctx);
+                            if (!admission.IsSuccess)
+                            {
+                                lockScopeResult = Result<TransitionExecutionContext>.Fail(admission.Error);
+                                return;
+                            }
+
+                            var reserve = await admissionService.ReserveAsync(ctx, cancellationToken);
+                            if (!reserve.IsSuccess)
+                            {
+                                lockScopeResult = Result<TransitionExecutionContext>.Fail(reserve.Error);
+                                return;
+                            }
+
+                            reservedToken = reserve.Value;
+                            ctx.ChainToken = reserve.Value;
+                        }
+                    }
+                    else
+                    {
+                        await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
+                    }
                 }
 
                 var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
-                lockScopeResult = enqueueResult.Match(
-                    onSuccess: _ =>
-                    {
-                        LogEnqueueSuccess(context, jobName);
-                        return Result<TransitionExecutionContext>.Ok(ctx);
-                    },
-                    onFailure: error =>
-                    {
-                        LogEnqueueFailure(context);
-                        return Result<TransitionExecutionContext>.Fail(error);
-                    });
+                if (enqueueResult.IsSuccess)
+                {
+                    LogEnqueueSuccess(context, jobName);
+                    lockScopeResult = Result<TransitionExecutionContext>.Ok(ctx);
+                }
+                else
+                {
+                    LogEnqueueFailure(context);
+
+                    // Compensate a reserve whose job never made it to the queue — otherwise the
+                    // instance stays Busy with no job to settle it (reaper would be the only way out).
+                    if (reservedToken.HasValue)
+                        await admissionService.ReleaseReservationAsync(ctx, reservedToken.Value, cancellationToken);
+
+                    lockScopeResult = Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
+                }
             },
             DefaultLockLeaseSeconds,
             cancellationToken);
@@ -254,7 +276,8 @@ public sealed class AsyncTransitionStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            Stage = context.Data?.Stage
+            Stage = context.Data?.Stage,
+            ChainToken = transContext.ChainToken
         };
     }
 

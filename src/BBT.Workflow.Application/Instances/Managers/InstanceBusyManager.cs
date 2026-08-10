@@ -72,6 +72,64 @@ public sealed class InstanceBusyManager(
         return BusyMarkOutcome.Marked;
     }
 
+    /// <inheritdoc />
+    public async Task<BusyMarkOutcome> TryReserveWithPropagationAsync(
+        Guid instanceId, Guid chainToken, CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
+
+        if (instance is null || instance.IsCompleted)
+            return BusyMarkOutcome.Skipped;
+
+        if (instance.IsBusy)
+            return BusyMarkOutcome.AlreadyBusy;
+
+        await PersistChainOwnershipAsync(instance, chainToken, cancellationToken);
+        await PropagateToSubflowAsync(instance, cancellationToken);
+
+        return BusyMarkOutcome.Marked;
+    }
+
+    /// <inheritdoc />
+    public async Task<BusyMarkOutcome> TakeOverAsync(
+        Guid instanceId, Guid chainToken, CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
+
+        if (instance is null || instance.IsCompleted)
+            return BusyMarkOutcome.Skipped;
+
+        // Deliberately no subflow propagation: a takeover (cancel/exit/timeout) drives its own
+        // downstream handling; propagating Busy here would race the subflow cancellation path.
+        await PersistChainOwnershipAsync(instance, chainToken, cancellationToken);
+
+        return BusyMarkOutcome.Marked;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryReleaseAsync(
+        Guid instanceId, Guid chainToken, CancellationToken cancellationToken = default)
+    {
+        var result = await instanceRepository.GetResultAsync(
+            instanceId.ToString(), includeDetails: false, cancellationToken);
+
+        if (!result.IsSuccess || result.Value is null)
+            return false;
+
+        var instance = result.Value;
+        if (!instance.IsBusy || !instance.MatchesChain(chainToken))
+            return false;
+
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+        instance.Active();
+        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+
+        return true;
+    }
+
     /// <summary>
     /// Persists the Busy flip for an already-loaded instance in an isolated RequiresNew transaction.
     /// </summary>
@@ -81,6 +139,23 @@ public sealed class InstanceBusyManager(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
         instance.Busy();
+        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+
+        logger.InstanceMarkedBusy(instance.Id);
+    }
+
+    /// <summary>
+    /// Persists Busy + chain ownership token for an already-loaded instance in an isolated
+    /// RequiresNew transaction (reserve and takeover share this core).
+    /// </summary>
+    private async Task PersistChainOwnershipAsync(
+        Instance instance, Guid chainToken, CancellationToken cancellationToken)
+    {
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+        instance.BeginChain(chainToken);
         await instanceRepository.UpdateAsync(instance, false, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 

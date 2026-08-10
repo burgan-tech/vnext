@@ -18,6 +18,7 @@ using BBT.Workflow.CurrentUser;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Execution.Transitions.Services;
@@ -49,6 +50,7 @@ public sealed class InstanceCommandAppService(
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
+    ITransitionAdmissionService transitionAdmissionService,
     ITransitionContextFactory transitionContextFactory,
     IWorkflowContext workflowContext,
     IRepresentationEtagService representationEtagService,
@@ -614,6 +616,14 @@ public sealed class InstanceCommandAppService(
         var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
         if (!contextResult.IsSuccess)
             return Result.Fail(contextResult.Error);
+
+        // Busy-as-mutex: reject a Busy instance BEFORE spending validation work — a request
+        // that cannot be admitted should not fetch schemas or evaluate specifications.
+        // Flag-aware: no-op when UseBusyAsMutex is off or the kind is exempt (cancel/exit/
+        // updateData/owner re-entry).
+        var admission = transitionAdmissionService.CheckAdmission(contextResult.Value!);
+        if (!admission.IsSuccess)
+            return Result.Fail(admission.Error);
 
         return await transitionValidationService.ValidateAsync(contextResult.Value!, cancellationToken);
     }
