@@ -216,6 +216,7 @@ public sealed class TransitionJobHandler(
                     context.CallerMode = args.CallerSync ? ExecMode.Sync : ExecMode.Async;
                     context.ChainToken = args.ChainToken;
                     context.ExpectedRevision = args.AdmittedRevision;
+                    context.EnforceExpectedRevision = args.AdmittedRevision.HasValue;
                     // Legacy payloads have no durable admission identity and therefore no trusted
                     // schema-validation receipt. Always validate their body again.
                     context.TransitionSchemaValidated =

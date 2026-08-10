@@ -86,6 +86,21 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Discards the read-only/preflight tracking snapshot and reloads the aggregate from the
+    /// database. Call only after the transition admission/execution lock has been acquired and
+    /// before any mutation is made in the current unit of work.
+    /// </summary>
+    /// <remarks>
+    /// Transition requests intentionally perform schema checks before waiting for the lock. The
+    /// instance can change while that wait is in progress; mutating the old tracked entity would
+    /// turn normal contention into an optimistic-concurrency exception. This method establishes
+    /// the authoritative, change-tracked snapshot used for the actual state check and mutation.
+    /// </remarks>
+    Task<Result<Instance>> ReloadActiveAsync(
+        string identifier,
+        CancellationToken cancellationToken = default);
+
     Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default);
 
     Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(int skip, int take, CancellationToken cancellationToken = default);

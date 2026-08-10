@@ -77,10 +77,18 @@ public sealed class WorkflowExecutionContext
     public Guid? ChainToken { get; set; }
 
     /// <summary>
-    /// Optimistic-concurrency revision expected by an admitted background transition. Null for
-    /// callers that have not gone through the admission protocol.
+    /// Revision observed by the caller or recorded by async admission. It is an informational
+    /// preflight snapshot unless <see cref="EnforceExpectedRevision"/> is enabled by the durable
+    /// consumer.
     /// </summary>
     public long? ExpectedRevision { get; set; }
+
+    /// <summary>
+    /// Requires <see cref="ExpectedRevision"/> to match the authoritative snapshot loaded after
+    /// the execution lock is acquired. Set only by durable job consumers; HTTP admission
+    /// snapshots are refreshed under the lock instead of being rejected as stale.
+    /// </summary>
+    public bool EnforceExpectedRevision { get; set; }
 
     /// <summary>
     /// True when the transition request body has already passed its input schema at the HTTP

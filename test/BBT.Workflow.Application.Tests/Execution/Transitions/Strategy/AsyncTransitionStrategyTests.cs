@@ -44,7 +44,10 @@ public class AsyncTransitionStrategyTests
     public AsyncTransitionStrategyTests()
     {
         _mockValidationService
-            .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.ValidateInputSchemaAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+        _mockValidationService
+            .Setup(x => x.ValidatePolicyAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
 
         _mockRawBodyProvider.Setup(x => x.GetRawBody()).Returns("{\"amount\":42}");
@@ -118,7 +121,7 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Once);
         _mockValidationService.Verify(
-            x => x.ValidateAsync(
+            x => x.ValidateInputSchemaAsync(
                 It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -184,7 +187,7 @@ public class AsyncTransitionStrategyTests
         var validationError = Error.Validation("schema.invalid", "Field 'amount' is required");
 
         _mockValidationService
-            .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.ValidateInputSchemaAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Fail(validationError));
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
@@ -328,6 +331,41 @@ public class AsyncTransitionStrategyTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenInstanceBecomesBusyWhileWaitingForLock_ShouldRejectAuthoritativeSnapshot()
+    {
+        var (wfCtx, preflightContext) = SetupSuccessfulContext();
+        var authoritativeContext = CreateTransitionExecutionContext(
+            preflightContext.TransitionKey,
+            preflightContext.InstanceId);
+        authoritativeContext.Instance.BeginChain(Guid.NewGuid());
+
+        _mockInstanceRepository
+            .Setup(x => x.ReloadActiveAsync(wfCtx.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(authoritativeContext.Instance));
+        _mockContextFactory
+            .Setup(x => x.CreateFromPreloaded(
+                wfCtx,
+                preflightContext.Workflow,
+                authoritativeContext.Instance))
+            .Returns(Result<TransitionExecutionContext>.Ok(authoritativeContext));
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+        preflightContext.Instance.IsBusy.ShouldBeFalse();
+        _mockInstanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     [Theory]
     [InlineData("S")]
     [InlineData("P")]
@@ -408,21 +446,20 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenAdmissionSnapshotRevisionChanged_ShouldRejectWithoutEnqueue()
+    public async Task ExecuteAsync_WhenAdmissionSnapshotRevisionChanged_ShouldUseLockedAuthoritativeSnapshot()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
         wfCtx.ExpectedRevision = txCtx.Instance.Revision + 1;
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceRevisionConflict);
+        result.IsSuccess.ShouldBeTrue();
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()),
-            Times.Never);
+            Times.Once);
     }
 
     [Fact]
@@ -576,6 +613,17 @@ public class AsyncTransitionStrategyTests
         _mockContextFactory
             .Setup(x => x.CreateAsync(wfCtx, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<TransitionExecutionContext>.Ok(txCtx));
+        _mockContextFactory
+            .Setup(x => x.CreateFromPreloaded(
+                wfCtx,
+                txCtx.Workflow,
+                It.IsAny<Instance>()))
+            .Returns(Result<TransitionExecutionContext>.Ok(txCtx));
+        _mockInstanceRepository
+            .Setup(x => x.ReloadActiveAsync(
+                wfCtx.InstanceId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(txCtx.Instance));
         _mockInstanceRepository
             .Setup(x => x.UpdateAsync(
                 It.IsAny<Instance>(), false, It.IsAny<CancellationToken>()))
@@ -597,14 +645,16 @@ public class AsyncTransitionStrategyTests
             RouteValues = new Dictionary<string, string?>()
         };
 
-    private static TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
+    private static TransitionExecutionContext CreateTransitionExecutionContext(
+        string transitionKey = "test-transition",
+        Guid? instanceId = null)
     {
-        var instanceId = Guid.NewGuid();
+        var resolvedInstanceId = instanceId ?? Guid.NewGuid();
         const string workflowKey = "test-workflow";
         const string domain = "test-domain";
 
         var workflow = CreateMockWorkflow(workflowKey, domain);
-        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
+        var instance = Instance.Create(resolvedInstanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
         var transition = string.Equals(transitionKey, workflow.StartTransition.Key, StringComparison.Ordinal)
             ? workflow.StartTransition
@@ -612,7 +662,7 @@ public class AsyncTransitionStrategyTests
 
         return new TransitionExecutionContext
         {
-            InstanceId = instanceId,
+            InstanceId = resolvedInstanceId,
             Domain = domain,
             WorkflowKey = workflowKey,
             TransitionKey = transitionKey,

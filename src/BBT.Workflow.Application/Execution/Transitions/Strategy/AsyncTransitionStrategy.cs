@@ -71,15 +71,13 @@ public sealed class AsyncTransitionStrategy(
     /// <inheritdoc />
     /// <summary>
     /// Executes transition asynchronously by enqueuing a background job.
-    /// Railway chain: Create Context → Validate (schema + policy) → Set Busy → Enqueue Job → Return Context
+    /// Railway chain: Create Context → Validate Schema → Lock → Reload + Validate Policy →
+    /// Set Busy → Enqueue Job → Return Context.
     /// </summary>
     /// <remarks>
-    /// Validation must run BEFORE lock acquisition and job enqueue so that callers
-    /// receive 400 Bad Request for invalid payloads instead of accepting the request,
-    /// flipping the instance to Busy, and discovering the schema violation later in
-    /// the background job (which would leave the instance in a Faulted state).
-    /// This also guarantees correct behavior when callers bypass the AppService
-    /// pre-validation guard and invoke the workflow execution service directly.
+    /// Immutable input-schema validation runs before the lock so bad requests create no side
+    /// effects. State policy runs after a fresh lock-protected reload, preventing a snapshot that
+    /// became stale while waiting from producing an optimistic-concurrency exception.
     /// </remarks>
     [Trace]
     public Task<Result<TransitionExecutionContext>> ExecuteAsync(
@@ -88,33 +86,22 @@ public sealed class AsyncTransitionStrategy(
     {
         var activity = Activity.Current;
         return ctxFactory.CreateAsync(context, cancellationToken)
-            .BindAsync(ctx => ValidateAsync(ctx, context, cancellationToken))
+            .BindAsync(ctx => ValidateSchemaBeforeLockAsync(ctx, context, cancellationToken))
             .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, activity, cancellationToken));
     }
 
     /// <summary>
-    /// Validates the transition context (schema + state-machine policy) before
-    /// any side effects (Busy flip, lock acquisition, job enqueue).
-    /// Mirrors the guard in <c>TransitionPipeline.RunAsync</c> for the sync path.
+    /// Validates only the immutable request schema before lock acquisition. State-machine policy
+    /// is checked against the authoritative snapshot inside the lock.
     /// </summary>
-    private async Task<Result<TransitionExecutionContext>> ValidateAsync(
+    private async Task<Result<TransitionExecutionContext>> ValidateSchemaBeforeLockAsync(
         TransitionExecutionContext ctx,
         WorkflowExecutionContext workflowContext,
         CancellationToken cancellationToken)
     {
-        if (workflowContext.ExpectedRevision is { } expectedRevision
-            && ctx.Instance.Revision != expectedRevision)
-        {
-            return Result<TransitionExecutionContext>.Fail(
-                WorkflowErrors.InstanceRevisionConflict(
-                    ctx.InstanceId,
-                    expectedRevision,
-                    ctx.Instance.Revision));
-        }
-
         var validationResult = workflowContext.TransitionSchemaValidated
-            ? await validationService.ValidatePolicyAsync(ctx, cancellationToken)
-            : await validationService.ValidateAsync(ctx, cancellationToken);
+            ? Result.Ok()
+            : await validationService.ValidateInputSchemaAsync(ctx, cancellationToken);
         return validationResult.IsSuccess
             ? Result<TransitionExecutionContext>.Ok(ctx)
             : Result<TransitionExecutionContext>.Fail(validationResult.Error);
@@ -177,6 +164,24 @@ public sealed class AsyncTransitionStrategy(
         {
             Result<TransitionExecutionContext> lockScopeResult;
 
+            // The preflight entity may have gone stale while this request waited for the enqueue
+            // lock. Replace it with one authoritative tracked aggregate before checking Busy,
+            // state policy, idempotency or writing the reservation. This turns ordinary request
+            // contention into deterministic Busy/state responses instead of a revision conflict
+            // during SaveChanges.
+            var authoritativeResult = await ReloadAndValidatePolicyAsync(
+                ctx,
+                context,
+                cancellationToken);
+            if (!authoritativeResult.IsSuccess)
+            {
+                lockScopeResult = Result<TransitionExecutionContext>.Fail(authoritativeResult.Error);
+                SetActivityStatus(activity, lockScopeResult);
+                return lockScopeResult;
+            }
+
+            ctx = authoritativeResult.Value!;
+
             // Normal transitions are serialized by the Busy concurrency update. Reserved
             // transitions may legitimately run while Busy, so retain the active-job guard only
             // for them.
@@ -226,6 +231,33 @@ public sealed class AsyncTransitionStrategy(
             if (!leaseTransferred)
                 await lockHandle.DisposeAsync();
         }
+    }
+
+    private async Task<Result<TransitionExecutionContext>> ReloadAndValidatePolicyAsync(
+        TransitionExecutionContext preflightContext,
+        WorkflowExecutionContext workflowContext,
+        CancellationToken cancellationToken)
+    {
+        var instanceResult = await instanceRepository.ReloadActiveAsync(
+            workflowContext.InstanceId,
+            cancellationToken);
+        if (!instanceResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(instanceResult.Error);
+
+        var contextResult = ctxFactory.CreateFromPreloaded(
+            workflowContext,
+            preflightContext.Workflow,
+            instanceResult.Value!);
+        if (!contextResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(contextResult.Error);
+
+        var authoritativeContext = contextResult.Value!;
+        var policyResult = await validationService.ValidatePolicyAsync(
+            authoritativeContext,
+            cancellationToken);
+        return policyResult.IsSuccess
+            ? Result<TransitionExecutionContext>.Ok(authoritativeContext)
+            : Result<TransitionExecutionContext>.Fail(policyResult.Error);
     }
 
     /// <summary>

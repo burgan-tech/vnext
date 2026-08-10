@@ -655,6 +655,7 @@ public class TransitionJobHandlerTests
 
         Assert.NotNull(capturedContext);
         Assert.Equal(payload.AdmittedRevision, capturedContext.ExpectedRevision);
+        Assert.True(capturedContext.EnforceExpectedRevision);
         Assert.True(capturedContext.TransitionSchemaValidated);
         Assert.Equal(payload.TriggerType, capturedContext.TriggerType);
         Assert.Equal(payload.IsReentry, capturedContext.IsReentry);

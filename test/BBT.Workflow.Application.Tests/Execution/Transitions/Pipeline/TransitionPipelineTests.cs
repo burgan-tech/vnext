@@ -84,6 +84,14 @@ public class TransitionPipelineTests
             .Returns(Task.CompletedTask);
 
         // Default: validation succeeds
+        _mockValidationService.ValidateInputSchemaAsync(
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+        _mockValidationService.ValidatePolicyAsync(
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
         _mockValidationService.ValidateAsync(
             Arg.Any<TransitionExecutionContext>(),
             Arg.Any<CancellationToken>())
@@ -297,6 +305,67 @@ public class TransitionPipelineTests
             .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task RunAsync_WhenSnapshotChangesWhileWaitingForLock_ShouldExecuteAuthoritativeInstance()
+    {
+        var preflightContext = CreateTransitionExecutionContext();
+        var authoritativeContext = CreateTransitionExecutionContext(
+            preflightContext.TransitionKey,
+            preflightContext.InstanceId);
+        var workflowContext = CreateWorkflowExecutionContext(preflightContext);
+        TransitionExecutionContext? executedContext = null;
+
+        SetupContextFactory(preflightContext);
+        _mockInstanceRepository.ReloadActiveAsync(
+                workflowContext.InstanceId,
+                Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(authoritativeContext.Instance));
+        _mockContextFactory.CreateFromPreloaded(
+                workflowContext,
+                preflightContext.Workflow,
+                authoritativeContext.Instance)
+            .Returns(Result<TransitionExecutionContext>.Ok(authoritativeContext));
+
+        foreach (var step in _mockSteps)
+        {
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executedContext ??= callInfo.ArgAt<TransitionExecutionContext>(0);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        executedContext.ShouldBeSameAs(authoritativeContext);
+        executedContext!.Instance.ShouldBeSameAs(authoritativeContext.Instance);
+        executedContext.Instance.ShouldNotBeSameAs(preflightContext.Instance);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenDurableAdmissionRevisionIsStale_ShouldRejectAfterLockedReload()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.ExpectedRevision = context.Instance.Revision + 1;
+        workflowContext.EnforceExpectedRevision = true;
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceRevisionConflict);
+        foreach (var step in _mockSteps)
+        {
+            await step.DidNotReceive()
+                .ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        }
+    }
+
     #endregion
 
     #region Reserved Transition Tests
@@ -431,6 +500,7 @@ public class TransitionPipelineTests
                         ? Result<TransitionExecutionContext>.Ok(context1)
                         : Result<TransitionExecutionContext>.Ok(context2));
             });
+        SetupAuthoritativeReload(context1);
 
         foreach (var step in _mockSteps)
         {
@@ -502,6 +572,7 @@ public class TransitionPipelineTests
                         ? Result<TransitionExecutionContext>.Ok(context1)
                         : Result<TransitionExecutionContext>.Ok(context2));
             });
+        SetupAuthoritativeReload(context1);
 
         foreach (var step in _mockSteps)
         {
@@ -800,6 +871,7 @@ public class TransitionPipelineTests
                         ? Result<TransitionExecutionContext>.Ok(context1)
                         : Result<TransitionExecutionContext>.Ok(context2));
             });
+        SetupAuthoritativeReload(context1);
 
         foreach (var step in _mockSteps)
         {
@@ -889,6 +961,20 @@ public class TransitionPipelineTests
     {
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Result<TransitionExecutionContext>.Ok(context)));
+        SetupAuthoritativeReload(context);
+    }
+
+    private void SetupAuthoritativeReload(TransitionExecutionContext context)
+    {
+        _mockContextFactory.CreateFromPreloaded(
+                Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>())
+            .Returns(Result<TransitionExecutionContext>.Ok(context));
+        _mockInstanceRepository.ReloadActiveAsync(
+                context.InstanceId.ToString(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(context.Instance));
     }
 
     private void SetupStepsToSucceed()
@@ -917,20 +1003,22 @@ public class TransitionPipelineTests
         };
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
+    private TransitionExecutionContext CreateTransitionExecutionContext(
+        string transitionKey = "test-transition",
+        Guid? instanceId = null)
     {
-        var instanceId = Guid.NewGuid();
+        var resolvedInstanceId = instanceId ?? Guid.NewGuid();
         var workflowKey = "test-workflow";
         var domain = "test-domain";
 
         var workflow = CreateMockWorkflow(workflowKey, domain);
-        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
+        var instance = Instance.Create(resolvedInstanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
         var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
 
         return new TransitionExecutionContext
         {
-            InstanceId = instanceId,
+            InstanceId = resolvedInstanceId,
             Domain = domain,
             WorkflowKey = workflowKey,
             TransitionKey = transitionKey,

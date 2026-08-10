@@ -97,7 +97,7 @@ public class TransitionPipeline
         CancellationToken cancellationToken)
     {
         // 1) Build the first context to decide reserved vs normal path
-        var contextResult = await CreateAndValidateContextAsync(workflowContext, cancellationToken);
+        var contextResult = await CreatePreflightContextAsync(workflowContext, cancellationToken);
         if (!contextResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(contextResult.Error);
 
@@ -124,6 +124,15 @@ public class TransitionPipeline
             // Mark the reserved key as held only for this pipeline invocation. AsyncLocal-scoped:
             // it expires when this method returns, before runner-owned post-commit work begins.
             ChainLockRegistry.Register(reservedKey);
+
+            var authoritativeResult = await ReloadAndValidateContextAsync(
+                workflowContext,
+                context,
+                cancellationToken);
+            if (!authoritativeResult.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(authoritativeResult.Error);
+
+            context = authoritativeResult.Value!;
 
             // A durable S8 checkpoint always belongs to the interrupted MAIN transition.
             // Reserved transitions (cancel/exit/update-data/timeout/long-poll ack) must never
@@ -157,6 +166,15 @@ public class TransitionPipeline
         // scoped registration expires when this method returns; runner-owned post-commit work
         // starts only after that handoff, once the lock registration has ended.
         ChainLockRegistry.Register(context.LockKey);
+
+        var lockedContextResult = await ReloadAndValidateContextAsync(
+            workflowContext,
+            context,
+            cancellationToken);
+        if (!lockedContextResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(lockedContextResult.Error);
+
+        context = lockedContextResult.Value!;
 
         // 4) Run the chain. SetBusyStep uses this already-loaded aggregate and persists the
         // reservation as the first mutating lifecycle step; avoid a second repository reload.
@@ -285,8 +303,7 @@ public class TransitionPipeline
     }
 
     /// <summary>
-    /// Creates and validates a transition context from a workflow context.
-    /// Shared by the initial entry and auto-chain iterations.
+    /// Creates and validates an inline auto-chain context while the chain lock is already held.
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> CreateAndValidateContextAsync(
         WorkflowExecutionContext workflowContext,
@@ -298,7 +315,8 @@ public class TransitionPipeline
 
         var context = contextResult.Value!;
 
-        if (workflowContext.ExpectedRevision is { } expectedRevision
+        if (workflowContext.EnforceExpectedRevision
+            && workflowContext.ExpectedRevision is { } expectedRevision
             && context.Instance.Revision != expectedRevision)
         {
             return Result<TransitionExecutionContext>.Fail(
@@ -315,6 +333,75 @@ public class TransitionPipeline
             : await _validationService.ValidateAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
+
+        context.Profile = _profileResolver.Resolve(workflowContext);
+        context.EnqueueContinuations = workflowContext.EnqueueContinuations;
+        context.ChainToken = workflowContext.ChainToken;
+        return Result<TransitionExecutionContext>.Ok(context);
+    }
+
+    /// <summary>
+    /// Performs only immutable request-schema validation before lock acquisition. State policy
+    /// belongs to the authoritative snapshot loaded after the lock is held.
+    /// </summary>
+    private async Task<Result<TransitionExecutionContext>> CreatePreflightContextAsync(
+        WorkflowExecutionContext workflowContext,
+        CancellationToken cancellationToken)
+    {
+        var contextResult = await _contextFactory.CreateAsync(workflowContext, cancellationToken);
+        if (!contextResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(contextResult.Error);
+
+        var context = contextResult.Value!;
+        if (!workflowContext.TransitionSchemaValidated)
+        {
+            var schemaResult = await _validationService.ValidateInputSchemaAsync(
+                context,
+                cancellationToken);
+            if (!schemaResult.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(schemaResult.Error);
+        }
+
+        return Result<TransitionExecutionContext>.Ok(context);
+    }
+
+    /// <summary>
+    /// Replaces the pre-lock tracking snapshot and validates state against the row that is
+    /// authoritative for this lock owner.
+    /// </summary>
+    private async Task<Result<TransitionExecutionContext>> ReloadAndValidateContextAsync(
+        WorkflowExecutionContext workflowContext,
+        TransitionExecutionContext preflightContext,
+        CancellationToken cancellationToken)
+    {
+        var instanceResult = await _instanceRepository.ReloadActiveAsync(
+            workflowContext.InstanceId,
+            cancellationToken);
+        if (!instanceResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(instanceResult.Error);
+
+        var contextResult = _contextFactory.CreateFromPreloaded(
+            workflowContext,
+            preflightContext.Workflow,
+            instanceResult.Value!);
+        if (!contextResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(contextResult.Error);
+
+        var context = contextResult.Value!;
+        if (workflowContext.EnforceExpectedRevision
+            && workflowContext.ExpectedRevision is { } expectedRevision
+            && context.Instance.Revision != expectedRevision)
+        {
+            return Result<TransitionExecutionContext>.Fail(
+                WorkflowErrors.InstanceRevisionConflict(
+                    context.InstanceId,
+                    expectedRevision,
+                    context.Instance.Revision));
+        }
+
+        var policyResult = await _validationService.ValidatePolicyAsync(context, cancellationToken);
+        if (!policyResult.IsSuccess)
+            return Result<TransitionExecutionContext>.Fail(policyResult.Error);
 
         context.Profile = _profileResolver.Resolve(workflowContext);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;

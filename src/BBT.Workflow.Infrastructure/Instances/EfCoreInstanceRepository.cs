@@ -1192,6 +1192,27 @@ public sealed class EfCoreInstanceRepository(
         return Result<Instance>.Ok(instance);
     }
 
+    /// <inheritdoc />
+    public async Task<Result<Instance>> ReloadActiveAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        // This boundary is deliberately placed immediately after lock acquisition. Silently
+        // clearing pending writes would lose data, so fail fast if a caller ever moves it past a
+        // mutation. In the intended preflight flow the tracker contains reads only.
+        context.ChangeTracker.DetectChanges();
+        if (context.ChangeTracker.HasChanges())
+        {
+            throw new InvalidOperationException(
+                "Cannot reload a transition instance after the current unit of work has pending changes.");
+        }
+
+        context.ChangeTracker.Clear();
+        return await GetActiveAsync(identifier, cancellationToken);
+    }
+
     /// <summary>
     /// Gets an instance by ID using Result pattern.
     /// Returns Result.NotFound if instance doesn't exist.
