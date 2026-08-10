@@ -152,6 +152,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.Instance?.Id.ToString());
             activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
             activity.SetTag("vnext.task.count", tasks.Count);
+            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         }
 
         if (!tasks.Any())

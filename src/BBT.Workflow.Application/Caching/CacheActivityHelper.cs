@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using BBT.Workflow.Logging;
+using BBT.Aether.Telemetry;
 
 namespace BBT.Workflow.Caching;
 
@@ -42,6 +44,9 @@ public static class CacheActivityHelper
         string? cacheKey = null,
         string? componentType = null)
     {
+        if (!AetherTracingRuntime.IsVerbose)
+            return null;
+
         var activity = ActivitySource.StartActivity(
             operationName,
             ActivityKind.Client,
@@ -50,6 +55,8 @@ public static class CacheActivityHelper
         if (activity is not null)
         {
             activity.SetTag(TagCacheStore, "dapr");
+            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
             if (!string.IsNullOrEmpty(cacheKey))
                 activity.SetTag(TagCacheKey, cacheKey);
             if (!string.IsNullOrEmpty(componentType))

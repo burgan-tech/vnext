@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BBT.Aether.Telemetry;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Tasks.Coordinator;
@@ -45,6 +46,9 @@ public static class TaskExecutionActivityHelper
         string? taskKey = null,
         string? taskType = null)
     {
+        if (!AetherTracingRuntime.IsVerbose)
+            return null;
+
         var parentContext = Activity.Current?.Context ?? default;
 
         var activity = ActivitySource.StartActivity(
@@ -58,6 +62,8 @@ public static class TaskExecutionActivityHelper
                 activity.SetTag(TelemetryConstants.TagNames.TaskKey, taskKey);
             if (!string.IsNullOrEmpty(taskType))
                 activity.SetTag(TelemetryConstants.TagNames.TaskType, taskType);
+            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
         }
 
         return activity;

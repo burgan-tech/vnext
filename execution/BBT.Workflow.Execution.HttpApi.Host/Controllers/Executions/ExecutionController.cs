@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
@@ -43,6 +44,16 @@ public sealed class ExecutionController(
     {
         var envelope = request.Envelope;
         var traceContext = request.TraceContext;
+
+        var activity = Activity.Current;
+        activity?.SetTag(TelemetryConstants.TagNames.Domain, traceContext?.Domain ?? "unknown");
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, traceContext?.WorkflowKey ?? "unknown");
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, traceContext?.WorkflowVersion ?? "unknown");
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, traceContext?.InstanceId.ToString() ?? Guid.Empty.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.TaskKey, envelope.TaskKey);
+        activity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
+        activity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
 
         using (logger.BeginScope(new Dictionary<string, object>
         {
