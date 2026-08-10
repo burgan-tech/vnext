@@ -18,6 +18,12 @@ namespace BBT.Workflow.Events;
 /// from the workflow cache, compiles and executes the domain-authored mapping script to obtain
 /// a correlation key and body, then dispatches to start or transition an instance.
 /// Registered as a transient service.
+/// <para>
+/// Schema validation: the mapped body is validated at intake by delegating to
+/// <see cref="IInstanceCommandAppService"/> (Start/Transition), whose pre-dispatch guard runs
+/// the full schema + policy validation. The pipeline itself is policy-only, so this delegation
+/// is what keeps event delivery covered — do not bypass the command app service here.
+/// </para>
 /// </summary>
 /// <inheritdoc />
 public sealed class EventAppService(

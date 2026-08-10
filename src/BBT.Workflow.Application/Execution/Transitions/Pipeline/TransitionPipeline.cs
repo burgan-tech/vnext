@@ -301,7 +301,12 @@ public class TransitionPipeline
 
         var context = contextResult.Value!;
 
-        var validationResult = await _validationService.ValidateAsync(context, cancellationToken);
+        // Policy-only: state-machine specifications re-run on every hop because the current
+        // state changes between auto-chain iterations. Schema validation, by contrast, runs
+        // once at the request intake (HTTP app service, async accept, event delivery, start)
+        // — every pipeline entry is either such an intake's dispatch or a system-generated
+        // hop whose payload was produced by the engine itself.
+        var validationResult = await _validationService.ValidatePolicyAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 

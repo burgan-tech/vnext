@@ -29,6 +29,33 @@ public interface ITransitionValidationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Validates only the request payload against the transition's JSON schema (if any).
+    /// Runs at request intake points (HTTP transition, instance start, async accept, event
+    /// delivery via the command app service) — system-generated hops (auto-chain, background
+    /// job re-entry, subflow resume, scheduled/timeout fires) accept their data as already
+    /// validated and never re-run schema validation.
+    /// </summary>
+    /// <param name="context">The transition execution context containing the request payload</param>
+    /// <param name="cancellationToken">Cancellation token to cancel the operation</param>
+    /// <returns>Result indicating validation success or failure with field-level error details</returns>
+    Task<Result> ValidateSchemaAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Validates only the state-machine execution policy (specifications: state availability,
+    /// actor authorization, well-known/shared transition gates, SubFlow bypass). Runs on every
+    /// pipeline hop — including auto-chain iterations — because the current state changes
+    /// between hops, unlike the schema which is fixed per request.
+    /// </summary>
+    /// <param name="context">The transition execution context</param>
+    /// <param name="cancellationToken">Cancellation token to cancel the operation</param>
+    /// <returns>Result indicating validation success or failure with rule error details</returns>
+    Task<Result> ValidatePolicyAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Validates a start transition for a new instance before persistence using Result Pattern.
     /// This method is used during instance creation to validate the start transition before the instance is persisted.
     /// Returns Result.Ok() if all validations pass, or Result.Fail() with detailed error information on failure.

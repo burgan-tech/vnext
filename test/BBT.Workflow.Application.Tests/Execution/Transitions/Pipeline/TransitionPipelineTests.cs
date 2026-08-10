@@ -89,6 +89,12 @@ public class TransitionPipelineTests
             Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
 
+        // The pipeline itself runs policy-only validation per hop (schema is intake-only).
+        _mockValidationService.ValidatePolicyAsync(
+            Arg.Any<TransitionExecutionContext>(),
+            Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+
         _mockInstanceRepository
             .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<Instance>(0)));
