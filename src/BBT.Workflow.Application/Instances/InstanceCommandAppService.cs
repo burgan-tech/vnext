@@ -555,19 +555,26 @@ public sealed class InstanceCommandAppService(
         runtimeInfoProvider.Check(input.Domain);
 
         // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
-        //    Busy rejection never pays the full aggregate load. The workflow definition comes
-        //    from the component cache (cheap) to classify the requested key: cancel/exit/
-        //    updateData are exempt, and a Busy parent with an active SubFlow is admitted so the
-        //    pipeline can forward the request to the subflow. This is a fast-fail only — the
-        //    authoritative decision is the reserve under the status lock in the pipeline.
+        //    Busy rejection never pays the full aggregate load. The snapshot also carries the
+        //    bound Flow/FlowVersion, so the workflow definition is resolved ONCE here (from the
+        //    component cache) and reused for the rest of the request. Classification decides the
+        //    fast-fail: cancel/exit/updateData are exempt, and a Busy parent with an active
+        //    SubFlow is admitted so the pipeline can forward the request to the subflow. This is
+        //    a fast-fail only — the authoritative decision is the reserve under the status lock.
         var snapshot = await instanceRepository.GetExecutionSnapshotAsync(instance, cancellationToken);
-        if (snapshot is { IsBusy: true, HasActiveSubFlow: false })
+
+        Definitions.Workflow? workflowDefinition = null;
+        if (snapshot is not null)
         {
             var snapshotWorkflow = await LoadWorkflowAsync(
                 input.Domain, snapshot.Flow!, snapshot.FlowVersion, cancellationToken);
+            if (!snapshotWorkflow.IsSuccess)
+                return Result<TransitionOutput>.Fail(snapshotWorkflow.Error);
 
-            if (snapshotWorkflow.IsSuccess
-                && transitionAdmissionService.ClassifyKey(snapshotWorkflow.Value!, transitionKey)
+            workflowDefinition = snapshotWorkflow.Value!;
+
+            if (snapshot is { IsBusy: true, HasActiveSubFlow: false }
+                && transitionAdmissionService.ClassifyKey(workflowDefinition, transitionKey)
                     == AdmissionKind.Normal)
             {
                 logger.TransitionRejectedInstanceBusy(snapshot.Id, transitionKey);
@@ -576,25 +583,30 @@ public sealed class InstanceCommandAppService(
             }
         }
 
-        // 2) Admitted (or snapshot inconclusive) — resolve the full instance; workflow is
-        //    loaded from instance's Flow and FlowVersion (not from request).
+        // 2) Admitted (or no snapshot row) — resolve the full instance.
         var instanceResult = await instanceRepository.GetActiveAsync(instance, cancellationToken);
         if (!instanceResult.IsSuccess)
             return Result<TransitionOutput>.Fail(instanceResult.Error);
 
         var resolvedInstance = instanceResult.Value!;
 
-        var workflowResult = await LoadWorkflowAsync(
-            input.Domain,
-            resolvedInstance.Flow,
-            resolvedInstance.FlowVersion,
-            cancellationToken);
-        if (!workflowResult.IsSuccess)
-            return Result<TransitionOutput>.Fail(workflowResult.Error);
+        // The definition loaded above already belongs to this instance in the normal case; load
+        // only when there was no snapshot, or when the two identifier resolutions disagreed —
+        // the workflow must always match the instance's own Flow, never the request's.
+        if (workflowDefinition is null || workflowDefinition.Key != resolvedInstance.Flow)
+        {
+            var workflowResult = await LoadWorkflowAsync(
+                input.Domain,
+                resolvedInstance.Flow,
+                resolvedInstance.FlowVersion,
+                cancellationToken);
+            if (!workflowResult.IsSuccess)
+                return Result<TransitionOutput>.Fail(workflowResult.Error);
+
+            workflowDefinition = workflowResult.Value;
+        }
 
         var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
-
-        var workflowDefinition = workflowResult.Value;
 
         // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
         // dispatching to the execution service. This guarantees consistent 400 Bad Request
