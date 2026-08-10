@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -8,9 +9,9 @@ namespace BBT.Workflow.Execution.Admission;
 
 /// <inheritdoc />
 /// <remarks>
-/// Ordering invariant: the reserve flip commits inside the busy manager's RequiresNew UoW while
-/// the short status lock is still held — the flip is durable before the lock releases, so a
-/// competing reserve can never observe a stale status.
+/// Ordering invariant: every status flip performed here commits inside the busy manager's
+/// RequiresNew UoW while the short status lock is still held — the flip is durable before the
+/// lock releases, so a competing admission can never observe a stale status.
 /// </remarks>
 public sealed class TransitionAdmissionService(
     IInstanceStatusLock statusLock,
@@ -20,12 +21,16 @@ public sealed class TransitionAdmissionService(
     /// <inheritdoc />
     public AdmissionKind Classify(TransitionExecutionContext context)
     {
-        if (context.IsUpdateDataTransition())
-            return AdmissionKind.Unconditional;
+        // Well-known kinds resolve from the definition + key — shared with ClassifyKey so the
+        // app-service fast-fail and the pipeline prologue can never disagree.
+        if (context.Transition?.Key is { } key)
+        {
+            var wellKnown = ClassifyKey(context.Workflow, key);
+            if (wellKnown != AdmissionKind.Normal)
+                return wellKnown;
+        }
 
-        if (context.IsCancelTransition()
-            || context.IsExitTransition()
-            || context.Directives.IsTimeoutTransition)
+        if (context.Directives.IsTimeoutTransition)
             return AdmissionKind.BypassBusyCheck;
 
         // Subflow resume / long-poll ack resume own the Busy instance by directive; a
@@ -39,6 +44,32 @@ public sealed class TransitionAdmissionService(
     }
 
     /// <inheritdoc />
+    public AdmissionKind ClassifyKey(Definitions.Workflow workflow, string transitionKey)
+    {
+        if (Matches(transitionKey, WellKnownTransitionKeys.UpdateData, workflow.UpdateData?.Key))
+            return AdmissionKind.Unconditional;
+
+        if (Matches(transitionKey, WellKnownTransitionKeys.Cancel, workflow.Cancel?.Key)
+            || Matches(transitionKey, WellKnownTransitionKeys.Exit, workflow.Exit?.Key))
+            return AdmissionKind.BypassBusyCheck;
+
+        return AdmissionKind.Normal;
+
+        // Same matching rules as the TransitionExecutionContext extensions: the reserved alias
+        // (accepted on the request side) or the workflow's configured key, OrdinalIgnoreCase.
+        static bool Matches(string requested, string alias, string? configuredKey)
+            => requested.Equals(alias, StringComparison.OrdinalIgnoreCase)
+               || (configuredKey is not null
+                   && configuredKey.Equals(requested, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <inheritdoc />
+    public bool IsSubflowForward(TransitionExecutionContext context)
+        => Classify(context) == AdmissionKind.Normal
+           && context.Instance.IsBusy
+           && context.Instance.HasActiveSubFlow;
+
+    /// <inheritdoc />
     public Result CheckAdmission(TransitionExecutionContext context)
     {
         if (Classify(context) != AdmissionKind.Normal)
@@ -46,6 +77,11 @@ public sealed class TransitionAdmissionService(
 
         if (context.Instance.IsBusy)
         {
+            // A Busy parent with an open SubFlow is not a conflict: the request is admitted and
+            // ForwardToActiveSubflowStep relays it to the subflow, which runs its own admission.
+            if (context.Instance.HasActiveSubFlow)
+                return Result.Ok();
+
             logger.TransitionRejectedInstanceBusy(context.InstanceId, context.TransitionKey);
             return Result.Fail(WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey));
         }
@@ -79,6 +115,23 @@ public sealed class TransitionAdmissionService(
                 return Result.Fail(ExecutionErrors.InstanceAlreadyCompleted(
                     context.InstanceId, context.Instance.Status.Description));
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<Result> TakeOverAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+        if (!scope.IsAcquired)
+            return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
+
+        // Unconditional flip: exempt from the Busy 409, but the flip itself is serialized under
+        // the same short lock as every reserve/settle. Idempotent when already Busy; a Completed
+        // instance is left untouched — HandleCancelPreflightStep surfaces the terminal error.
+        await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
+        logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
+        return Result.Ok();
     }
 
     /// <inheritdoc />

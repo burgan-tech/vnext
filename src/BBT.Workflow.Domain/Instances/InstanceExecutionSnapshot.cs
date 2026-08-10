@@ -10,11 +10,20 @@ namespace BBT.Workflow.Instances;
 /// <param name="Key">Instance business key.</param>
 /// <param name="Status">Instance status at read time.</param>
 /// <param name="CurrentState">Current state key of the instance.</param>
+/// <param name="Flow">Bound workflow key — lets intake callers resolve the workflow definition
+/// from the component cache without loading the aggregate.</param>
+/// <param name="FlowVersion">Bound workflow version.</param>
+/// <param name="HasActiveSubFlow">True when an open SubFlow-type correlation exists. A Busy
+/// instance with an active SubFlow must NOT be rejected with 409 — the pipeline forwards the
+/// request to the subflow instead (<c>ForwardToActiveSubflowStep</c>).</param>
 public sealed record InstanceExecutionSnapshot(
     Guid Id,
     string? Key,
     InstanceStatus Status,
-    string? CurrentState)
+    string? CurrentState,
+    string? Flow,
+    string? FlowVersion,
+    bool HasActiveSubFlow)
 {
     /// <summary>True when the instance is currently Busy (a pipeline owns it).</summary>
     public bool IsBusy => Status.Equals(InstanceStatus.Busy);

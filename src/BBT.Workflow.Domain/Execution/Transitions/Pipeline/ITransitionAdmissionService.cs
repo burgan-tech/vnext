@@ -16,9 +16,10 @@ public enum AdmissionKind
     Normal = 0,
 
     /// <summary>
-    /// Cancel / exit / timeout: exempt from the Busy 409 — accepted and executed even while
-    /// another pipeline owns the instance. No status flip at admission; their own pipeline
-    /// settles the terminal status.
+    /// Cancel / exit / timeout: exempt from the Busy 409 — accepted even while another
+    /// pipeline owns the instance — but still take the short status lock: admission marks the
+    /// instance Busy under the lock (<see cref="ITransitionAdmissionService.TakeOverAsync"/>)
+    /// so the flip is serialized with every other status write.
     /// </summary>
     BypassBusyCheck = 1,
 
@@ -49,6 +50,24 @@ public interface ITransitionAdmissionService
     AdmissionKind Classify(TransitionExecutionContext context);
 
     /// <summary>
+    /// Classifies a transition request from the workflow definition and the requested key alone —
+    /// no loaded instance required. Used by intake fast-fail paths (the app service checks the
+    /// Busy status via a light projection before loading the aggregate). Directive-driven kinds
+    /// (timeout, resumes, pre-reserved) cannot be detected here and classify as
+    /// <see cref="AdmissionKind.Normal"/>; the pipeline prologue remains authoritative.
+    /// </summary>
+    AdmissionKind ClassifyKey(Definitions.Workflow workflow, string transitionKey);
+
+    /// <summary>
+    /// Returns whether a Busy instance should have this request forwarded to its active SubFlow
+    /// instead of being rejected: a <see cref="AdmissionKind.Normal"/> request against a Busy
+    /// parent that has an open SubFlow-type correlation. Such requests are admitted without a
+    /// reserve — <c>ForwardToActiveSubflowStep</c> forwards them and the subflow runs its own
+    /// admission in its own context.
+    /// </summary>
+    bool IsSubflowForward(TransitionExecutionContext context);
+
+    /// <summary>
     /// Cheap Busy pre-check using the already-loaded aggregate (no extra DB round trip):
     /// fails with <c>Instance:100031</c> (409) when the instance is Busy and the request is
     /// <see cref="AdmissionKind.Normal"/>. This is a fast-fail optimization only — the
@@ -62,6 +81,15 @@ public interface ITransitionAdmissionService
     /// A concurrent winner surfaces as <c>Instance:100031</c> (409).
     /// </summary>
     Task<Result> ReserveAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admits a <see cref="AdmissionKind.BypassBusyCheck"/> request (cancel/exit/timeout):
+    /// under the short status lock, marks the instance Busy without checking — exempt from the
+    /// 409 but still serialized through the same distributed lock as every other status flip.
+    /// Pulling an Active instance to Busy also blocks new Normal admissions while the
+    /// cancel/exit pipeline runs. Idempotent when the instance is already Busy or Completed.
+    /// </summary>
+    Task<Result> TakeOverAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Compensates a successful <see cref="ReserveAsync"/> whose follow-up work failed before

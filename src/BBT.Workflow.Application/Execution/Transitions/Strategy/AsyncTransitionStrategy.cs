@@ -151,9 +151,11 @@ public sealed class AsyncTransitionStrategy(
                 // the short status lock) so a competing request gets 409 immediately; the job
                 // re-enters as the owner (IsPreReserved). Bypass/unconditional kinds (cancel/
                 // exit/timeout/updateData) are accepted without a reserve — the job's pipeline
-                // prologue admits them by kind.
+                // prologue admits them by kind. A Busy parent with an active SubFlow is also
+                // accepted without a reserve: the job's pipeline forwards it to the subflow.
                 if (!ctx.Directives.IsInternalResume
-                    && admissionService.Classify(ctx) == AdmissionKind.Normal)
+                    && admissionService.Classify(ctx) == AdmissionKind.Normal
+                    && !admissionService.IsSubflowForward(ctx))
                 {
                     var admission = admissionService.CheckAdmission(ctx);
                     if (!admission.IsSuccess)

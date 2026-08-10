@@ -271,6 +271,30 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_BusyParentWithActiveSubflow_ShouldEnqueueWithoutReserve()
+    {
+        // Busy + aktif SubFlow: 409 yok, reserve yok — job'un pipeline'ı isteği subflow'a
+        // forward eder (ForwardToActiveSubflowStep).
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        _mockAdmissionService
+            .Setup(x => x.IsSubflowForward(It.IsAny<TransitionExecutionContext>()))
+            .Returns(true);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockAdmissionService.Verify(
+            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenIsInternalResume_ShouldSkipReserve()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();

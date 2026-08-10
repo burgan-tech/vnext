@@ -11,6 +11,12 @@ namespace BBT.Workflow.Execution.Pipeline;
 /// </summary>
 internal static class TransitionSettlement
 {
+    /// <summary>
+    /// Applies the resolved resting status. <c>statusLock</c> serializes the Busy→Active flip
+    /// with the other status writers (reserve, takeover, fault); pass null when the caller
+    /// ALREADY holds the status lock for this key (post-commit settlement) — a second acquire
+    /// would fail, not reenter.
+    /// </summary>
     public static async Task ApplyAsync(
         TransitionExecutionContext context,
         InstanceStatus? resolvedStatus,
@@ -18,7 +24,8 @@ internal static class TransitionSettlement
         IInstanceRepository instanceRepository,
         IStateNotificationScheduler stateNotificationScheduler,
         ILogger logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IInstanceStatusLock? statusLock = null)
     {
         if (context.Instance.IsBusy &&
             resolvedStatus is not null &&
@@ -26,6 +33,16 @@ internal static class TransitionSettlement
             !context.Instance.ActiveCorrelations.Any(c =>
                 c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted))
         {
+            // Serialize the flip with reserves/takeovers. On acquisition failure proceed
+            // unguarded — leaving the chain's own settlement unapplied would strand the
+            // instance Busy. The write itself commits with the enclosing UoW; the lock
+            // serializes the flip moment, not the commit (documented, accepted window).
+            ITransitionLockScope? scope = null;
+            if (statusLock is not null)
+                scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+
+            await using var _ = scope;
+
             context.Instance.Active();
             logger.LogDebug(
                 "Instance {InstanceId} resolved to Active after chain settlement",

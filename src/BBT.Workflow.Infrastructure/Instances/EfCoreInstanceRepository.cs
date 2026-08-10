@@ -447,12 +447,20 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <remarks>
+    /// The subflow member deliberately mirrors <c>ProjectStateFingerprint</c>'s expression so it
+    /// is served by IX_InstancesCorrelations_ActiveBlockingSubFlow (partial: IsCompleted = false
+    /// AND SubFlowType = 'S'). No includes — a single-row projection for admission checks.
+    /// </remarks>
     private static IQueryable<InstanceExecutionSnapshot> ProjectExecutionSnapshot(IQueryable<Instance> query) =>
         query.Select(i => new InstanceExecutionSnapshot(
             i.Id,
             i.Key,
             i.Status,
-            i.CurrentState));
+            i.CurrentState,
+            i.Flow,
+            i.FlowVersion,
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
 
     /// <inheritdoc />
     public async Task<InstanceDataFingerprint?> GetDataFingerprintAsync(

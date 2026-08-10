@@ -554,7 +554,30 @@ public sealed class InstanceCommandAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        // Resolve instance first; workflow is loaded from instance's Flow and FlowVersion (not from request)
+        // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
+        //    Busy rejection never pays the full aggregate load. The workflow definition comes
+        //    from the component cache (cheap) to classify the requested key: cancel/exit/
+        //    updateData are exempt, and a Busy parent with an active SubFlow is admitted so the
+        //    pipeline can forward the request to the subflow. This is a fast-fail only — the
+        //    authoritative decision is the reserve under the status lock in the pipeline.
+        var snapshot = await instanceRepository.GetExecutionSnapshotAsync(instance, cancellationToken);
+        if (snapshot is { IsBusy: true, HasActiveSubFlow: false })
+        {
+            var snapshotWorkflow = await LoadWorkflowAsync(
+                input.Domain, snapshot.Flow!, snapshot.FlowVersion, cancellationToken);
+
+            if (snapshotWorkflow.IsSuccess
+                && transitionAdmissionService.ClassifyKey(snapshotWorkflow.Value!, transitionKey)
+                    == AdmissionKind.Normal)
+            {
+                logger.TransitionRejectedInstanceBusy(snapshot.Id, transitionKey);
+                return Result<TransitionOutput>.Fail(
+                    WorkflowErrors.InstanceBusy(snapshot.Id, transitionKey));
+            }
+        }
+
+        // 2) Admitted (or snapshot inconclusive) — resolve the full instance; workflow is
+        //    loaded from instance's Flow and FlowVersion (not from request).
         var instanceResult = await instanceRepository.GetActiveAsync(instance, cancellationToken);
         if (!instanceResult.IsSuccess)
             return Result<TransitionOutput>.Fail(instanceResult.Error);

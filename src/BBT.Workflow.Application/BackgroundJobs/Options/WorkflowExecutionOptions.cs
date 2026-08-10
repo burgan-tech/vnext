@@ -63,12 +63,12 @@ public sealed class WorkflowExecutionOptions
 
     /// <summary>
     /// Lease duration in seconds for the short status lock guarding instance status transitions
-    /// (Active→Busy reserve and Busy→Active/Completed/Faulted settlement). The critical section
-    /// is a single-row check-and-set committed in a RequiresNew UoW, so the lease only needs to
-    /// outlive transient DB latency — it is a crash-safety net, not an execution budget.
-    /// Default: 15.
+    /// (Active→Busy reserve/takeover and Busy→Active/Faulted settlement). The critical section
+    /// is a single-row check-and-set committed in a RequiresNew UoW — real hold time is
+    /// milliseconds; the lease only needs to outlive transient DB latency as a crash-safety
+    /// net, not an execution budget. Default: 5.
     /// </summary>
-    public int StatusLockLeaseSeconds { get; set; } = 15;
+    public int StatusLockLeaseSeconds { get; set; } = 5;
 
     /// <summary>
     /// Bounded wait applied when acquiring the status lock. Status flips resolve in

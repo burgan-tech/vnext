@@ -53,9 +53,12 @@ public class TransitionPipelineTests
         _mockAdmissionService = Substitute.For<ITransitionAdmissionService>();
         _mockAdmissionService.CheckAdmission(Arg.Any<TransitionExecutionContext>())
             .Returns(Result.Ok());
-        // Default: Classify returns Normal (enum default) and the reserve succeeds.
+        // Default: Classify returns Normal (enum default); reserve and takeover succeed.
         _mockAdmissionService
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+        _mockAdmissionService
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
         _mockStatusLock = Substitute.For<IInstanceStatusLock>();
         _mockSteps = new List<ITransitionStep>();
@@ -375,8 +378,36 @@ public class TransitionPipelineTests
 
         result.IsSuccess.ShouldBeTrue();
         resumePointWhenFirstStepRan.ShouldBeNull();
+        // Bypass kinds are exempt from the Busy 409 but still flip Busy under the short lock.
+        await _mockAdmissionService.Received(1)
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_BusyParentWithActiveSubflow_ShouldRunWithoutReserve()
+    {
+        // A Busy parent with an active SubFlow is admitted without a reserve — the chain runs
+        // and ForwardToActiveSubflowStep relays the request to the subflow.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Normal);
+        _mockAdmissionService.IsSubflowForward(Arg.Any<TransitionExecutionContext>())
+            .Returns(true);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.DidNotReceive()
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

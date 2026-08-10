@@ -204,6 +204,101 @@ public class TransitionAdmissionServiceTests
 
     #endregion
 
+    #region TakeOverAsync
+
+    [Fact]
+    public async Task TakeOverAsync_AcquiresLockAndMarksBusy()
+    {
+        // Cancel/exit/timeout skip the Busy 409 but the flip still goes through the short lock.
+        var context = CreateContext("cancel");
+        SetupAcquiredLock();
+
+        var result = await CreateService().TakeOverAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _statusLock.Received(1)
+            .AcquireAsync(context.LockKey, Arg.Any<CancellationToken>());
+        await _busyManager.Received(1)
+            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TakeOverAsync_WhenLockNotAcquired_FailsWithLockConflict()
+    {
+        var context = CreateContext("cancel");
+        SetupFailedLock();
+
+        var result = await CreateService().TakeOverAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
+        await _busyManager.DidNotReceive()
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    #endregion
+
+    #region ClassifyKey (instance'sız sınıflandırma)
+
+    [Theory]
+    [InlineData("cancel", AdmissionKind.BypassBusyCheck)]
+    [InlineData("EXIT", AdmissionKind.BypassBusyCheck)]
+    [InlineData("update-parent-data", AdmissionKind.Unconditional)]
+    [InlineData("regular-transition", AdmissionKind.Normal)]
+    public void ClassifyKey_ByAlias_ReturnsExpectedKind(string transitionKey, AdmissionKind expected)
+    {
+        var workflow = CreateWorkflow("wf", "dom");
+
+        CreateService().ClassifyKey(workflow, transitionKey).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void ClassifyKey_ConfiguredCustomCancelKey_ReturnsBypass()
+    {
+        var workflow = CreateWorkflow("wf", "dom");
+        workflow.SetCancel(Transition.Create("iptal-et", null, "state1", TriggerType.Manual, "Patch"));
+
+        CreateService().ClassifyKey(workflow, "iptal-et").ShouldBe(AdmissionKind.BypassBusyCheck);
+    }
+
+    #endregion
+
+    #region IsSubflowForward / Busy + aktif SubFlow muafiyeti
+
+    [Fact]
+    public void IsSubflowForward_BusyWithActiveSubflow_ReturnsTrue()
+    {
+        var context = CreateContext();
+        context.Instance.Busy();
+        AddActiveSubflowCorrelation(context.Instance);
+
+        CreateService().IsSubflowForward(context).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void IsSubflowForward_BusyWithoutSubflow_ReturnsFalse()
+    {
+        // Not: aktif SubFlow korelasyonu eklemek domain kuralı gereği parent'ı zaten Busy yapar
+        // (Instance.AddCorrelation → Busy()), bu yüzden "Active + subflow" diye bir durum yok.
+        var context = CreateContext();
+        context.Instance.Busy();
+
+        CreateService().IsSubflowForward(context).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void CheckAdmission_BusyWithActiveSubflow_Succeeds()
+    {
+        // Forward edilecek — 409 yok; ForwardToActiveSubflowStep isteği subflow'a iletir.
+        var context = CreateContext();
+        context.Instance.Busy();
+        AddActiveSubflowCorrelation(context.Instance);
+
+        CreateService().CheckAdmission(context).IsSuccess.ShouldBeTrue();
+    }
+
+    #endregion
+
     #region ReleaseReservationAsync
 
     [Fact]
@@ -238,6 +333,11 @@ public class TransitionAdmissionServiceTests
     #endregion
 
     #region Helpers
+
+    private static void AddActiveSubflowCorrelation(Instance instance)
+        => instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), instance.Id, "child-flow", Guid.NewGuid(),
+            SubFlowType.SubFlow.Code, "child-domain", "child-flow", "1.0.0"));
 
     private static TransitionExecutionContext CreateContext(string transitionKey = "regular-transition")
     {

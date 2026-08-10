@@ -124,12 +124,23 @@ public class TransitionPipeline
         switch (_admissionService.Classify(context))
         {
             case AdmissionKind.Unconditional:
-            case AdmissionKind.BypassBusyCheck:
-                // updateData / cancel / exit / timeout: no lock, no status flip at admission.
-                // A durable S8 checkpoint always belongs to the interrupted MAIN transition —
-                // these must never resume from a foreign checkpoint, so clear it in-memory.
+                // updateData: no lock, no Busy check, no status flip — instance-data writes are
+                // ordered by the DB versioning trigger. A durable S8 checkpoint always belongs
+                // to the interrupted MAIN transition — never resume from a foreign checkpoint.
                 context.Instance.ClearResumePoint();
                 return await RunChainAsync(context, cancellationToken);
+
+            case AdmissionKind.BypassBusyCheck:
+            {
+                // cancel / exit / timeout: exempt from the Busy 409, but the status flip still
+                // goes through the same short distributed lock — admission marks Busy under it.
+                var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                if (!takeover.IsSuccess)
+                    return Result<TransitionExecutionContext>.Fail(takeover.Error);
+
+                context.Instance.ClearResumePoint();
+                return await RunChainAsync(context, cancellationToken);
+            }
 
             case AdmissionKind.OwnerReentry:
                 // Directive-driven resumes never resume from a foreign MAIN-transition
@@ -148,6 +159,13 @@ public class TransitionPipeline
 
             default: // AdmissionKind.Normal
             {
+                // A Busy parent with an active SubFlow is admitted WITHOUT a reserve: the
+                // instance stays Busy for the subflow's lifetime by design, and
+                // ForwardToActiveSubflowStep (order 10) relays the request to the subflow,
+                // which runs the same admission logic in its own context.
+                if (_admissionService.IsSubflowForward(context))
+                    return await RunChainAsync(context, cancellationToken);
+
                 var reserve = await _admissionService.ReserveAsync(context, cancellationToken);
                 if (!reserve.IsSuccess)
                     return Result<TransitionExecutionContext>.Fail(reserve.Error);
@@ -242,7 +260,8 @@ public class TransitionPipeline
                     _instanceRepository,
                     _stateNotificationScheduler,
                     _logger,
-                    cancellationToken);
+                    cancellationToken,
+                    statusLock: _statusLock);
 
                 return Result<TransitionExecutionContext>.Ok(context);
             }
