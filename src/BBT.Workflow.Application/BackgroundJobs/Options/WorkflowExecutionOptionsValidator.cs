@@ -39,6 +39,21 @@ public sealed class WorkflowExecutionOptionsValidator(IConfiguration configurati
                 "default): the lock must outlive the job budget and the timeout-recovery path.");
         }
 
+        if (options is { UseBusyAsMutex: true, EnableChainReaper: false })
+        {
+            failures.Add(
+                "WorkflowExecution:UseBusyAsMutex requires WorkflowExecution:EnableChainReaper. " +
+                "With Busy as the execution mutex there is no lock lease to auto-expire — a crash " +
+                "leaves the instance Busy forever, and the chain reaper is the only recovery path.");
+        }
+
+        if (options is { UseBusyAsMutex: true, StatusLockLeaseSeconds: < 1 })
+        {
+            failures.Add(
+                $"WorkflowExecution:StatusLockLeaseSeconds ({options.StatusLockLeaseSeconds}) must be at " +
+                "least 1 second when UseBusyAsMutex is enabled.");
+        }
+
         return failures.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(failures);

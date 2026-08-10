@@ -13,6 +13,7 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -594,6 +595,150 @@ public class TransitionPipelineTests
             _mockStatusLock,
             Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
+    }
+
+    #endregion
+
+    #region Busy-As-Mutex Admission Tests
+
+    [Fact]
+    public async Task RunAsync_BusyAsMutex_NormalTransition_ReservesWithoutChainLock()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var token = Guid.NewGuid();
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Normal);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Guid>.Ok(token));
+
+        var pipeline = CreatePipelineWithOptions(
+            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
+
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.ChainToken.ShouldBe(token);
+
+        // The whole-chain lock must never be taken in busy-as-mutex mode.
+        await _mockLockScopeFactory.DidNotReceive()
+            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.Received(1)
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_BusyAsMutex_WhenAdmissionRejects_ShouldReturnInstanceBusyWithoutSteps()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var stepsExecuted = 0;
+
+        SetupContextFactory(context);
+        foreach (var step in _mockSteps)
+        {
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    stepsExecuted++;
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        _mockAdmissionService.CheckAdmission(Arg.Any<TransitionExecutionContext>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey)));
+
+        var pipeline = CreatePipelineWithOptions(
+            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
+
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+        stepsExecuted.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_BusyAsMutex_BypassKind_ShouldTakeOverAndClearResumePoint()
+    {
+        var context = CreateTransitionExecutionContext("cancel");
+        context.Instance.SetResumePoint(40);
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var token = Guid.NewGuid();
+        int? resumePointWhenFirstStepRan = null;
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                // The foreign S8 checkpoint must be cleared BEFORE the executor plans/runs;
+                // the executor re-stamps its own checkpoints afterwards.
+                resumePointWhenFirstStepRan = callInfo.ArgAt<TransitionExecutionContext>(0)
+                    .Instance.ResumePointStepOrder;
+                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            });
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+        _mockAdmissionService
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Guid>.Ok(token));
+
+        var pipeline = CreatePipelineWithOptions(
+            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
+
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.ChainToken.ShouldBe(token);
+        resumePointWhenFirstStepRan.ShouldBeNull();
+        await _mockAdmissionService.DidNotReceive()
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_BusyAsMutex_OwnerReentry_VerifiesOwnershipInsteadOfReserving()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.OwnerReentry);
+        _mockAdmissionService
+            .VerifyOwnershipAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+
+        var pipeline = CreatePipelineWithOptions(
+            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
+
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.Received(1)
+            .VerifyOwnershipAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.DidNotReceive()
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Stubs every fixture step to return Continue.
+    /// </summary>
+    private void SetupStepsToContinue()
+    {
+        foreach (var step in _mockSteps)
+        {
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
     }
 
     #endregion
