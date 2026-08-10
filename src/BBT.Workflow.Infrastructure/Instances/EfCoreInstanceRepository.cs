@@ -452,7 +452,6 @@ public sealed class EfCoreInstanceRepository(
             i.Id,
             i.Key,
             i.Status,
-            i.ChainToken,
             i.CurrentState));
 
     /// <inheritdoc />
@@ -1512,44 +1511,6 @@ public sealed class EfCoreInstanceRepository(
             .Include(i => i.ChildCorrelations)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
-    }
-
-    public async Task<List<Instance>> GetStuckBusyChainsAsync(
-        DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default)
-    {
-        var limit = maxCount <= 0 ? 100 : maxCount;
-
-        var dbSet = await GetDbSetAsync();
-
-        // Schema is resolved by the schema-aware DbContext from the ambient ICurrentSchema,
-        // established by the caller (ChainReaperHostedService via IcurrentSchema.Change(flowKey)).
-        // Tracked (no AsNoTracking): the reaper faults / updates the returned instances.
-        return await dbSet
-            .Where(i => i.Status == InstanceStatus.Busy
-                && i.ChainToken != null
-                && i.ChainHeartbeatAt != null
-                && i.ChainHeartbeatAt < olderThanUtc)
-            .OrderBy(i => i.ChainHeartbeatAt)
-            .Take(limit)
-            .ToListAsync(cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(
-        CancellationToken cancellationToken = default)
-    {
-        // Flow definitions are stored as instances in the sys_flows schema; switch to it for this
-        // read only so a background sweep (no request scope) can enumerate the per-flow schemas.
-        // Mirrors the discovery in SchemaMigrationRunner.
-        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
-        {
-            var dbSet = await GetDbSetAsync();
-            return await dbSet
-                .AsNoTracking()
-                .Where(i => i.Key != null)
-                .Select(i => i.Key!)
-                .Distinct()
-                .ToListAsync(cancellationToken);
-        }
     }
 
     private static string SanitizeIdentifier(string identifier)

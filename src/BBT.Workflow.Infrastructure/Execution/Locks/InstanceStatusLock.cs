@@ -10,12 +10,7 @@ namespace BBT.Workflow.Infrastructure.Execution.Locks;
 /// <summary>
 /// Short-lease status lock backed by the Aether distributed lock service. Protects only the
 /// instance status check-and-set (reserve / settle), so the lease is a few seconds
-/// (<see cref="WorkflowExecutionOptions.StatusLockLeaseSeconds"/>) instead of the chain budget.
-/// <para>
-/// Honors <see cref="ChainLockRegistry"/> so that, while the legacy whole-chain lock mode still
-/// holds the same key for the duration of the pipeline, status writes from within that pipeline
-/// acquire a reentrant no-op scope instead of colliding with their own chain lock.
-/// </para>
+/// (<see cref="WorkflowExecutionOptions.StatusLockLeaseSeconds"/>) instead of a chain budget.
 /// </summary>
 public sealed class InstanceStatusLock(
     IDistributedLockService distributedLockService,
@@ -30,12 +25,6 @@ public sealed class InstanceStatusLock(
         string lockKey,
         CancellationToken cancellationToken = default)
     {
-        if (ChainLockRegistry.IsHeld(lockKey))
-        {
-            logger.TransitionLockReentrantAcquired(lockKey);
-            return TransitionLockScope.Reentrant(lockKey);
-        }
-
         for (var attempt = 1; attempt <= _wait.MaxAttempts; attempt++)
         {
             var handle = await distributedLockService.TryAcquireLockAsync(

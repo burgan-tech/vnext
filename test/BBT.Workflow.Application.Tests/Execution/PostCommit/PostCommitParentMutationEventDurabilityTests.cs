@@ -131,7 +131,7 @@ public sealed class PostCommitParentMutationEventDurabilityTests
                 seed.Instances.Add(authoritative);
                 await seed.SaveChangesAsync();
             }
-            authoritative.BeginChain(Guid.NewGuid());
+            authoritative.Busy();
 
             var dispatcher = Substitute.For<IDomainEventDispatcher>();
             var dispatchedEvents = new List<DomainEventEnvelope>();
@@ -176,8 +176,8 @@ public sealed class PostCommitParentMutationEventDurabilityTests
 
             var lockScope = Substitute.For<ITransitionLockScope>();
             lockScope.IsAcquired.Returns(true);
-            var lockFactory = Substitute.For<ITransitionLockScopeFactory>();
-            lockFactory.AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            var statusLock = Substitute.For<BBT.Workflow.Execution.Pipeline.IInstanceStatusLock>();
+            statusLock.AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(lockScope);
 
             var uowManager = Substitute.For<IUnitOfWorkManager>();
@@ -187,10 +187,7 @@ public sealed class PostCommitParentMutationEventDurabilityTests
             var service = new PostCommitParentMutationService(
                 uowManager,
                 repository,
-                lockFactory,
-                Substitute.For<BBT.Workflow.Execution.Pipeline.IInstanceStatusLock>(),
-                Microsoft.Extensions.Options.Options.Create(
-                    new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
+                statusLock,
                 workflowContext,
                 Substitute.For<IStateNotificationScheduler>(),
                 NullLogger<PostCommitParentMutationService>.Instance);

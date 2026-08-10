@@ -116,11 +116,12 @@ public sealed class TransitionExecutionContext
     public bool EnqueueContinuations { get; set; }
 
     /// <summary>
-    /// Gets or sets the auto-chain ownership token for this execution (S6). Minted at SetBusy
-    /// for a fresh chain, or carried in from a continuation. Stamped on the instance via
-    /// <c>BeginChain</c> and propagated to subsequent continuations so the gate admits them.
+    /// Gets or sets whether the instance was already reserved (flipped to Busy) for this
+    /// execution before the pipeline ran — background-job re-entry after an async accept, or a
+    /// chain continuation job. Pre-reserved executions skip the Busy admission check and the
+    /// reserve; the accept that created them owns the Busy flag.
     /// </summary>
-    public Guid? ChainToken { get; set; }
+    public bool IsPreReserved { get; set; }
 
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }

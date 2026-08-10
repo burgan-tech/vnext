@@ -70,7 +70,6 @@ public static class TaskServiceCollectionExtensions
             WorkflowExecutionOptionsValidator>();
 
         services.AddScoped<IJobTimeoutRecoveryService, JobTimeoutRecoveryService>();
-        services.AddScoped<IChainReaperService, ChainReaperService>();
 
         return services;
     }

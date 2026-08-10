@@ -1,7 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
@@ -13,16 +12,14 @@ namespace BBT.Workflow.Execution.Pipeline;
 
 /// <summary>
 /// Orchestrates the execution of transition lifecycle steps in a deterministic order.
-/// Acquires a single request-scoped lock that covers the entire auto-chain —
-/// no gap between chained transitions.
-/// Reserved transitions bypass the outer lock unless they require an own scope (subflow resume).
+/// Admission is Busy-as-mutex: the first request-handling hop takes the short status lock
+/// only for the Active→Busy check-and-set; the pipeline body and its auto-chain then run
+/// with no held lease — the Busy flag itself is the mutual exclusion.
 /// </summary>
 public class TransitionPipeline
 {
     private readonly TransitionExecutor _executor;
     private readonly ContinuationDispatcher _continuationDispatcher;
-    private readonly ITransitionLockScopeFactory _lockScopeFactory;
-    private readonly IReservedTransitionResolver _reservedTransitionResolver;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
     private readonly IInstanceRepository _instanceRepository;
@@ -32,7 +29,6 @@ public class TransitionPipeline
     private readonly IStateNotificationScheduler _stateNotificationScheduler;
     private readonly ITransitionAdmissionService _admissionService;
     private readonly IInstanceStatusLock _statusLock;
-    private readonly WorkflowExecutionOptions _executionOptions;
     private readonly ILogger<TransitionPipeline> _logger;
 
     /// <summary>
@@ -63,8 +59,6 @@ public class TransitionPipeline
     public TransitionPipeline(
         TransitionExecutor executor,
         ContinuationDispatcher continuationDispatcher,
-        ITransitionLockScopeFactory lockScopeFactory,
-        IReservedTransitionResolver reservedTransitionResolver,
         IInstanceBusyManager busyMarker,
         ITransitionContextFactory contextFactory,
         IInstanceRepository instanceRepository,
@@ -74,13 +68,10 @@ public class TransitionPipeline
         IStateNotificationScheduler stateNotificationScheduler,
         ITransitionAdmissionService admissionService,
         IInstanceStatusLock statusLock,
-        Microsoft.Extensions.Options.IOptions<WorkflowExecutionOptions> executionOptions,
         ILogger<TransitionPipeline> logger)
     {
         _executor = executor;
         _continuationDispatcher = continuationDispatcher;
-        _lockScopeFactory = lockScopeFactory;
-        _reservedTransitionResolver = reservedTransitionResolver;
         _busyMarker = busyMarker;
         _contextFactory = contextFactory;
         _instanceRepository = instanceRepository;
@@ -90,101 +81,17 @@ public class TransitionPipeline
         _stateNotificationScheduler = stateNotificationScheduler;
         _admissionService = admissionService;
         _statusLock = statusLock;
-        _executionOptions = executionOptions.Value;
         _logger = logger;
     }
 
     /// <summary>
-    /// Executes the transition pipeline with a single request-scoped lock.
-    /// The lock is acquired once before the first transition and held for the
-    /// entire auto-chain, except reserved paths that bypass or use an independent scope.
+    /// Executes the transition pipeline: context creation → cheap Busy pre-check → policy
+    /// validation → per-kind admission (Normal reserves under the short status lock; cancel/
+    /// exit/timeout bypass the Busy check; updateData runs unconditionally; pre-reserved job
+    /// re-entries and internal resumes skip the reserve). The chain then runs with no lock —
+    /// only the very first request-handling hop is gated.
     /// </summary>
     public async Task<Result<TransitionExecutionContext>> RunAsync(
-        WorkflowExecutionContext workflowContext,
-        CancellationToken cancellationToken)
-    {
-        // Busy-as-mutex model: admission (Busy 409 / short-lock reserve) replaces the
-        // whole-chain lock entirely — the chain runs with no held lease.
-        if (_executionOptions.UseBusyAsMutex)
-            return await RunWithBusyAdmissionAsync(workflowContext, cancellationToken);
-
-        // 1) Build the first context to decide reserved vs normal path
-        var contextResult = await CreateAndValidateContextAsync(workflowContext, cancellationToken);
-        if (!contextResult.IsSuccess)
-            return Result<TransitionExecutionContext>.Fail(contextResult.Error);
-
-        var context = contextResult.Value!;
-
-        if (context.SkipImmediateExecution)
-            return Result<TransitionExecutionContext>.Ok(context);
-
-        // 2) Reserved transitions acquire their own type-specific lock independently of the main
-        //    flow lock. Post-commit work begins only after this pipeline returns and lock
-        //    registration ends, so this path does not depend on nested callback reentrancy.
-        if (_reservedTransitionResolver.IsReserved(context))
-        {
-            var reservedKey = _reservedTransitionResolver.GetOwnLockKey(context);
-            await using var ownLock = await _lockScopeFactory.AcquireAsync(reservedKey, cancellationToken);
-            if (!ownLock.IsAcquired)
-            {
-                // Lock failure is already logged by TransitionLockScopeFactory with the full key;
-                // avoid a duplicate log line for the same acquisition.
-                return Result<TransitionExecutionContext>.Fail(
-                    WorkflowErrors.InstanceLockConflict(context.InstanceId));
-            }
-
-            // Mark the reserved key as held only for this pipeline invocation. AsyncLocal-scoped:
-            // it expires when this method returns, before runner-owned post-commit work begins.
-            ChainLockRegistry.Register(reservedKey);
-
-            // A durable S8 checkpoint always belongs to the interrupted MAIN transition.
-            // Reserved transitions (cancel/exit/update-data/timeout/long-poll ack) must never
-            // resume from a foreign checkpoint — clear it in-memory so the executor builds
-            // their plan from the top. Subflow / long-poll resumes are unaffected: they set an
-            // explicit ResumeFrom directive, which takes precedence over the instance checkpoint.
-            context.Instance.ClearResumePoint();
-
-            // SubFlow Resume resumes an already-Busy instance; confirm the busy mark.
-            // (Long-poll acknowledge resume is intentionally NOT re-marked here: the paused
-            // instance is already Busy, and a redundant resume that no-ops must not strand an
-            // already-advanced instance in Busy.)
-            if (context.Directives.IsSubFlowResume)
-                await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
-
-            return await RunChainAsync(context, ownLock, cancellationToken);
-        }
-
-        // 3) Normal transitions — acquire single lock for the entire chain
-        await using var lockScope = await _lockScopeFactory.AcquireAsync(context.LockKey, cancellationToken);
-
-        if (!lockScope.IsAcquired)
-        {
-            // Lock failure is already logged by TransitionLockScopeFactory with the full key;
-            // avoid a duplicate log line for the same acquisition.
-            return Result<TransitionExecutionContext>.Fail(
-                WorkflowErrors.InstanceLockConflict(context.InstanceId));
-        }
-
-        // Mark the chain lock key as held for work within this pipeline invocation. AsyncLocal-
-        // scoped registration expires when this method returns; runner-owned post-commit work
-        // starts only after that handoff, once the lock registration has ended.
-        ChainLockRegistry.Register(context.LockKey);
-
-        // 4) Mark instance Busy immediately after lock acquisition
-        await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
-
-        // 5) Run the entire chain under this lock scope
-        return await RunChainAsync(context, lockScope, cancellationToken);
-    }
-
-    /// <summary>
-    /// Busy-as-mutex prologue (<see cref="WorkflowExecutionOptions.UseBusyAsMutex"/>):
-    /// context creation → cheap Busy pre-check → policy validation → per-kind admission
-    /// (reserve / takeover / ownership verify / unconditional), then the chain runs with
-    /// <c>lockScope: null</c> — the Busy flag plus the durable chain token carry mutual
-    /// exclusion instead of a held lease.
-    /// </summary>
-    private async Task<Result<TransitionExecutionContext>> RunWithBusyAdmissionAsync(
         WorkflowExecutionContext workflowContext,
         CancellationToken cancellationToken)
     {
@@ -197,7 +104,7 @@ public class TransitionPipeline
         var context = contextResult.Value!;
         context.Profile = _profileResolver.Resolve(workflowContext);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
-        context.ChainToken = workflowContext.ChainToken;
+        context.IsPreReserved = workflowContext.IsPreReserved;
 
         // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip).
         var admission = _admissionService.CheckAdmission(context);
@@ -217,41 +124,27 @@ public class TransitionPipeline
         switch (_admissionService.Classify(context))
         {
             case AdmissionKind.Unconditional:
-                // updateData: no lock, no Busy — instance-data writes are ordered by the DB
-                // versioning trigger. Clear any foreign S8 checkpoint (see reserved path note).
-                context.Instance.ClearResumePoint();
-                return await RunChainAsync(context, lockScope: null, cancellationToken);
-
             case AdmissionKind.BypassBusyCheck:
-            {
-                var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
-                if (!takeover.IsSuccess)
-                    return Result<TransitionExecutionContext>.Fail(takeover.Error);
-
-                context.ChainToken = takeover.Value;
+                // updateData / cancel / exit / timeout: no lock, no status flip at admission.
+                // A durable S8 checkpoint always belongs to the interrupted MAIN transition —
+                // these must never resume from a foreign checkpoint, so clear it in-memory.
                 context.Instance.ClearResumePoint();
-                return await RunChainAsync(context, lockScope: null, cancellationToken);
-            }
+                return await RunChainAsync(context, cancellationToken);
 
             case AdmissionKind.OwnerReentry:
-            {
-                var ownership = await _admissionService.VerifyOwnershipAsync(context, cancellationToken);
-                if (!ownership.IsSuccess)
-                    return Result<TransitionExecutionContext>.Fail(ownership.Error);
-
                 // Directive-driven resumes never resume from a foreign MAIN-transition
                 // checkpoint (their explicit ResumeFrom directive takes precedence); a job
                 // re-entry keeps the checkpoint for S8 crash-resume.
                 if (context.Directives.IsInternalResume)
                     context.Instance.ClearResumePoint();
 
-                // SubFlow resume resumes an already-Busy instance; confirm the busy mark
-                // (mirrors the legacy reserved path).
+                // SubFlow resume resumes an already-Busy instance; confirm the busy mark.
+                // (Long-poll acknowledge resume is intentionally NOT re-marked: a redundant
+                // resume that no-ops must not strand an already-advanced instance in Busy.)
                 if (context.Directives.IsSubFlowResume)
                     await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
-                return await RunChainAsync(context, lockScope: null, cancellationToken);
-            }
+                return await RunChainAsync(context, cancellationToken);
 
             default: // AdmissionKind.Normal
             {
@@ -259,49 +152,24 @@ public class TransitionPipeline
                 if (!reserve.IsSuccess)
                     return Result<TransitionExecutionContext>.Fail(reserve.Error);
 
-                context.ChainToken = reserve.Value;
-                return await RunChainAsync(context, lockScope: null, cancellationToken);
+                return await RunChainAsync(context, cancellationToken);
             }
         }
     }
 
     /// <summary>
-    /// Runs the full transition chain (first + auto-chained) under a single lock scope.
-    /// The lease is sized to cover the whole chain budget; between-hop TTL extension is
-    /// opt-in (<see cref="WorkflowExecutionOptions.EnableLockLeaseExtension"/>) and only
-    /// valid with providers that support atomic extension.
+    /// Runs the full transition chain (first + auto-chained) with no held lock: admission has
+    /// already reserved the instance (or the request kind is exempt), so the Busy flag carries
+    /// mutual exclusion across every hop with zero per-hop overhead.
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> RunChainAsync(
         TransitionExecutionContext initialContext,
-        ITransitionLockScope? lockScope,
         CancellationToken cancellationToken)
     {
         var context = initialContext;
-        var isFirstHop = true;
 
         while (true)
         {
-            // Busy-as-mutex: with no held lease, re-assert chain ownership at each hop after
-            // the first (the first hop just reserved / verified). A rotated token means a
-            // takeover (cancel/exit/timeout) or the reaper owns the instance now — stop
-            // WITHOUT faulting; the new owner has already settled the status.
-            if (!isFirstHop
-                && _executionOptions.UseBusyAsMutex
-                && lockScope is null
-                && context.ChainToken.HasValue)
-            {
-                var snapshot = await _instanceRepository.GetExecutionSnapshotAsync(
-                    context.InstanceId.ToString(), cancellationToken);
-
-                if (snapshot is null || !snapshot.MatchesChain(context.ChainToken.Value))
-                {
-                    _logger.ChainOwnershipLost(context.InstanceId, context.ChainToken, snapshot?.ChainToken);
-                    return Result<TransitionExecutionContext>.Ok(context);
-                }
-            }
-
-            isFirstHop = false;
-
             // Guard: Prevent infinite chain loops
             if (context.ChainDepth > MaxChainDepth)
             {
@@ -328,7 +196,7 @@ public class TransitionPipeline
             }
 
             // A post-commit job marks the handoff boundary. The runner owns executing this
-            // remote work after the originating UoW has committed and this lock scope ends.
+            // remote work after the originating UoW has committed.
             // Do not consume the jobs: it returns the intact directives to the runner.
             if (context.Directives.PostCommitJobs.Count > 0)
             {
@@ -366,38 +234,17 @@ public class TransitionPipeline
             if (continuationResult.Value is null)
             {
                 // No further in-process work (chain complete or continuation enqueued) —
-                // apply deferred status and release chain ownership if requested
-                // (inside lock, no re-acquire needed).
+                // apply the deferred status.
                 await TransitionSettlement.ApplyAsync(
                     context,
                     context.Directives.ConsumeResolvedStatus(),
-                    context.Directives.ConsumeEndChain(),
                     scheduleNotification: !hadNextTransition,
                     _instanceRepository,
                     _stateNotificationScheduler,
                     _logger,
-                    cancellationToken,
-                    guardChainOwnership: _executionOptions.UseBusyAsMutex && lockScope is null);
+                    cancellationToken);
 
                 return Result<TransitionExecutionContext>.Ok(context);
-            }
-
-            // Refresh the lock TTL before starting the next chained transition — only when the
-            // provider supports atomic extension (opt-in). The default Dapr lock provider cannot
-            // extend a held lock, so the lease is sized upfront to cover the full chain budget
-            // (WorkflowExecutionOptions.GetEffectiveLockLeaseSeconds) instead. When extension IS
-            // enabled, a failed extension means exclusivity may already be lost — stop the chain
-            // rather than continue without a held lease; job re-delivery / the chain reaper
-            // recover the instance.
-            if (lockScope is not null && _executionOptions.EnableLockLeaseExtension)
-            {
-                var extended = await lockScope.ExtendAsync(cancellationToken);
-                if (!extended)
-                {
-                    _logger.TransitionLockExtendFailed(context.InstanceId.ToString(), context.TransitionKey);
-                    return Result<TransitionExecutionContext>.Fail(
-                        WorkflowErrors.InstanceLockConflict(context.InstanceId));
-                }
             }
 
             // Rebuild and validate the next chained transition context (single source of truth).
@@ -411,7 +258,7 @@ public class TransitionPipeline
 
     /// <summary>
     /// Creates and validates a transition context from a workflow context.
-    /// Shared by the initial entry and auto-chain iterations.
+    /// Used by auto-chain iterations (the initial entry runs the admission prologue instead).
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> CreateAndValidateContextAsync(
         WorkflowExecutionContext workflowContext,
@@ -434,13 +281,14 @@ public class TransitionPipeline
 
         context.Profile = _profileResolver.Resolve(workflowContext);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
-        context.ChainToken = workflowContext.ChainToken;
+        context.IsPreReserved = workflowContext.IsPreReserved;
         return Result<TransitionExecutionContext>.Ok(context);
     }
 
     /// <summary>
-    /// Marks the workflow instance as faulted. Already within lock scope —
-    /// no re-acquisition needed.
+    /// Marks the workflow instance as faulted. The fault flip is serialized under the short
+    /// status lock (best effort — on acquisition failure it proceeds unguarded, because leaving
+    /// a failed pipeline invisible is worse than a narrow double-write window).
     /// Uses a RequiresNew UoW scope so that any dirty state left on the current
     /// DbContext by the failed pipeline step does not block SaveChanges.
     /// </summary>
@@ -451,18 +299,7 @@ public class TransitionPipeline
     {
         _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
-        // Busy-as-mutex: faulting is a status flip on an unlocked chain — serialize it under the
-        // short status lock and verify chain ownership first. A rotated token means a takeover
-        // (cancel/exit) already owns the instance; faulting on top would overwrite its settle.
-        ITransitionLockScope? statusScope = null;
-        if (_executionOptions.UseBusyAsMutex)
-        {
-            statusScope = await _statusLock.AcquireAsync(context.LockKey, cancellationToken);
-            // On acquisition failure proceed unguarded: leaving a failed pipeline invisible
-            // (not Faulted) is worse than the narrow double-write window.
-        }
-
-        await using var _ = statusScope;
+        await using var statusScope = await _statusLock.AcquireAsync(context.LockKey, cancellationToken);
 
         await using var faultUow = _uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
@@ -470,15 +307,6 @@ public class TransitionPipeline
         // Reload in the new scope so we operate on a clean, tracked entity.
         var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)
                        ?? context.Instance;
-
-        if (_executionOptions.UseBusyAsMutex
-            && context.ChainToken.HasValue
-            && !instance.MatchesChain(context.ChainToken.Value)
-            && instance.ChainToken.HasValue)
-        {
-            _logger.ChainOwnershipLost(context.InstanceId, context.ChainToken, instance.ChainToken);
-            return;
-        }
 
         if (!instance.HasActiveIncident)
         {
@@ -500,5 +328,4 @@ public class TransitionPipeline
 
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }
-
 }

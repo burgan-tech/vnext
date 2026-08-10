@@ -263,26 +263,6 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns Busy instances that own an auto-chain token whose heartbeat is older than
-    /// <paramref name="olderThanUtc"/> — candidates for the stuck-Busy reaper (S7).
-    /// Scoped to the current schema; the reaper sweeps schemas it is invoked for.
-    /// </summary>
-    /// <param name="olderThanUtc">Heartbeat staleness threshold (UTC).</param>
-    /// <param name="maxCount">Maximum number of candidates to return per sweep.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<List<Instance>> GetStuckBusyChainsAsync(
-        DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns the distinct flow keys registered as definitions in the <c>sys_flows</c> schema.
-    /// Each flow key maps to its own runtime-created database schema. Used by background sweeps
-    /// (e.g. the stuck-Busy chain reaper) to enumerate the per-flow schemas to scan, since a
-    /// hosted service has no request-scoped <c>ICurrentSchema</c> and the real instances live in
-    /// the per-flow schemas — not in any single ambient/default schema.
-    /// </summary>
-    Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Returns a paged list of active-instance + data pairs projected to a slim summary,
     /// ordered by instance Id. Excludes unused Instance columns (CurrentState, Status, etc.).
     /// Non-tracking — intended for monitoring component list queries only.

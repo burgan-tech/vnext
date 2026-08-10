@@ -30,8 +30,6 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 public class TransitionPipelineTests
 {
     private readonly ILogger<TransitionPipeline> _mockLogger;
-    private readonly ITransitionLockScopeFactory _mockLockScopeFactory;
-    private readonly IReservedTransitionResolver _mockReservedResolver;
     private readonly IInstanceBusyManager _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IInstanceRepository _mockInstanceRepository;
@@ -46,8 +44,6 @@ public class TransitionPipelineTests
     public TransitionPipelineTests()
     {
         _mockLogger = Substitute.For<ILogger<TransitionPipeline>>();
-        _mockLockScopeFactory = Substitute.For<ITransitionLockScopeFactory>();
-        _mockReservedResolver = Substitute.For<IReservedTransitionResolver>();
         _mockBusyMarker = Substitute.For<IInstanceBusyManager>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
@@ -56,6 +52,10 @@ public class TransitionPipelineTests
         _mockStateNotificationScheduler = Substitute.For<IStateNotificationScheduler>();
         _mockAdmissionService = Substitute.For<ITransitionAdmissionService>();
         _mockAdmissionService.CheckAdmission(Arg.Any<TransitionExecutionContext>())
+            .Returns(Result.Ok());
+        // Default: Classify returns Normal (enum default) and the reserve succeeds.
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
         _mockStatusLock = Substitute.For<IInstanceStatusLock>();
         _mockSteps = new List<ITransitionStep>();
@@ -68,22 +68,6 @@ public class TransitionPipelineTests
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Schedule));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Auto));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Finalize));
-
-        // Default: lock acquired successfully
-        var mockLockScope = CreateAcquiredLockScope();
-        _mockLockScopeFactory
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(mockLockScope);
-
-        // Default: not a reserved transition
-        _mockReservedResolver
-            .IsReserved(Arg.Any<TransitionExecutionContext>())
-            .Returns(false);
-
-        // Default: own lock key = main lock key + ":reserved"
-        _mockReservedResolver
-            .GetOwnLockKey(Arg.Any<TransitionExecutionContext>())
-            .Returns(ctx => ctx.ArgAt<TransitionExecutionContext>(0).LockKey + ":reserved");
 
         // Default: busy marker succeeds silently
         _mockBusyMarker
@@ -120,8 +104,6 @@ public class TransitionPipelineTests
         _pipeline = new TransitionPipeline(
             executor,
             continuationDispatcher,
-            _mockLockScopeFactory,
-            _mockReservedResolver,
             _mockBusyMarker,
             _mockContextFactory,
             _mockInstanceRepository,
@@ -131,14 +113,13 @@ public class TransitionPipelineTests
             _mockStateNotificationScheduler,
             _mockAdmissionService,
             _mockStatusLock,
-            Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
             _mockLogger);
     }
 
     #region Lock Scope Tests
 
     [Fact]
-    public async Task RunAsync_WithValidContext_ShouldAcquireLockOnceAndExecuteAllSteps()
+    public async Task RunAsync_WithValidContext_ShouldReserveOnceAndExecuteAllSteps()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
@@ -166,31 +147,9 @@ public class TransitionPipelineTests
         executionOrder.Count.ShouldBe(_mockSteps.Count);
         executionOrder.ShouldBe(_mockSteps.Select(m => m.Order).OrderBy(o => o).ToList());
 
-        // Lock acquired exactly once for the entire chain
-        await _mockLockScopeFactory.Received(1)
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunAsync_WhenLockFails_ShouldReturnConflictError()
-    {
-        // Arrange
-        var context = CreateTransitionExecutionContext();
-        var workflowContext = CreateWorkflowExecutionContext(context);
-
-        SetupContextFactory(context);
-
-        var failedScope = CreateNotAcquiredLockScope();
-        _mockLockScopeFactory
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(failedScope);
-
-        // Act
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
+        // Admission reserve happens exactly once for the entire request
+        await _mockAdmissionService.Received(1)
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -204,10 +163,9 @@ public class TransitionPipelineTests
         SetupContextFactory(context);
         SetupStepsToSucceed();
         context.Target = CreateStateWithNotification("waiting-for-post-commit");
-        context.Instance.BeginChain(Guid.NewGuid());
+        context.Instance.Busy();
         context.Directives.RequestNextTransition(next);
         context.Directives.SetResolvedStatus(InstanceStatus.Active);
-        context.Directives.RequestEndChain();
         context.Directives.EnqueuePostCommit(postCommitJob);
 
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
@@ -217,13 +175,10 @@ public class TransitionPipelineTests
         result.Value.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
         result.Value.Directives.NextTransition.ShouldBeSameAs(next);
         result.Value.Directives.ResolvedStatus.ShouldBe(InstanceStatus.Active);
-        result.Value.Directives.EndChainRequested.ShouldBeTrue();
-        context.Instance.ChainToken.ShouldNotBeNull();
         await _mockInstanceRepository.DidNotReceive()
             .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
         await _mockStateNotificationScheduler.DidNotReceive()
             .ScheduleAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
-        ChainLockRegistry.IsHeld(context.LockKey).ShouldBeFalse();
     }
 
     [Fact]
@@ -283,7 +238,7 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_ShouldMarkBusyImmediatelyAfterLockAcquisition()
+    public async Task RunAsync_NormalTransition_ShouldReserveViaAdmissionNotBusyMarker()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
@@ -295,129 +250,20 @@ public class TransitionPipelineTests
         // Act
         await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
-        // Assert
-        await _mockBusyMarker.Received(1)
-            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
-    }
-
-    #endregion
-
-    #region Reserved Transition Tests
-
-    [Fact]
-    public async Task RunAsync_WhenReservedTransition_ShouldAcquireOwnLockKeyNotMainLockKey()
-    {
-        // Arrange
-        var context = CreateTransitionExecutionContext("cancel");
-        var workflowContext = CreateWorkflowExecutionContext(context);
-        var expectedOwnKey = context.LockKey + ":reserved";
-
-        SetupContextFactory(context);
-        SetupStepsToSucceed();
-
-        _mockReservedResolver
-            .IsReserved(Arg.Any<TransitionExecutionContext>())
-            .Returns(true);
-
-        // Act
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-
-        // Must acquire the own (type-specific) key, not the main flow lock key
-        await _mockLockScopeFactory.Received(1)
-            .AcquireAsync(expectedOwnKey, Arg.Any<CancellationToken>());
-
-        await _mockLockScopeFactory.DidNotReceive()
-            .AcquireAsync(context.LockKey, Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunAsync_WhenReservedNonResume_ShouldNotMarkBusy()
-    {
-        // Arrange
-        var context = CreateTransitionExecutionContext("cancel");
-        var workflowContext = CreateWorkflowExecutionContext(context);
-
-        SetupContextFactory(context);
-        SetupStepsToSucceed();
-
-        _mockReservedResolver
-            .IsReserved(Arg.Any<TransitionExecutionContext>())
-            .Returns(true);
-
-        // Act
-        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert: busy NOT marked for non-subflow-resume reserved transitions
+        // Assert: the short-lock reserve is the only admission-side status flip
+        await _mockAdmissionService.Received(1)
+            .ReserveAsync(context, Arg.Any<CancellationToken>());
         await _mockBusyMarker.DidNotReceive()
             .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task RunAsync_WhenSubFlowResume_ShouldAcquireResumeKeyAndMarkBusy()
-    {
-        // Arrange
-        var context = CreateTransitionExecutionContext("resume");
-        context.Directives.MarkAsSubFlowResume();
-        var workflowContext = CreateWorkflowExecutionContext(context);
-        var expectedOwnKey = context.LockKey + ":reserved"; // default mock returns :reserved
-
-        SetupContextFactory(context);
-        SetupStepsToSucceed();
-
-        _mockReservedResolver
-            .IsReserved(Arg.Any<TransitionExecutionContext>())
-            .Returns(true);
-
-        // Act
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeTrue();
-
-        await _mockLockScopeFactory.Received(1)
-            .AcquireAsync(expectedOwnKey, Arg.Any<CancellationToken>());
-
-        // Busy MUST be marked for subflow resume
-        await _mockBusyMarker.Received(1)
-            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunAsync_WhenReservedLockFails_ShouldReturnConflictError()
-    {
-        // Arrange
-        var context = CreateTransitionExecutionContext("cancel");
-        var workflowContext = CreateWorkflowExecutionContext(context);
-
-        SetupContextFactory(context);
-        SetupStepsToSucceed();
-
-        _mockReservedResolver
-            .IsReserved(Arg.Any<TransitionExecutionContext>())
-            .Returns(true);
-
-        var failedScope = CreateNotAcquiredLockScope();
-        _mockLockScopeFactory
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(failedScope);
-
-        // Act
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
-    }
-
     #endregion
+
 
     #region Auto-Chain Tests
 
     [Fact]
-    public async Task RunAsync_WithAutoChain_ShouldRunEntireChainUnderSingleLock()
+    public async Task RunAsync_WithAutoChain_ShouldAdmitOnlyOnceForTheWholeChain()
     {
         // Arrange
         var context1 = CreateTransitionExecutionContext();
@@ -469,165 +315,7 @@ public class TransitionPipelineTests
         result.IsSuccess.ShouldBeTrue();
         contextCallCount.ShouldBe(2);
 
-        // Lock acquired only ONCE for the entire chain (not per-transition)
-        await _mockLockScopeFactory.Received(1)
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunAsync_WithAutoChain_ShouldExtendLockBetweenIterations()
-    {
-        // Arrange — between-hop lease extension is OPT-IN (the default Dapr lock provider
-        // cannot extend a held lock, so the budget-aligned lease carries the chain instead);
-        // build a pipeline configured for a provider that supports atomic extension.
-        var pipeline = CreatePipelineWithOptions(
-            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions
-            {
-                EnableLockLeaseExtension = true
-            });
-        var context1 = CreateTransitionExecutionContext();
-        var context2 = CreateTransitionExecutionContext("auto-transition");
-        var workflowContext = CreateWorkflowExecutionContext(context1);
-        var contextCallCount = 0;
-
-        var mockLockScope = CreateAcquiredLockScope();
-
-        _mockLockScopeFactory
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(mockLockScope);
-
-        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                contextCallCount++;
-                return Task.FromResult(
-                    contextCallCount == 1
-                        ? Result<TransitionExecutionContext>.Ok(context1)
-                        : Result<TransitionExecutionContext>.Ok(context2));
-            });
-
-        foreach (var step in _mockSteps)
-        {
-            if (step.Order == LifecycleOrder.Auto)
-            {
-                var callCount = 0;
-                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                    .Returns(callInfo =>
-                    {
-                        callCount++;
-                        if (callCount == 1)
-                        {
-                            var ctx = callInfo.ArgAt<TransitionExecutionContext>(0);
-                            ctx.Directives.RequestNextTransition(
-                                new NextTransitionRequest("auto-transition", "auto"));
-                            return Task.FromResult(
-                                Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
-                        }
-                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
-                    });
-            }
-            else
-            {
-                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-                    .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
-            }
-        }
-
-        // Act
-        await pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        // Assert: lock extended between chain iterations
-        await mockLockScope.Received(1)
-            .ExtendAsync(Arg.Any<CancellationToken>());
-    }
-
-    /// <summary>
-    /// Builds a pipeline with explicit execution options, reusing the fixture's mocks.
-    /// </summary>
-    private TransitionPipeline CreatePipelineWithOptions(
-        BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions options)
-    {
-        var executor = new TransitionExecutor(
-            _mockSteps,
-            Substitute.For<ILogger<TransitionExecutor>>());
-        var continuationDispatcher = new ContinuationDispatcher(
-            new IContinuationStrategy[] { new InlineContinuationStrategy() });
-
-        return new TransitionPipeline(
-            executor,
-            continuationDispatcher,
-            _mockLockScopeFactory,
-            _mockReservedResolver,
-            _mockBusyMarker,
-            _mockContextFactory,
-            _mockInstanceRepository,
-            _mockUowManager,
-            _mockValidationService,
-            new PipelineProfileResolver(),
-            _mockStateNotificationScheduler,
-            _mockAdmissionService,
-            _mockStatusLock,
-            Microsoft.Extensions.Options.Options.Create(options),
-            _mockLogger);
-    }
-
-    private TransitionPipeline CreatePipelineWithContinuationStrategies(
-        params IContinuationStrategy[] continuationStrategies)
-    {
-        var executor = new TransitionExecutor(
-            _mockSteps,
-            Substitute.For<ILogger<TransitionExecutor>>());
-        var continuationDispatcher = new ContinuationDispatcher(continuationStrategies);
-
-        return new TransitionPipeline(
-            executor,
-            continuationDispatcher,
-            _mockLockScopeFactory,
-            _mockReservedResolver,
-            _mockBusyMarker,
-            _mockContextFactory,
-            _mockInstanceRepository,
-            _mockUowManager,
-            _mockValidationService,
-            new PipelineProfileResolver(),
-            _mockStateNotificationScheduler,
-            _mockAdmissionService,
-            _mockStatusLock,
-            Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()),
-            _mockLogger);
-    }
-
-    #endregion
-
-    #region Busy-As-Mutex Admission Tests
-
-    [Fact]
-    public async Task RunAsync_BusyAsMutex_NormalTransition_ReservesWithoutChainLock()
-    {
-        var context = CreateTransitionExecutionContext();
-        var workflowContext = CreateWorkflowExecutionContext(context);
-        var token = Guid.NewGuid();
-
-        SetupContextFactory(context);
-        SetupStepsToContinue();
-
-        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
-            .Returns(AdmissionKind.Normal);
-        _mockAdmissionService
-            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(Result<Guid>.Ok(token));
-
-        var pipeline = CreatePipelineWithOptions(
-            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
-
-        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.ChainToken.ShouldBe(token);
-
-        // The whole-chain lock must never be taken in busy-as-mutex mode.
-        await _mockLockScopeFactory.DidNotReceive()
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        // Admission runs only ONCE for the entire chain — hops carry no lock and no re-check
         await _mockAdmissionService.Received(1)
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
@@ -653,10 +341,7 @@ public class TransitionPipelineTests
         _mockAdmissionService.CheckAdmission(Arg.Any<TransitionExecutionContext>())
             .Returns(Result.Fail(WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey)));
 
-        var pipeline = CreatePipelineWithOptions(
-            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
-
-        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
@@ -664,12 +349,11 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_BusyAsMutex_BypassKind_ShouldTakeOverAndClearResumePoint()
+    public async Task RunAsync_BypassKind_ShouldRunWithoutReserveAndClearResumePoint()
     {
         var context = CreateTransitionExecutionContext("cancel");
         context.Instance.SetResumePoint(40);
         var workflowContext = CreateWorkflowExecutionContext(context);
-        var token = Guid.NewGuid();
         int? resumePointWhenFirstStepRan = null;
 
         SetupContextFactory(context);
@@ -686,24 +370,17 @@ public class TransitionPipelineTests
 
         _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
             .Returns(AdmissionKind.BypassBusyCheck);
-        _mockAdmissionService
-            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(Result<Guid>.Ok(token));
 
-        var pipeline = CreatePipelineWithOptions(
-            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
-
-        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        result.Value!.ChainToken.ShouldBe(token);
         resumePointWhenFirstStepRan.ShouldBeNull();
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task RunAsync_BusyAsMutex_OwnerReentry_VerifiesOwnershipInsteadOfReserving()
+    public async Task RunAsync_OwnerReentry_ShouldRunWithoutReserve()
     {
         var context = CreateTransitionExecutionContext();
         var workflowContext = CreateWorkflowExecutionContext(context);
@@ -713,18 +390,10 @@ public class TransitionPipelineTests
 
         _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
             .Returns(AdmissionKind.OwnerReentry);
-        _mockAdmissionService
-            .VerifyOwnershipAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(Result.Ok());
 
-        var pipeline = CreatePipelineWithOptions(
-            new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions { UseBusyAsMutex = true });
-
-        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        await _mockAdmissionService.Received(1)
-            .VerifyOwnershipAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
@@ -867,7 +536,7 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenSkipImmediateExecution_ShouldNotAcquireLockOrExecuteSteps()
+    public async Task RunAsync_WhenSkipImmediateExecution_ShouldNotReserveOrExecuteSteps()
     {
         // Arrange
         var context = CreateTransitionExecutionContext();
@@ -881,8 +550,8 @@ public class TransitionPipelineTests
 
         // Assert
         result.IsSuccess.ShouldBeTrue();
-        await _mockLockScopeFactory.DidNotReceive()
-            .AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.DidNotReceive()
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     #endregion
@@ -992,6 +661,30 @@ public class TransitionPipelineTests
     #endregion
 
     #region Helper Methods
+
+    private TransitionPipeline CreatePipelineWithContinuationStrategies(
+        params IContinuationStrategy[] continuationStrategies)
+    {
+        var executor = new TransitionExecutor(
+            _mockSteps,
+            Substitute.For<ILogger<TransitionExecutor>>());
+        var continuationDispatcher = new ContinuationDispatcher(continuationStrategies);
+
+        return new TransitionPipeline(
+            executor,
+            continuationDispatcher,
+            _mockBusyMarker,
+            _mockContextFactory,
+            _mockInstanceRepository,
+            _mockUowManager,
+            _mockValidationService,
+            new PipelineProfileResolver(),
+            _mockStateNotificationScheduler,
+            _mockAdmissionService,
+            _mockStatusLock,
+            _mockLogger);
+    }
+
 
     private static State CreateStateWithNotification(string key)
     {

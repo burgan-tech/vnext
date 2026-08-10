@@ -27,7 +27,6 @@ public sealed class WorkflowExecutionServiceTests
         var next = new NextTransitionRequest("next-transition", "automatic");
         executionContext.Directives.EnqueuePostCommit(postCommitJob);
         executionContext.Directives.RequestNextTransition(next);
-        executionContext.Directives.RequestEndChain();
 
         strategyFactory.Get(ExecMode.Sync).Returns(Result<ITransitionStrategy>.Ok(strategy));
         strategy.ExecuteAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
@@ -44,7 +43,6 @@ public sealed class WorkflowExecutionServiceTests
         output.ExecutionContext.ShouldBeSameAs(executionContext);
         output.Continuations.Next.ShouldBeSameAs(next);
         output.Continuations.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
-        output.Continuations.EndChainRequested.ShouldBeTrue();
     }
 
     private static TransitionExecutionContext CreateExecutionContext()

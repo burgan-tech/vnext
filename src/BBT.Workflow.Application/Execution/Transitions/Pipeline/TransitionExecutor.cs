@@ -83,12 +83,9 @@ public sealed class TransitionExecutor
                     // step's own SaveChanges — zero extra round trips. Never advanced at or
                     // after Finalize: FinalizeTransitionStep clears the checkpoint, and a later
                     // set (e.g. ResolveAvailable) would leak it into the next transition.
-                    // The heartbeat touch keeps the chain reaper's staleness window measured
-                    // from live progress rather than chain start.
                     if (state.CurrentStep.Order < LifecycleOrder.Finalize)
                     {
                         context.Instance.SetResumePoint(state.CurrentStep.Order);
-                        context.Instance.TouchChainHeartbeat();
                     }
 
                     if (flowControl.ShouldStop)

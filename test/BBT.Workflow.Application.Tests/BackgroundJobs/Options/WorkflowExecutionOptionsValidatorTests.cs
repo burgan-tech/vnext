@@ -23,40 +23,12 @@ public class WorkflowExecutionOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_BusyAsMutexWithReaperDisabled_Fails()
+    public void Validate_ZeroStatusLease_Fails()
     {
-        // With Busy as the mutex there is no lock lease to expire — the reaper is the only
-        // recovery for a crash-stranded Busy instance, so this combination must fail fast.
+        // The status lock guards the Active→Busy admission check-and-set; a zero lease would
+        // make every reserve fail.
         var options = new WorkflowExecutionOptions
         {
-            UseBusyAsMutex = true,
-            EnableChainReaper = false
-        };
-
-        var result = CreateValidator().Validate(null, options);
-
-        result.Failed.ShouldBeTrue();
-        result.FailureMessage.ShouldContain("EnableChainReaper");
-    }
-
-    [Fact]
-    public void Validate_BusyAsMutexWithReaperEnabled_Succeeds()
-    {
-        var options = new WorkflowExecutionOptions
-        {
-            UseBusyAsMutex = true,
-            EnableChainReaper = true
-        };
-
-        CreateValidator().Validate(null, options).Succeeded.ShouldBeTrue();
-    }
-
-    [Fact]
-    public void Validate_BusyAsMutexWithZeroStatusLease_Fails()
-    {
-        var options = new WorkflowExecutionOptions
-        {
-            UseBusyAsMutex = true,
             StatusLockLeaseSeconds = 0
         };
 

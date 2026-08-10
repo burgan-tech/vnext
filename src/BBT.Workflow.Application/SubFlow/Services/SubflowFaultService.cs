@@ -80,8 +80,7 @@ public sealed class SubflowFaultService(
                 // Per-subInstance terminal lock, independent of the main-flow lock and reserved keys:
                 // a long-held chain lease never blocks the signal, parallel SubProcess terminal-closes
                 // don't contend, and only duplicate deliveries of the SAME subInstance serialize.
-                // Sync/async safe: distinct from the parent's held key (no self-deadlock); nested
-                // same-key reentry is still handled by ChainLockRegistry.
+                // Sync/async safe: distinct from every instance-status lock key (no self-deadlock).
                 var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.InstanceId}:sub:{input.SubInstanceId:N}";
 
                 // Lock-free duplicate short-circuit — see SubflowCompletionService for the rationale.

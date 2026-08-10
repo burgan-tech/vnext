@@ -39,16 +39,6 @@ public sealed class TransitionLockScopeFactory(
         LockAcquireWait wait,
         CancellationToken cancellationToken = default)
     {
-        // Chain-reentrant acquisition: when this exact key is already held higher up in the
-        // same async call chain (e.g. a sync subflow completion callback running inside the
-        // parent pipeline's post-commit phase), the outer holder already provides mutual
-        // exclusion — and the provider (SET NX) would reject the re-acquire anyway.
-        if (ChainLockRegistry.IsHeld(lockKey))
-        {
-            logger.TransitionLockReentrantAcquired(lockKey);
-            return TransitionLockScope.Reentrant(lockKey);
-        }
-
         var attempts = Math.Max(1, wait.MaxAttempts);
 
         for (var attempt = 1; attempt <= attempts; attempt++)

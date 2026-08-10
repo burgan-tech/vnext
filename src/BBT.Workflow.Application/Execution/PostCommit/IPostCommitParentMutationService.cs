@@ -37,8 +37,7 @@ public sealed record PostCommitParentSnapshot
         string traceId,
         IReadOnlyDictionary<string, string?> headers,
         IReadOnlyDictionary<string, string?> routeValues,
-        JsonElement? data,
-        Guid? chainToken = null)
+        JsonElement? data)
     {
         Domain = domain;
         WorkflowKey = workflowKey;
@@ -50,7 +49,6 @@ public sealed record PostCommitParentSnapshot
         Headers = headers.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
         RouteValues = routeValues.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
         Data = data?.Clone();
-        ChainToken = chainToken;
     }
 
     public string Domain { get; }
@@ -63,13 +61,6 @@ public sealed record PostCommitParentSnapshot
     public IReadOnlyDictionary<string, string?> Headers { get; }
     public IReadOnlyDictionary<string, string?> RouteValues { get; }
     public JsonElement? Data { get; }
-
-    /// <summary>
-    /// Durable chain ownership token captured at handoff. Under Busy-as-mutex, the post-commit
-    /// settle verifies this against the reloaded instance before mutating — a rotated token
-    /// means a takeover owns the instance and the settle must be skipped.
-    /// </summary>
-    public Guid? ChainToken { get; }
 
     public string LockKey => $"vnext:{Domain}:{WorkflowKey}:{InstanceId}";
 
@@ -87,7 +78,6 @@ public sealed record PostCommitParentSnapshot
             context.TraceId,
             context.Headers,
             context.RouteValues,
-            context.DataElement,
-            context.ChainToken);
+            context.DataElement);
     }
 }

@@ -303,7 +303,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // error. 503 is transient (TransientHttpStatus) so the inbox relay redelivers.
             opt.Map(WorkflowErrorCodes.SubflowTerminalLockNotAcquired, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.InstanceBusy, HttpStatusCode.Conflict);
-            opt.Map(WorkflowErrorCodes.ChainOwnershipLost, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);

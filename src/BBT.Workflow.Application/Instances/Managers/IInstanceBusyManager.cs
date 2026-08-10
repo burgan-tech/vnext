@@ -43,31 +43,9 @@ public interface IInstanceBusyManager
     Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Attempts to reserve an instance for the Busy-as-mutex model: like
-    /// <see cref="TryMarkBusyWithPropagationAsync"/>, but stamps the supplied chain ownership
-    /// token (<see cref="Instance.BeginChain"/>) instead of a bare Busy flip, so the reserving
-    /// request owns the instance. Must be called under the short status lock — this method
-    /// performs the check, not the mutual exclusion.
-    /// </summary>
-    Task<BusyMarkOutcome> TryReserveWithPropagationAsync(
-        Guid instanceId, Guid chainToken, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Takes over an instance regardless of its Busy state (cancel/exit/timeout): rotates the
-    /// chain ownership token and marks Busy in an isolated RequiresNew transaction. Rotating
-    /// the token invalidates any in-flight chain — it detects the mismatch at its next
-    /// ownership check or status write. Returns <see cref="BusyMarkOutcome.Skipped"/> when the
-    /// instance is Completed or not found. Must be called under the short status lock.
-    /// </summary>
-    Task<BusyMarkOutcome> TakeOverAsync(
-        Guid instanceId, Guid chainToken, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Releases a reservation whose follow-up work never ran (compensation): settles Busy back
-    /// to Active only when the instance still carries the supplied chain token. No-ops on a
-    /// token mismatch — a takeover or reaper already owns the instance. Must be called under
-    /// the short status lock.
+    /// to Active. No-ops when the instance is not Busy or is Completed. Must be called under
+    /// the short status lock and only by the accept path that performed the reserve.
     /// </summary>
-    Task<bool> TryReleaseAsync(
-        Guid instanceId, Guid chainToken, CancellationToken cancellationToken = default);
+    Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default);
 }

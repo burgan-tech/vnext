@@ -81,8 +81,7 @@ public sealed class EnqueueContinuationStrategy(
             ExecutionActor = ExecutionActor.System,
             CallerSync = false,
             TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString,
-            ChainToken = current.ChainToken // propagate chain ownership (S6)
+            TraceState = activity?.TraceStateString
         };
 
         var outboxEvent = new TransitionContinuationRequested
@@ -98,7 +97,6 @@ public sealed class EnqueueContinuationStrategy(
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             ExecutionActor = ExecutionActor.System.ToString(),
-            ChainToken = current.ChainToken, // propagate chain ownership (S6)
             ChainDepth = current.ChainDepth + 1
         };
 

@@ -46,9 +46,7 @@ public sealed class AsyncTransitionStrategy(
     IReservedTransitionResolver reservedTransitionResolver,
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
-    IInstanceBusyManager instanceBusyManager,
     ITransitionAdmissionService admissionService,
-    IOptions<WorkflowExecutionOptions> executionOptions,
     ITransitionEnqueueGateway enqueueGateway,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
@@ -147,42 +145,31 @@ public sealed class AsyncTransitionStrategy(
                     return;
                 }
 
-                Guid? reservedToken = null;
+                var reserved = false;
 
-                if (!ctx.Directives.IsInternalResume)
+                // Busy-as-mutex accept: Normal requests reserve the instance NOW (Busy under
+                // the short status lock) so a competing request gets 409 immediately; the job
+                // re-enters as the owner (IsPreReserved). Bypass/unconditional kinds (cancel/
+                // exit/timeout/updateData) are accepted without a reserve — the job's pipeline
+                // prologue admits them by kind.
+                if (!ctx.Directives.IsInternalResume
+                    && admissionService.Classify(ctx) == AdmissionKind.Normal)
                 {
-                    if (executionOptions.Value.UseBusyAsMutex)
+                    var admission = admissionService.CheckAdmission(ctx);
+                    if (!admission.IsSuccess)
                     {
-                        // Busy-as-mutex accept: Normal requests reserve the instance NOW
-                        // (Busy + chain token under the short status lock) so a competing
-                        // request gets 409 immediately; the job re-enters as the owner via
-                        // the token stamped into the payload. Bypass/unconditional kinds are
-                        // accepted without a reserve — the job's pipeline prologue performs
-                        // the takeover / unconditional run.
-                        if (admissionService.Classify(ctx) == AdmissionKind.Normal)
-                        {
-                            var admission = admissionService.CheckAdmission(ctx);
-                            if (!admission.IsSuccess)
-                            {
-                                lockScopeResult = Result<TransitionExecutionContext>.Fail(admission.Error);
-                                return;
-                            }
-
-                            var reserve = await admissionService.ReserveAsync(ctx, cancellationToken);
-                            if (!reserve.IsSuccess)
-                            {
-                                lockScopeResult = Result<TransitionExecutionContext>.Fail(reserve.Error);
-                                return;
-                            }
-
-                            reservedToken = reserve.Value;
-                            ctx.ChainToken = reserve.Value;
-                        }
+                        lockScopeResult = Result<TransitionExecutionContext>.Fail(admission.Error);
+                        return;
                     }
-                    else
+
+                    var reserve = await admissionService.ReserveAsync(ctx, cancellationToken);
+                    if (!reserve.IsSuccess)
                     {
-                        await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
+                        lockScopeResult = Result<TransitionExecutionContext>.Fail(reserve.Error);
+                        return;
                     }
+
+                    reserved = true;
                 }
 
                 var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
@@ -196,9 +183,9 @@ public sealed class AsyncTransitionStrategy(
                     LogEnqueueFailure(context);
 
                     // Compensate a reserve whose job never made it to the queue — otherwise the
-                    // instance stays Busy with no job to settle it (reaper would be the only way out).
-                    if (reservedToken.HasValue)
-                        await admissionService.ReleaseReservationAsync(ctx, reservedToken.Value, cancellationToken);
+                    // instance stays Busy with no job to settle it.
+                    if (reserved)
+                        await admissionService.ReleaseReservationAsync(ctx, cancellationToken);
 
                     lockScopeResult = Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
                 }
@@ -276,8 +263,7 @@ public sealed class AsyncTransitionStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            Stage = context.Data?.Stage,
-            ChainToken = transContext.ChainToken
+            Stage = context.Data?.Stage
         };
     }
 
@@ -309,7 +295,6 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            ChainToken = transContext.ChainToken,
             ChainDepth = transContext.ChainDepth
         };
     }

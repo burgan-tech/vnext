@@ -162,33 +162,17 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
-    /// Logs when an instance is reserved (Active→Busy) under the short status lock, stamping
-    /// the chain ownership token that carries mutual exclusion for the pipeline body.
+    /// Logs when an instance is reserved (Active→Busy) under the short status lock. The Busy
+    /// flag carries mutual exclusion for the pipeline body and its auto-chain.
     /// </summary>
     [LoggerMessage(
         EventId = 10136,
         Level = LogLevel.Debug,
-        Message = "Instance {InstanceId} reserved Busy for transition {TransitionKey} (chain token {ChainToken})")]
+        Message = "Instance {InstanceId} reserved Busy for transition {TransitionKey}")]
     public static partial void InstanceBusyReserved(
         this ILogger logger,
         Guid instanceId,
-        string transitionKey,
-        Guid chainToken);
-
-    /// <summary>
-    /// Logs when a running chain loses instance ownership: the durable chain token no longer
-    /// matches (a cancel/exit rotated it, or the reaper reclaimed the instance). The chain stops
-    /// without faulting the instance — the new owner has already settled it.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10137,
-        Level = LogLevel.Warning,
-        Message = "Chain ownership lost for instance {InstanceId}: expected token {ExpectedToken}, found {ActualToken}; stopping chain")]
-    public static partial void ChainOwnershipLost(
-        this ILogger logger,
-        Guid instanceId,
-        Guid? expectedToken,
-        Guid? actualToken);
+        string transitionKey);
 
     /// <summary>
     /// Logs when an instance status settlement (Busy→Active/Completed/Faulted) commits under
@@ -216,87 +200,16 @@ public static partial class WorkflowLogs
 
     /// <summary>
     /// Logs when the compensation that releases an accept-time reservation failed. The
-    /// instance stays Busy until the chain reaper reclaims it.
+    /// instance stays Busy until job-timeout recovery faults it.
     /// </summary>
     [LoggerMessage(
         EventId = 10140,
         Level = LogLevel.Warning,
-        Message = "Failed to release reservation for instance {InstanceId}; chain reaper will recover")]
+        Message = "Failed to release reservation for instance {InstanceId}")]
     public static partial void ReservationReleaseFailed(
         this ILogger logger,
         Exception exception,
         Guid instanceId);
-
-    /// <summary>
-    /// Logs when a foreign transition is rejected by the chain-token gate because the instance
-    /// is Busy with an active auto-chain owned by a different token.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10124,
-        Level = LogLevel.Warning,
-        Message = "Foreign transition {TransitionKey} rejected: instance {InstanceId} is Busy with an active chain (token mismatch)")]
-    public static partial void ForeignChainTransitionRejected(
-        this ILogger logger,
-        string transitionKey,
-        Guid instanceId);
-
-    /// <summary>
-    /// Logs when the chain reaper faults a stuck-Busy instance whose chain has no live job.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10125,
-        Level = LogLevel.Warning,
-        Message = "Chain reaper faulted stuck instance {InstanceId} (chain {ChainToken}); heartbeat stale since {HeartbeatAt:o}")]
-    public static partial void ChainReaperFaultedInstance(
-        this ILogger logger,
-        Guid instanceId,
-        Guid? chainToken,
-        DateTime? heartbeatAt);
-
-    /// <summary>
-    /// Logs the result of a chain reaper sweep.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10126,
-        Level = LogLevel.Information,
-        Message = "Chain reaper sweep completed: {Faulted} faulted, {SkippedActive} skipped (active job)")]
-    public static partial void ChainReaperSweepCompleted(
-        this ILogger logger,
-        int faulted,
-        int skippedActive);
-
-    /// <summary>
-    /// Logs when the per-flow sweep timeout elapses before the reaper finishes a schema.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10127,
-        Level = LogLevel.Warning,
-        Message = "Chain reaper sweep timed out for flow schema {FlowKey}; schema skipped this cycle")]
-    public static partial void ChainReaperFlowSweepTimedOut(
-        this ILogger logger,
-        string flowKey);
-
-    /// <summary>
-    /// Logs when this replica won the chain-reaper leader lease and will run the sweep this cycle.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10128,
-        Level = LogLevel.Debug,
-        Message = "Chain reaper acquired leader lease ({LeaseSeconds}s); sweeping this cycle")]
-    public static partial void ChainReaperLeadershipAcquired(
-        this ILogger logger,
-        int leaseSeconds);
-
-    /// <summary>
-    /// Logs when another replica holds the chain-reaper leader lease, so this replica skips the
-    /// sweep this cycle (avoids redundant sys_flows discovery and per-flow polling across pods).
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10129,
-        Level = LogLevel.Debug,
-        Message = "Chain reaper leader lease held by another replica; skipping sweep this cycle")]
-    public static partial void ChainReaperLeadershipHeldElsewhere(
-        this ILogger logger);
 
     /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,

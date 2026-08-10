@@ -1,8 +1,6 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Aether.Results;
-using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Admission;
@@ -18,25 +16,18 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Admission;
 
 /// <summary>
 /// Unit tests for <see cref="TransitionAdmissionService"/> — the Busy-as-mutex admission gate:
-/// classification matrix, cheap Busy pre-check, reserve/takeover under the short status lock,
-/// owner re-entry verification, and reservation release compensation.
+/// classification matrix, cheap Busy pre-check, reserve under the short status lock, and
+/// reservation release compensation.
 /// </summary>
 public class TransitionAdmissionServiceTests
 {
     private readonly IInstanceStatusLock _statusLock = Substitute.For<IInstanceStatusLock>();
     private readonly IInstanceBusyManager _busyManager = Substitute.For<IInstanceBusyManager>();
-    private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
     private readonly ILogger<TransitionAdmissionService> _logger =
         Substitute.For<ILogger<TransitionAdmissionService>>();
 
-    private TransitionAdmissionService CreateService(bool useBusyAsMutex = true)
-        => new(
-            _statusLock,
-            _busyManager,
-            _instanceRepository,
-            Microsoft.Extensions.Options.Options.Create(
-                new WorkflowExecutionOptions { UseBusyAsMutex = useBusyAsMutex }),
-            _logger);
+    private TransitionAdmissionService CreateService()
+        => new(_statusLock, _busyManager, _logger);
 
     private void SetupAcquiredLock()
     {
@@ -94,11 +85,11 @@ public class TransitionAdmissionServiceTests
     }
 
     [Fact]
-    public void Classify_WithChainToken_ReturnsOwnerReentry()
+    public void Classify_PreReserved_ReturnsOwnerReentry()
     {
-        // A background-job re-entry / per-job continuation carries the accept-time token.
+        // A background-job re-entry / per-job continuation: the accept already reserved Busy.
         var context = CreateContext();
-        context.ChainToken = Guid.NewGuid();
+        context.IsPreReserved = true;
 
         CreateService().Classify(context).ShouldBe(AdmissionKind.OwnerReentry);
     }
@@ -106,15 +97,6 @@ public class TransitionAdmissionServiceTests
     #endregion
 
     #region CheckAdmission
-
-    [Fact]
-    public void CheckAdmission_FlagOff_AllowsBusyInstance()
-    {
-        var context = CreateContext();
-        context.Instance.Busy();
-
-        CreateService(useBusyAsMutex: false).CheckAdmission(context).IsSuccess.ShouldBeTrue();
-    }
 
     [Fact]
     public void CheckAdmission_NormalOnBusyInstance_FailsWithInstanceBusy()
@@ -136,6 +118,16 @@ public class TransitionAdmissionServiceTests
         CreateService().CheckAdmission(context).IsSuccess.ShouldBeTrue();
     }
 
+    [Fact]
+    public void CheckAdmission_PreReservedOnBusyInstance_Succeeds()
+    {
+        var context = CreateContext();
+        context.Instance.Busy();
+        context.IsPreReserved = true;
+
+        CreateService().CheckAdmission(context).IsSuccess.ShouldBeTrue();
+    }
+
     [Theory]
     [InlineData("cancel")]
     [InlineData("exit")]
@@ -153,18 +145,17 @@ public class TransitionAdmissionServiceTests
     #region ReserveAsync
 
     [Fact]
-    public async Task ReserveAsync_WhenMarked_ReturnsToken()
+    public async Task ReserveAsync_WhenMarked_Succeeds()
     {
         var context = CreateContext();
         SetupAcquiredLock();
         _busyManager
-            .TryReserveWithPropagationAsync(context.InstanceId, Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Marked);
 
         var result = await CreateService().ReserveAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        result.Value.ShouldNotBe(Guid.Empty);
     }
 
     [Fact]
@@ -174,7 +165,7 @@ public class TransitionAdmissionServiceTests
         var context = CreateContext();
         SetupAcquiredLock();
         _busyManager
-            .TryReserveWithPropagationAsync(context.InstanceId, Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.AlreadyBusy);
 
         var result = await CreateService().ReserveAsync(context, CancellationToken.None);
@@ -194,7 +185,7 @@ public class TransitionAdmissionServiceTests
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
         await _busyManager.DidNotReceive()
-            .TryReserveWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+            .TryMarkBusyWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -203,7 +194,7 @@ public class TransitionAdmissionServiceTests
         var context = CreateContext();
         SetupAcquiredLock();
         _busyManager
-            .TryReserveWithPropagationAsync(context.InstanceId, Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Skipped);
 
         var result = await CreateService().ReserveAsync(context, CancellationToken.None);
@@ -213,128 +204,40 @@ public class TransitionAdmissionServiceTests
 
     #endregion
 
-    #region TakeOverAsync
-
-    [Fact]
-    public async Task TakeOverAsync_OnBusyInstance_RotatesTokenAndSucceeds()
-    {
-        var context = CreateContext("cancel");
-        context.Instance.Busy();
-        SetupAcquiredLock();
-        _busyManager
-            .TakeOverAsync(context.InstanceId, Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns(BusyMarkOutcome.Marked);
-
-        var result = await CreateService().TakeOverAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        result.Value.ShouldNotBe(Guid.Empty);
-    }
-
-    [Fact]
-    public async Task TakeOverAsync_WhenCompleted_Fails()
-    {
-        var context = CreateContext("cancel");
-        SetupAcquiredLock();
-        _busyManager
-            .TakeOverAsync(context.InstanceId, Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns(BusyMarkOutcome.Skipped);
-
-        var result = await CreateService().TakeOverAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeFalse();
-    }
-
-    #endregion
-
-    #region VerifyOwnershipAsync
-
-    [Fact]
-    public async Task VerifyOwnership_TokenMatches_Succeeds()
-    {
-        var context = CreateContext();
-        var token = Guid.NewGuid();
-        context.ChainToken = token;
-        SetupSnapshot(context, InstanceStatus.Busy, token);
-
-        var result = await CreateService().VerifyOwnershipAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task VerifyOwnership_TokenRotated_FailsWithChainOwnershipLost()
-    {
-        // A cancel/exit takeover rotated the durable token — the re-entering job lost ownership.
-        var context = CreateContext();
-        context.ChainToken = Guid.NewGuid();
-        SetupSnapshot(context, InstanceStatus.Busy, Guid.NewGuid());
-
-        var result = await CreateService().VerifyOwnershipAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.ChainOwnershipLost);
-    }
-
-    [Fact]
-    public async Task VerifyOwnership_NoToken_SucceedsWithoutSnapshotRead()
-    {
-        // Directive-driven resumes may carry no token; ownership rides the resume directive.
-        var context = CreateContext();
-
-        var result = await CreateService().VerifyOwnershipAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        await _instanceRepository.DidNotReceive()
-            .GetExecutionSnapshotAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    #endregion
-
     #region ReleaseReservationAsync
 
     [Fact]
-    public async Task ReleaseReservation_WithMatchingToken_ReleasesViaBusyManager()
+    public async Task ReleaseReservation_ReleasesViaBusyManager()
     {
         var context = CreateContext();
-        var token = Guid.NewGuid();
         SetupAcquiredLock();
         _busyManager
-            .TryReleaseAsync(context.InstanceId, token, Arg.Any<CancellationToken>())
+            .TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(true);
 
-        await CreateService().ReleaseReservationAsync(context, token, CancellationToken.None);
+        await CreateService().ReleaseReservationAsync(context, CancellationToken.None);
 
         await _busyManager.Received(1)
-            .TryReleaseAsync(context.InstanceId, token, Arg.Any<CancellationToken>());
+            .TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task ReleaseReservation_WhenBusyManagerThrows_DoesNotPropagate()
     {
         var context = CreateContext();
-        var token = Guid.NewGuid();
         SetupAcquiredLock();
         _busyManager
-            .TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns<Task<bool>>(_ => throw new InvalidOperationException("boom"));
 
         // Compensation must never mask the original failure.
         await Should.NotThrowAsync(
-            () => CreateService().ReleaseReservationAsync(context, token, CancellationToken.None));
+            () => CreateService().ReleaseReservationAsync(context, CancellationToken.None));
     }
 
     #endregion
 
     #region Helpers
-
-    private void SetupSnapshot(TransitionExecutionContext context, InstanceStatus status, Guid? chainToken)
-    {
-        _instanceRepository
-            .GetExecutionSnapshotAsync(context.InstanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(new InstanceExecutionSnapshot(
-                context.InstanceId, "key", status, chainToken, "state1"));
-    }
 
     private static TransitionExecutionContext CreateContext(string transitionKey = "regular-transition")
     {

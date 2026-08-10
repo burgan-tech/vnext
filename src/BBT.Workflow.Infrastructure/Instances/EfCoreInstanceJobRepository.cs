@@ -92,20 +92,4 @@ public sealed class EfCoreInstanceJobRepository(
             .ToListAsync(cancellationToken);
     }
 
-    /// <inheritdoc />
-    public async Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(
-        IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default)
-    {
-        var ids = instanceIds.ToList();
-        if (ids.Count == 0)
-            return [];
-
-        var result = await (await GetQueryableAsync())
-            .Where(j => ids.Contains(j.InstanceId) && j.IsActive == true)
-            .Select(j => j.InstanceId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
-        return [.. result];
-    }
 }

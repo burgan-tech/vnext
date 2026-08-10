@@ -49,7 +49,7 @@ public static class PipelineServiceCollectionExtensions
         // Validation Services
         services.AddScoped<ITransitionValidationService, TransitionValidationService>();
 
-        // Busy-as-mutex admission gate (flag-aware; no-ops when UseBusyAsMutex is off)
+        // Busy-as-mutex admission gate: Busy pre-check + short-lock reserve
         services.AddScoped<ITransitionAdmissionService, TransitionAdmissionService>();
 
         services.AddSingleton<IPipelineProfileResolver, PipelineProfileResolver>();

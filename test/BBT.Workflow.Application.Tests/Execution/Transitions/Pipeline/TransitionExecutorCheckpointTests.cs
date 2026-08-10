@@ -94,25 +94,6 @@ public class TransitionExecutorCheckpointTests
         executed.ShouldBe(new[] { LifecycleOrder.ChangeState });
     }
 
-    [Fact]
-    public async Task ExecuteOneAsync_ShouldRefreshChainHeartbeatOnCommittedSteps()
-    {
-        // Arrange — an owned chain whose heartbeat was stamped at chain start
-        var steps = new[] { CreateStep(LifecycleOrder.CreateTransition) };
-        var executor = CreateExecutor(steps);
-        var context = CreateContext();
-        context.Instance.BeginChain(Guid.NewGuid());
-        var heartbeatAtChainStart = context.Instance.ChainHeartbeatAt;
-        await Task.Delay(20);
-
-        // Act
-        await executor.ExecuteOneAsync(context, CancellationToken.None);
-
-        // Assert — staleness is measured from live progress, not chain start
-        context.Instance.ChainHeartbeatAt.ShouldNotBeNull();
-        context.Instance.ChainHeartbeatAt!.Value.ShouldBeGreaterThan(heartbeatAtChainStart!.Value);
-    }
-
     private static TransitionExecutor CreateExecutor(IEnumerable<ITransitionStep> steps) =>
         new(steps, Substitute.For<ILogger<TransitionExecutor>>());
 

@@ -78,13 +78,10 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
     /// </summary>
     private static void ClearBusyIfNeeded(TransitionExecutionContext context)
     {
-        // If target state is Busy subtype, ChangeState will handle status. The chain has come
-        // to rest in a Busy-subtype state, so release the durable chain-ownership token (the
-        // instance stays Busy) — otherwise the chain-token gate would reject legitimate foreign
-        // transitions and the ChainReaper would treat the resting instance as stuck.
+        // If target state is Busy subtype, ChangeState will handle status: the instance
+        // deliberately rests Busy until an external signal advances it.
         if (context.Target?.SubType == StateSubType.Busy)
         {
-            context.Directives.RequestEndChain();
             return;
         }
 

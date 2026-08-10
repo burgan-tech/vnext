@@ -619,8 +619,7 @@ public sealed class InstanceCommandAppService(
 
         // Busy-as-mutex: reject a Busy instance BEFORE spending validation work — a request
         // that cannot be admitted should not fetch schemas or evaluate specifications.
-        // Flag-aware: no-op when UseBusyAsMutex is off or the kind is exempt (cancel/exit/
-        // updateData/owner re-entry).
+        // No-op for exempt kinds (cancel/exit/updateData/owner re-entry).
         var admission = transitionAdmissionService.CheckAdmission(contextResult.Value!);
         if (!admission.IsSuccess)
             return Result.Fail(admission.Error);
