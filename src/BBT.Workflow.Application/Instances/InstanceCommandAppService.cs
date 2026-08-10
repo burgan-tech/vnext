@@ -637,32 +637,6 @@ public sealed class InstanceCommandAppService(
         // this marker prevents the exact same transition input schema from running 2-3 times.
         context.TransitionSchemaValidated = true;
 
-        var transition = transitionContext.Transition;
-        if (transition is not null)
-        {
-            var currentState = resolvedInstance.GetCurrentState;
-            // Availability itself is owned by the transition policy. Only apply state-specific
-            // role narrowing when the definition actually has an entry for this state; this keeps
-            // reserved/well-known transitions compatible while still enforcing their global grants.
-            var authorizationState = transition.FindAvailableIn(currentState) is null
-                ? null
-                : currentState;
-            var requestContext = new AuthorizationRequestContext(
-                input.Headers,
-                QueryParameters: null,
-                RouteValues: input.RouteValues);
-            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedInStateAsync(
-                workflowDefinition,
-                transition,
-                authorizationState,
-                resolvedInstance,
-                BuildCallerRoles(explicitRole: null, headers: input.Headers),
-                requestContext,
-                cancellationToken);
-            if (!allowed)
-                return Result<TransitionOutput>.Fail(WorkflowErrors.TransitionAccessDenied(transitionKey));
-        }
-
         return await workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
             .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion))

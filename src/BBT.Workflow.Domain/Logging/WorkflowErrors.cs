@@ -106,12 +106,6 @@ public static class WorkflowErrors
             WorkflowErrorCodes.UnauthorizedTransition,
             $"Transition '{transitionKey}' with trigger type '{triggerType}' cannot be executed by '{executionActor}' context");
 
-    /// <summary>Caller roles are not granted for the requested transition.</summary>
-    public static Error TransitionAccessDenied(string transitionKey)
-        => Error.Forbidden(
-            WorkflowErrorCodes.AuthorizationRoleDenied,
-            $"Access to transition '{transitionKey}' is not permitted for the current roles.");
-
     public static Error InvalidIdempotencyKey(int maxLength)
         => Error.Validation(
             WorkflowErrorCodes.InvalidIdempotencyKey,

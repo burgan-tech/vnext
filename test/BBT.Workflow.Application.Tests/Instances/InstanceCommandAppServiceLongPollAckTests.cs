@@ -77,16 +77,6 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
         _transitionValidationService
             .ValidateAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
-        _authManager
-            .IsAnyRoleAllowedInStateAsync(
-                Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Transition>(),
-                Arg.Any<string?>(),
-                Arg.Any<Instance>(),
-                Arg.Any<IReadOnlyCollection<string>>(),
-                Arg.Any<AuthorizationRequestContext>(),
-                Arg.Any<CancellationToken>())
-            .Returns(true);
         _workflowExecutionService
             .ExecuteTransitionAsync(
                 Arg.Any<WorkflowExecutionContext>(),
