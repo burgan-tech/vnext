@@ -256,6 +256,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<BBT.Workflow.Execution.Pipeline.ITransitionLockScopeFactory,
             BBT.Workflow.Infrastructure.Execution.Locks.TransitionLockScopeFactory>();
+        services.AddScoped<BBT.Workflow.Execution.Pipeline.IInstanceStatusLock,
+            BBT.Workflow.Infrastructure.Execution.Locks.InstanceStatusLock>();
         return services;
     }
 

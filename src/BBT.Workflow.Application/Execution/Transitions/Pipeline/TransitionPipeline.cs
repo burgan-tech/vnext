@@ -49,6 +49,7 @@ public class TransitionPipeline
     private static readonly HashSet<string> ClientFacingErrorCodes = new(StringComparer.Ordinal)
     {
         WorkflowErrorCodes.ResourceLockConflict,
+        WorkflowErrorCodes.InstanceBusy,
     };
 
     private static bool IsClientFacingError(Error error)

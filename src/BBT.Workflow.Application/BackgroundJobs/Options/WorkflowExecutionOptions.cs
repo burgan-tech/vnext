@@ -91,6 +91,35 @@ public sealed class WorkflowExecutionOptions
             : TransitionJobTimeoutSeconds + 30;
 
     /// <summary>
+    /// Enables the Busy-as-mutex execution model: transition admission rejects a Busy instance
+    /// with 409 (<c>Instance:100031</c>) up front, the distributed lock shrinks to a short
+    /// status-flip check-and-set (<see cref="StatusLockLeaseSeconds"/>), and the pipeline body
+    /// plus auto-chain run without a held lease — the Busy flag and the chain token carry
+    /// mutual exclusion instead. Default: false (legacy whole-chain lock).
+    /// </summary>
+    public bool UseBusyAsMutex { get; set; }
+
+    /// <summary>
+    /// Lease duration in seconds for the short status lock guarding instance status transitions
+    /// (Active→Busy reserve and Busy→Active/Completed/Faulted settlement). The critical section
+    /// is a single-row check-and-set committed in a RequiresNew UoW, so the lease only needs to
+    /// outlive transient DB latency — it is a crash-safety net, not an execution budget.
+    /// Default: 15.
+    /// </summary>
+    public int StatusLockLeaseSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Bounded wait applied when acquiring the status lock. Status flips resolve in
+    /// milliseconds, so a short linear backoff absorbs contention (e.g. settlement racing a
+    /// cancel) instead of failing the caller into a full retry cycle.
+    /// </summary>
+    public LockConflictRetryOptions StatusLockRetry { get; set; } = new()
+    {
+        MaxAttempts = 4,
+        BaseDelayMilliseconds = 50
+    };
+
+    /// <summary>
     /// Maximum number of flow schemas swept concurrently by the chain reaper.
     /// Higher values reduce sweep wall-clock time at the cost of more concurrent DB connections.
     /// Default: 4.

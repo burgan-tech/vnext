@@ -149,6 +149,72 @@ public static partial class WorkflowLogs
     public static partial void InstanceMarkedBusy(this ILogger logger, Guid instanceId);
 
     /// <summary>
+    /// Logs when transition admission rejects a request because the instance is Busy
+    /// (Busy-as-mutex model; surfaces as 409 Instance:100031).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10135,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} rejected: instance {InstanceId} is Busy")]
+    public static partial void TransitionRejectedInstanceBusy(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when an instance is reserved (Active→Busy) under the short status lock, stamping
+    /// the chain ownership token that carries mutual exclusion for the pipeline body.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10136,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} reserved Busy for transition {TransitionKey} (chain token {ChainToken})")]
+    public static partial void InstanceBusyReserved(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        Guid chainToken);
+
+    /// <summary>
+    /// Logs when a running chain loses instance ownership: the durable chain token no longer
+    /// matches (a cancel/exit rotated it, or the reaper reclaimed the instance). The chain stops
+    /// without faulting the instance — the new owner has already settled it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10137,
+        Level = LogLevel.Warning,
+        Message = "Chain ownership lost for instance {InstanceId}: expected token {ExpectedToken}, found {ActualToken}; stopping chain")]
+    public static partial void ChainOwnershipLost(
+        this ILogger logger,
+        Guid instanceId,
+        Guid? expectedToken,
+        Guid? actualToken);
+
+    /// <summary>
+    /// Logs when an instance status settlement (Busy→Active/Completed/Faulted) commits under
+    /// the short status lock.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10138,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} status settled to {Status} under status lock")]
+    public static partial void InstanceStatusSettled(
+        this ILogger logger,
+        Guid instanceId,
+        string status);
+
+    /// <summary>
+    /// Logs when the short status lock could not be acquired within its bounded retry budget.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10139,
+        Level = LogLevel.Warning,
+        Message = "Status lock acquisition failed for {LockKey} after bounded retries")]
+    public static partial void StatusLockAcquireFailed(
+        this ILogger logger,
+        string lockKey);
+
+    /// <summary>
     /// Logs when a foreign transition is rejected by the chain-token gate because the instance
     /// is Busy with an active auto-chain owned by a different token.
     /// </summary>

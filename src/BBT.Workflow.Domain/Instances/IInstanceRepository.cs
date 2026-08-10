@@ -51,6 +51,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Projects the execution-admission snapshot (status, chain token, current state) for the
+    /// instance matching the identifier (GUID or key) in a single projection query — no includes,
+    /// no aggregate materialization. Used by the Busy pre-check and the reserve re-check under the
+    /// status lock. Identifier resolution mirrors <see cref="GetStateFingerprintAsync"/>
+    /// (id first, then most recent row by key). Returns null when no instance matches.
+    /// </summary>
+    Task<InstanceExecutionSnapshot?> GetExecutionSnapshotAsync(string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Projects the data-function validation fingerprint (latest data row's ETag + flow version)
     /// for the instance matching the identifier (GUID or key) in a single projection query.
     /// The latest ETag read is an index-only probe (<c>UX_InstancesData_Instance_IsLatest</c>

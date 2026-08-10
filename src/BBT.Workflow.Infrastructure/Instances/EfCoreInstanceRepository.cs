@@ -415,6 +415,47 @@ public sealed class EfCoreInstanceRepository(
             i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()));
 
     /// <inheritdoc />
+    public async Task<InstanceExecutionSnapshot?> GetExecutionSnapshotAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await QueryExecutionSnapshotAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+    }
+
+    /// <summary>
+    /// Core execution-snapshot projection over an instance queryable. Internal so integration tests
+    /// can run the exact production query against a real database without composing the repository.
+    /// </summary>
+    internal static async Task<InstanceExecutionSnapshot?> QueryExecutionSnapshotAsync(
+        IQueryable<Instance> query,
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await ProjectExecutionSnapshot(query.Where(i => i.Id == instanceId))
+                .FirstOrDefaultAsync(cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic, mirroring QueryStateFingerprintAsync.
+        return await ProjectExecutionSnapshot(
+                query.Where(i => i.Key == identifier).OrderByDescending(i => i.CreatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static IQueryable<InstanceExecutionSnapshot> ProjectExecutionSnapshot(IQueryable<Instance> query) =>
+        query.Select(i => new InstanceExecutionSnapshot(
+            i.Id,
+            i.Key,
+            i.Status,
+            i.ChainToken,
+            i.CurrentState));
+
+    /// <inheritdoc />
     public async Task<InstanceDataFingerprint?> GetDataFingerprintAsync(
         string identifier,
         CancellationToken cancellationToken = default)
