@@ -27,7 +27,8 @@ internal static class TransitionSettlement
         CancellationToken cancellationToken,
         IInstanceStatusLock? statusLock = null)
     {
-        if (context.Instance.IsBusy &&
+        if (context.OwnsStatus &&
+            context.Instance.IsBusy &&
             resolvedStatus is not null &&
             context.Target?.SubType != StateSubType.Busy &&
             !context.Instance.ActiveCorrelations.Any(c =>

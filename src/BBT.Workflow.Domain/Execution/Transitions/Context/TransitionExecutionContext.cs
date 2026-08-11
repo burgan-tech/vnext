@@ -123,6 +123,16 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public bool IsPreReserved { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether this execution owns the instance's Busy lifecycle. Assigned by the
+    /// pipeline admission: reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
+    /// updateData ⇒ true only when its opportunistic reserve succeeded or the parent rests in a
+    /// SubFlow state. Gates status resolution (<c>ResolveAvailableStep</c>), settlement and
+    /// auto-transition advancement for updateData: a non-owner must never flip a Busy it does
+    /// not hold, and must not start a competing chain.
+    /// </summary>
+    public bool OwnsStatus { get; set; }
+
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
 

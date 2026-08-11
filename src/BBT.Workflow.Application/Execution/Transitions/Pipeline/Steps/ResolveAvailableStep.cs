@@ -52,6 +52,17 @@ public sealed class ResolveAvailableStep(
     /// </summary>
     private bool ShouldSetAvailable(TransitionExecutionContext context)
     {
+        // Only the execution that owns the Busy lifecycle may resolve the status. A non-owning
+        // execution (data-only updateData beside an in-flight chain, subflow forward) would
+        // otherwise steal the owner's Busy by resolving it to Active here.
+        if (!context.OwnsStatus)
+        {
+            logger.LogDebug(
+                "Instance {InstanceId} status not owned by this execution, skipping ResolveAvailableStep",
+                context.InstanceId);
+            return false;
+        }
+
         // Already completed or not busy - nothing to do
         if (context.Instance.IsCompleted || !context.Instance.IsBusy)
         {

@@ -411,6 +411,55 @@ public class TransitionPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_UpdateData_ActiveInstance_ReservesOpportunisticallyAndOwnsStatus()
+    {
+        // updateData on an Active instance: opportunistic reserve succeeds → the request owns
+        // the status lifecycle and may advance auto transitions.
+        var context = CreateTransitionExecutionContext("update-parent-data");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockAdmissionService
+            .TryReserveOpportunisticallyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.OwnsStatus.ShouldBeTrue();
+        await _mockAdmissionService.DidNotReceive()
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_UpdateData_BusyInstance_RunsDataOnlyWithoutOwnership()
+    {
+        // updateData beside an in-flight chain: reserve fails silently → data-only, no
+        // status ownership — the owner's Busy can never be stolen.
+        var context = CreateTransitionExecutionContext("update-parent-data");
+        context.Instance.Busy();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockAdmissionService
+            .TryReserveOpportunisticallyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.OwnsStatus.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task RunAsync_OwnerReentry_ShouldRunWithoutReserve()
     {
         var context = CreateTransitionExecutionContext();

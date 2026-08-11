@@ -212,6 +212,32 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when an updateData request gains status ownership (opportunistic reserve succeeded
+    /// or the parent rests in a SubFlow state) and may advance auto transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10145,
+        Level = LogLevel.Information,
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} owns the status lifecycle; auto-transition advancement enabled")]
+    public static partial void UpdateDataAdvanceEnabled(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when an updateData request runs data-only: the instance is Busy with an in-flight
+    /// chain, so the data is written but no auto transitions are advanced.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10146,
+        Level = LogLevel.Debug,
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} runs data-only (instance Busy with an in-flight chain)")]
+    public static partial void UpdateDataDataOnly(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE
     /// row lock within lock_timeout — a concurrent writer held it for the whole wait budget.
     /// </summary>

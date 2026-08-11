@@ -124,11 +124,26 @@ public class TransitionPipeline
         switch (_admissionService.Classify(context))
         {
             case AdmissionKind.Unconditional:
-                // updateData: no lock, no Busy check, no status flip — instance-data writes are
-                // ordered by the DB versioning trigger. A durable S8 checkpoint always belongs
-                // to the interrupted MAIN transition — never resume from a foreign checkpoint.
+            {
+                // updateData: always accepted. Opportunistic reserve decides how far it goes:
+                // an Active instance is reserved (this request owns the status lifecycle and
+                // may advance auto transitions with the fresh data); a Busy one degrades to
+                // data-only — unless the parent rests in a SubFlow state, where there is no
+                // competing chain and the update may advance the parent's own auto transitions.
                 context.Instance.ClearResumePoint();
+
+                var reserved = await _admissionService.TryReserveOpportunisticallyAsync(
+                    context, cancellationToken);
+                context.OwnsStatus = reserved
+                    || context.Current?.StateType == StateType.SubFlow;
+
+                if (context.OwnsStatus)
+                    _logger.UpdateDataAdvanceEnabled(context.InstanceId, context.TransitionKey);
+                else
+                    _logger.UpdateDataDataOnly(context.InstanceId, context.TransitionKey);
+
                 return await RunChainAsync(context, cancellationToken);
+            }
 
             case AdmissionKind.BypassBusyCheck:
             {
@@ -138,6 +153,7 @@ public class TransitionPipeline
                 if (!takeover.IsSuccess)
                     return Result<TransitionExecutionContext>.Fail(takeover.Error);
 
+                context.OwnsStatus = true;
                 context.Instance.ClearResumePoint();
                 return await RunChainAsync(context, cancellationToken);
             }
@@ -155,6 +171,7 @@ public class TransitionPipeline
                 if (context.Directives.IsSubFlowResume)
                     await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
+                context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);
 
             default: // AdmissionKind.Normal
@@ -162,7 +179,8 @@ public class TransitionPipeline
                 // A Busy parent with an active SubFlow is admitted WITHOUT a reserve: the
                 // instance stays Busy for the subflow's lifetime by design, and
                 // ForwardToActiveSubflowStep (order 10) relays the request to the subflow,
-                // which runs the same admission logic in its own context.
+                // which runs the same admission logic in its own context. It does NOT own the
+                // parent's status.
                 if (_admissionService.IsSubflowForward(context))
                     return await RunChainAsync(context, cancellationToken);
 
@@ -170,6 +188,7 @@ public class TransitionPipeline
                 if (!reserve.IsSuccess)
                     return Result<TransitionExecutionContext>.Fail(reserve.Error);
 
+                context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);
             }
         }
@@ -301,6 +320,7 @@ public class TransitionPipeline
         context.Profile = _profileResolver.Resolve(workflowContext);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
+        context.OwnsStatus = workflowContext.OwnsStatus;
         return Result<TransitionExecutionContext>.Ok(context);
     }
 

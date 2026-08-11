@@ -77,6 +77,15 @@ public sealed class WorkflowExecutionContext
     /// </summary>
     public bool IsPreReserved { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether this execution owns the instance's Busy lifecycle. Set by the
+    /// pipeline admission (reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
+    /// updateData ⇒ opportunistic). Only status owners may resolve/settle the instance status —
+    /// a non-owning updateData running beside an in-flight chain must never flip the owner's
+    /// Busy. Propagated across inline continuation hops.
+    /// </summary>
+    public bool OwnsStatus { get; set; }
+
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
 

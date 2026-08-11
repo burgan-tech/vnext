@@ -38,11 +38,27 @@ public class ResolveAvailableStepTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenExecutionDoesNotOwnStatus_ShouldNotResolve()
+    {
+        // A non-owning execution (data-only updateData beside an in-flight chain, subflow
+        // forward) must never resolve the owner's Busy to Active.
+        var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
+        context.Instance.Busy();
+        context.OwnsStatus = false;
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Directives.ResolvedStatus.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenAllConditionsMet_ShouldDeferActiveStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
         context.Instance.Busy(); // Set to Busy first
+        context.OwnsStatus = true; // resolution is gated on Busy-lifecycle ownership
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);
@@ -220,6 +236,7 @@ public class ResolveAvailableStepTests
         // Arrange - state with no transitions should be Available
         var context = CreateTransitionExecutionContextWithNoTransitions();
         context.Instance.Busy();
+        context.OwnsStatus = true; // resolution is gated on Busy-lifecycle ownership
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);

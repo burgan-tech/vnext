@@ -139,7 +139,11 @@ public sealed class PostCommitParentMutationService(
             Workflow = workflow,
             Instance = instance,
             Current = freshState!,
-            Target = freshState
+            Target = freshState,
+            // Post-commit settlement always acts on behalf of the chain that handed off —
+            // the owner of the Busy lifecycle. Without this, TransitionSettlement's
+            // ownership guard would skip the settle and strand the parent Busy.
+            OwnsStatus = true
         };
     }
 }

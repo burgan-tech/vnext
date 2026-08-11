@@ -83,6 +83,15 @@ public interface ITransitionAdmissionService
     Task<Result> ReserveAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Opportunistic reserve for <see cref="AdmissionKind.Unconditional"/> (updateData): under
+    /// the short status lock, flips Active→Busy and returns true (the request owns the status
+    /// lifecycle and may advance the state process). Returns false — NEVER an error — when the
+    /// instance is already Busy, Completed, or the lock could not be acquired: the request is
+    /// still accepted, but degrades to data-only (no auto-transition advancement).
+    /// </summary>
+    Task<bool> TryReserveOpportunisticallyAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Admits a <see cref="AdmissionKind.BypassBusyCheck"/> request (cancel/exit/timeout):
     /// under the short status lock, marks the instance Busy without checking — exempt from the
     /// 409 but still serialized through the same distributed lock as every other status flip.

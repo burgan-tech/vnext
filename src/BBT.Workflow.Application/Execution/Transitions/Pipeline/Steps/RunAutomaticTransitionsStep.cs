@@ -24,6 +24,16 @@ public sealed class RunAutomaticTransitionsStep(
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(RunAutomaticTransitionsStep)}");
 
+        // Data-only updateData: the request does not own the Busy lifecycle (an in-flight
+        // chain does), so it must not start a competing auto chain — the owning chain will
+        // evaluate its own auto transitions against the freshly written data. Owning
+        // updateData (opportunistic reserve succeeded, or the parent rests in a SubFlow
+        // state) advances normally.
+        if (context.IsUpdateDataTransition() && !context.OwnsStatus)
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
         var nonBlockingFailures = NonBlockingTaskFailures.Get(context);
 
         // Check if target state has any automatic transitions

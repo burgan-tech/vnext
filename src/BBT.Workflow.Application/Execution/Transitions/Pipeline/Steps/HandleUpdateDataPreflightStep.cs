@@ -47,7 +47,26 @@ public sealed class HandleUpdateDataPreflightStep(
             .BindAsync(_ => UpdateDataAsync(context, cancellationToken))
             .Tap(_ => logger.UpdateDataTransitionDetected(context.InstanceId))
             .Tap(_ => logger.UpdateDataSkipToFinish(context.InstanceId))
+            .Bind(_ => PrepareAutoEvaluationTarget(context))
             .Map(_ => CreateSkipOutcome());
+    }
+
+    /// <summary>
+    /// Sets the auto-evaluation target to the current (SubFlow) state so the parent's own
+    /// auto transitions are evaluated against the freshly written data.
+    /// <c>RunAutomaticTransitionsStep</c> reads <c>context.Target</c>, and ChangeStateStep is
+    /// skipped on this path — mirrors <c>ClearBusyOnResumeStep.UpdateTargetStateInContext</c>.
+    /// </summary>
+    private static Result<TransitionExecutionContext> PrepareAutoEvaluationTarget(
+        TransitionExecutionContext context)
+    {
+        return context.Workflow.GetState(context.Instance.GetCurrentState)
+            .Map(state =>
+            {
+                context.Target = state;
+                context.RefreshScriptContextInstance();
+                return context;
+            });
     }
 
         /// <summary>
@@ -207,13 +226,17 @@ public sealed class HandleUpdateDataPreflightStep(
     }
 
     /// <summary>
-    /// Creates outcome to skip to Finalize step.
+    /// Creates the skip outcome: jump to auto-transition evaluation (order 90) instead of
+    /// Finalize, so an updateData on a SubFlow-state parent can advance the parent's own auto
+    /// transitions with the fresh data. When no auto condition is satisfied the step falls
+    /// through to Finalize and the behavior matches the former data-only short-circuit.
+    /// The advance itself is still gated by <c>OwnsStatus</c> in RunAutomaticTransitionsStep.
     /// </summary>
     private static StepOutcome CreateSkipOutcome()
     {
         return new StepOutcome
         {
-            SkipToOrder = LifecycleOrder.Finalize
+            SkipToOrder = LifecycleOrder.Auto
         };
     }
 }
