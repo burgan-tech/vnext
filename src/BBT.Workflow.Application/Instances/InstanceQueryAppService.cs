@@ -479,7 +479,7 @@ public sealed class InstanceQueryAppService(
     /// workflow-level transitions — cancel, updateData and exit (manual/event, available in current state).
     /// When in active subflow, clients see subflow transitions plus those parent transitions; state-level
     /// parent transitions are not included. updateData in particular only does work while the parent sits
-    /// in a SubFlow state (see <c>HandleUpdateDataPreflightStep</c>), so this merge is its primary surface.
+    /// in a SubFlow state (updateData executes on the parent and is never forwarded to the subflow), so this merge is its primary surface.
     /// </summary>
     private static List<string> MergeWithParentAvailableTransitions(
         List<string> subflowTransitionNames,

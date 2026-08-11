@@ -35,14 +35,12 @@ public sealed class PipelineExecutionProfile
     // already run it. Only the genuine per-request/subflow-prelude steps stay excluded.
     private static readonly ImmutableHashSet<int> AutoChainExcluded = ImmutableHashSet.Create(
         LifecycleOrder.Preflight,
-        LifecycleOrder.CheckParentUpdateDataTransition,
         LifecycleOrder.ForwardToActiveSubflow,
         LifecycleOrder.SetBusy,
         LifecycleOrder.ApplyTimeoutState);
 
     private static readonly ImmutableHashSet<int> ScheduledExcluded = ImmutableHashSet.Create(
         LifecycleOrder.Preflight,
-        LifecycleOrder.CheckParentUpdateDataTransition,
         LifecycleOrder.ForwardToActiveSubflow);
 
     private static readonly ImmutableHashSet<int> EventExcluded = ImmutableHashSet.Create(
@@ -51,7 +49,6 @@ public sealed class PipelineExecutionProfile
 
     private static readonly ImmutableHashSet<int> ErrorBoundaryExcluded = ImmutableHashSet.Create(
         LifecycleOrder.Preflight,
-        LifecycleOrder.CheckParentUpdateDataTransition,
         LifecycleOrder.ForwardToActiveSubflow,
         LifecycleOrder.ResourceLock);
 

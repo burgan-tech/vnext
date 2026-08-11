@@ -611,7 +611,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// and the given state satisfies the AvailableIn constraint.
     /// AvailableIn empty/null means available in all states (same semantics as shared transitions).
     /// Used when merging parent transitions into SubFlow available transitions — the parent-in-subflow
-    /// case is exactly where <c>HandleUpdateDataPreflightStep</c> applies.
+    /// case is handled on the parent by the normal pipeline (updateData is never forwarded to the subflow).
     /// </summary>
     public string? GetUpdateDataTransitionKey(State currentState) =>
         ResolveWellKnownTransitionKey(UpdateData, currentState);

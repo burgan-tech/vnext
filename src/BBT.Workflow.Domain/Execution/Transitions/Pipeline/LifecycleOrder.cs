@@ -10,13 +10,7 @@ public static class LifecycleOrder
     /// Subflow
     /// </summary>
     public const int Preflight = 5;
-    
-    /// <summary>
-    /// Order for checking shared transitions in SubFlow states.
-    /// Skips to CreateTransition if current state is SubFlow and transition is shared.
-    /// </summary>
-    public const int CheckParentUpdateDataTransition = ForwardToActiveSubflow - 1;
-    
+
     /// <summary>
     /// Subflow
     /// </summary>

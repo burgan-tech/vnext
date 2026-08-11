@@ -373,28 +373,6 @@ public static partial class WorkflowLogs
         string transitionKey);
 
     /// <summary>
-    /// Logs when an updateData transition is detected.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10011,
-        Level = LogLevel.Information,
-        Message = "UpdateData transition detected for instance {InstanceId}")]
-    public static partial void UpdateDataTransitionDetected(
-        this ILogger logger,
-        Guid instanceId);
-
-    /// <summary>
-    /// Logs when skipping to finish step for updateData transition.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10012,
-        Level = LogLevel.Information,
-        Message = "Skipping normal pipeline steps for updateData transition, jumping to Finalize step for instance {InstanceId}")]
-    public static partial void UpdateDataSkipToFinish(
-        this ILogger logger,
-        Guid instanceId);
-
-    /// <summary>
     /// Logs when an exit transition is detected.
     /// </summary>
     [LoggerMessage(
@@ -536,18 +514,6 @@ public static partial class WorkflowLogs
     public static partial void DynamicExpressoConditionEvaluationFailed(
         this ILogger logger,
         string reason);
-
-    /// <summary>
-    /// Logs when attempting to update data on an already completed instance.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10054,
-        Level = LogLevel.Warning,
-        Message = "Cannot update data for instance {InstanceId}: already in {Status} state")]
-    public static partial void UpdateDataInstanceAlreadyCompleted(
-        this ILogger logger,
-        Guid instanceId,
-        string status);
 
     /// <summary>
     /// Logs when attempting to exit an already completed instance.
