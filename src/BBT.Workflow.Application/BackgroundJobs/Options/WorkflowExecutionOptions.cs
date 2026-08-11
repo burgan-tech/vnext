@@ -82,6 +82,13 @@ public sealed class WorkflowExecutionOptions
     };
 
     /// <summary>
+    /// PostgreSQL timeouts for the InstanceData write funnel: every SaveChanges that inserts
+    /// InstanceData rows takes a per-instance <c>FOR UPDATE</c> row lock and runs with these
+    /// transaction-scoped (<c>SET LOCAL</c>) limits.
+    /// </summary>
+    public InstanceDataWriteOptions InstanceDataWrite { get; set; } = new();
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process
@@ -119,6 +126,28 @@ public sealed class TransitionJobFailurePolicyOptions
 {
     public int MaxRetries { get; set; } = 5;
     public int IntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// Timeouts for the InstanceData write funnel (<c>WorkflowDbContext</c> SaveChanges path).
+/// Both are applied with <c>SET LOCAL</c>, i.e. scoped to the writing transaction —
+/// PgBouncer-transaction-mode safe. <c>StatementTimeoutMs</c> applies to every statement for
+/// the remainder of that transaction (single-statement cap, not a whole-transaction budget).
+/// </summary>
+public sealed class InstanceDataWriteOptions
+{
+    /// <summary>
+    /// Maximum time a writer waits on the per-instance <c>FOR UPDATE</c> row lock before the
+    /// write fails with <c>Instance:100035</c> (409). Default: 5000ms (POC parity).
+    /// </summary>
+    public int LockTimeoutMs { get; set; } = 5000;
+
+    /// <summary>
+    /// Maximum runtime for any single statement in the writing transaction; exceeding it
+    /// cancels the statement and fails the write with <c>Instance:100036</c> (503).
+    /// Default: 10000ms (POC parity).
+    /// </summary>
+    public int StatementTimeoutMs { get; set; } = 10000;
 }
 
 /// <summary>

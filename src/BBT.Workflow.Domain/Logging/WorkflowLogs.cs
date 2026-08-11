@@ -212,6 +212,59 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE
+    /// row lock within lock_timeout — a concurrent writer held it for the whole wait budget.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10141,
+        Level = LogLevel.Warning,
+        Message = "Instance data write lock timed out for instance {InstanceId} after {LockTimeoutMs}ms")]
+    public static partial void InstanceDataLockWaitTimeout(
+        this ILogger logger,
+        Guid instanceId,
+        int lockTimeoutMs);
+
+    /// <summary>
+    /// Logs when a new InstanceData row's semantic version was rebased onto the real database
+    /// head because the in-memory base was stale (a concurrent writer committed in between).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10142,
+        Level = LogLevel.Information,
+        Message = "Instance data version rebased for instance {InstanceId}: {StaleVersion} -> {RebasedVersion} (VersionNo {VersionNo})")]
+    public static partial void InstanceDataVersionRebased(
+        this ILogger logger,
+        Guid instanceId,
+        string staleVersion,
+        string rebasedVersion,
+        long versionNo);
+
+    /// <summary>
+    /// Logs when the write funnel demoted a stale latest row (written by a concurrent
+    /// transaction) under the FOR UPDATE lock before inserting the new head.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10143,
+        Level = LogLevel.Debug,
+        Message = "Stale latest InstanceData row demoted for instance {InstanceId} before inserting VersionNo {VersionNo}")]
+    public static partial void InstanceDataStaleLatestDemoted(
+        this ILogger logger,
+        Guid instanceId,
+        long versionNo);
+
+    /// <summary>
+    /// Logs when an InstanceData write statement was cancelled by statement_timeout.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10144,
+        Level = LogLevel.Warning,
+        Message = "Instance data write statement timed out for instance {InstanceId} after {StatementTimeoutMs}ms")]
+    public static partial void InstanceDataWriteStatementTimeout(
+        this ILogger logger,
+        Guid instanceId,
+        int statementTimeoutMs);
+
+    /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
     /// causing the request to be rejected with 409 Conflict.
     /// </summary>

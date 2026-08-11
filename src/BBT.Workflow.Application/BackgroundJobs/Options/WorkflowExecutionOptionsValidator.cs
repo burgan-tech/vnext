@@ -46,6 +46,15 @@ public sealed class WorkflowExecutionOptionsValidator(IConfiguration configurati
                 "least 1 second — it guards the Active→Busy admission check-and-set.");
         }
 
+        if (options.InstanceDataWrite.LockTimeoutMs < 1
+            || options.InstanceDataWrite.LockTimeoutMs > options.InstanceDataWrite.StatementTimeoutMs)
+        {
+            failures.Add(
+                $"WorkflowExecution:InstanceDataWrite:LockTimeoutMs ({options.InstanceDataWrite.LockTimeoutMs}) " +
+                $"must be positive and not exceed StatementTimeoutMs ({options.InstanceDataWrite.StatementTimeoutMs}): " +
+                "the lock wait is part of the statement budget.");
+        }
+
         return failures.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(failures);
