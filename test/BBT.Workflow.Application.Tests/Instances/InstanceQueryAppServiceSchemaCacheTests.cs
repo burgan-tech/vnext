@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
@@ -18,6 +19,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Extentions;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -40,6 +42,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
     private readonly IInstanceRepository _instanceRepository;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly Caching.IInstanceSchemaFunctionCache _instanceSchemaFunctionCache;
+    private readonly ITaskConditionService _conditionService = Substitute.For<ITaskConditionService>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -93,6 +96,9 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
+            transitionSchemaResolver: new TransitionSchemaResolver(
+                new RuleBasedSelectionResolver(_conditionService),
+                Substitute.For<ILogger<TransitionSchemaResolver>>()),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
             currentSchema: Substitute.For<ICurrentSchema>(),
@@ -234,6 +240,84 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             .SetAsync(Arg.Any<string>(), Arg.Any<Caching.SchemaFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task GetSchemaAsync_WhenTransitionSchemaIsRuleBased_BypassesFastPathAndDoesNotCacheOrEtag()
+    {
+        var (instance, workflow) = CreateInstanceWithRuleBasedTransitionSchema();
+        SetupFullPathMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        // The rule matches, so the mobile entry wins over the trailing rule-less fallback.
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(true));
+
+        var result = await _service.GetSchemaAsync(
+            CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("approve-schema-mobile");
+
+        // A rule reads headers and query parameters, which the caller-scope hash does not cover — so the
+        // response must never be cached nor represented by the fingerprint ETag.
+        result.Result.Value!.ETag.ShouldBeNull();
+        await _instanceSchemaFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceSchemaFunctionCache.DidNotReceive()
+            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.SchemaFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenRuleBasedAndIfNoneMatchSupplied_StillReturnsBodyNever304()
+    {
+        var (instance, workflow) = CreateInstanceWithRuleBasedTransitionSchema();
+        SetupFullPathMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(true));
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetSchemaAsync(input, TestTransition, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenRuleDoesNotMatch_FallsBackToTheRulelessEntry()
+    {
+        var (instance, workflow) = CreateInstanceWithRuleBasedTransitionSchema();
+        SetupFullPathMocks(instance, workflow);
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(false));
+
+        var result = await _service.GetSchemaAsync(
+            CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("approve-schema");
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenRuleThrows_SkipsEntryRatherThanFailing()
+    {
+        var (instance, workflow) = CreateInstanceWithRuleBasedTransitionSchema();
+        SetupFullPathMocks(instance, workflow);
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Fail(Error.Failure("script", "boom")));
+
+        var result = await _service.GetSchemaAsync(
+            CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("approve-schema");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void EnableCache()
@@ -273,6 +357,25 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         return (instance, workflow);
     }
 
+    /// <summary>
+    /// A transition whose schema is authored as two entries: a rule-bearing mobile schema followed by a
+    /// rule-less fallback — the shape rule-based selection exists for.
+    /// </summary>
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithRuleBasedTransitionSchema()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema(withSchemaRef: false);
+        var transition = workflow.GetState(TestState).Value!.Transitions.First(t => t.Key == TestTransition);
+
+        transition.SetSchema(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateWithRule(
+                new Reference("approve-schema-mobile", TestDomain, "sys-schemas", TestVersion),
+                new ScriptCode("inline", "true")),
+            SchemaEntry.CreateDefault(
+                new Reference("approve-schema", TestDomain, "sys-schemas", TestVersion))));
+
+        return (instance, workflow);
+    }
+
     private void SetupFullPathMocks(Instance instance, Definitions.Workflow workflow)
     {
         _instanceRepository
@@ -286,11 +389,15 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         _componentCacheStore
             .GetSchemaAsync(TestDomain, "approve-schema", Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Result<SchemaDefinition>.Ok(SchemaFromJson()));
+
+        _componentCacheStore
+            .GetSchemaAsync(TestDomain, "approve-schema-mobile", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<SchemaDefinition>.Ok(SchemaFromJson("approve-schema-mobile")));
     }
 
-    private static SchemaDefinition SchemaFromJson() =>
-        System.Text.Json.JsonSerializer.Deserialize<SchemaDefinition>("""
-            { "key": "approve-schema", "type": "JSON", "schema": { "type": "object" } }
+    private static SchemaDefinition SchemaFromJson(string key = "approve-schema") =>
+        System.Text.Json.JsonSerializer.Deserialize<SchemaDefinition>($$"""
+            { "key": "{{key}}", "type": "JSON", "schema": { "type": "object" } }
             """, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
 
     private static GetSchemaInput CreateInput(string instanceId) => new()

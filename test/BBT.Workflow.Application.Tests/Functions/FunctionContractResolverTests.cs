@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -28,7 +29,8 @@ public sealed class FunctionContractResolverTests
     public FunctionContractResolverTests()
     {
         _resolver = new FunctionContractResolver(
-            _conditionService, NullLogger<FunctionContractResolver>.Instance);
+            new RuleBasedSelectionResolver(_conditionService),
+            NullLogger<FunctionContractResolver>.Instance);
     }
 
     [Theory]

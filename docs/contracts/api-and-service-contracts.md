@@ -109,6 +109,16 @@ route accepts it. Surrounding tooling (Swagger/OpenAPI, gateways, client SDKs) d
 unrecognised method yet; model body-carrying reads as `POST`. See
 [Function Handler Architecture](../domain/function-handler-architecture.md) § Custom Function Contract.
 
+### View / schema parity
+
+Clients pair the `view` and `schema` functions, so both are rule-based (`transition.schema` accepts a
+single reference, an entry array, or `{ "schemas": [...] }`) and both forward to an active subflow with
+a fallback to the parent's own definition. That fallback is what makes the parent's shared and
+well-known transitions — which the state function merges into the subflow-facing
+`availableTransitions` with `hasSchema` from the parent — actually followable. A rule-based schema is
+never served from cache and carries no `ETag`. See
+[Function Handler Architecture](../domain/function-handler-architecture.md) § View / schema parity.
+
 ### View response: display modes
 
 The view response keeps `display` as the SDI (single-document) string and adds a `modes` object

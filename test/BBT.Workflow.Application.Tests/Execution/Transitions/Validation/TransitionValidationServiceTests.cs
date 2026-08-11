@@ -12,7 +12,11 @@ using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Domain;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting;
+using BBT.Workflow.Selection;
 using BBT.Workflow.Shared;
+using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Validation;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -30,6 +34,7 @@ public class TransitionValidationServiceTests
 {
     private readonly Mock<IJsonSchemaValidator> _mockSchemaValidator;
     private readonly Mock<IComponentCacheStore> _mockComponentCacheStore;
+    private readonly ITaskConditionService _conditionService;
     private readonly TransitionExecutionPolicy _transitionExecutionPolicy;
     private readonly TransitionValidationService _service;
 
@@ -37,18 +42,27 @@ public class TransitionValidationServiceTests
     {
         _mockSchemaValidator = new Mock<IJsonSchemaValidator>();
         _mockComponentCacheStore = new Mock<IComponentCacheStore>();
+        _conditionService = Substitute.For<ITaskConditionService>();
 
         // Create actual policy with real empty composite (no specifications = always pass)
         var emptySpecs = Enumerable.Empty<ITransitionSpecification>();
         var logger = Substitute.For<ILogger<CompositeTransitionSpecification>>();
         var composite = new CompositeTransitionSpecification(emptySpecs, logger);
-        
+
         _transitionExecutionPolicy = new TransitionExecutionPolicy(composite);
 
+        // The real selection resolver, so a single rule-less schema entry resolves exactly as it does in
+        // production without touching the condition service or building a script context.
         _service = new TransitionValidationService(
             _transitionExecutionPolicy,
             _mockSchemaValidator.Object,
-            _mockComponentCacheStore.Object);
+            _mockComponentCacheStore.Object,
+            new TransitionSchemaResolver(
+                new RuleBasedSelectionResolver(_conditionService),
+                Substitute.For<ILogger<TransitionSchemaResolver>>()),
+            Substitute.For<IScriptContextFactory>(),
+            Substitute.For<IInstanceRepository>(),
+            Substitute.For<IRuntimeInfoProvider>());
     }
 
     #region ValidateAsync Tests
@@ -193,6 +207,68 @@ public class TransitionValidationServiceTests
         capturedOptions!.Culture.ShouldBe("tr-TR");
         capturedOptions.IncludeVocabularyDetails.ShouldBeTrue();
         capturedOptions.CustomValidationEnabled.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenSchemaIsRuleBased_ValidatesAgainstTheRuleSelectedSchema()
+    {
+        // Arrange — the client was handed the mobile schema by the schema function, so execution must
+        // validate the body against that same one. Resolving the two independently is how a caller gets
+        // rejected by a contract it was never shown.
+        var mobileRef = new Reference("mobile-schema", "test-domain", "sys-schemas", "1.0.0");
+        var fallbackRef = new Reference("web-schema", "test-domain", "sys-schemas", "1.0.0");
+        var context = CreateTransitionContextWithRuleBasedSchema(mobileRef, fallbackRef);
+        var mobileSchema = CreateMockSchemaDefinition("mobile-schema");
+
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(true));
+
+        // The IReference overload is an extension method, so the interface's four-argument member is
+        // what the mock can observe.
+        _mockComponentCacheStore
+            .Setup(x => x.GetSchemaAsync(mobileRef.Domain, mobileRef.Key, mobileRef.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<SchemaDefinition>.Ok(mobileSchema));
+
+        _mockSchemaValidator
+            .Setup(x => x.Validate(
+                mobileSchema.Schema,
+                It.IsAny<JsonElement?>(),
+                It.IsAny<SchemaValidationOptions>()))
+            .Returns(Result.Ok());
+
+        // Act
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        _mockComponentCacheStore.Verify(
+            x => x.GetSchemaAsync(fallbackRef.Domain, fallbackRef.Key, fallbackRef.Version, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenEveryEntryHasARuleAndNoneMatch_SkipsValidation()
+    {
+        // Arrange — no contract applies to this request, so there is nothing to validate. Same posture
+        // as FunctionRequestValidationService; failing closed here would reject a legitimate request.
+        var context = CreateValidTransitionContext();
+        var ruledRef = new Reference("mobile-schema", "test-domain", "sys-schemas", "1.0.0");
+        context.Transition!.SetSchema(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateWithRule(ruledRef, new ScriptCode("inline", "false"))));
+
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(false));
+
+        // Act
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        _mockComponentCacheStore.Verify(
+            x => x.GetSchemaAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact(Skip = "Extension methods cannot be mocked")]
@@ -572,9 +648,18 @@ public class TransitionValidationServiceTests
         IReadOnlyDictionary<string, string?>? headers = null)
     {
         var context = CreateValidTransitionContext(headers);
-        typeof(Transition)
-            .GetProperty(nameof(Transition.Schema))!
-            .SetValue(context.Transition, schemaRef);
+        context.Transition!.SetSchema(schemaRef);
+        return context;
+    }
+
+    private TransitionExecutionContext CreateTransitionContextWithRuleBasedSchema(
+        Reference ruledSchemaRef,
+        Reference fallbackSchemaRef)
+    {
+        var context = CreateValidTransitionContext();
+        context.Transition!.SetSchema(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateWithRule(ruledSchemaRef, new ScriptCode("inline", "true")),
+            SchemaEntry.CreateDefault(fallbackSchemaRef)));
         return context;
     }
 

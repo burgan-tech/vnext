@@ -2787,6 +2787,22 @@ public static partial class WorkflowLogs
         string function,
         string instance);
 
+    /// <summary>
+    /// Logs when the fast path and cache are bypassed because the transition's schema selection is
+    /// rule-based, so the resolved document depends on request state the caller-scope hash does not
+    /// cover (arbitrary headers and query parameters). Caching it would serve one caller's schema to
+    /// another and answer 304 for a body that should have changed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20426,
+        Level = LogLevel.Debug,
+        Message = "{Function} function cache bypassed for instance {Instance}: transition {TransitionKey} declares a rule-based schema requiring live evaluation")]
+    public static partial void InstanceSchemaFunctionCacheBypassedForRuleBasedSchema(
+        this ILogger logger,
+        string function,
+        string instance,
+        string transitionKey);
+
     #endregion
 
     #region Related Instance Access
@@ -3129,6 +3145,21 @@ public static partial class WorkflowLogs
         string functionKey,
         string slot,
         string referenceKey,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a rule on a transition's <c>schemas</c> entry could not be evaluated. The entry is
+    /// skipped and evaluation continues with the next one, mirroring view rule handling — a broken rule
+    /// must not fail the request, it just cannot select its entry.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80006,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} schema rule evaluation failed for entry {SchemaKey}: {ErrorMessage}. Skipping entry.")]
+    public static partial void TransitionSchemaRuleEvaluationFailed(
+        this ILogger logger,
+        string transitionKey,
+        string schemaKey,
         string errorMessage);
 
     /// <summary>

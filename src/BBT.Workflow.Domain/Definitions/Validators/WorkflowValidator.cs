@@ -535,7 +535,7 @@ public class WorkflowValidator
         }
 
         // Schema is not allowed
-        if (transition.Schema != null)
+        if (transition.HasSchema)
         {
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' cannot have a schema definition.",
@@ -628,7 +628,7 @@ public class WorkflowValidator
         }
 
         // Schema is not allowed
-        if (transition.Schema != null)
+        if (transition.HasSchema)
         {
             result.AddError(new ValidationResult(
                 $"Scheduled transition '{transition.Key}' cannot have a schema definition.",
@@ -837,6 +837,41 @@ public class WorkflowValidator
             transition.OnExecutionTasks, $"{basePath}.{nameof(Transition.OnExecutionTasks)}", errors);
 
         ValidateViewRules(transition.View, $"{basePath}.{nameof(Transition.View)}", errors);
+        ValidateSchemaRules(transition, $"{basePath}.{nameof(Transition.Schema)}", errors);
+    }
+
+    /// <summary>
+    /// Validates the selection rule of each entry in a transition's schema selection, and that the
+    /// entries form a reachable chain. Like view selection, a broken rule compiles mid-request; unlike
+    /// view selection, a schema also gates request-body validation, so an entry that can never fire
+    /// silently changes what the runtime accepts.
+    /// </summary>
+    private static void ValidateSchemaRules(
+        Transition transition,
+        string basePath,
+        IList<ValidationResult> errors)
+    {
+        var selection = transition.Schema;
+        if (selection is null)
+            return;
+
+        var entries = selection.Schemas;
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var entry = entries[index];
+
+            ScriptCodeValidator.Validate(entry.Rule, $"{basePath}[{index}].{nameof(SchemaEntry.Rule)}", errors);
+
+            // A rule-less entry always matches, so it wins from here on and everything after it is dead.
+            if (entry.Rule == null && index != entries.Count - 1)
+            {
+                errors.Add(new ValidationResult(
+                    $"Transition '{transition.Key}' declares a schema entry without a rule at index {index}, " +
+                    $"but it is not the last entry. A rule-less entry always matches, so the {entries.Count - index - 1} " +
+                    "entry/entries after it can never be selected. Move it to the end.",
+                    [$"{basePath}[{index}]"]));
+            }
+        }
     }
 
     /// <summary>

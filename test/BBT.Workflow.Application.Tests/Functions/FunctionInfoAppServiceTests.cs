@@ -18,6 +18,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -91,7 +92,8 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
             functionAccessPolicy: new FunctionAccessPolicy(
                 Substitute.For<ICurrentUser>(), _authorizationManager),
             contractResolver: new FunctionContractResolver(
-                _conditionService, NullLogger<FunctionContractResolver>.Instance),
+                new RuleBasedSelectionResolver(_conditionService),
+                NullLogger<FunctionContractResolver>.Instance),
             viewContentResolutionService: _viewContentResolution);
     }
 

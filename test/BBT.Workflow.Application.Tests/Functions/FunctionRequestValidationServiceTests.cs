@@ -10,6 +10,7 @@ using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Validation;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -41,7 +42,9 @@ public sealed class FunctionRequestValidationServiceTests
         _service = new FunctionRequestValidationService(
             _schemaValidator,
             _componentCacheStore,
-            new FunctionContractResolver(_conditionService, NullLogger<FunctionContractResolver>.Instance),
+            new FunctionContractResolver(
+                new RuleBasedSelectionResolver(_conditionService),
+                NullLogger<FunctionContractResolver>.Instance),
             NullLogger<FunctionRequestValidationService>.Instance);
     }
 

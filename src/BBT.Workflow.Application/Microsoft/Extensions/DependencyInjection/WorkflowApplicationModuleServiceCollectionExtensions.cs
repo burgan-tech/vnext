@@ -19,6 +19,7 @@ using BBT.Workflow.Events;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -86,6 +87,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IStateStoreCacheGateway, StateStoreCacheGateway>();
+        services.AddScoped<IRuleBasedSelectionResolver, RuleBasedSelectionResolver>();
+        services.AddScoped<ITransitionSchemaResolver, TransitionSchemaResolver>();
         services.AddScoped<IFunctionContractResolver, FunctionContractResolver>();
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();

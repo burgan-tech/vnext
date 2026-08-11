@@ -111,6 +111,15 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorization-matrix",
         "POST {domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}"
       ]
+    },
+    "ruleBasedTransitionSchema": {
+      "since": "0.0.81",
+      "status": "stable",
+      "description": "transition.schema is extended from a single sys-schemas reference to a rule-based selection, matching what views[] has always supported: author it as a single reference, as an array of entries ([{rule, schema}]), or as the wrapped array form ({schemas:[...]}). Entries are evaluated in declaration order against an IConditionMapping rule and the first match wins; an entry without a rule always matches and must therefore be the last entry (WorkflowValidator rejects an earlier one, since everything after it would be unreachable). A bare reference deserializes to exactly one rule-less entry, so definitions authored earlier behave identically and this is not a breaking change. The same resolver serves the schema function and transition request-body validation, so a client is always validated against the schema it was handed; note that on the execution path the rule's Body is the request body while on the schema function (a GET) it is the instance's latest data, so rules should key on Headers, QueryParameters and Instance. Because a rule may read headers and query parameters that the schema function's caller-scope hash does not cover, a rule-based selection bypasses the fingerprint fast path and the response cache entirely and carries no ETag (never 304); selections with no rules keep their previous caching behaviour. hasSchema in the state response stays declaration-based and evaluates no rules. Separately, the schema function's subflow forwarding is brought to parity with the view function: it now forwards the caller's headers and query parameters (so the subflow's own queryRoles dynamic grants and selection rules can match, and Accept-Language survives) and falls back to the parent's own definition when the subflow cannot answer for a transition key — which is what makes the parent's shared and well-known cancel/updateData/exit transitions, merged into the subflow-facing availableTransitions with hasSchema taken from the parent, actually followable instead of 404.",
+      "schemaPath": "transition.schema",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/schema?transitionKey={key}"
+      ]
     }
   }
 }

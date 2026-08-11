@@ -1,9 +1,12 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Policies;
+using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting;
+using BBT.Workflow.Selection;
 using BBT.Workflow.Shared;
 using BBT.Workflow.Validation;
 using System.Diagnostics;
@@ -15,7 +18,11 @@ namespace BBT.Workflow.Execution.Validation;
 public class TransitionValidationService(
     TransitionExecutionPolicy transitionExecutionPolicy,
     IJsonSchemaValidator schemaValidator,
-    IComponentCacheStore componentCacheStore) : ITransitionValidationService
+    IComponentCacheStore componentCacheStore,
+    ITransitionSchemaResolver transitionSchemaResolver,
+    IScriptContextFactory scriptContextFactory,
+    IInstanceRepository instanceRepository,
+    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionValidationService
 {
     /// <inheritdoc />
     /// <summary>
@@ -43,17 +50,40 @@ public class TransitionValidationService(
     /// <summary>
     /// Validates transition data against JSON schema.
     /// Chains GetSchemaAsync Result into validation.
+    /// <para>
+    /// Schema selection goes through the same <see cref="ITransitionSchemaResolver"/> the
+    /// <c>schema</c> function uses, so the body is validated against the very schema the client was
+    /// handed. Resolving these two independently is how a caller ends up rejected by a contract it was
+    /// never shown.
+    /// </para>
+    /// <para>
+    /// Note the one deliberate asymmetry, inherited from function contract resolution: here the rule's
+    /// <c>Body</c> is the request body, while on the discovery path it is the instance's latest data.
+    /// Author transition schema rules against Headers, QueryParameters and Instance.
+    /// </para>
     /// </summary>
     private async Task<Result> ValidateTransitionSchemaAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        // Guard: No schema defined
-        if (context.Transition?.Schema is null)
+        // Guard: No schema declared
+        if (context.Transition is null || !context.Transition.HasSchema)
             return Result.Ok();
 
-        var schemaResult = await componentCacheStore.GetSchemaAsync(
-            context.Transition.Schema, cancellationToken);
+        var schemaReferenceResult = await transitionSchemaResolver.ResolveAsync(
+            context.Transition,
+            BuildSelectionScriptContext(context),
+            cancellationToken);
+
+        if (!schemaReferenceResult.IsSuccess)
+            return Result.Fail(schemaReferenceResult.Error);
+
+        // Every entry carried a rule and none matched: no contract applies to this request, so there is
+        // nothing to validate — same posture as FunctionRequestValidationService.
+        if (schemaReferenceResult.Value is not { } schemaReference)
+            return Result.Ok();
+
+        var schemaResult = await componentCacheStore.GetSchemaAsync(schemaReference, cancellationToken);
 
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);
@@ -63,6 +93,24 @@ public class TransitionValidationService(
             context.DataElement,
             CreateSchemaValidationOptions(context.Headers));
     }
+
+    /// <summary>
+    /// Builds the lazily-materialized script context schema selection rules are evaluated against.
+    /// Materialized only when an entry actually declares a rule, and shared with the rest of the
+    /// pipeline through <see cref="TransitionExecutionContext.GetOrBuildScriptContextAsync"/> so a
+    /// transition never builds two contexts.
+    /// </summary>
+    private LazyScriptContext BuildSelectionScriptContext(TransitionExecutionContext context) =>
+        new(ct => context.GetOrBuildScriptContextAsync(
+            innerCt => scriptContextFactory.NewBuilder(instanceRepository)
+                .WithRuntime(runtimeInfoProvider)
+                .WithWorkflow(context.Workflow)
+                .WithInstance(context.Instance)
+                .WithTransition(context.Transition)
+                .WithBody(context.Data)
+                .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
+                .BuildAsync(innerCt),
+            ct));
 
     private static SchemaValidationOptions CreateSchemaValidationOptions(IReadOnlyDictionary<string, string?>? headers)
     {

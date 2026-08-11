@@ -223,6 +223,32 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
   cap `Workflow:Scripting:RelatedAccess:MaxResolutionsPerContext` (default 10). Full guide:
   `docs/runtime/script-related-instance-access.md`.
 
+## Transition Schema Selection (`schema` / `schemas`)
+
+- `transition.schema` is rule-based, exactly like `views[]`: single reference, entry array, or the
+  canonical `{ "schemas": [...] }` that `SchemaSelectionJsonConverter` always writes. Every pre-existing
+  bare-reference definition deserializes to one rule-less entry — not a breaking change.
+- Never test `transition.Schema != null` to mean "has a schema". Use `Transition.HasSchema`
+  (declaration presence) and `Transition.HasRuleBasedSchema` (does resolution depend on the request).
+- **One matcher.** `RuleBasedSelectionResolver` owns the loop; `FunctionContractResolver` and
+  `TransitionSchemaResolver` are adapters onto it. Do not add a third — the `schema` function and
+  `TransitionValidationService` must resolve identically or a caller is validated against a contract it
+  was never shown.
+- **Never cache a rule-selected schema.** `CallerScopeHash` covers roles + identity + culture + version,
+  **not** arbitrary headers/query, which a rule may read. The schema function therefore bypasses the
+  fast path, the cache write and the `ETag` when `HasRuleBasedSchema`. Do not "fix" this by hashing
+  headers — `traceparent` alone would defeat the cache for every function.
+- Rule `Body` is the **request body** on execution and the **instance's latest data** on the `schema`
+  function (a GET). Author rules against `Headers`/`QueryParameters`/`Instance`; nothing enforces it.
+- `hasSchema` in the state response is declaration-based, never resolved — evaluating every
+  transition's rules on every long-poll is what `catalog` exists to avoid.
+- Subflow: forward, then **fall back to the parent's own definition** when the subflow cannot answer,
+  mirroring `GetSubFlowViewWithOverrideAsync`. Required because the state function merges the parent's
+  shared + `cancel`/`updateData`/`exit` keys into the subflow-facing list with `hasSchema` from the
+  parent. Forward the caller's `Headers`/`QueryParams` — an empty context does not fail closed, it
+  makes `$.context.*` empty so grants and rules silently cannot match.
+- Gap, deliberate: `state.subFlow.overrides.views` has no `overrides.schemas` counterpart.
+
 ## View Selection
 
 - Views array on states/transitions, evaluated in order, first matching rule wins.

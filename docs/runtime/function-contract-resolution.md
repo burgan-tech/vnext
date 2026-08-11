@@ -40,7 +40,20 @@ Conversion is handled by `ViewDefinitionJsonConverter` and `SchemaSelectionJsonC
 
 ## Resolution rules
 
-`FunctionContractResolver` (`src/BBT.Workflow.Application/Functions/Contracts/`) evaluates one slot:
+`RuleBasedSelectionResolver` (`src/BBT.Workflow.Application/Selection/`) owns the loop. Two adapters
+project a declaration onto its uniform candidate list:
+
+| Adapter | Declares |
+| --- | --- |
+| `FunctionContractResolver` (`Functions/Contracts/`) | a function's four contract slots |
+| `TransitionSchemaResolver` (`Selection/`) | a transition's `schemas` entries |
+
+There is deliberately **one** matcher. A second copy would let the surfaces disagree about the same
+definition — and for transition schemas that disagreement is user-visible: the `schema` function and
+request-body validation would resolve independently, so a caller could be rejected by a contract it was
+never shown. `TransitionSchemaResolver` is used by both.
+
+The loop itself:
 
 | Case | Outcome |
 | --- | --- |
@@ -96,6 +109,28 @@ unchanged.
 | `/info` | all four | `hasView` / `hasSchema` false, href still emitted |
 | `/view?target=input\|output` | `inputView` / `outputView` | `404` |
 | `/schema?target=input\|output` | `inputSchema` / `outputSchema` | `404` |
+| `schema` function (`InstanceQueryAppService`) | `transition.schema` | `404` |
+| `TransitionValidationService` (execute) | `transition.schema` | Body is not validated |
+
+### Transition schemas
+
+`transition.schema` accepts the same three wire shapes (`{ "schemas": [...] }` is the canonical written
+form) and is evaluated by the same loop. Two things are specific to it:
+
+- **Body semantics differ by path, as with functions.** On execution the rule's `Body` is the request
+  body; on the `schema` function — a `GET` — it is the instance's latest data. A rule keyed on the
+  request body can therefore select differently in the two places. Author transition schema rules
+  against `Headers`, `QueryParameters` and `Instance`. No validator can enforce this.
+- **A rule-based selection is never cached.** The schema function's fingerprint ETag folds in a caller
+  scope of roles, identity, culture and requested version — *not* arbitrary headers or query
+  parameters. Caching a rule-selected schema would hand one caller's schema to another and answer
+  `304` for a body that should have changed, so the fast path, the cache write and the `ETag` are all
+  skipped when any entry carries a rule. Definitions that declare no rules keep their previous
+  behaviour exactly. See
+  [state-function cache and fingerprint ETag](state-function-cache-and-etag.md).
+
+`WorkflowValidator` rejects a rule-less entry that is not last, since it always matches and everything
+after it would be unreachable.
 
 `outputSchema` is never enforced at runtime — it is declarative, surfaced for clients and tooling.
 

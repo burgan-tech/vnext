@@ -83,7 +83,6 @@ public sealed class Transition : IHasKey
 
     [JsonInclude] public ScriptCode? Timer { get; private set; }
     [JsonInclude] public ScriptCode? Rule { get; private set; }
-    [JsonInclude] public Reference? Schema { get; private set; }
 
     /// <summary>
     /// Optional list restricting where this transition can be executed, and optionally which roles
@@ -147,6 +146,43 @@ public sealed class Transition : IHasKey
     /// </summary>
     [JsonIgnore]
     public ViewDefinition? View => views ?? view;
+
+    [JsonInclude]
+    [JsonPropertyName("schema")]
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    private SchemaSelection? schema { get; set; }
+
+    [JsonInclude]
+    [JsonPropertyName("schemas")]
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    private SchemaSelection? schemas { get; set; }
+
+    /// <summary>
+    /// Schema selection for the transition, mirroring <see cref="View"/>: authorable as a single
+    /// <c>schema</c> reference or as rule-based <c>schemas</c> entries evaluated in declaration order.
+    /// The new format takes precedence when both are present.
+    /// <para>
+    /// Never read the entries to decide "does this transition have a schema" — use
+    /// <see cref="HasSchema"/>, so the answer stays declaration-based and costs no rule evaluation.
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public SchemaSelection? Schema => schemas ?? schema;
+
+    /// <summary>
+    /// True when the transition declares at least one schema entry.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasSchema => Schema is { Schemas.Count: > 0 };
+
+    /// <summary>
+    /// True when at least one declared schema entry carries a selection rule, i.e. the resolved schema
+    /// depends on the request. Callers that cache a resolved schema must not do so when this is true:
+    /// the schema-function caller scope covers roles, identity, culture and version, but not the
+    /// arbitrary headers and query parameters a rule may read.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasRuleBasedSchema => Schema?.Schemas.Any(entry => entry.Rule != null) == true;
 
     /// <summary>
     /// Transition roles for authorization. DENY always overrides ALLOW.
@@ -249,7 +285,12 @@ public sealed class Transition : IHasKey
 
     public void SetSchema(IReference reference)
     {
-        Schema = reference.ToReference();
+        schemas = SchemaSelection.CreateDefault(reference.ToReference());
+    }
+
+    public void SetSchema(SchemaSelection schemaSelection)
+    {
+        schemas = schemaSelection;
     }
 
     public void SetRule(string location, string scriptCode)

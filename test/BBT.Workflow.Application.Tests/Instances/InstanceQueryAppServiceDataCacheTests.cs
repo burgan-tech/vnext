@@ -16,6 +16,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Extentions;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -117,6 +118,9 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
+            transitionSchemaResolver: new TransitionSchemaResolver(
+                new RuleBasedSelectionResolver(Substitute.For<ITaskConditionService>()),
+                Substitute.For<ILogger<TransitionSchemaResolver>>()),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
             currentSchema: Substitute.For<ICurrentSchema>(),

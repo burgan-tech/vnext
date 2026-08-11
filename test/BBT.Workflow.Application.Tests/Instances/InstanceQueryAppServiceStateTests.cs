@@ -18,6 +18,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Extentions;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -95,6 +96,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
             viewContentResolutionService: _viewContentResolutionService,
+            transitionSchemaResolver: new TransitionSchemaResolver(
+                new RuleBasedSelectionResolver(Substitute.For<ITaskConditionService>()),
+                Substitute.For<ILogger<TransitionSchemaResolver>>()),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: _urlTemplateBuilder,
             currentSchema: Substitute.For<ICurrentSchema>(),
@@ -973,6 +977,105 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSchemaAsync_WhenInSubFlowAndSubFlowCannotAnswer_FallsBackToTheParentTransitionSchema()
+    {
+        // Arrange — this is the shape the state function advertises: while a subflow borrows the
+        // displayed state, the parent's shared and well-known transitions are merged into
+        // availableTransitions with hasSchema taken from the PARENT definition. Following that
+        // schema.href must therefore resolve here, not surface the subflow's not-found.
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        AddTransitionWithSchema(workflow, "parent-shared", "parent-shared-schema");
+        SetupCommonMocks(instance, workflow);
+        SetupSchemaComponent("parent-shared-schema");
+
+        _instanceQueryGateway
+            .GetFunctionWithSchemaAsync(
+                Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound", "Schema not found for transition parent-shared")));
+
+        // Act
+        var result = await _service.GetSchemaAsync(new GetSchemaInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString()
+        }, transitionKey: "parent-shared", CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("parent-shared-schema");
+        // An active subflow means the answer is composed live, so it is never represented by an ETag.
+        result.Result.Value!.ETag.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenSubFlowAnswers_ReturnsTheSubFlowSchema()
+    {
+        // Arrange
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        AddTransitionWithSchema(workflow, "parent-shared", "parent-shared-schema");
+        SetupCommonMocks(instance, workflow);
+        SetupSchemaComponent("parent-shared-schema");
+
+        _instanceQueryGateway
+            .GetFunctionWithSchemaAsync(
+                Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result<GetSchemaOutput>.Ok(new GetSchemaOutput
+            {
+                Key = "subflow-schema",
+                Type = "JSON"
+            }));
+
+        // Act
+        var result = await _service.GetSchemaAsync(new GetSchemaInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString()
+        }, transitionKey: "parent-shared", CancellationToken.None);
+
+        // Assert — the subflow owns the key, so its answer wins over the parent's own definition
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Key.ShouldBe("subflow-schema");
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenForwardingToSubFlow_CarriesTheCallersRequestContext()
+    {
+        // Arrange — the subflow's own queryRoles dynamic grants and schema selection rules read
+        // $.context.Headers / QueryParameters. An empty context does not fail closed, it silently
+        // cannot match, so the forward has to carry what this request carries.
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        AddTransitionWithSchema(workflow, "parent-shared", "parent-shared-schema");
+        SetupCommonMocks(instance, workflow);
+        SetupSchemaComponent("parent-shared-schema");
+
+        GetFunctionWithInstanceInput? forwarded = null;
+        _instanceQueryGateway
+            .GetFunctionWithSchemaAsync(
+                Arg.Do<GetFunctionWithInstanceInput>(i => forwarded = i),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<GetSchemaOutput>.Ok(new GetSchemaOutput { Key = "subflow-schema", Type = "JSON" }));
+
+        // Act
+        await _service.GetSchemaAsync(new GetSchemaInput
+        {
+            Domain = TestDomain,
+            Workflow = TestWorkflow,
+            Instance = instance.Id.ToString(),
+            Headers = new Dictionary<string, string?> { ["x-device"] = "mobile" },
+            QueryParameters = new Dictionary<string, string?> { ["channel"] = "app" }
+        }, transitionKey: "parent-shared", CancellationToken.None);
+
+        // Assert
+        forwarded.ShouldNotBeNull();
+        forwarded!.Headers.ShouldContainKeyAndValue("x-device", "mobile");
+        forwarded!.QueryParams.ShouldContainKeyAndValue("channel", "app");
+    }
+
+    [Fact]
     public async Task GetInstanceStateAsync_AlwaysIncludesMasterHref()
     {
         // Arrange
@@ -1273,6 +1376,27 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         return (instance, workflow);
     }
+
+    /// <summary>
+    /// Adds a manual transition carrying a single (rule-less) schema reference to the workflow's test
+    /// state, standing in for a parent shared or well-known transition that a client inside a subflow is
+    /// offered.
+    /// </summary>
+    private static void AddTransitionWithSchema(Definitions.Workflow workflow, string transitionKey, string schemaKey)
+    {
+        var transition = Transition.Create(transitionKey, TestState, TestState, TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetSchema(new Reference(schemaKey, TestDomain, "sys-schemas", TestVersion));
+        workflow.GetState(TestState).Value!.AddTransition(transition);
+    }
+
+    private void SetupSchemaComponent(string schemaKey) =>
+        _componentCacheStore
+            .GetSchemaAsync(TestDomain, schemaKey, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Schemas.SchemaDefinition>.Ok(
+                System.Text.Json.JsonSerializer.Deserialize<Definitions.Schemas.SchemaDefinition>($$"""
+                    { "key": "{{schemaKey}}", "type": "JSON", "schema": { "type": "object" } }
+                    """, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!));
 
     private static Definitions.Workflow BuildWorkflow(State state)
     {

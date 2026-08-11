@@ -143,6 +143,12 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
                     Workflow = input.Workflow,
                     Version = input.Version,
                     Instance = input.Instance,
+                    // The request context must travel with the forward: the subflow's own queryRoles
+                    // dynamic grants and schema selection rules read $.context.Headers /
+                    // QueryParameters, and an empty context does not fail closed — it silently cannot
+                    // match. Culture (Accept-Language) rides along for the same reason.
+                    Headers = input.Headers,
+                    QueryParameters = input.QueryParams,
                     Roles = input.Roles
                 };
                 // Subflow composition path: no If-None-Match is ever sent, so the conditional

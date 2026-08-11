@@ -229,9 +229,21 @@ callerHash  = h(roles | actor identity | culture | version)   # no extensions di
   (`ResolveTransition(transitionKey, currentState)`) is state-dependent, and
   `EffectiveState == CurrentState` whenever no active subflow exists.
 - **Active subflow → full bypass** (both functions forward to the subflow's own function via
-  the gateway). The subflow's body-embedded `ETag` is nulled on the forwarded response — it
-  belongs to a different resource. Subflow calls never carry `If-None-Match` (the remote
-  master/schema calls strip it from forwarded headers, like the state path).
+  the gateway; the schema function falls back to the parent's own definition when the subflow
+  cannot answer for that transition key, so the response is composed live either way). The
+  subflow's body-embedded `ETag` is nulled on the forwarded response — it belongs to a different
+  resource. Subflow calls never carry `If-None-Match` (the remote master/schema calls strip it
+  from forwarded headers, like the state path).
+- **Rule-based transition schema → full bypass** (schema function only). `callerHash` covers roles,
+  actor identity, culture and version — it does **not** cover arbitrary headers or query parameters,
+  which a selection rule may read. Caching under that ETag would serve one caller's schema to another
+  and answer `304` for a body that should have changed, so the fast path, the cache write and the
+  `ETag` are skipped whenever any declared entry carries a rule (`Transition.HasRuleBasedSchema`).
+  The fast path decides this from the fingerprint's `flowVersion` + `effectiveState` plus a
+  component-cache flow read, so a definition with no rules still pays nothing but a cache lookup.
+  Do not "fix" this by folding headers into `callerHash`: request-scoped headers such as
+  `traceparent` change on every call, which would defeat the cache for every function.
+  The view function has no cache at all, so bypassing here also keeps view/schema behaviour aligned.
 - Only **successful** outcomes are cached (missing transition key, unresolvable transition,
   or missing schema reference are never written).
 - A validated hit short-circuits fully (no aggregate load); the queryRoles gate is skipped on
@@ -282,7 +294,7 @@ function cache entries; the single value covers all built-in functions of the wo
 | 20404 | `StateFunctionCacheError` | Cache operation failed; degraded to miss |
 | 20405 | `StateFunctionEtagNotModified` | 304 answered from the fingerprint alone |
 | 20410-20414 | `DataFunctionCache*` / `DataFunctionEtagNotModified` | Data-function counterparts of the above |
-| 20420-20425 | `InstanceSchemaFunctionCache*` | Master/schema counterparts (shared quintet + subflow bypass, `{Function}` = master/schema) |
+| 20420-20426 | `InstanceSchemaFunctionCache*` | Master/schema counterparts (shared quintet + subflow and rule-based-schema bypasses, `{Function}` = master/schema) |
 
 Cache operations are traced under the `BBT.Workflow.Cache` activity source
 (component types `state-fn`, `data-fn`, `master-fn`, `schema-fn`).

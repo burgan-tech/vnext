@@ -613,6 +613,121 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
         return DeserializeWorkflow(json);
     }
 
+    #region Transition Schema Selection Tests
+
+    [Theory]
+    // A single bare component reference — every definition authored before rule-based schemas.
+    [InlineData("""
+        "schema": { "key": "submit-schema", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" }
+        """, false, false)]
+    // A rule-bearing entry followed by the rule-less fallback: the reachable, intended shape.
+    [InlineData("""
+        "schemas": [
+          { "rule": {"location": "inline", "code": "dHJ1ZQ=="},
+            "schema": { "key": "submit-schema-mobile", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" } },
+          { "schema": { "key": "submit-schema", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" } }
+        ]
+        """, true, false)]
+    // The rule-less entry is first, so the entry after it can never be selected.
+    [InlineData("""
+        "schemas": [
+          { "schema": { "key": "submit-schema", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" } },
+          { "rule": {"location": "inline", "code": "dHJ1ZQ=="},
+            "schema": { "key": "submit-schema-mobile", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" } }
+        ]
+        """, true, true)]
+    public void Validate_TransitionSchemaSelection_ReportsOnlyUnreachableEntries(
+        string schemaJson, bool expectRuleBased, bool expectUnreachableError)
+    {
+        // Arrange
+        var workflow = CreateWorkflowWithManualTransitionSchema(schemaJson);
+        var transition = workflow.GetState("initial").Value!.Transitions.Single(t => t.Key == "submit");
+
+        // Assert on the parsed model first — all three shapes must deserialize to a usable selection.
+        transition.HasSchema.ShouldBeTrue();
+        transition.HasRuleBasedSchema.ShouldBe(expectRuleBased);
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        var unreachableErrors = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("can never be selected"))
+            .ToList();
+
+        if (expectUnreachableError)
+            unreachableErrors.ShouldNotBeEmpty();
+        else
+            unreachableErrors.ShouldBeEmpty(
+                $"Unexpected errors: {string.Join(", ", unreachableErrors.Select(e => e.ErrorMessage))}");
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenAutomaticTransitionDeclaresRuleBasedSchema()
+    {
+        // Arrange — the "auto transitions carry no schema" rule must hold for the array shape too,
+        // not just the single-reference shape it was written against.
+        var workflow = CreateWorkflowWithManualTransitionSchema("""
+            "schemas": [
+              { "schema": { "key": "submit-schema", "domain": "core", "flow": "sys-schemas", "version": "1.0.0" } }
+            ]
+            """, triggerType: "automatic");
+
+        // Act
+        var result = _validator.Validate(workflow);
+
+        // Assert
+        result.ValidationErrors
+            .Any(e => e.ErrorMessage!.Contains("cannot have a schema definition"))
+            .ShouldBeTrue();
+    }
+
+    private WorkflowDefinition CreateWorkflowWithManualTransitionSchema(
+        string schemaJson,
+        string triggerType = "manual")
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "submit",
+                            "target": "approved",
+                            "triggerType": "{{triggerType}}",
+                            "rule": {"location": "inline", "code": "dHJ1ZQ=="},
+                            "labels": [{"label": "Submit", "language": "en"}],
+                            {{schemaJson}}
+                        }
+                    ]
+                },
+                {
+                    "key": "approved",
+                    "stateType": "finish",
+                    "labels": [{"label": "Approved", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """;
+
+        return DeserializeWorkflow(json);
+    }
+
+    #endregion
+
     private WorkflowDefinition CreateWorkflowWithDefaultAutoTransition()
     {
         var json = """

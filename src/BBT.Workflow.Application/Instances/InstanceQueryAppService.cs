@@ -23,6 +23,8 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.Functions.Contracts;
+using BBT.Workflow.Selection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -39,6 +41,7 @@ public sealed class InstanceQueryAppService(
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
     IViewContentResolutionService viewContentResolutionService,
+    ITransitionSchemaResolver transitionSchemaResolver,
     ITaskConditionService taskConditionService,
     IUrlTemplateBuilder urlTemplateBuilder,
     ICurrentSchema currentSchema,
@@ -1207,7 +1210,7 @@ public sealed class InstanceQueryAppService(
                         var transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
-                        hasSchema = transition?.Schema != null;
+                        hasSchema = transition?.HasSchema == true;
                         annotations = transition?.Annotations;
                     }
 
@@ -1243,7 +1246,10 @@ public sealed class InstanceQueryAppService(
             {
                 var transition = currentWorkflow.ResolveTransition(transitionKey, currentStateValue);
                 var hasView = transition?.View is { Views.Count: > 0 };
-                var hasSchema = transition?.Schema != null;
+                // Declaration presence, not resolution: evaluating every transition's selection rules on
+                // every long-poll is exactly the cost the catalog function exists to avoid. Same posture
+                // as function /info, which always emits the href because a rule can match on a later call.
+                var hasSchema = transition?.HasSchema == true;
                 return new TransitionItem
                 {
                     Name = transitionKey,
@@ -1561,6 +1567,16 @@ public sealed class InstanceQueryAppService(
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
 
+                    // A rule-based selection resolves per request against headers and query parameters
+                    // the caller-scope hash does not cover, so its result must not be cached or answered
+                    // with 304 — see IInstanceSchemaFunctionCache / CallerScopeHash. Only asked when the
+                    // active-subflow bypass has not already claimed this response, so the log names the
+                    // one reason that actually applies.
+                    var ruleBased = !data.instance.HasActiveSubFlow
+                        && IsRuleBasedTransitionSchema(data.workflow, data.instance, transitionKey);
+                    if (ruleBased)
+                        logger.InstanceSchemaFunctionCacheBypassedForRuleBasedSchema("schema", input.Instance, transitionKey!);
+
                     return await FinalizeSchemaFunctionResultAsync(
                         "schema",
                         buildResult.Value!,
@@ -1569,6 +1585,7 @@ public sealed class InstanceQueryAppService(
                         schemaCacheKey,
                         instanceSchemaFunctionCache.ComputeEtag(input, InstanceDataFingerprint.FromInstance(data.instance), transitionKey!),
                         input.IfNoneMatch,
+                        bypassCache: ruleBased,
                         cancellationToken);
                 },
                 onFailure: error => ConditionalResult<GetSchemaOutput>.Fail(error));
@@ -1581,6 +1598,11 @@ public sealed class InstanceQueryAppService(
     /// are cached under the fingerprint ETag (warm before the 304 decision) and answered
     /// conditionally.
     /// </summary>
+    /// <param name="bypassCache">
+    /// True when the response cannot be represented by the fingerprint ETag — currently a rule-based
+    /// transition schema, whose resolution depends on request state outside the caller scope. Treated
+    /// exactly like the active-subflow case: no cache write, no ETag, no 304.
+    /// </param>
     private async Task<ConditionalResult<GetSchemaOutput>> FinalizeSchemaFunctionResultAsync(
         string function,
         GetSchemaOutput output,
@@ -1589,9 +1611,10 @@ public sealed class InstanceQueryAppService(
         string? cacheKey,
         string etag,
         string? ifNoneMatch,
+        bool bypassCache,
         CancellationToken cancellationToken)
     {
-        if (instance.HasActiveSubFlow)
+        if (instance.HasActiveSubFlow || bypassCache)
         {
             output.ETag = null;
             return ConditionalResult<GetSchemaOutput>.Success(output);
@@ -1616,8 +1639,9 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Fast path for the schema function over the data fingerprint: 304 when If-None-Match
     /// matches the fingerprint ETag, cached response when the stored entry carries the same
-    /// ETag. Bypassed entirely when the instance has an active SubFlow (live evaluation).
-    /// Returns null when the full build path must run.
+    /// ETag. Bypassed entirely when the instance has an active SubFlow (live evaluation) or when
+    /// the transition declares a rule-based schema (resolution depends on request state the
+    /// fingerprint and caller scope do not cover). Returns null when the full build path must run.
     /// </summary>
     private async Task<ConditionalResult<GetSchemaOutput>?> TryServeSchemaFromFingerprintAsync(
         GetSchemaInput input,
@@ -1631,6 +1655,12 @@ public sealed class InstanceQueryAppService(
         if (fingerprint.HasActiveSubFlow)
         {
             logger.InstanceSchemaFunctionCacheBypassedForSubFlow("schema", input.Instance);
+            return null;
+        }
+
+        if (await IsRuleBasedTransitionSchemaAsync(input, fingerprint, transitionKey, cancellationToken))
+        {
+            logger.InstanceSchemaFunctionCacheBypassedForRuleBasedSchema("schema", input.Instance, transitionKey);
             return null;
         }
 
@@ -1661,6 +1691,57 @@ public sealed class InstanceQueryAppService(
         var output = entry.Output;
         output.ETag = entry.Etag;
         return ConditionalResult<GetSchemaOutput>.Success(output);
+    }
+
+    /// <summary>
+    /// True when the transition resolved for the instance's current state declares a rule-based schema.
+    /// Definition-only inspection over the already-loaded flow — no rule is evaluated here.
+    /// </summary>
+    private static bool IsRuleBasedTransitionSchema(
+        Definitions.Workflow flow,
+        Instance instance,
+        string? transitionKey)
+    {
+        if (string.IsNullOrEmpty(transitionKey))
+            return false;
+
+        var stateResult = flow.GetState(instance.GetCurrentState);
+        if (!stateResult.IsSuccess || stateResult.Value == null)
+            return false;
+
+        return flow.ResolveTransition(transitionKey, stateResult.Value)?.HasRuleBasedSchema == true;
+    }
+
+    /// <summary>
+    /// Fast-path counterpart of <see cref="IsRuleBasedTransitionSchema"/>, answered from the fingerprint
+    /// projection plus the component cache so the aggregate is never loaded. The flow read is
+    /// cache-backed, so a definition that declares no rules — the common case — keeps paying nothing but
+    /// a cache lookup. Unresolvable flow or state degrades to "not rule-based": the full build path then
+    /// produces the authoritative answer.
+    /// </summary>
+    private async Task<bool> IsRuleBasedTransitionSchemaAsync(
+        GetSchemaInput input,
+        InstanceDataFingerprint fingerprint,
+        string transitionKey,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(fingerprint.EffectiveState))
+            return false;
+
+        var flowResult = await componentCacheStore.GetFlowAsync(
+            input.Domain,
+            input.Workflow,
+            fingerprint.FlowVersion ?? input.Version,
+            cancellationToken);
+
+        if (!flowResult.IsSuccess || flowResult.Value == null)
+            return false;
+
+        var stateResult = flowResult.Value.GetState(fingerprint.EffectiveState);
+        if (!stateResult.IsSuccess || stateResult.Value == null)
+            return false;
+
+        return flowResult.Value.ResolveTransition(transitionKey, stateResult.Value)?.HasRuleBasedSchema == true;
     }
 
     /// <summary>
@@ -1727,6 +1808,8 @@ public sealed class InstanceQueryAppService(
                         masterCacheKey,
                         instanceSchemaFunctionCache.ComputeEtag(input, InstanceDataFingerprint.FromInstance(data.instance)),
                         input.IfNoneMatch,
+                        // The flow-level master schema is a single reference, never rule-based.
+                        bypassCache: false,
                         cancellationToken);
                 },
                 onFailure: error => ConditionalResult<GetSchemaOutput>.Fail(error));
@@ -1919,8 +2002,10 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Builds the schema output for a specific transition.
-    /// If the instance has an active SubFlow, forwards the request to the SubFlow.
-    /// Handles state resolution and schema lookup using Railway pattern.
+    /// If the instance has an active SubFlow, forwards the request to the SubFlow and falls back to
+    /// this flow's own definition when the SubFlow cannot answer — the same contract the view function
+    /// has, and what makes the parent's shared and well-known transitions reachable while a subflow is
+    /// borrowing the displayed state. Handles state resolution and rule-based schema selection.
     /// </summary>
     private async Task<Result<GetSchemaOutput>> BuildSchemaOutputAsync(
         Instance instance,
@@ -1942,10 +2027,19 @@ public sealed class InstanceQueryAppService(
         // instance.Subflow returns the first active subflow (Type: S and not completed)
         if (instance.Subflow != null)
         {
-            return await GetSubFlowSchemaAsync(instance.Subflow, transitionKey, cancellationToken);
+            var subFlowSchema = await GetSubFlowSchemaAsync(
+                instance.Subflow, input, transitionKey, cancellationToken);
+
+            if (subFlowSchema != null)
+                return Result<GetSchemaOutput>.Ok(subFlowSchema);
+
+            // The subflow could not answer for this key. The state function merges the parent's shared
+            // and well-known (cancel/updateData/exit) transitions into the subflow-facing transition
+            // list and reports their hasSchema from the parent definition, so those keys must resolve
+            // here rather than surfacing the subflow's not-found. Mirrors GetSubFlowViewWithOverrideAsync.
         }
 
-        // No active SubFlow - handle locally
+        // Resolve against this flow's definition
         // Get current state using Railway pattern
         var currentStateResult = currentWorkflow.GetState(instance.GetCurrentState);
         if (!currentStateResult.IsSuccess || currentStateResult.Value == null)
@@ -1958,18 +2052,37 @@ public sealed class InstanceQueryAppService(
 
         var transition = currentWorkflow.ResolveTransition(transitionKey, currentState);
 
-        if (transition?.Schema == null)
+        if (transition == null || !transition.HasSchema)
         {
             return Result<GetSchemaOutput>.Fail(
                 Error.NotFound("notfound",
                     $"Schema not found for transition {transitionKey} in state {instance.CurrentState}"));
         }
 
+        // Rule-based selection: entries are evaluated in declaration order and the first match wins.
+        // The context is built lazily so a transition declaring a single rule-less schema — the common
+        // case — never pays for serializing the instance's latest data.
+        var schemaReferenceResult = await transitionSchemaResolver.ResolveAsync(
+            transition,
+            BuildSelectionScriptContext(instance, currentWorkflow, transitionKey, input.Headers, input.QueryParameters),
+            cancellationToken);
+
+        if (!schemaReferenceResult.IsSuccess)
+            return Result<GetSchemaOutput>.Fail(schemaReferenceResult.Error);
+
+        var schemaReference = schemaReferenceResult.Value;
+        if (schemaReference == null)
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"No matching schema found for transition {transitionKey} in state {instance.CurrentState}"));
+        }
+
         // Fetch and return the schema using Railway pattern
         return await componentCacheStore.GetSchemaAsync(
-                transition.Schema.Domain,
-                transition.Schema.Key,
-                transition.Schema.Version,
+                schemaReference.Domain,
+                schemaReference.Key,
+                schemaReference.Version,
                 cancellationToken)
             .MapAsync(schema => new GetSchemaOutput
             {
@@ -1980,10 +2093,37 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Gets schema from a remote SubFlow instance.
+    /// Builds the lazily-materialized script context rule-based selection is evaluated against.
+    /// The body is the instance's latest data: this is the discovery path, which carries no request
+    /// body — the same material state and transition view rules read.
     /// </summary>
-    private async Task<Result<GetSchemaOutput>> GetSubFlowSchemaAsync(
+    private LazyScriptContext BuildSelectionScriptContext(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        string? transitionKey,
+        Dictionary<string, string?>? headers,
+        Dictionary<string, string?>? queryParameters) =>
+        new(ct => scriptContextFactory.NewBuilder(instanceRepository)
+            .WithWorkflow(currentWorkflow)
+            .WithInstance(instance)
+            .WithRuntime(runtimeInfoProvider)
+            .WithTransition(transitionKey ?? string.Empty)
+            .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
+            .WithHeaders(headers)
+            .WithQueryParameters(queryParameters)
+            .BuildAsync(ct));
+
+    /// <summary>
+    /// Gets schema from a remote SubFlow instance, forwarding the caller's request context so the
+    /// subflow's own queryRoles grants and schema selection rules see what this request carries.
+    /// </summary>
+    /// <returns>
+    /// The subflow's schema, or null when the subflow cannot answer for this transition key — the
+    /// caller then resolves against its own definition, exactly as the view function does.
+    /// </returns>
+    private async Task<GetSchemaOutput?> GetSubFlowSchemaAsync(
         InstanceCorrelation subflow,
+        GetSchemaInput input,
         string transitionKey,
         CancellationToken cancellationToken)
     {
@@ -1993,14 +2133,18 @@ public sealed class InstanceQueryAppService(
             Workflow = subflow.SubFlowName,
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
-            Role = currentUser.ResolveCallerRole(null),
-            Roles = currentUser.ResolveCallerRoles(null)
+            Headers = input.Headers ?? new Dictionary<string, string?>(),
+            QueryParams = input.QueryParameters ?? new Dictionary<string, string?>(),
+            Role = currentUser.ResolveCallerRole(input.Headers),
+            Roles = currentUser.ResolveCallerRoles(input.Headers)
         };
 
-        return await instanceQueryGateway.GetFunctionWithSchemaAsync(
+        var subFlowResult = await instanceQueryGateway.GetFunctionWithSchemaAsync(
             subFlowInput,
             transitionKey,
             cancellationToken);
+
+        return subFlowResult.IsSuccess ? subFlowResult.Value : null;
     }
 
     /// <summary>

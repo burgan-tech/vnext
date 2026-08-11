@@ -213,9 +213,14 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         // Act
         transition.SetSchema(schemaReference);
 
-        // Assert
+        // Assert: a single reference is wrapped into one rule-less entry, so the transition has a
+        // schema and it resolves without evaluating anything.
         Assert.NotNull(transition.Schema);
-        Assert.Equal("schema-1", transition.Schema.Key);
+        Assert.True(transition.HasSchema);
+        Assert.False(transition.HasRuleBasedSchema);
+        var entry = Assert.Single(transition.Schema.Schemas);
+        Assert.Null(entry.Rule);
+        Assert.Equal("schema-1", entry.Schema.Key);
     }
 
     [Fact]
@@ -384,6 +389,7 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
 
         // Assert
         Assert.Null(transition.Schema);
+        Assert.False(transition.HasSchema);
     }
 
     [Fact]
@@ -510,6 +516,118 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         Assert.NotNull(transition.View);
         Assert.Single(transition.View.Views);
         Assert.Equal("cancel-confirmation-view", transition.View.Views[0].View.Key);
+    }
+
+    [Fact]
+    public void Schema_ShouldDeserialize_FromLegacySingleReferenceFormat()
+    {
+        // Every definition authored before rule-based schemas looks like this, so it must keep landing
+        // on a single rule-less entry that resolves without evaluating anything.
+        var json = """
+        {
+            "key": "submit-transition",
+            "from": null,
+            "target": "review-state",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "schema": {
+                "key": "submit-schema",
+                "domain": "core",
+                "version": "1.0.0",
+                "flow": "sys-schemas"
+            }
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.True(transition.HasSchema);
+        Assert.False(transition.HasRuleBasedSchema);
+        Assert.Single(transition.Schema!.Schemas);
+        Assert.Null(transition.Schema.Schemas[0].Rule);
+        Assert.Equal("submit-schema", transition.Schema.Schemas[0].Schema.Key);
+    }
+
+    [Fact]
+    public void Schema_ShouldDeserialize_FromRuleBasedSchemasArrayFormat()
+    {
+        var json = """
+        {
+            "key": "submit-transition",
+            "from": null,
+            "target": "review-state",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "schemas": [
+                {
+                    "rule": { "location": "inline", "code": "dHJ1ZQ==" },
+                    "schema": {
+                        "key": "submit-schema-mobile",
+                        "domain": "core",
+                        "version": "1.0.0",
+                        "flow": "sys-schemas"
+                    }
+                },
+                {
+                    "schema": {
+                        "key": "submit-schema",
+                        "domain": "core",
+                        "version": "1.0.0",
+                        "flow": "sys-schemas"
+                    }
+                }
+            ]
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.True(transition.HasRuleBasedSchema);
+        Assert.Equal(2, transition.Schema!.Schemas.Count);
+        Assert.NotNull(transition.Schema.Schemas[0].Rule);
+        Assert.Equal("submit-schema-mobile", transition.Schema.Schemas[0].Schema.Key);
+        // Declaration order is preserved and the trailing rule-less entry is the fallback.
+        Assert.Null(transition.Schema.Schemas[1].Rule);
+        Assert.Equal("submit-schema", transition.Schema.Schemas[1].Schema.Key);
+    }
+
+    [Fact]
+    public void Schema_ShouldRoundTrip_ThroughTheCanonicalWrappedForm()
+    {
+        // The converter always writes the wrapped array form — the same choice ViewDefinitionJsonConverter
+        // makes for "view" — so a re-read of what we wrote must produce an identical selection.
+        var original = System.Text.Json.JsonSerializer.Deserialize<Transition>("""
+        {
+            "key": "submit-transition",
+            "from": null,
+            "target": "review-state",
+            "triggerType": "manual",
+            "versionStrategy": "Patch",
+            "labels": [],
+            "onExecutionTasks": [],
+            "schemas": [
+                { "rule": { "location": "inline", "code": "dHJ1ZQ==" },
+                  "schema": { "key": "a", "domain": "core", "version": "1.0.0", "flow": "sys-schemas" } },
+                { "schema": { "key": "b", "domain": "core", "version": "1.0.0", "flow": "sys-schemas" } }
+            ]
+        }
+        """, JsonSerializerConstants.JsonOptions)!;
+
+        var json = System.Text.Json.JsonSerializer.Serialize(original, JsonSerializerConstants.JsonOptions);
+        var reread = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(reread);
+        Assert.Equal(2, reread.Schema!.Schemas.Count);
+        Assert.NotNull(reread.Schema.Schemas[0].Rule);
+        Assert.Equal("a", reread.Schema.Schemas[0].Schema.Key);
+        Assert.Null(reread.Schema.Schemas[1].Rule);
+        Assert.Equal("b", reread.Schema.Schemas[1].Schema.Key);
     }
 
     [Fact]

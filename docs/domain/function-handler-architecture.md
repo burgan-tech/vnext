@@ -30,12 +30,37 @@ Application services own domain behavior and result construction.
 | `state` | `StateFunctionHandler` | Supports `If-None-Match`, returns `304`, sets `ETag` and `X-Entity-ETag`. |
 | `data` | `DataFunctionHandler` | Supports conditional read and extensions. |
 | `view` | `ViewFunctionHandler` | Resolves state or transition view using request headers/query. |
-| `schema` | `SchemaFunctionHandler` | Returns transition-aware schema. |
+| `schema` | `SchemaFunctionHandler` | Returns transition-aware schema, rule-selected like `view`. |
 | `authorize` | `AuthorizeFunctionHandler` | Evaluates user/role access. |
 | `permissions` | `AuthorizationMatrixFunctionHandler` | Returns authorization matrix. |
 | `hierarchy` | `HierarchyFunctionHandler` | Returns instance hierarchy. |
 | `humanTask` | `HumanTaskFunctionHandler` | Returns human task state for clients. |
 | `catalog` | `CatalogFunctionHandler` | Lists the workflow's declared functions, role-filtered, each linked to its `info` endpoint. |
+
+## View / schema parity
+
+A client renders a screen from `view` and validates that screen's input against `schema`, so the two
+are consumed as one unit. Both therefore behave the same way in the two places it matters:
+
+- **Rule-based selection.** `transition.schema` accepts the same three shapes as `views[]` — a single
+  component reference, an entry array, or the wrapped `{ "schemas": [...] }` form — evaluated in
+  declaration order with the first match winning. See
+  [Function contract resolution](../runtime/function-contract-resolution.md), whose resolver both share.
+- **Subflow forwarding.** While a subflow is borrowing the displayed state, both functions forward to
+  the subflow instance and fall back to the parent's own definition when the subflow cannot answer.
+  That fallback is not cosmetic: the state function merges the parent's shared and well-known
+  (`cancel`/`updateData`/`exit`) transitions into the subflow-facing `availableTransitions` and reports
+  their `hasSchema` from the **parent** definition, so following that `schema` href has to resolve
+  against the parent. The forward carries the caller's headers and query parameters, because the
+  subflow's own `queryRoles` grants and selection rules read `$.context.Headers` /
+  `$.context.QueryParameters` — an empty context does not fail closed, it silently cannot match.
+
+`hasSchema` in the state response is **declaration presence, not resolution** — mirroring `hasView`,
+and for the same reason `/info` always emits its href: evaluating every transition's rules on every
+long-poll is the cost the `catalog` function exists to avoid.
+
+`state.subFlow.overrides.views` still has no schema counterpart: a parent can replace a subflow's view
+but not its schema.
 
 ## Custom Function Contract (verbs, schemas, views)
 
