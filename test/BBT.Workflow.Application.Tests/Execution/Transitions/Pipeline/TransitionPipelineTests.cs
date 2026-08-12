@@ -352,24 +352,13 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_BypassKind_ShouldRunWithoutReserveAndClearResumePoint()
+    public async Task RunAsync_BypassKind_ShouldRunWithoutReserve()
     {
         var context = CreateTransitionExecutionContext("cancel");
-        context.Instance.SetResumePoint(40);
         var workflowContext = CreateWorkflowExecutionContext(context);
-        int? resumePointWhenFirstStepRan = null;
 
         SetupContextFactory(context);
         SetupStepsToContinue();
-        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                // The foreign S8 checkpoint must be cleared BEFORE the executor plans/runs;
-                // the executor re-stamps its own checkpoints afterwards.
-                resumePointWhenFirstStepRan = callInfo.ArgAt<TransitionExecutionContext>(0)
-                    .Instance.ResumePointStepOrder;
-                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
-            });
 
         _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
             .Returns(AdmissionKind.BypassBusyCheck);
@@ -377,7 +366,6 @@ public class TransitionPipelineTests
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        resumePointWhenFirstStepRan.ShouldBeNull();
         // Bypass kinds are exempt from the Busy 409 but still flip Busy under the short lock.
         await _mockAdmissionService.Received(1)
             .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());

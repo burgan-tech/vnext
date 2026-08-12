@@ -126,14 +126,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public InstanceStatus Status { get; private set; }
 
     /// <summary>
-    /// Durable resume point (S8): the last committed lifecycle step order within the in-flight
-    /// transition. On crash-resume the pipeline restarts from the next step rather than the
-    /// beginning, and already-committed remote task journal rows (InstanceTask) are bypassed,
-    /// avoiding duplicate irreversible side effects. Null when no transition is mid-flight.
-    /// </summary>
-    public int? ResumePointStepOrder { get; private set; }
-
-    /// <summary>
     /// Long-poll acknowledge token. Set when the pipeline pauses on entering a state whose
     /// <c>interaction.longPoll.terminate</c> is true; the State (long-poll) function surfaces the
     /// termination signal while this is non-null, and the pipeline resumes when the client
@@ -607,16 +599,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
         Status = InstanceStatus.Busy;
     }
-
-    /// <summary>
-    /// Records the last committed lifecycle step order for crash-resume (S8).
-    /// </summary>
-    public void SetResumePoint(int stepOrder) => ResumePointStepOrder = stepOrder;
-
-    /// <summary>
-    /// Clears the durable resume point (called at transition finalize so it never leaks into the next transition).
-    /// </summary>
-    public void ClearResumePoint() => ResumePointStepOrder = null;
 
     /// <summary>
     /// Arms the long-poll acknowledge marker with the supplied token (pipeline paused on state entry).

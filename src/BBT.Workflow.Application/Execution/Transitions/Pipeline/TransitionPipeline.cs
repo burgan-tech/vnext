@@ -132,7 +132,6 @@ public class TransitionPipeline
                 // a REAL reserve and the chained transition proceeds as a proper owner. A
                 // parent with an open SubFlow correlation short-circuits to data-only in
                 // HandleUpdateDataDataOnlyStep.
-                context.Instance.ClearResumePoint();
                 context.OwnsStatus = false;
                 return await RunChainAsync(context, cancellationToken);
             }
@@ -146,17 +145,10 @@ public class TransitionPipeline
                     return Result<TransitionExecutionContext>.Fail(takeover.Error);
 
                 context.OwnsStatus = true;
-                context.Instance.ClearResumePoint();
                 return await RunChainAsync(context, cancellationToken);
             }
 
             case AdmissionKind.OwnerReentry:
-                // Directive-driven resumes never resume from a foreign MAIN-transition
-                // checkpoint (their explicit ResumeFrom directive takes precedence); a job
-                // re-entry keeps the checkpoint for S8 crash-resume.
-                if (context.Directives.IsInternalResume)
-                    context.Instance.ClearResumePoint();
-
                 // SubFlow resume resumes an already-Busy instance; confirm the busy mark.
                 // (Long-poll acknowledge resume is intentionally NOT re-marked: a redundant
                 // resume that no-ops must not strand an already-advanced instance in Busy.)

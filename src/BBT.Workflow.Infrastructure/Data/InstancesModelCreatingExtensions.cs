@@ -62,9 +62,6 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
-            // Durable resume point for crash-resume (S8).
-            b.Property(p => p.ResumePointStepOrder);
-
             // Long-poll acknowledge marker (declarative long-poll termination on state entry).
             b.Property(p => p.LongPollAckToken);
             b.HasIndex(p => p.LongPollAckToken)
