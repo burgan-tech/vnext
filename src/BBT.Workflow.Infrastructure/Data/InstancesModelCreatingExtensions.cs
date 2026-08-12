@@ -471,11 +471,11 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(i => i.JobId)
                 .IsUnique();
 
-            // Partial composite index for the three hot-path queries that filter by
-            // InstanceId + JobName + IsActive (GetListActiveAsync, MarkAsProcessedAsync,
-            // AnyActiveByJobNameAsync). Active jobs are a small subset per instance, so
-            // the partial filter keeps the index compact while covering all three patterns
-            // via the (InstanceId, JobName) leftmost prefix.
+            // Partial composite index for the hot-path queries that filter by InstanceId +
+            // IsActive: GetListActiveAsync, MarkAsProcessedAsync and AnyActiveTransitionJobAsync
+            // (which narrows further on the structured JobType/SourceState/TransitionKey columns —
+            // covered by the leftmost InstanceId prefix, and active jobs are a small subset per
+            // instance so the residual filter is cheap). The partial filter keeps it compact.
             b.HasIndex(i => new { i.InstanceId, i.JobName })
                 .HasFilter("\"IsActive\" = true")
                 .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");

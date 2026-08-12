@@ -41,16 +41,20 @@ public sealed class EnqueueContinuationStrategy(
         if (next is null)
             return Result<WorkflowExecutionContext?>.Ok(null);
 
-        // Scope by the state the auto-transition fires from (the state just entered) so two
-        // same-named continuations across different states do not dedup into one Dapr job.
-        var sourceStateKey = current.Target?.Key ?? current.Current?.Key ?? string.Empty;
-        var jobName = JobName.ForAsyncTransition(current.InstanceId, sourceStateKey, next.TransitionKey);
-        var jobNameValue = jobName.Value;
-
-        // Single caller-generated id, reused for the durable InstanceJob.JobId AND the underlying
-        // BackgroundJobInfo.Id (direct + outbox paths). Keeps the two in sync so cancellation-by-id
-        // works — no placeholder.
+        // Single caller-generated id, reused for the durable InstanceJob.JobId, the underlying
+        // BackgroundJobInfo.Id (direct + outbox paths) AND the job name's invocation segment.
+        // Keeps the three in sync so cancellation-by-id works — no placeholder.
         var jobId = Guid.NewGuid();
+
+        // Scope by the state the auto-transition fires from (the state just entered) so two
+        // same-named continuations across different states never share a name, and by the job id so
+        // successive iterations of a $self loop do not either: the scheduler entry is keyed by name
+        // and deleted by name when a one-shot job completes, so the finishing iteration would
+        // otherwise delete the next iteration's trigger and leave the instance Busy for good.
+        var sourceStateKey = current.Target?.Key ?? current.Current?.Key ?? string.Empty;
+        var jobName = JobName.ForAsyncTransition(
+            current.InstanceId, sourceStateKey, next.TransitionKey, jobId);
+        var jobNameValue = jobName.Value;
 
         // Durable intent for the active-job guard / reaper — atomic with the transition commit
         // because we run inside the pipeline's ambient UoW (TransitionRunner).

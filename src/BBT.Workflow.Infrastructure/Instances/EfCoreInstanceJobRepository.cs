@@ -39,10 +39,20 @@ public sealed class EfCoreInstanceJobRepository(
             .FirstOrDefaultAsync(p => p.JobId == jobId, cancellationToken);
     }
 
-    public async Task<bool> AnyActiveByJobNameAsync(Guid instanceId, string jobName,
+    public async Task<bool> AnyActiveTransitionJobAsync(
+        Guid instanceId,
+        JobType jobType,
+        string? sourceState,
+        string transitionKey,
         CancellationToken cancellationToken = default)
         => await (await GetQueryableAsync())
-            .AnyAsync(j => j.InstanceId == instanceId && j.JobName == jobName && j.IsActive == true, cancellationToken);
+            .AnyAsync(
+                j => j.InstanceId == instanceId
+                     && j.IsActive == true
+                     && j.JobType == jobType
+                     && j.SourceState == sourceState
+                     && j.TransitionKey == transitionKey,
+                cancellationToken);
 
     /// <inheritdoc />
     public async Task<List<InstanceJob>> GetActiveByFlowAsync(

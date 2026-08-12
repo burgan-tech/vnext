@@ -48,7 +48,7 @@ public sealed class InstanceCancellationServiceTests
         // A "check" scheduled job owned by state-c must survive when we leave state-a.
         var job = InstanceJob.Create(
             Guid.NewGuid(),
-            JobName.ForScheduledTransition(_instance.Id, "state-c", "check"),
+            JobName.ForScheduledTransition(_instance.Id, "state-c", "check", Guid.NewGuid()),
             Guid.NewGuid(),
             "bank",
             "flow",
@@ -71,7 +71,7 @@ public sealed class InstanceCancellationServiceTests
     {
         var job = InstanceJob.Create(
             Guid.NewGuid(),
-            JobName.ForScheduledTransition(_instance.Id, "state-a", "check"),
+            JobName.ForScheduledTransition(_instance.Id, "state-a", "check", Guid.NewGuid()),
             Guid.NewGuid(),
             "bank",
             "flow",
@@ -258,7 +258,7 @@ public sealed class InstanceCancellationServiceTests
     private InstanceJob CreateInstanceJob(string transition = "check") =>
         InstanceJob.Create(
             Guid.NewGuid(),
-            JobName.ForScheduledTransition(_instance.Id, "state-a", transition),
+            JobName.ForScheduledTransition(_instance.Id, "state-a", transition, Guid.NewGuid()),
             Guid.NewGuid(),
             "bank",
             "flow",

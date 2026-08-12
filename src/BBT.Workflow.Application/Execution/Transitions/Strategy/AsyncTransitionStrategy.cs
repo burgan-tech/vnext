@@ -114,11 +114,15 @@ public sealed class AsyncTransitionStrategy(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        // Source-state key scopes the job name (see JobName). Must match the value used when the job
-        // is persisted in EnqueueAndSaveJobAsync so the AnyActiveByJobNameAsync guard below lines up.
+        // One id, one name, built ONCE here: the job name is unique per enqueue (see JobName), so
+        // rebuilding it downstream would produce a different string than the row and the scheduler
+        // entry. The active-job guard below matches the LOGICAL identity instead (structured
+        // columns), which is what "a job for this transition is already queued" actually means.
+        var jobId = Guid.NewGuid();
+        var sourceStateKey = ctx.Current?.Key ?? string.Empty;
         var jobName = JobName.ForAsyncTransition(
-            Guid.Parse(context.InstanceId), ctx.Current?.Key ?? string.Empty, context.TransitionKey).Value;
-        EnrichTelemetry(activity, ctx, jobName);
+            ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId);
+        EnrichTelemetry(activity, ctx, jobName.Value);
 
         Result<TransitionExecutionContext> lockScopeResult =
             Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
@@ -137,9 +141,14 @@ public sealed class AsyncTransitionStrategy(
             lockKey,
             async () =>
             {
-                if (await jobRepository.AnyActiveByJobNameAsync(ctx.InstanceId, jobName, cancellationToken))
+                if (await jobRepository.AnyActiveTransitionJobAsync(
+                        ctx.InstanceId,
+                        JobType.AsyncTransition,
+                        jobName.SourceState,
+                        ctx.TransitionKey,
+                        cancellationToken))
                 {
-                    logger.TransitionJobAlreadyQueued(jobName, ctx.InstanceId, ctx.TransitionKey);
+                    logger.TransitionJobAlreadyQueued(jobName.Value, ctx.InstanceId, ctx.TransitionKey);
                     lockScopeResult = Result<TransitionExecutionContext>.Fail(
                         WorkflowErrors.TransitionJobAlreadyActive(ctx.InstanceId, ctx.TransitionKey));
                     return;
@@ -174,10 +183,11 @@ public sealed class AsyncTransitionStrategy(
                     reserved = true;
                 }
 
-                var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
+                var enqueueResult = await EnqueueAndSaveJobAsync(
+                    context, ctx, jobName, jobId, activity, cancellationToken);
                 if (enqueueResult.IsSuccess)
                 {
-                    LogEnqueueSuccess(context, jobName);
+                    LogEnqueueSuccess(context, jobName.Value);
                     lockScopeResult = Result<TransitionExecutionContext>.Ok(ctx);
                 }
                 else
@@ -213,13 +223,11 @@ public sealed class AsyncTransitionStrategy(
     private async Task<Result<string>> EnqueueAndSaveJobAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
+        JobName jobName,
+        Guid jobId,
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var jobName = JobName.ForAsyncTransition(
-            transContext.InstanceId, transContext.Current?.Key ?? string.Empty, transContext.TransitionKey);
-        var jobId = Guid.NewGuid();
-
         var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity);
         var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity);
 
