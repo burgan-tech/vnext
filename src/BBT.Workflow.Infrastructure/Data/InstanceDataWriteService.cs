@@ -39,6 +39,17 @@ public sealed class InstanceDataWriteService(
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<InstanceDataWriteService> logger) : IInstanceDataWriteService
 {
+    /// <summary>
+    /// Serializes appends that arrive on the SAME DbContext concurrently. Parallel task
+    /// branches each get their own DI scope, but the ambient (AsyncLocal) UnitOfWork flows
+    /// into every branch and hands them all the same schema-bound context — and a Npgsql
+    /// connection cannot run two commands at once (NpgsqlOperationInProgressException).
+    /// Writers on different contexts are untouched; those serialize on the FOR UPDATE
+    /// row lock as designed.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorkflowDbContext, SemaphoreSlim>
+        ContextGates = new();
+
     /// <inheritdoc />
     public async Task<InstanceData?> AppendAsync(
         Instance instance,
@@ -149,6 +160,24 @@ public sealed class InstanceDataWriteService(
     /// the whole scope.
     /// </summary>
     private async Task<T?> RunLockedAsync<T>(
+        WorkflowDbContext context,
+        Guid instanceId,
+        CancellationToken cancellationToken,
+        Func<Task<T?>> body) where T : class
+    {
+        var gate = ContextGates.GetValue(context, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await RunLockedCoreAsync(context, instanceId, cancellationToken, body);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<T?> RunLockedCoreAsync<T>(
         WorkflowDbContext context,
         Guid instanceId,
         CancellationToken cancellationToken,

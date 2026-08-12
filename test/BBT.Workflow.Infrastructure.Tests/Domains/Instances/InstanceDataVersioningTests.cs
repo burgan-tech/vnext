@@ -216,6 +216,49 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Concurrent_Appends_On_A_Shared_DbContext_Should_Serialize_On_The_Context_Gate()
+    {
+        // Parallel task branches all receive the SAME schema-bound DbContext from the ambient
+        // UnitOfWork — a Npgsql connection cannot run two commands at once, so the service
+        // must serialize same-context appends instead of throwing
+        // NpgsqlOperationInProgressException ("connection is already in state 'Executing'").
+        var seeded = await CreateInstanceAsync();
+        const int count = 8;
+
+        await using var ctx = CreateContext();
+        var service = CreateService(ctx);
+
+        var tasks = Enumerable.Range(0, count)
+            .Select(i =>
+            {
+                var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+                return service.AppendAsync(
+                    instance, new JsonData($"{{\"shared{i}\":{i}}}"), VersionStrategy.IncreasePatch,
+                    CancellationToken.None);
+            })
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        // Assert from a FRESH context: the writing context's tracked rows don't observe the
+        // raw-SQL stale-latest demote (in production the shared aggregate's
+        // AcceptPersistedData demotes the in-memory rows; here each append used a
+        // throwaway aggregate on purpose).
+        await using var verifyCtx = CreateContext();
+        var list = await verifyCtx.InstancesData
+            .Where(x => x.InstanceId == seeded.Id)
+            .OrderBy(x => x.VersionNo)
+            .ToListAsync();
+        list.Count.ShouldBe(count);
+        list.Select(x => x.VersionNo).ShouldBe(Enumerable.Range(1, count).Select(i => (long)i));
+        var latest = list.Single(x => x.IsLatest);
+        for (var i = 0; i < count; i++)
+        {
+            latest.Data.Json.ShouldContain($"\"shared{i}\"");
+        }
+    }
+
+    [Fact]
     public async Task Different_Instances_Should_Have_Independent_Version_Sequences()
     {
         // Arrange
