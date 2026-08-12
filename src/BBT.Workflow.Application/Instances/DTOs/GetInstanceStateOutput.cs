@@ -59,6 +59,16 @@ public sealed class GetInstanceStateOutput
     public List<TransitionItem> Transitions { get; set; } = [];
 
     /// <summary>
+    /// Transitions the runtime has armed to fire automatically for this instance, ordered by
+    /// execution time ascending. Read from the persisted job state, so clients can render
+    /// countdowns and upcoming-action information without any scheduler access. Always describes
+    /// the polled instance itself — during an active-subflow window it is not merged with the
+    /// subflow's own list. Changes to this set participate in the state fingerprint ETag; see
+    /// <c>StateFunctionCache.ResponseShapeVersion</c>.
+    /// </summary>
+    public List<ScheduledTransitionItem> ScheduledTransitions { get; set; } = [];
+
+    /// <summary>
     /// Pointer to the workflow's function catalog: whether the flow declares any functions, and where
     /// to enumerate them.
     /// </summary>

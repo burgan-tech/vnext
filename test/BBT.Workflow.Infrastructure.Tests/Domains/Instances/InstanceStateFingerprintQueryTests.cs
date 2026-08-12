@@ -171,6 +171,41 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
         fingerprint.CompletedCorrelationCount.ShouldBe(0);
         fingerprint.LastCorrelationCompletedAt.ShouldBeNull();
         fingerprint.LastSubFlowStateChangedAt.ShouldBeNull();
+        fingerprint.ActiveScheduledTransitionJobCount.ShouldBe(0);
+        fingerprint.LastScheduledTransitionJobCreatedAt.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The job aggregates must run over active scheduled-transition rows only — a processed
+    /// scheduled row and an active job of another kind (timeout) must move neither the count nor
+    /// the max-created-at, however new they are. This is the set the response body exposes.
+    /// </summary>
+    [Fact]
+    public async Task ProjectsScheduledJobAggregates_OverActiveScheduledTransitionRowsOnly()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "fp-job-aggregates");
+        instance.SetEffectiveState("review");
+        await SeedAsync(instance);
+
+        var olderAt = new DateTime(2026, 8, 1, 10, 0, 0, DateTimeKind.Utc);
+        var newerAt = new DateTime(2026, 8, 1, 11, 0, 0, DateTimeKind.Utc);
+        var newestAt = new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
+
+        await SeedJobAsync(instance.Id,
+            JobName.ForScheduledTransition(instance.Id, "review", "remind"), createdAt: olderAt);
+        await SeedJobAsync(instance.Id,
+            JobName.ForScheduledTransition(instance.Id, "review", "escalate"), createdAt: newerAt);
+        await SeedJobAsync(instance.Id,
+            JobName.ForScheduledTransition(instance.Id, "review", "expired"),
+            processed: true, createdAt: newestAt);
+        await SeedJobAsync(instance.Id, JobName.ForTimeout(instance.Id), createdAt: newestAt);
+
+        await using var ctx = CreateContext();
+        var fingerprint = await QueryAsync(ctx, instance.Id.ToString());
+
+        fingerprint.ShouldNotBeNull();
+        fingerprint!.ActiveScheduledTransitionJobCount.ShouldBe(2);
+        fingerprint.LastScheduledTransitionJobCreatedAt.ShouldBe(newerAt);
     }
 
     /// <summary>
@@ -204,6 +239,13 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
 
         await SeedAsync(instance);
 
+        // One active scheduled row and one processed one, so the job members are exercised on both
+        // theory rows and the processed row proves both paths exclude it.
+        await SeedJobAsync(instance.Id,
+            JobName.ForScheduledTransition(instance.Id, "review", "remind"));
+        await SeedJobAsync(instance.Id,
+            JobName.ForScheduledTransition(instance.Id, "review", "expired"), processed: true);
+
         await using var ctx = CreateContext();
         var projected = await QueryAsync(ctx, instance.Id.ToString());
 
@@ -219,7 +261,14 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
             .Where(c => c.ParentInstanceId == instance.Id)
             .ToListAsync();
 
-        var fromInstance = InstanceStateFingerprint.FromInstance(loaded, allCorrelations);
+        var activeScheduledTransitionJobs = await ctx.Set<InstanceJob>()
+            .AsNoTracking()
+            .Where(j => j.InstanceId == instance.Id && j.IsActive
+                        && j.JobType == JobType.ScheduledTransition)
+            .ToListAsync();
+
+        var fromInstance = InstanceStateFingerprint.FromInstance(
+            loaded, allCorrelations, activeScheduledTransitionJobs);
 
         projected.ShouldNotBeNull();
         fromInstance.ShouldBe(projected);
@@ -241,7 +290,10 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
 
     private static Task<InstanceStateFingerprint?> QueryAsync(WorkflowDbContext ctx, string identifier) =>
         EfCoreInstanceRepository.QueryStateFingerprintAsync(
-            ctx.Instances.AsNoTracking(), identifier, CancellationToken.None);
+            ctx.Instances.AsNoTracking(),
+            ctx.Set<InstanceJob>().AsNoTracking(),
+            identifier,
+            CancellationToken.None);
 
     private static InstanceCorrelation CreateCorrelation(Guid instanceId, string subFlowType) =>
         InstanceCorrelation.Create(
@@ -253,6 +305,33 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
             subFlowDomain: "sub-domain",
             subFlowName: "sub-flow",
             subFlowVersion: "1.0.0");
+
+    private async Task SeedJobAsync(
+        Guid instanceId,
+        JobName jobName,
+        bool processed = false,
+        DateTime? createdAt = null)
+    {
+        var jobId = Guid.NewGuid();
+        var job = InstanceJob.Create(
+            jobId, jobName, jobId, "sub-domain", Flow, instanceId,
+            executeAt: DateTimeOffset.UtcNow.AddMinutes(5));
+        if (processed)
+            job.MarkAsProcessed();
+
+        await using var ctx = CreateContext();
+        ctx.Set<InstanceJob>().Add(job);
+        await ctx.SaveChangesAsync();
+
+        if (createdAt is not null)
+        {
+            // CreatedAt is audit-stamped on save; pin it afterwards so max-created-at
+            // assertions are deterministic.
+            await ctx.Database.ExecuteSqlRawAsync(
+                "UPDATE \"public\".\"InstanceJobs\" SET \"CreatedAt\" = {0} WHERE \"Id\" = {1}",
+                createdAt.Value, job.Id);
+        }
+    }
 
     private async Task SeedAsync(Instance instance, DateTime? createdAt = null)
     {

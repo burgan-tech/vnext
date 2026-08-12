@@ -48,7 +48,9 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
        COUNT(correlations)                     AS CorrelationCount,
        COUNT(correlations WHERE IsCompleted)   AS CompletedCorrelationCount,
        MAX(correlations.CompletedAt)           AS LastCorrelationCompletedAt,
-       MAX(correlations.SubFlowStateChangedAt) AS LastSubFlowStateChangedAt
+       MAX(correlations.SubFlowStateChangedAt) AS LastSubFlowStateChangedAt,
+       COUNT(active scheduled-transition jobs) AS ActiveScheduledTransitionJobCount,
+       MAX(their CreatedAt)                    AS LastScheduledTransitionJobCreatedAt
 ```
 
 - Identifier resolution mirrors `FindByIdentifierAsReadOnlyAsync`: id first, then the most
@@ -66,12 +68,22 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   `CorrelationCount`, terminating (or a revert) moves `CompletedCorrelationCount`, a
   revert-then-recomplete that restores both counts moves `LastCorrelationCompletedAt`, and a sub
   item advancing its own state moves `LastSubFlowStateChangedAt`.
+- The two **scheduled-job aggregates** exist because the body carries the `scheduledTransitions`
+  list. Unlike the correlation aggregates they run over a *filtered* set — active
+  `JobType.ScheduledTransition` rows only, exactly what the body exposes. There is no navigation
+  from `Instance` to `InstanceJob` (the FK was removed), so they correlate through the
+  `InstanceJobs` set directly, served by `IX_InstanceJobs_Active_Instance_JobName` (partial on
+  `IsActive`, `InstanceId` prefix). A job firing or being cancelled moves the count; a
+  cancel-and-reschedule (same count, new row) moves the max-created-at.
 
 > **Invariant — the two build paths must agree.** The fast path fingerprints via this projection;
-> the full-build path uses `InstanceStateFingerprint.FromInstance(instance, allCorrelations)`.
+> the full-build path uses
+> `InstanceStateFingerprint.FromInstance(instance, allCorrelations, activeScheduledTransitionJobs)`.
 > The aggregate's own `ChildCorrelations` is loaded with an active-only filtered include, so it
 > must never feed the aggregates — hence `allCorrelations` is a required argument rather than
-> read off the instance. If the two disagree on one member, the full-path ETag never matches the
+> read off the instance; the job list is likewise the pre-filtered list that feeds the response
+> body, so body and ETag can never disagree on the set. If the two paths disagree on one member,
+> the full-path ETag never matches the
 > one the fast path validates and every poll rebuilds the response. Guarded by
 > `InstanceStateFingerprintQueryTests.ProjectionAndFromInstance_ProduceIdenticalFingerprints`.
 
@@ -82,19 +94,21 @@ Computed by `IStateFunctionCache.ComputeEtag` — a deterministic SHA-256 hash (
 ```
 etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersion | callerHash
          | correlationCount | completedCorrelationCount
-         | lastCorrelationCompletedAt | lastSubFlowStateChangedAt)
+         | lastCorrelationCompletedAt | lastSubFlowStateChangedAt
+         | activeScheduledTransitionJobCount | lastScheduledTransitionJobCreatedAt)
 ```
 
 - **Deterministic across pods**: any instance of the service computes the same ETag for the
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v5`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v6`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
   the `catalog` function; v5 began narrowing `availableTransitions` by per-state `availableIn` role
-  grants, which can *remove* an entry a caller previously saw), every previously issued ETag must be
+  grants, which can *remove* an entry a caller previously saw; v6 added the `scheduledTransitions`
+  list), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -116,6 +130,12 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   a sub item starting, terminating or advancing its state changes the body without touching the
   instance's own state or status, and a long-polling client would otherwise keep getting 304 and
   never observe it.
+- **Scheduled-job members are in the hash** for the same reason: the body exposes the
+  `scheduledTransitions` list, built from the instance's active scheduled-transition jobs. The
+  count moves when a job fires or is cancelled; the max-created-at covers cancel-and-reschedule —
+  a `$self` re-entry that re-arms the same transition with a new execution time while state,
+  status and correlations all stay put. Both members run over active
+  `JobType.ScheduledTransition` rows only, exactly the set the body exposes.
 - The ETag intentionally does **not** track instance-data-only changes: the state function
   signals state/status transitions, not data versions. `X-Entity-ETag` served from cache may
   lag data-only updates until the next state/status change (accepted by design — the data

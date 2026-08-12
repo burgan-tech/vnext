@@ -45,6 +45,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IViewContentResolutionService _viewContentResolutionService;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly IInstanceCorrelationRepository _instanceCorrelationRepository;
+    private readonly IInstanceJobRepository _instanceJobRepository;
     private readonly Caching.IStateFunctionCache _stateFunctionCache;
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
@@ -66,6 +67,10 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _viewContentResolutionService = Substitute.For<IViewContentResolutionService>();
         _transitionAuthorizationManager = Substitute.For<ITransitionAuthorizationManager>();
         _instanceCorrelationRepository = Substitute.For<IInstanceCorrelationRepository>();
+        _instanceJobRepository = Substitute.For<IInstanceJobRepository>();
+        _instanceJobRepository
+            .GetListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns([]);
         // Enabled defaults to false so existing tests exercise the full build path;
         // cache-specific tests opt in explicitly.
         _stateFunctionCache = Substitute.For<Caching.IStateFunctionCache>();
@@ -91,6 +96,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceRepository: _instanceRepository,
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: _instanceCorrelationRepository,
+            instanceJobRepository: _instanceJobRepository,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -503,6 +509,89 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         transitions["approve"].Kind.ShouldBe("stateTransition");
         transitions["add-note"].Kind.ShouldBe("sharedTransition");
         transitions["cancel-request"].Kind.ShouldBe("cancel");
+    }
+
+    /// <summary>
+    /// The scheduledTransitions list is built from the persisted job state: active
+    /// scheduled-transition rows with an execution time, ordered by that time ascending, each entry
+    /// carrying the transition key, the "scheduled" kind and the UTC execution instant.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ExposesActiveScheduledTransitionJobs_OrderedByExecuteAt()
+    {
+        // Arrange
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+
+        var laterAt = new DateTimeOffset(2026, 8, 3, 14, 30, 0, TimeSpan.Zero);
+        var soonerAt = new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero);
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(
+            [
+                CreateScheduledTransitionJob(instance.Id, "payment-timeout", laterAt),
+                CreateScheduledTransitionJob(instance.Id, "send-reminder", soonerAt)
+            ]);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — ordered by execution time, not by insertion order
+        result.Result.IsSuccess.ShouldBeTrue();
+        var scheduled = result.Result.Value!.ScheduledTransitions;
+        scheduled.Count.ShouldBe(2);
+        scheduled[0].Name.ShouldBe("send-reminder");
+        scheduled[0].Kind.ShouldBe(ScheduledTransitionItem.ScheduledKind);
+        scheduled[0].ExecuteAtUtc.ShouldBe(soonerAt.UtcDateTime);
+        scheduled[0].ExecuteAtUtc.Kind.ShouldBe(DateTimeKind.Utc);
+        scheduled[1].Name.ShouldBe("payment-timeout");
+        scheduled[1].ExecuteAtUtc.ShouldBe(laterAt.UtcDateTime);
+    }
+
+    /// <summary>
+    /// Only scheduled-transition jobs with a persisted execution time are exposed: other job kinds
+    /// (here the workflow timeout) are not scheduled transitions, and rows persisted before the
+    /// ExecuteAt column existed carry no instant to display and are omitted rather than emitted
+    /// without one.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_OmitsOtherJobKindsAndRowsWithoutExecuteAt()
+    {
+        // Arrange
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+
+        var legacyRow = InstanceJob.Create(
+            Guid.NewGuid(),
+            JobName.ForScheduledTransition(instance.Id, TestState, "pre-upgrade"),
+            Guid.NewGuid(), TestDomain, TestWorkflow, instance.Id);
+        var timeoutJob = InstanceJob.Create(
+            Guid.NewGuid(),
+            JobName.ForTimeout(instance.Id),
+            Guid.NewGuid(), TestDomain, TestWorkflow, instance.Id,
+            new DateTimeOffset(2026, 8, 4, 0, 0, 0, TimeSpan.Zero));
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([legacyRow, timeoutJob]);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.ScheduledTransitions.ShouldBeEmpty();
+    }
+
+    private InstanceJob CreateScheduledTransitionJob(
+        Guid instanceId, string transitionKey, DateTimeOffset executeAt)
+    {
+        var jobId = Guid.NewGuid();
+        return InstanceJob.Create(
+            jobId,
+            JobName.ForScheduledTransition(instanceId, TestState, transitionKey),
+            jobId, TestDomain, TestWorkflow, instanceId, executeAt);
     }
 
     [Fact]
@@ -1141,7 +1230,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(new InstanceStateFingerprint(instance.Id, "test-key", TestState, InstanceStatus.Busy,
                 TestVersion, HasActiveSubFlow: true,
                 CorrelationCount: 1, CompletedCorrelationCount: 0,
-                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
+                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null,
+                ActiveScheduledTransitionJobCount: 0, LastScheduledTransitionJobCreatedAt: null));
 
         // Act
         var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
@@ -1201,7 +1291,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
                 TestVersion, HasActiveSubFlow: false,
                 CorrelationCount: 0, CompletedCorrelationCount: 0,
-                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
+                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null,
+                ActiveScheduledTransitionJobCount: 0, LastScheduledTransitionJobCreatedAt: null));
 
     private void SetupCachedEntry(out Caching.StateFunctionCacheEntry entry, string etag = "etag-current")
     {

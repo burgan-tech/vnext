@@ -83,18 +83,31 @@ public class TimerSchedule : ValueObject
     }
     
     /// <summary>
+    /// Resolves the single UTC instant this schedule fires at, relative to <paramref name="now"/>.
+    /// Every supported schedule type collapses to exactly one instant, so callers that must both
+    /// arm the scheduler and persist the execution time resolve once and reuse the value — two
+    /// separate clock reads would drift for Duration/Immediate schedules.
+    /// </summary>
+    /// <param name="now">The reference clock, normally <see cref="DateTimeOffset.UtcNow"/>.</param>
+    /// <returns>The instant the schedule fires at.</returns>
+    public DateTimeOffset ResolveExecuteAt(DateTimeOffset now)
+    {
+        return ScheduleType switch
+        {
+            TimerScheduleType.DateTime => ScheduledDateTime!.Value,
+            TimerScheduleType.Duration => now.Add(Duration!.Value),
+            TimerScheduleType.Immediate => now.AddSeconds(2),
+            _ => throw new InvalidOperationException($"Unsupported schedule type: {ScheduleType}")
+        };
+    }
+
+    /// <summary>
     /// Converts this WorkflowTimerSchedule to a DaprJobSchedule for job scheduling.
     /// </summary>
     /// <returns>A DaprJobSchedule equivalent to this WorkflowTimerSchedule.</returns>
     public DaprJobSchedule ToDaprJobSchedule()
     {
-        return ScheduleType switch
-        {
-            TimerScheduleType.DateTime => DaprJobSchedule.FromDateTime(ScheduledDateTime!.Value),
-            TimerScheduleType.Duration => DaprJobSchedule.FromDateTime(DateTimeOffset.UtcNow.Add(Duration!.Value)),
-            TimerScheduleType.Immediate => DaprJobSchedule.FromDateTime(DateTimeOffset.UtcNow.AddSeconds(2)),
-            _ => throw new InvalidOperationException($"Unsupported schedule type: {ScheduleType}")
-        };
+        return DaprJobSchedule.FromDateTime(ResolveExecuteAt(DateTimeOffset.UtcNow));
     }
 
     /// <summary>

@@ -11,6 +11,7 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Tasks.Coordinator;
+using Dapr.Jobs.Models;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -152,12 +153,18 @@ public sealed class ScheduleTransitionsStep(
             ["instanceId"] = context.InstanceId.ToString()
         };
 
+        // One instant feeds both the scheduler arming and the persisted ExecuteAt: the state
+        // function exposes the row's ExecuteAt as the transition's execution time, so it must be
+        // exactly what the scheduler was armed with, not a second clock read.
+        var executeAt = timerSchedule.ResolveExecuteAt(DateTimeOffset.UtcNow);
+
         return new TransitionSchedulingInfo(
             context,
             jobName,
             payload,
-            timerSchedule.ToDaprJobSchedule().ExpressionValue,
-            metadata);
+            DaprJobSchedule.FromDateTime(executeAt).ExpressionValue,
+            metadata,
+            executeAt);
     }
 
     /// <summary>
@@ -183,7 +190,8 @@ public sealed class ScheduleTransitionsStep(
                 jobId,
                 info.Context.Domain,
                 info.Context.WorkflowKey,
-                info.Context.InstanceId),
+                info.Context.InstanceId,
+                info.ExecuteAt),
             true,
             cancellationToken);
 
@@ -198,5 +206,6 @@ public sealed class ScheduleTransitionsStep(
         JobName JobName,
         TransitionTimerPayload Payload,
         string ScheduleExpression,
-        Dictionary<string, object> Metadata);
+        Dictionary<string, object> Metadata,
+        DateTimeOffset ExecuteAt);
 }

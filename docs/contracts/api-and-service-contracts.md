@@ -131,6 +131,37 @@ concurrent completion its active subset can be a moment fresher than `activeCorr
 Changes to the correlation set participate in the state ETag — see
 [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+### State response: scheduled transitions
+
+The state response lists the transitions the runtime has already armed to fire automatically, so a
+client can render countdowns and upcoming-action information without polling anything else:
+
+```jsonc
+"scheduledTransitions": [
+  { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z" }
+]
+```
+
+- Built from the **persisted job state**: active `InstanceJob` rows of type `ScheduledTransition`
+  whose `ExecuteAt` was captured at scheduling time — the exact instant the scheduler was armed
+  with, never a re-evaluation of the transition's timer script. Ordered by `executeAtUtc`
+  ascending; empty array when nothing is scheduled.
+- `name` is the transition key; `kind` is currently always `scheduled` (a job-kind vocabulary —
+  the workflow-level timeout is a candidate future kind). `executeAtUtc` is always UTC with the
+  `Z` designator.
+- **Not role-filtered**, unlike `availableTransitions`: a scheduled transition fires regardless of
+  the caller, so the list is a fact about the instance, not a caller capability.
+- Always describes the **polled instance itself** — during an active-subflow window it is not
+  merged with the subflow's own list (poll the subflow instance for its schedule).
+- Rows persisted before the `ExecuteAt` column existed are omitted rather than emitted without a
+  time; they age out as their jobs fire or are cancelled.
+- An entry may briefly remain visible with a past `executeAtUtc` while the fired transition's
+  pipeline is still settling — the list reflects the persisted job rows, and the row is marked
+  processed when the handler completes.
+- Changes to the scheduled-job set participate in the state ETag (count + newest row), so a
+  cancel-and-reschedule on a `$self` re-entry moves the ETag even though state and status do not —
+  see [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
 ### Client-facing hrefs and the `UrlTemplates` section
 
 Every `href` a client receives — `availableTransitions[].href`, `data`, `view`, `schema`, `master`,

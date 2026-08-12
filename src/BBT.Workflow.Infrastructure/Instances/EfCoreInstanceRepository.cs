@@ -366,8 +366,12 @@ public sealed class EfCoreInstanceRepository(
         string identifier,
         CancellationToken cancellationToken = default)
     {
-        var dbSet = await GetDbSetAsync();
-        return await QueryStateFingerprintAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+        var dbContext = await GetDbContextAsync();
+        return await QueryStateFingerprintAsync(
+            dbContext.Set<Instance>().AsNoTracking(),
+            dbContext.Set<InstanceJob>().AsNoTracking(),
+            identifier,
+            cancellationToken);
     }
 
     /// <summary>
@@ -376,12 +380,13 @@ public sealed class EfCoreInstanceRepository(
     /// </summary>
     internal static async Task<InstanceStateFingerprint?> QueryStateFingerprintAsync(
         IQueryable<Instance> query,
+        IQueryable<InstanceJob> jobs,
         string identifier,
         CancellationToken cancellationToken)
     {
         if (Guid.TryParse(identifier, out var instanceId))
         {
-            var byId = await ProjectStateFingerprint(query.Where(i => i.Id == instanceId))
+            var byId = await ProjectStateFingerprint(query.Where(i => i.Id == instanceId), jobs)
                 .FirstOrDefaultAsync(cancellationToken);
             if (byId is not null)
                 return byId;
@@ -390,7 +395,7 @@ public sealed class EfCoreInstanceRepository(
         // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
         // keeps the fallback deterministic, mirroring FindByIdentifierAsReadOnlyAsync.
         return await ProjectStateFingerprint(
-                query.Where(i => i.Key == identifier).OrderByDescending(i => i.CreatedAt))
+                query.Where(i => i.Key == identifier).OrderByDescending(i => i.CreatedAt), jobs)
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -400,8 +405,14 @@ public sealed class EfCoreInstanceRepository(
     /// validation. They mirror <see cref="InstanceStateFingerprint.FromInstance"/> term for term —
     /// the full-build path must produce a byte-identical fingerprint or the cache invalidates on every
     /// poll. Served by IX_InstancesCorrelations_ByParent (unfiltered, on ParentInstanceId).
+    /// The job members run over active scheduled-transition rows only — the set the response body's
+    /// <c>scheduledTransitions</c> exposes. There is no navigation from Instance to InstanceJob (the FK
+    /// was removed), so they correlate through the <paramref name="jobs"/> queryable; the seek is
+    /// served by IX_InstanceJobs_Active_Instance_JobName (partial on IsActive, InstanceId prefix).
     /// </remarks>
-    private static IQueryable<InstanceStateFingerprint> ProjectStateFingerprint(IQueryable<Instance> query) =>
+    private static IQueryable<InstanceStateFingerprint> ProjectStateFingerprint(
+        IQueryable<Instance> query,
+        IQueryable<InstanceJob> jobs) =>
         query.Select(i => new InstanceStateFingerprint(
             i.Id,
             i.Key,
@@ -412,7 +423,13 @@ public sealed class EfCoreInstanceRepository(
             i.ChildCorrelations.Count,
             i.ChildCorrelations.Count(c => c.IsCompleted),
             i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
-            i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()));
+            i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max(),
+            jobs.Count(j =>
+                j.InstanceId == i.Id && j.IsActive && j.JobType == JobType.ScheduledTransition),
+            jobs.Where(j =>
+                    j.InstanceId == i.Id && j.IsActive && j.JobType == JobType.ScheduledTransition)
+                .Select(j => (DateTime?)j.CreatedAt)
+                .Max()));
 
     /// <inheritdoc />
     public async Task<InstanceDataFingerprint?> GetDataFingerprintAsync(

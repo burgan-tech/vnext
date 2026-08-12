@@ -35,6 +35,7 @@ public sealed class InstanceQueryAppService(
     IInstanceRepository instanceRepository,
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceCorrelationRepository instanceCorrelationRepository,
+    IInstanceJobRepository instanceJobRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -956,8 +957,17 @@ public sealed class InstanceQueryAppService(
                         .OrderBy(c => c.CreatedAt)
                         .ToList();
 
+                    // Active scheduled-transition jobs, read once: the same list feeds the response
+                    // body's scheduledTransitions and the fingerprint's job members, so the ETag can
+                    // never disagree with the body about the set.
+                    var activeScheduledTransitionJobs = (await instanceJobRepository
+                            .GetListActiveAsync(data.instance.Id, cancellationToken))
+                        .Where(j => j.JobType == JobType.ScheduledTransition)
+                        .ToList();
+
                     var buildResult = await BuildInstanceStateOutputAsync(
-                        data.instance, data.workflow, input, allCorrelations, cancellationToken);
+                        data.instance, data.workflow, input, allCorrelations,
+                        activeScheduledTransitionJobs, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
 
@@ -970,7 +980,8 @@ public sealed class InstanceQueryAppService(
                     // paths hash the same set — see InstanceStateFingerprint.FromInstance.
                     // Active-subflow responses fold the live displayed state/status into the hash:
                     // the parent row alone cannot see subflow-internal Busy/Active flips.
-                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance, allCorrelations);
+                    var fingerprint = InstanceStateFingerprint.FromInstance(
+                        data.instance, allCorrelations, activeScheduledTransitionJobs);
                     var etag = data.instance.HasActiveSubFlow
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
@@ -1058,12 +1069,16 @@ public sealed class InstanceQueryAppService(
     /// <param name="allCorrelations">Full child correlation set (active + completed), CreatedAt ascending.
     /// Feeds the <c>correlations</c> response list only — the active-subflow detection below deliberately
     /// keeps using the aggregate, whose active set drives Busy/settlement semantics.</param>
+    /// <param name="activeScheduledTransitionJobs">The instance's active scheduled-transition jobs,
+    /// pre-filtered by the caller. Feeds the <c>scheduledTransitions</c> response list; the caller hashes
+    /// the same list into the fingerprint ETag.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
         IReadOnlyCollection<InstanceCorrelation> allCorrelations,
+        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
         CancellationToken cancellationToken)
     {
         // Build instance transition information using shared logic (no DB call - uses instance.ActiveCorrelations)
@@ -1373,10 +1388,32 @@ public sealed class InstanceQueryAppService(
             ActiveCorrelations = allActiveCorrelations,
             Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
+            ScheduledTransitions = BuildScheduledTransitionItems(activeScheduledTransitionJobs),
             Functions = functionsHref,
             Interaction = interaction
         });
     }
+
+    /// <summary>
+    /// Maps the instance's active scheduled-transition jobs to the response's
+    /// <c>scheduledTransitions</c> list, ordered by execution time ascending. Rows without an
+    /// <see cref="InstanceJob.ExecuteAt"/> (persisted before the column existed) are omitted rather
+    /// than emitted without a time — every exposed entry carries an execution instant, and such rows
+    /// age out as their jobs fire or are cancelled. Not role-filtered: a scheduled transition fires
+    /// regardless of the caller, so the list is a fact about the instance, not a caller capability.
+    /// </summary>
+    private static List<ScheduledTransitionItem> BuildScheduledTransitionItems(
+        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs) =>
+        activeScheduledTransitionJobs
+            .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
+            .OrderBy(j => j.ExecuteAt!.Value)
+            .Select(j => new ScheduledTransitionItem
+            {
+                Name = j.TransitionKey!,
+                Kind = ScheduledTransitionItem.ScheduledKind,
+                ExecuteAtUtc = j.ExecuteAt!.Value
+            })
+            .ToList();
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none

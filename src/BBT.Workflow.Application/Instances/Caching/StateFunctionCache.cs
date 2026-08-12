@@ -30,9 +30,9 @@ public sealed class StateFunctionCache(
     /// instance fingerprint and the caller scope only — it does not cover the response body's shape.
     /// So whenever a runtime change alters what the body contains for an unchanged instance (for
     /// example v2, which started listing the workflow-level <c>updateData</c> and <c>exit</c>
-    /// transitions; v3, which added the workflow's <c>functions</c> discovery links; or v4, which
+    /// transitions; v3, which added the workflow's <c>functions</c> discovery links; v4, which
     /// replaced that inline list with a <c>hasFunctions</c> flag plus a link to the <c>catalog</c>
-    /// function), this constant
+    /// function; or v6, which added the <c>scheduledTransitions</c> list), this constant
     /// must be bumped: it invalidates every previously issued ETag and every cached body, and without
     /// it a client long-polling an instance whose state never changes would keep receiving
     /// <c>304 Not Modified</c> and never observe the new shape.
@@ -43,7 +43,7 @@ public sealed class StateFunctionCache(
     /// <see cref="InstanceStateFingerprint.FlowVersion"/> already covers — and so cannot change while an
     /// instance is parked. What needed invalidating was the shape change, once, not the value.
     /// </remarks>
-    private const string ResponseShapeVersion = "v5";
+    private const string ResponseShapeVersion = "v6";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 
@@ -77,6 +77,9 @@ public sealed class StateFunctionCache(
         // The correlation members participate because the response body carries the full correlation
         // set: a sub item starting, terminating or advancing its state changes the body without
         // touching the instance's own state or status, and must still invalidate the caller's ETag.
+        // The scheduled-job members participate for the same reason: the body carries the
+        // scheduledTransitions list, and a $self re-entry can re-arm a timer with a new execution
+        // time while state, status and correlations all stay put.
         var material = string.Join('|',
             ResponseShapeVersion,
             fingerprint.Id,
@@ -89,7 +92,9 @@ public sealed class StateFunctionCache(
             fingerprint.CorrelationCount,
             fingerprint.CompletedCorrelationCount,
             FormatTimestamp(fingerprint.LastCorrelationCompletedAt),
-            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt));
+            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt),
+            fingerprint.ActiveScheduledTransitionJobCount,
+            FormatTimestamp(fingerprint.LastScheduledTransitionJobCreatedAt));
 
         return Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
