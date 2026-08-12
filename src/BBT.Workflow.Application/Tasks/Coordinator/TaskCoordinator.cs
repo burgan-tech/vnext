@@ -125,7 +125,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             origin,
             context,
             completedTaskIds: [],
-            groupCheckpoint: null,
             cancellationToken);
     }
 
@@ -138,7 +137,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
-        Func<CancellationToken, Task>? groupCheckpoint = null,
         CancellationToken cancellationToken = default)
     {
         Activity.Current?.SetDisplayName("TaskCoordinator.Execute");
@@ -218,14 +216,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 }
             }
 
-            // Durability checkpoint: the caller persists this group's outputs before the next
-            // group runs, so a crash later on loses only unfinished work. The task journal has
-            // already recorded the group's completions in its own transactions; this closes the
-            // gap where the journal said "done" but the data outputs only lived in memory.
-            if (groupCheckpoint is not null)
-            {
-                await groupCheckpoint(cancellationToken);
-            }
         }
 
         totalStopwatch.Stop();

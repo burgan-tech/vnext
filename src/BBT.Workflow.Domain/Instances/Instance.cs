@@ -871,6 +871,42 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
     }
 
+    /// <summary>
+    /// Accepts a row the <see cref="IInstanceDataWriteService"/> just persisted (or found) into
+    /// this aggregate's in-memory data list, keeping the single-latest invariant. Id-idempotent:
+    /// EF relationship fixup may have already attached the row when the service shares this
+    /// aggregate's DbContext — a second accept is a no-op. Snapshot aggregates receive a
+    /// detached copy from the caller, never the tracked entity itself.
+    /// </summary>
+    internal void AcceptPersistedData(InstanceData row)
+    {
+        lock (_dataListLock)
+        {
+            if (_dataList.Any(d => d.Id == row.Id))
+            {
+                if (row.IsLatest)
+                {
+                    foreach (var other in _dataList.Where(d => d.IsLatest && d.Id != row.Id))
+                    {
+                        other.MarkAsNotLatest();
+                    }
+                }
+
+                return;
+            }
+
+            if (row.IsLatest)
+            {
+                foreach (var other in _dataList.Where(d => d.IsLatest))
+                {
+                    other.MarkAsNotLatest();
+                }
+            }
+
+            _dataList.Add(row);
+        }
+    }
+
     [SchemaValidation]
     public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)
     {
@@ -931,6 +967,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     [SchemaValidation]
     public InstanceData AddData(Guid id, JsonData inputData, VersionStrategy? versionStrategy = null)
     {
+        //Version Stratejy burasıda lock altında hesaplanacak
+        //Sqeunce kaldıracğaız doğrudan version no ile gidecek.
         lock (_dataListLock)
         {
             var lastData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();

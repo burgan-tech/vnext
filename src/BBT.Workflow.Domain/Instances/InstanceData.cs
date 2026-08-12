@@ -157,11 +157,13 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     }
 
     /// <summary>
-    /// Computes SHA1 hash of the JSON data for change detection
+    /// Computes SHA1 hash of the JSON data for change detection. Internal so the InstanceData
+    /// write service can run the no-change dedup comparison under the database row lock with
+    /// exactly the same normalization as the stored <see cref="DataHash"/>.
     /// </summary>
     /// <param name="data">The JSON data to hash</param>
     /// <returns>SHA1 hash as hex string</returns>
-    private static string ComputeDataHash(JsonData data)
+    internal static string ComputeDataHash(JsonData data)
     {
         using var sha1 = SHA1.Create();
 
@@ -226,7 +228,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     ///     <item><description>1.0.0-alpha.1 + Major → 2.0.0</description></item>
     /// </list>
     /// </remarks>
-    private static string IncrementVersion(string currentVersion, VersionStrategy versionStrategy)
+    internal static string IncrementVersion(string currentVersion, VersionStrategy versionStrategy)
     {
         // Parse extended version format: MAJOR.MINOR.PATCH[-PRERELEASE][-pkg.PKG_VERSION][+BUILD_METADATA]
         // Pre-release can be: -alpha, -alpha.1, -beta.2, -rc.1, etc. (but NOT -pkg which is reserved)

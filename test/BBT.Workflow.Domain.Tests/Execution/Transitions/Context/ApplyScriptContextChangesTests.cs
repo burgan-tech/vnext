@@ -1,11 +1,8 @@
 using System;
 using System.Linq;
-using BBT.Aether.DependencyInjection;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 using Xunit;
@@ -13,101 +10,76 @@ using Xunit;
 namespace BBT.Workflow.Execution.Transitions.Context;
 
 /// <summary>
-/// Unit tests for <see cref="TransitionExecutionContext.ApplyScriptContextChanges"/>: task
-/// results captured on the detached ScriptContext snapshot are replayed onto the live
-/// aggregate BY STRATEGY — the version is recomputed from the live head instead of carrying
-/// the snapshot's frozen version string, which could sit below the live head after a
-/// concurrent append (throwing on latest-only aggregates or demoting a newer head).
+/// Unit tests for <see cref="TransitionExecutionContext.ApplyScriptContextChanges"/> under the
+/// immediate-persist model: task outputs are persisted by the write service the moment they are
+/// produced, so this method no longer replays data — it only syncs the LIVE aggregate's
+/// in-memory latest with the snapshot's freshest persisted row (needed when a parallel-branch
+/// scope wrote through its own DbContext) and applies the non-data mutations.
 /// </summary>
 public class ApplyScriptContextChangesTests
 {
-    public ApplyScriptContextChangesTests()
-    {
-        // The [SchemaValidation] aspect woven into Instance.AddData/AddDataWithVersion resolves
-        // its services from the ambient (AsyncLocal) provider; a workflow-less context makes
-        // validation a no-op (same pattern as InstanceDataLatestInvariantTests).
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton<IWorkflowContext>(new NullWorkflowContext());
-        AmbientServiceProvider.Current = services.BuildServiceProvider();
-    }
-
-    private sealed class NullWorkflowContext : IWorkflowContext
-    {
-        public Definitions.Workflow? Workflow => null;
-        public bool HasWorkflow => false;
-        public void SetWorkflow(Definitions.Workflow workflow)
-        {
-        }
-    }
-
     [Fact]
-    public void Apply_WhenLiveHeadAdvancedPastSnapshot_RecomputesAboveLiveHead()
+    public void Apply_SnapshotHasNewerPersistedRow_SyncsItIntoTheLiveAggregate()
     {
-        var live = CreateInstanceWithData("1.2.1");
+        var live = CreateInstanceWithLatest("1.2.1");
         var scriptContext = CreateScriptContextSnapshot(live);
 
-        // Task output lands on the snapshot: 1.2.1 -> 1.2.2 (patch).
-        scriptContext.Instance!.AddData(
-            Guid.NewGuid(), new JsonData("{\"task\":\"result\"}"), VersionStrategy.IncreasePatch);
-
-        // Meanwhile the live aggregate advanced (e.g. the transition's own payload write).
-        live.AddData(Guid.NewGuid(), new JsonData("{\"payload\":true}"), VersionStrategy.IncreaseMinor);
-        var liveHead = live.LatestData!.Version; // 1.3.0
+        // A branch-scope persist landed on the snapshot: a REAL persisted row (identity assigned).
+        var persisted = new InstanceData(
+            Guid.NewGuid(), live.Id, "1.2.2", new JsonData("{\"task\":\"result\"}"), true)
+        {
+            VersionNo = 2
+        };
+        scriptContext.Instance!.AcceptPersistedData(persisted);
 
         var context = CreateContext(live);
         context.ApplyScriptContextChanges(scriptContext);
 
-        // The replayed row is recomputed ABOVE the live head — never the frozen 1.2.2.
-        var applied = live.DataList.OrderByDescending(d => d, InstanceDataVersionComparer.Instance).First();
-        applied.Version.ShouldBe("1.3.1");
-        InstanceDataVersionComparer.CompareVersionStrings(applied.Version, liveHead).ShouldBeGreaterThan(0);
-        applied.IsLatest.ShouldBeTrue();
+        live.LatestData!.Id.ShouldBe(persisted.Id);
         live.DataList.Count(d => d.IsLatest).ShouldBe(1);
+    }
+
+    [Fact]
+    public void Apply_RowAlreadyInLiveAggregate_DoesNotDuplicate()
+    {
+        // Sequential path: EF fixup already attached the persisted row to the live aggregate.
+        var live = CreateInstanceWithLatest("1.2.1");
+        var scriptContext = CreateScriptContextSnapshot(live);
+        var countBefore = live.DataList.Count;
+
+        var context = CreateContext(live);
+        context.ApplyScriptContextChanges(scriptContext);
+        context.ApplyScriptContextChanges(scriptContext);
+
+        live.DataList.Count.ShouldBe(countBefore);
     }
 
     [Fact]
     public void Apply_OnLatestOnlyLoadedAggregate_DoesNotThrow()
     {
-        // The production shape: GetActiveAsync loads latest-only and marks the aggregate
-        // partial. Replaying a stale snapshot version used to throw
-        // "the aggregate was loaded latest-only and the target version line is not in memory".
-        var live = CreateInstanceWithData("1.2.1");
+        var live = CreateInstanceWithLatest("1.2.1");
         live.MarkDataPartiallyLoaded();
-
         var scriptContext = CreateScriptContextSnapshot(live);
-        scriptContext.Instance!.AddData(
-            Guid.NewGuid(), new JsonData("{\"task\":\"result\"}"), VersionStrategy.IncreasePatch);
-
-        live.AddData(Guid.NewGuid(), new JsonData("{\"payload\":true}"), VersionStrategy.IncreaseMinor);
+        scriptContext.Instance!.AcceptPersistedData(new InstanceData(
+            Guid.NewGuid(), live.Id, "1.2.2", new JsonData("{\"task\":1}"), true)
+        {
+            VersionNo = 2
+        });
 
         var context = CreateContext(live);
 
         Should.NotThrow(() => context.ApplyScriptContextChanges(scriptContext));
-        live.LatestData!.Version.ShouldBe("1.3.1");
+        live.LatestData!.Version.ShouldBe("1.2.2");
     }
 
-    [Fact]
-    public void Apply_SameRowTwice_IsIdempotent()
-    {
-        var live = CreateInstanceWithData("1.0.0");
-        var scriptContext = CreateScriptContextSnapshot(live);
-        scriptContext.Instance!.AddData(
-            Guid.NewGuid(), new JsonData("{\"task\":1}"), VersionStrategy.IncreasePatch);
-
-        var context = CreateContext(live);
-        context.ApplyScriptContextChanges(scriptContext);
-        var countAfterFirst = live.DataList.Count;
-
-        context.ApplyScriptContextChanges(scriptContext);
-
-        live.DataList.Count.ShouldBe(countAfterFirst);
-    }
-
-    private static Instance CreateInstanceWithData(string seedVersion)
+    private static Instance CreateInstanceWithLatest(string version)
     {
         var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), new JsonData("{\"seed\":true}"), seedVersion);
+        instance.AcceptPersistedData(new InstanceData(
+            Guid.NewGuid(), instance.Id, version, new JsonData("{\"seed\":true}"), true)
+        {
+            VersionNo = 1
+        });
         return instance;
     }
 

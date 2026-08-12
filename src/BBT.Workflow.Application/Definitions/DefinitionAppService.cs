@@ -110,14 +110,9 @@ public sealed class DefinitionAppService(
         if (!validationResult.IsSuccess)
             return validationResult;
 
-        instance.AddDataWithVersion(
-            GuidGenerator.Create(),
-            new JsonData(input.Attributes),
-            input.Version
-        );
-
-        await instanceRepository.InsertAsync(instance, false, cancellationToken);
-        await instanceDataWriteService.SaveWithVersioningAsync(instance, cancellationToken);
+        await instanceRepository.InsertAsync(instance, true, cancellationToken);
+        await instanceDataWriteService.AppendExplicitAsync(
+            instance, GuidGenerator.Create(), input.Version, new JsonData(input.Attributes), cancellationToken);
 
         await castProcessor.ProcessAsync(
             input.Flow,
@@ -161,15 +156,10 @@ public sealed class DefinitionAppService(
         if (!validationResult.IsSuccess)
             return validationResult;
 
-        instance.AddDataWithVersion(
-            GuidGenerator.Create(),
-            new JsonData(input.Attributes),
-            input.Version,
-            false
-        );
         instance.ModifiedAt = DateTime.UtcNow;
-        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
-        await instanceDataWriteService.SaveWithVersioningAsync(instance, cancellationToken);
+        await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+        await instanceDataWriteService.AppendExplicitAsync(
+            instance, GuidGenerator.Create(), input.Version, new JsonData(input.Attributes), cancellationToken);
 
         await castProcessor.ProcessAsync(
             input.Flow,
@@ -239,23 +229,19 @@ public sealed class DefinitionAppService(
             return validationResult;
 
         instance.AddTags(dataItem.Tags.ToArray());
-        instance.AddDataWithVersion(
-            GuidGenerator.Create(),
-            new JsonData(dataItem.Attributes),
-            dataItem.Version
-        );
 
         if (instance.IsTransient)
         {
-            await instanceRepo.InsertAsync(instance, false, cancellationToken);
+            await instanceRepo.InsertAsync(instance, true, cancellationToken);
         }
         else
         {
             instance.ModifiedAt = DateTime.UtcNow;
-            await instanceRepo.UpdateAsync(instance, false, cancellationToken);
+            await instanceRepo.UpdateAsync(instance, true, cancellationToken);
         }
 
-        await dataWriter.SaveWithVersioningAsync(instance, cancellationToken);
+        await dataWriter.AppendExplicitAsync(
+            instance, GuidGenerator.Create(), dataItem.Version, new JsonData(dataItem.Attributes), cancellationToken);
 
         await castProcessor.ProcessAsync(
             input.Key,

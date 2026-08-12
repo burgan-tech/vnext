@@ -296,8 +296,8 @@ public sealed class InstanceCommandAppService(
                 input.Instance.Callback,
                 cancellationToken)
             .ThenAsync(instance => ValidateStartTransitionAsync(workflow, instance, input, cancellationToken))
-            .ThenAsync(instance => MapInstanceDataAsync(workflow, instance, input, cancellationToken))
-            .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken));
+            .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken))
+            .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
         await uow.CommitAsync(cancellationToken);
         return result;
@@ -331,40 +331,8 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Maps and adds instance data if provided.
-    /// </summary>
-    private async Task<Result<Instance>> MapInstanceDataAsync(
-        Definitions.Workflow workflow,
-        Instance instance,
-        StartInstanceInput input,
-        CancellationToken cancellationToken)
-    {
-        if (input.Instance.Attributes == null)
-            return Result<Instance>.Ok(instance);
-
-        return await transitionDataMapper.MapTransitionDataAsync(
-                input.Instance.Attributes,
-                workflow.StartTransition,
-                workflow,
-                instance,
-                runtimeInfoProvider,
-                input.Headers,
-                cancellationToken)
-            .Tap(mappedData =>
-            {
-                if (mappedData != null)
-                {
-                    instance.AddData(
-                        guidGenerator.Create(),
-                        new JsonData(mappedData),
-                        workflow.StartTransition.VersionStrategy);
-                }
-            })
-            .MapAsync(_ => instance);
-    }
-
-    /// <summary>
-    /// Persists the instance to the repository.
+    /// Persists the instance to the repository (data-less — the initial data version is
+    /// appended AFTERWARDS through the write service, so its row lock has a row to grab).
     /// Infrastructure errors (DB connection, etc.) propagate to middleware - not wrapped in Result.
     /// </summary>
     private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PersistInstanceAsync(
@@ -372,12 +340,42 @@ public sealed class InstanceCommandAppService(
         Instance instance,
         CancellationToken cancellationToken)
     {
-        // The initial data version is persisted through the explicit InstanceData write service
-        // (it owns the SaveChanges and assigns VersionNo 1 — a brand-new instance has no
-        // competitor, so the row lock trivially matches nothing).
-        await instanceRepository.InsertAsync(instance, false, cancellationToken);
-        await instanceDataWriteService.SaveWithVersioningAsync(instance, cancellationToken);
+        await instanceRepository.InsertAsync(instance, true, cancellationToken);
         return Result<(Definitions.Workflow, Instance)>.Ok((workflow, instance));
+    }
+
+    /// <summary>
+    /// Maps the start payload and appends the initial data version IMMEDIATELY through the
+    /// InstanceData write service (identity computed under the per-instance row lock).
+    /// </summary>
+    private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> MapAndAppendInstanceDataAsync(
+        (Definitions.Workflow Workflow, Instance Instance) data,
+        StartInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        if (input.Instance.Attributes == null)
+            return Result<(Definitions.Workflow, Instance)>.Ok(data);
+
+        return await transitionDataMapper.MapTransitionDataAsync(
+                input.Instance.Attributes,
+                data.Workflow.StartTransition,
+                data.Workflow,
+                data.Instance,
+                runtimeInfoProvider,
+                input.Headers,
+                cancellationToken)
+            .TapAsync(async mappedData =>
+            {
+                if (mappedData != null)
+                {
+                    await instanceDataWriteService.AppendAsync(
+                        data.Instance,
+                        new JsonData(mappedData),
+                        data.Workflow.StartTransition.VersionStrategy,
+                        cancellationToken);
+                }
+            })
+            .MapAsync(_ => data);
     }
 
     /// <summary>

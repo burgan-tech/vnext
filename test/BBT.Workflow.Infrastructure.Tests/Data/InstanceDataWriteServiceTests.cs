@@ -1,121 +1,98 @@
 using System;
-using System.Collections.Generic;
-using BBT.Workflow.Data;
+using System.Linq;
 using BBT.Workflow.Instances;
-using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Infrastructure.Tests.Data;
 
 /// <summary>
-/// Unit tests for the pure core of the explicit InstanceData write service
-/// (<see cref="InstanceDataWriteService.AssignVersions"/>): sequential VersionNo assignment from
-/// the authoritative head, stale-base semantic-version rebase, and multi-row chaining — all
-/// without a database (the FOR UPDATE / SET LOCAL plumbing is exercised end-to-end against
-/// PostgreSQL).
+/// Unit tests for the in-memory halves of the immediate-persist write model: the aggregate
+/// refresh (<see cref="Instance.AcceptPersistedData"/> — Id-idempotent, keeps the single-latest
+/// invariant) and the version computation (<see cref="InstanceData.IncrementVersion"/>) the
+/// service applies to the head it reads under the row lock. The FOR UPDATE / SET LOCAL plumbing
+/// is exercised end-to-end against PostgreSQL.
 /// </summary>
 public class InstanceDataWriteServiceTests
 {
     private static readonly Guid InstanceId = Guid.NewGuid();
 
     [Fact]
-    public void AssignVersions_FirstRowWithoutHead_StartsAtOne()
+    public void AcceptPersistedData_NewLatestRow_DemotesOldLatestAndAdds()
     {
-        var row = CreateFirstRow("1.0.0");
+        var instance = CreateInstanceWithLatest("1.0.0", out var oldLatest);
+        var row = new InstanceData(Guid.NewGuid(), instance.Id, "1.0.1", new JsonData("{\"b\":2}"), true)
+        {
+            VersionNo = 2
+        };
 
-        InstanceDataWriteService.AssignVersions(
-            InstanceId, [row], head: null, NullLogger.Instance);
+        instance.AcceptPersistedData(row);
 
-        row.VersionNo.ShouldBe(1);
-        row.Version.ShouldBe("1.0.0");
+        instance.DataList.Count.ShouldBe(2);
+        oldLatest.IsLatest.ShouldBeFalse();
+        instance.LatestData!.Id.ShouldBe(row.Id);
+        instance.DataList.Count(d => d.IsLatest).ShouldBe(1);
     }
 
     [Fact]
-    public void AssignVersions_FreshBase_AssignsHeadPlusOneWithoutRebase()
+    public void AcceptPersistedData_SameIdTwice_IsIdempotent()
     {
-        // In-memory base WAS the head — no concurrent commit; version untouched.
-        var row = CreateNewRow("1.0.5", VersionStrategy.IncreasePatch); // computed 1.0.6
+        // EF relationship fixup may have already attached the row when the service shares the
+        // aggregate's DbContext — the explicit accept must not duplicate it.
+        var instance = CreateInstanceWithLatest("1.0.0", out _);
+        var row = new InstanceData(Guid.NewGuid(), instance.Id, "1.0.1", new JsonData("{\"b\":2}"), true)
+        {
+            VersionNo = 2
+        };
 
-        InstanceDataWriteService.AssignVersions(
-            InstanceId, [row], Head(versionNo: 6, version: "1.0.5", historySequence: 0), NullLogger.Instance);
+        instance.AcceptPersistedData(row);
+        instance.AcceptPersistedData(row);
 
-        row.VersionNo.ShouldBe(7);
-        row.Version.ShouldBe("1.0.6");
+        instance.DataList.Count.ShouldBe(2);
+        instance.DataList.Count(d => d.IsLatest).ShouldBe(1);
     }
 
     [Fact]
-    public void AssignVersions_StaleBase_RebasesOntoDbHead()
+    public void AcceptPersistedData_OlderLineRow_DoesNotStealLatest()
     {
-        // Row computed off stale 1.0.5, but a concurrent writer already committed 1.0.6.
-        var row = CreateNewRow("1.0.5", VersionStrategy.IncreasePatch); // computed 1.0.6 (duplicate!)
+        // The explicit publish path can append below the head; the latest flag stays put.
+        var instance = CreateInstanceWithLatest("2.0.0", out var head);
+        var olderLine = new InstanceData(Guid.NewGuid(), instance.Id, "1.0.5", new JsonData("{\"o\":1}"), false)
+        {
+            VersionNo = 2
+        };
 
-        InstanceDataWriteService.AssignVersions(
-            InstanceId, [row], Head(versionNo: 7, version: "1.0.6", historySequence: 0), NullLogger.Instance);
+        instance.AcceptPersistedData(olderLine);
 
-        row.VersionNo.ShouldBe(8);
-        row.Version.ShouldBe("1.0.7"); // rebased — no duplicate SemVer
+        head.IsLatest.ShouldBeTrue();
+        instance.LatestData!.Id.ShouldBe(head.Id);
+    }
+
+    [Theory]
+    [InlineData("Patch", "1.2.1", "1.2.2")]
+    [InlineData("Minor", "1.2.1", "1.3.0")]
+    [InlineData("Major", "1.2.1", "2.0.0")]
+    [InlineData("None", "1.2.1", "1.2.1")]
+    public void IncrementVersion_AppliesStrategyToTheHead(string strategy, string head, string expected)
+    {
+        InstanceData.IncrementVersion(head, VersionStrategy.FromCode(strategy)).ShouldBe(expected);
     }
 
     [Fact]
-    public void AssignVersions_NoneStrategyOnStaleBase_ContinuesHeadHistoryLine()
+    public void IncrementVersion_PreservesPkgSuffixAndMetadata()
     {
-        var row = CreateNewRow("1.0.5", VersionStrategy.None); // computed 1.0.5 again
-
-        InstanceDataWriteService.AssignVersions(
-            InstanceId, [row], Head(versionNo: 9, version: "1.0.6", historySequence: 2), NullLogger.Instance);
-
-        row.VersionNo.ShouldBe(10);
-        row.Version.ShouldBe("1.0.6");
-        row.HistorySequence.ShouldBe(3);
+        InstanceData.IncrementVersion("1.0.5-pkg.1.17.0+account", VersionStrategy.IncreasePatch)
+            .ShouldBe("1.0.6-pkg.1.17.0+account");
     }
 
-    [Fact]
-    public void AssignVersions_MultipleRows_ChainSequentially()
+    private static Instance CreateInstanceWithLatest(string version, out InstanceData latest)
     {
-        // Two rows added in one SaveChanges (e.g. parallel-branch merge): the first becomes
-        // the effective head for the second.
-        var first = CreateNewRow("1.0.5", VersionStrategy.IncreasePatch);              // 1.0.6
-        var second = first.NewVersion(Guid.NewGuid(), new JsonData("{\"c\":3}"),
-            VersionStrategy.IncreasePatch, 0);                                          // 1.0.7
-
-        var rows = new List<InstanceData> { second, first }; // deliberately out of order
-
-        InstanceDataWriteService.AssignVersions(
-            InstanceId, rows, Head(versionNo: 6, version: "1.0.5", historySequence: 0), NullLogger.Instance);
-
-        first.VersionNo.ShouldBe(7);
-        second.VersionNo.ShouldBe(8);
-        first.Version.ShouldBe("1.0.6");
-        second.Version.ShouldBe("1.0.7");
-    }
-
-    [Fact]
-    public void AssignVersions_ExplicitVersionAppend_KeepsAuthoredVersion()
-    {
-        // AddDataWithVersion-style rows carry no strategy — authored version preserved even
-        // when it sits below the head; VersionNo alone separates them.
-        var row = new InstanceData(
-            Guid.NewGuid(), InstanceId, "0.9.0", new JsonData("{}"), false, 1);
-
-        InstanceDataWriteService.AssignVersions(
-            InstanceId, [row], Head(versionNo: 12, version: "2.0.0", historySequence: 0), NullLogger.Instance);
-
-        row.VersionNo.ShouldBe(13);
-        row.Version.ShouldBe("0.9.0");
-    }
-
-    private static InstanceDataHeadRow Head(long versionNo, string version, int historySequence)
-        => new() { VersionNo = versionNo, Version = version, HistorySequence = historySequence };
-
-    private static InstanceData CreateFirstRow(string version)
-        => new(Guid.NewGuid(), InstanceId, version, new JsonData("{\"a\":1}"), true);
-
-    private static InstanceData CreateNewRow(string staleBaseVersion, VersionStrategy strategy)
-    {
-        var staleBase = new InstanceData(
-            Guid.NewGuid(), InstanceId, staleBaseVersion, new JsonData("{\"a\":1}"), true);
-
-        return staleBase.NewVersion(Guid.NewGuid(), new JsonData("{\"b\":2}"), strategy, 0);
+        var instance = Instance.Create(InstanceId, "test-flow", "1.0.0");
+        latest = new InstanceData(Guid.NewGuid(), instance.Id, version, new JsonData("{\"a\":1}"), true)
+        {
+            VersionNo = 1
+        };
+        instance.AcceptPersistedData(latest);
+        return instance;
     }
 }

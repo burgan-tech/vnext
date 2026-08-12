@@ -22,7 +22,6 @@ public sealed class RunOnExitTasksStep(
     ITaskCoordinatorExtended taskCoordinator,
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
-    IInstanceDataWriteService instanceDataWriteService,
     IInstanceTaskRepository instanceTaskRepository,
     IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
 {
@@ -75,10 +74,10 @@ public sealed class RunOnExitTasksStep(
             if (tasksResult.TaskError != null)
                 context.Items[TaskExecutionErrorKey] = tasksResult.TaskError;
 
-            // Apply script context changes before handling boundary
+            // Task outputs are already persisted per record by the write service; only the
+            // aggregate's non-data changes (mutations, sync of the latest snapshot) remain.
             context.ApplyScriptContextChanges(scriptContext);
-            await instanceRepository.UpdateAsync(context.Instance, false, cancellationToken);
-        await instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken);
+            await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
             return BoundaryOutcomeHandler.Handle(context, tasksResult);
         }
@@ -122,8 +121,7 @@ public sealed class RunOnExitTasksStep(
         }
         
         context.ApplyScriptContextChanges(scriptContext);
-        await instanceRepository.UpdateAsync(context.Instance, false, cancellationToken);
-        await instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken);
+        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
         
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
@@ -183,16 +181,6 @@ public sealed class RunOnExitTasksStep(
             TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
-            groupCheckpoint: async checkpointToken =>
-            {
-                // Persist each completed order group's outputs immediately: apply the snapshot
-                // deltas onto the live aggregate and save through the versioning write service.
-                // A crash in a later group then loses only unfinished work, and a retry (which
-                // bypasses journaled-complete tasks) finds their data already persisted.
-                context.ApplyScriptContextChanges(scriptContext);
-                await instanceRepository.UpdateAsync(context.Instance, false, checkpointToken);
-                await instanceDataWriteService.SaveWithVersioningAsync(context.Instance, checkpointToken);
-            },
             cancellationToken);
     }
 

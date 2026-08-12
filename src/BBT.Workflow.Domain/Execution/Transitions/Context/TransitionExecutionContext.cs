@@ -251,34 +251,17 @@ public sealed class TransitionExecutionContext
             return;
         }
 
-        var applied = false;
-        var existingIds = new HashSet<Guid>(Instance.DataList.Select(data => data.Id));
-
-        foreach (var data in scriptInstance.DataList)
+        // Task outputs are persisted IMMEDIATELY by the InstanceData write service (identity
+        // computed under the per-instance row lock) — there is no data replay here anymore.
+        // What remains is keeping the LIVE aggregate's in-memory latest in sync with the
+        // snapshot's freshest persisted row (parallel-branch scopes write through their own
+        // DbContext, so EF fixup cannot attach those rows to this aggregate) and applying the
+        // non-data mutations.
+        var snapshotLatest = scriptInstance.LatestData;
+        if (snapshotLatest is not null
+            && Instance.DataList.All(data => data.Id != snapshotLatest.Id))
         {
-            if (!existingIds.Add(data.Id))
-            {
-                continue;
-            }
-
-            // Replay by STRATEGY, not by the snapshot's frozen version string. The snapshot's
-            // computed version can sit below the live aggregate's head (a concurrent append
-            // advanced it between snapshot creation and this apply); replaying it verbatim as an
-            // explicit-version append either throws on a latest-only loaded aggregate ("target
-            // version line is not in memory") or silently demotes a newer head. Recomputing from
-            // the live head with the same strategy the task used keeps the row strategy-bearing,
-            // so the InstanceData write service can rebase it against the real database head
-            // under the per-instance row lock.
-            Instance.AddData(
-                data.Id,
-                new JsonData(data.Data.Json),
-                data.AppliedVersionStrategy ?? VersionStrategy.IncreasePatch);
-
-            applied = true;
-        }
-
-        if (applied)
-        {
+            Instance.AcceptPersistedData(snapshotLatest.CreateSnapshot());
             Data = Instance.Data;
         }
 

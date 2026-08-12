@@ -62,14 +62,16 @@ public sealed class CreateTransitionRecordStep(
             }
         }
 
-        // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist.
-        // The persist goes through the explicit InstanceData write service: it versions the newly
-        // added data rows under the per-instance row lock and owns the SaveChanges.
+        // Railway chain: Map data -> Validate key uniqueness -> Persist data (immediately,
+        // through the write service — row identity computed under the per-instance row lock)
+        // -> Persist the record. Non-data field changes (tags/stage/key) ride the same
+        // SaveChanges the write service (or the record persist) performs.
         return await MapTransitionDataAsync(context, transition, cancellationToken)
-            .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition, instanceTransition))
-            .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
+            .BindAsync(mappedData => ValidateAndSetInstanceKeyAsync(context, cancellationToken)
+                .MapAsync(_ => mappedData))
+            .TapAsync(mappedData => AppendMappedDataAsync(
+                context, mappedData, transition, instanceTransition, cancellationToken))
             .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
-            .TapAsync(_ => instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken))
             .TapAsync(_ => isReusedRecord
                 ? instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken)
                 : instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
@@ -134,27 +136,18 @@ public sealed class CreateTransitionRecordStep(
     }
 
     /// <summary>
-    /// Adds mapped data to instance and updates the transition body when a mapping script was applied.
+    /// Applies non-data field mutations (tags/stage), persists the mapped data IMMEDIATELY
+    /// through the InstanceData write service (identity computed under the row lock; identical
+    /// merged content dedups to no row), and updates the transition body when a mapping script
+    /// was applied.
     /// </summary>
-    private void AddMappedDataToInstance(
+    private async Task AppendMappedDataAsync(
         TransitionExecutionContext context,
         object? mappedData,
         Definitions.Transition? transition,
-        InstanceTransition instanceTransition)
+        InstanceTransition instanceTransition,
+        CancellationToken cancellationToken)
     {
-        if (mappedData != null)
-        {
-            context.Instance.AddData(
-                guidGenerator.Create(),
-                new JsonData(mappedData),
-                transition?.VersionStrategy);
-
-            if (transition?.Mapping is not null)
-            {
-                instanceTransition.SetBody(new JsonData(mappedData));
-            }
-        }
-
         if (context.Tags != null)
         {
             context.Instance.AddTags(context.Tags);
@@ -163,6 +156,20 @@ public sealed class CreateTransitionRecordStep(
         if (!string.IsNullOrWhiteSpace(context.Stage))
         {
             context.Instance.SetStage(context.Stage);
+        }
+
+        if (mappedData != null)
+        {
+            await instanceDataWriteService.AppendAsync(
+                context.Instance,
+                new JsonData(mappedData),
+                transition?.VersionStrategy,
+                cancellationToken);
+
+            if (transition?.Mapping is not null)
+            {
+                instanceTransition.SetBody(new JsonData(mappedData));
+            }
         }
     }
 

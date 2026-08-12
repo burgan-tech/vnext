@@ -42,14 +42,6 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
     /// <param name="taskTrigger">The trigger type that initiated the task execution.</param>
     /// <param name="context">The script execution context containing instance data and task responses.</param>
     /// <param name="completedTaskIds">Collection of task IDs to skip (already completed).</param>
-    /// <param name="groupCheckpoint">
-    /// Optional durability checkpoint invoked after EACH order group completes successfully.
-    /// The pipeline steps use it to apply the group's outputs onto the live aggregate and
-    /// persist them immediately, so a crash in a later group loses only the unfinished work —
-    /// combined with the retry task-journal bypass, completed tasks neither re-run nor lose
-    /// their data. A throwing checkpoint fails the coordination (the group's results are
-    /// treated as unpersisted).
-    /// </param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     /// <returns>A Result containing detailed execution information including task errors.</returns>
     Task<Result<TasksExecutionResult>> ExecuteWithDetailsAsync(
@@ -59,6 +51,5 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
         TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
-        Func<CancellationToken, Task>? groupCheckpoint = null,
         CancellationToken cancellationToken = default);
 }

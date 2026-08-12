@@ -63,21 +63,18 @@ public sealed class SubflowOutputMappingService(
             var hasData = outputMappingResult?.Data != null;
             if (hasData)
             {
-                parentInstance.AddData(
-                    guidGenerator.Create(),
+                // Persisted IMMEDIATELY — identity computed under the per-instance row lock.
+                await instanceDataWriteService.AppendAsync(
+                    parentInstance,
                     new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
-                    parentState.VersionStrategy);
+                    parentState.VersionStrategy,
+                    cancellationToken);
             }
 
             if (scriptContext.Mutations.HasChanges)
             {
                 scriptContext.Mutations.ApplyTo(parentInstance);
-            }
-
-            if (hasData || scriptContext.Mutations.HasChanges)
-            {
-                await instanceRepository.UpdateAsync(parentInstance, false, cancellationToken);
-                await instanceDataWriteService.SaveWithVersioningAsync(parentInstance, cancellationToken);
+                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
             }
 
             return Result.Ok();
