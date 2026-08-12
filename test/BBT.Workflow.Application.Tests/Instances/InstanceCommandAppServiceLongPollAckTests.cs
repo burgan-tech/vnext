@@ -79,6 +79,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             workflowExecutionService: Substitute.For<IWorkflowExecutionService>(),
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
+            instanceDataWriteService: Substitute.For<IInstanceDataWriteService>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             backgroundJobService: Substitute.For<IBackgroundJobService>(),
             guidGenerator: Substitute.For<IGuidGenerator>(),

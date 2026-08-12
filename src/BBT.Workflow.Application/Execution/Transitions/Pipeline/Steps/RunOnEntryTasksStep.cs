@@ -21,6 +21,7 @@ public sealed class RunOnEntryTasksStep(
     ITaskCoordinatorExtended taskCoordinator,
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     IInstanceTaskRepository instanceTaskRepository,
     IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
 {
@@ -74,7 +75,8 @@ public sealed class RunOnEntryTasksStep(
 
             // Apply script context changes before handling boundary
             context.ApplyScriptContextChanges(scriptContext);
-            await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+            await instanceRepository.UpdateAsync(context.Instance, false, cancellationToken);
+        await instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken);
 
             return BoundaryOutcomeHandler.Handle(context, tasksResult);
         }
@@ -118,7 +120,8 @@ public sealed class RunOnEntryTasksStep(
         }
         
         context.ApplyScriptContextChanges(scriptContext);
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        await instanceRepository.UpdateAsync(context.Instance, false, cancellationToken);
+        await instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken);
         
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }

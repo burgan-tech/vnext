@@ -85,6 +85,9 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // Security - Schema Validation
         services.AddScoped<ISchemaValidator, SchemaValidator>();
         
+        // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
+        services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();
+
         // You can register your repositories here.
         services.AddScoped<IInstanceRepository, EfCoreInstanceRepository>();
         services.AddScoped<IInstanceCorrelationRepository, EfCoreInstanceCorrelationRepository>();

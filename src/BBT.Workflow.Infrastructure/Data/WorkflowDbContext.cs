@@ -5,13 +5,9 @@ using BBT.Aether.Domain.Events;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Persistence;
-using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Data;
 
@@ -34,22 +30,16 @@ namespace BBT.Workflow.Data;
 public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreBackgroundJobs
 {
     private readonly ICurrentSchema? _currentSchema;
-    private readonly InstanceDataWriteOptions _instanceDataWriteOptions;
-    private readonly ILogger _instanceDataWriteLogger;
 
     /// <summary>
     /// Initializes a new instance of <see cref="WorkflowDbContext"/>.
     /// </summary>
     public WorkflowDbContext(
         DbContextOptions<WorkflowDbContext> options,
-        ICurrentSchema? currentSchema = null,
-        IOptions<WorkflowExecutionOptions>? executionOptions = null,
-        ILogger<WorkflowDbContext>? logger = null)
+        ICurrentSchema? currentSchema = null)
         : base(options)
     {
         _currentSchema = currentSchema;
-        _instanceDataWriteOptions = executionOptions?.Value.InstanceDataWrite ?? new InstanceDataWriteOptions();
-        _instanceDataWriteLogger = logger ?? NullLogger<WorkflowDbContext>.Instance;
     }
 
     /// <summary>
@@ -105,35 +95,28 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     public string? CurrentSchemaName => _currentSchema?.Name;
 
     /// <summary>
-    /// InstanceData write funnel: when the change tracker holds new <see cref="InstanceData"/>
-    /// rows, the save runs inside a transaction with a per-instance <c>FOR UPDATE</c> row lock
-    /// (POC-validated) — the funnel assigns monotonic VersionNos, rebases stale semantic
-    /// versions onto the real head, and demotes stale latest rows before the inserts execute.
-    /// Saves without new InstanceData rows are untouched. See <see cref="InstanceDataWriteFunnel"/>.
+    /// Safety assertion ONLY — performs no locking, versioning or transaction work (architecture
+    /// decision: InstanceData persistence is explicit, owned by <see cref="IInstanceDataWriteService"/>).
+    /// A new <see cref="InstanceData"/> row reaching a plain SaveChanges still carries its unassigned
+    /// <c>VersionNo == 0</c>; letting it through would corrupt the version sequence or trip the
+    /// unique indexes far from the actual mistake. Fail loudly at the source instead.
     /// </summary>
-    public override async Task<int> SaveChangesAsync(
+    public override Task<int> SaveChangesAsync(
         bool acceptAllChangesOnSuccess,
         CancellationToken cancellationToken = default)
     {
-        if (!InstanceDataWriteFunnel.HasPendingInstanceData(this))
-            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
-
-        // The row lock is transaction-scoped: with an ambient UoW transaction the lock rides
-        // it (held until that commit — same profile as the former advisory-lock trigger);
-        // without one, open a local transaction so lock + inserts commit atomically.
-        if (Database.CurrentTransaction is not null)
+        foreach (var entry in ChangeTracker.Entries<InstanceData>())
         {
-            await InstanceDataWriteFunnel.ApplyAsync(
-                this, _instanceDataWriteOptions, _instanceDataWriteLogger, cancellationToken);
-            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            if (entry.State == EntityState.Added && entry.Entity.VersionNo == 0)
+            {
+                throw new InvalidOperationException(
+                    $"InstanceData for instance {entry.Entity.InstanceId} is being saved without an " +
+                    "assigned VersionNo. New instance data versions must be persisted via " +
+                    "IInstanceDataWriteService.SaveWithVersioningAsync, not a plain repository save.");
+            }
         }
 
-        await using var transaction = await Database.BeginTransactionAsync(cancellationToken);
-        await InstanceDataWriteFunnel.ApplyAsync(
-            this, _instanceDataWriteOptions, _instanceDataWriteLogger, cancellationToken);
-        var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return result;
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
     /// <inheritdoc />

@@ -74,6 +74,7 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             workflowExecutionService: _executionService,
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
+            instanceDataWriteService: Substitute.For<IInstanceDataWriteService>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             backgroundJobService: Substitute.For<IBackgroundJobService>(),
             guidGenerator: Substitute.For<IGuidGenerator>(),

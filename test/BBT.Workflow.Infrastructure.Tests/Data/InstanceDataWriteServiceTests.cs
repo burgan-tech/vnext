@@ -9,13 +9,13 @@ using Xunit;
 namespace BBT.Workflow.Infrastructure.Tests.Data;
 
 /// <summary>
-/// Unit tests for the pure core of the InstanceData write funnel
-/// (<see cref="InstanceDataWriteFunnel.AssignVersions"/>): sequential VersionNo assignment from
+/// Unit tests for the pure core of the explicit InstanceData write service
+/// (<see cref="InstanceDataWriteService.AssignVersions"/>): sequential VersionNo assignment from
 /// the authoritative head, stale-base semantic-version rebase, and multi-row chaining — all
 /// without a database (the FOR UPDATE / SET LOCAL plumbing is exercised end-to-end against
 /// PostgreSQL).
 /// </summary>
-public class InstanceDataWriteFunnelTests
+public class InstanceDataWriteServiceTests
 {
     private static readonly Guid InstanceId = Guid.NewGuid();
 
@@ -24,7 +24,7 @@ public class InstanceDataWriteFunnelTests
     {
         var row = CreateFirstRow("1.0.0");
 
-        InstanceDataWriteFunnel.AssignVersions(
+        InstanceDataWriteService.AssignVersions(
             InstanceId, [row], head: null, NullLogger.Instance);
 
         row.VersionNo.ShouldBe(1);
@@ -37,7 +37,7 @@ public class InstanceDataWriteFunnelTests
         // In-memory base WAS the head — no concurrent commit; version untouched.
         var row = CreateNewRow("1.0.5", VersionStrategy.IncreasePatch); // computed 1.0.6
 
-        InstanceDataWriteFunnel.AssignVersions(
+        InstanceDataWriteService.AssignVersions(
             InstanceId, [row], Head(versionNo: 6, version: "1.0.5", historySequence: 0), NullLogger.Instance);
 
         row.VersionNo.ShouldBe(7);
@@ -50,7 +50,7 @@ public class InstanceDataWriteFunnelTests
         // Row computed off stale 1.0.5, but a concurrent writer already committed 1.0.6.
         var row = CreateNewRow("1.0.5", VersionStrategy.IncreasePatch); // computed 1.0.6 (duplicate!)
 
-        InstanceDataWriteFunnel.AssignVersions(
+        InstanceDataWriteService.AssignVersions(
             InstanceId, [row], Head(versionNo: 7, version: "1.0.6", historySequence: 0), NullLogger.Instance);
 
         row.VersionNo.ShouldBe(8);
@@ -62,7 +62,7 @@ public class InstanceDataWriteFunnelTests
     {
         var row = CreateNewRow("1.0.5", VersionStrategy.None); // computed 1.0.5 again
 
-        InstanceDataWriteFunnel.AssignVersions(
+        InstanceDataWriteService.AssignVersions(
             InstanceId, [row], Head(versionNo: 9, version: "1.0.6", historySequence: 2), NullLogger.Instance);
 
         row.VersionNo.ShouldBe(10);
@@ -81,7 +81,7 @@ public class InstanceDataWriteFunnelTests
 
         var rows = new List<InstanceData> { second, first }; // deliberately out of order
 
-        InstanceDataWriteFunnel.AssignVersions(
+        InstanceDataWriteService.AssignVersions(
             InstanceId, rows, Head(versionNo: 6, version: "1.0.5", historySequence: 0), NullLogger.Instance);
 
         first.VersionNo.ShouldBe(7);
@@ -98,7 +98,7 @@ public class InstanceDataWriteFunnelTests
         var row = new InstanceData(
             Guid.NewGuid(), InstanceId, "0.9.0", new JsonData("{}"), false, 1);
 
-        InstanceDataWriteFunnel.AssignVersions(
+        InstanceDataWriteService.AssignVersions(
             InstanceId, [row], Head(versionNo: 12, version: "2.0.0", historySequence: 0), NullLogger.Instance);
 
         row.VersionNo.ShouldBe(13);

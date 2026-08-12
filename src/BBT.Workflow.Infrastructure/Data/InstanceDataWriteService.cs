@@ -1,93 +1,91 @@
+using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace BBT.Workflow.Data;
 
 /// <summary>
-/// Serializes InstanceData writes with a per-instance PostgreSQL <c>FOR UPDATE</c> row lock,
-/// replacing the former BEFORE INSERT versioning trigger. Runs inside
-/// <see cref="WorkflowDbContext"/>'s SaveChanges pipeline whenever the change tracker holds new
-/// <see cref="InstanceData"/> rows, so every write path (start, pipeline steps, updateData,
-/// subflow output mapping, definition seeds) funnels through it with zero call-site changes.
+/// Explicit InstanceData persist path (architecture decision: no DbContext-level interception).
+/// Serializes concurrent InstanceData writers with a per-instance PostgreSQL <c>FOR UPDATE</c>
+/// row lock and assigns the version identity under that lock, then owns the SaveChanges. Call
+/// sites invoke it at the exact point they previously saved with <c>autoSave: true</c>; the
+/// guard in <see cref="WorkflowDbContext"/> catches any path that forgets.
 /// <para>
-/// Under the lock — inside the same transaction the rows commit in — the funnel:
-/// assigns the monotonic <see cref="InstanceData.VersionNo"/> (head + 1), rebases the semantic
-/// version onto the real database head when the in-memory base was stale, and demotes any
-/// stale latest row so the partial unique index <c>UX_InstancesData_Instance_IsLatest</c> holds.
-/// The unique indexes remain the database-level backstop for both invariants.
+/// Flow — inside the ambient transaction when one is open, otherwise inside a local one:
+/// <c>SET LOCAL</c> lock/statement timeouts → lock the parent Instances row → read the
+/// authoritative head → assign monotonic <see cref="InstanceData.VersionNo"/>s (head + 1) and
+/// rebase stale semantic versions onto the real head → demote any stale latest row → save.
+/// A brand-new instance has no row to lock yet — harmless: it cannot have a concurrent writer,
+/// the head read returns empty and numbering starts at 1. The partial unique indexes on
+/// <c>InstancesData</c> remain the database-level backstop.
 /// </para>
 /// </summary>
-internal static class InstanceDataWriteFunnel
+public sealed class InstanceDataWriteService(
+    IAetherDbContextProvider<WorkflowDbContext> dbContextProvider,
+    IOptions<WorkflowExecutionOptions> executionOptions,
+    ILogger<InstanceDataWriteService> logger) : IInstanceDataWriteService
 {
-    /// <summary>
-    /// Returns whether the change tracker holds newly added InstanceData rows — the only case
-    /// the funnel (and its transaction requirement) applies to.
-    /// </summary>
-    internal static bool HasPendingInstanceData(WorkflowDbContext context)
+    /// <inheritdoc />
+    public async Task SaveWithVersioningAsync(
+        Instance instance,
+        CancellationToken cancellationToken = default)
     {
-        foreach (var entry in context.ChangeTracker.Entries<InstanceData>())
-        {
-            if (entry.State == EntityState.Added)
-                return true;
-        }
+        var context = await dbContextProvider.GetDbContextAsync();
 
-        return false;
-    }
-
-    /// <summary>
-    /// Applies the funnel. Must be called inside an open transaction (the row lock is
-    /// transaction-scoped) and immediately before the base SaveChanges executes the inserts.
-    /// </summary>
-    internal static async Task ApplyAsync(
-        WorkflowDbContext context,
-        InstanceDataWriteOptions options,
-        ILogger logger,
-        CancellationToken cancellationToken)
-    {
         var added = context.ChangeTracker.Entries<InstanceData>()
-            .Where(e => e.State == EntityState.Added)
+            .Where(e => e.State == EntityState.Added && e.Entity.InstanceId == instance.Id)
             .Select(e => e.Entity)
             .ToList();
 
         if (added.Count == 0)
-            return;
-
-        var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
-
-        // Transaction-scoped timeouts (SET LOCAL — PgBouncer transaction-mode safe). The
-        // statement cap applies to every statement for the remainder of this transaction;
-        // it is a per-statement limit, not a whole-transaction budget.
-        await context.Database.ExecuteSqlRawAsync(
-            $"SET LOCAL lock_timeout = '{options.LockTimeoutMs}ms'; " +
-            $"SET LOCAL statement_timeout = '{options.StatementTimeoutMs}ms';",
-            cancellationToken);
-
-        // Deterministic instance order prevents lock-order deadlocks when a single SaveChanges
-        // ever carries rows for multiple instances.
-        foreach (var group in added.GroupBy(d => d.InstanceId).OrderBy(g => g.Key))
         {
-            await ApplyForInstanceAsync(context, schema, group.Key, [.. group], options, logger, cancellationToken);
+            // Nothing to version — still perform the save the call site asked for.
+            await context.SaveChangesAsync(cancellationToken);
+            return;
         }
+
+        // The row lock is transaction-scoped: with an ambient UoW transaction the lock rides it
+        // (held until that commit); without one, open a local transaction so lock + inserts
+        // commit atomically.
+        if (context.Database.CurrentTransaction is not null)
+        {
+            await ApplyAndSaveAsync(context, instance.Id, added, cancellationToken);
+            return;
+        }
+
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        await ApplyAndSaveAsync(context, instance.Id, added, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
-    private static async Task ApplyForInstanceAsync(
+    private async Task ApplyAndSaveAsync(
         WorkflowDbContext context,
-        string schema,
         Guid instanceId,
         List<InstanceData> rows,
-        InstanceDataWriteOptions options,
-        ILogger logger,
         CancellationToken cancellationToken)
     {
+        var options = executionOptions.Value.InstanceDataWrite;
+        var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
+
         try
         {
-            // POC parity: lock the parent Instances row — every InstanceData writer for this
-            // instance serializes here until the enclosing transaction commits.
+            // Transaction-scoped timeouts (SET LOCAL — PgBouncer transaction-mode safe). The
+            // statement cap applies to every statement for the remainder of this transaction;
+            // it is a per-statement limit, not a whole-transaction budget.
+            await context.Database.ExecuteSqlRawAsync(
+                $"SET LOCAL lock_timeout = '{options.LockTimeoutMs}ms'; " +
+                $"SET LOCAL statement_timeout = '{options.StatementTimeoutMs}ms';",
+                cancellationToken);
+
+            // Lock the parent Instances row — every InstanceData writer for this instance
+            // serializes here until the enclosing transaction commits. A brand-new instance
+            // matches no row (no lock needed — no competitor can see it yet).
             await context.Database.ExecuteSqlRawAsync(
                 $"SELECT 1 FROM \"{schema}\".\"Instances\" WHERE \"Id\" = {{0}} FOR UPDATE",
                 [instanceId],
@@ -117,6 +115,8 @@ internal static class InstanceDataWriteFunnel
                 if (demoted > 0)
                     logger.InstanceDataStaleLatestDemoted(instanceId, rows.Max(r => r.VersionNo));
             }
+
+            await context.SaveChangesAsync(cancellationToken);
         }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.LockNotAvailable)
         {

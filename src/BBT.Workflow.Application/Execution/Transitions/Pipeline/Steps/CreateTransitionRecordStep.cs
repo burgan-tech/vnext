@@ -17,6 +17,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 public sealed class CreateTransitionRecordStep(
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
     IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
@@ -41,11 +42,14 @@ public sealed class CreateTransitionRecordStep(
         var transitionKey = GetTransitionKey(context);
         var (instanceTransition, transition) = CreateInstanceTransition(context, transitionKey);
 
-        // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist
+        // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist.
+        // The persist goes through the explicit InstanceData write service: it versions the newly
+        // added data rows under the per-instance row lock and owns the SaveChanges.
         return await MapTransitionDataAsync(context, transition, cancellationToken)
             .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition, instanceTransition))
             .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
-            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, true, cancellationToken))
+            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
+            .TapAsync(_ => instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken))
             .TapAsync(_ =>
                 instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition))

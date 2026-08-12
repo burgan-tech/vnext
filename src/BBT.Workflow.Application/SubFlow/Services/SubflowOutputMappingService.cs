@@ -13,6 +13,7 @@ namespace BBT.Workflow.SubFlow;
 /// <inheritdoc cref="ISubflowOutputMappingService" />
 public sealed class SubflowOutputMappingService(
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -75,7 +76,8 @@ public sealed class SubflowOutputMappingService(
 
             if (hasData || scriptContext.Mutations.HasChanges)
             {
-                await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
+                await instanceRepository.UpdateAsync(parentInstance, false, cancellationToken);
+                await instanceDataWriteService.SaveWithVersioningAsync(parentInstance, cancellationToken);
             }
 
             return Result.Ok();
