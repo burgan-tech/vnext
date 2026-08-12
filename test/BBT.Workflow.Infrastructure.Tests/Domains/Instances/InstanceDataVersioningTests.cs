@@ -5,12 +5,12 @@ using System.Threading.Tasks;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Options;
-using BBT.Workflow.Caching;
 using BBT.Workflow.Data;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -66,7 +66,7 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     private static InstanceDataWriteService CreateService(WorkflowDbContext context) => new(
         new FixedDbContextProvider(context),
         new NullWorkflowContext(),
-        Substitute.For<IComponentCacheStore>(),
+        new ServiceCollection().BuildServiceProvider(),
         Substitute.For<IJsonSchemaValidator>(),
         Options.Create(new WorkflowExecutionOptions()),
         NullLogger<InstanceDataWriteService>.Instance);

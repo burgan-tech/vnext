@@ -9,6 +9,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -33,7 +34,7 @@ namespace BBT.Workflow.Data;
 public sealed class InstanceDataWriteService(
     IAetherDbContextProvider<WorkflowDbContext> dbContextProvider,
     IWorkflowContext workflowContext,
-    IComponentCacheStore componentCacheStore,
+    IServiceProvider serviceProvider,
     IJsonSchemaValidator jsonSchemaValidator,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<InstanceDataWriteService> logger) : IInstanceDataWriteService
@@ -259,6 +260,16 @@ public sealed class InstanceDataWriteService(
         var workflow = workflowContext.Workflow;
         if (workflow?.Schema is null)
             return;
+
+        // Resolved lazily: IComponentCacheStore lives in the Application module, which non-HTTP
+        // hosts (workers, DbMigrator) do not load — and in those hosts the workflow context is
+        // always empty, so this line is never reached. The null-check is a belt-and-braces skip.
+        var componentCacheStore = serviceProvider.GetService<IComponentCacheStore>();
+        if (componentCacheStore is null)
+        {
+            logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, "IComponentCacheStore is not registered in this host");
+            return;
+        }
 
         var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
         if (!schemaResult.IsSuccess)
