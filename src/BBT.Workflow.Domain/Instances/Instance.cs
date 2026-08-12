@@ -935,13 +935,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         {
             var lastData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
 
-            // If we have existing data, check if the new data is different
-            if (lastData?.HasSameData(inputData) == true)
-            {
-                // Data hasn't changed, return the existing data
-                return lastData;
-            }
-
             InstanceData newData;
             if (lastData is null)
             {
@@ -955,11 +948,23 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             }
             else
             {
+                // No-change dedup on the MERGED result: the stored row is always the full merged
+                // state (full-merge model), so the input must be compared post-merge. Comparing
+                // the raw input against the merged head — as this used to do — never matches for
+                // delta-only inputs (e.g. an idempotent duplicate callback stamping a key that is
+                // already set), silently growing the history with byte-identical versions.
+                var merged = lastData.Data.Merge(inputData);
+                if (lastData.HasSameData(merged))
+                {
+                    return lastData;
+                }
+
                 newData = lastData.NewVersion(
                     id,
-                    inputData,
+                    merged,
                     versionStrategy ?? VersionStrategy.None,
-                    GetNextHistorySequence(lastData.Version)
+                    GetNextHistorySequence(lastData.Version),
+                    alreadyMerged: true
                 );
             }
 

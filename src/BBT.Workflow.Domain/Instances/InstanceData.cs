@@ -44,7 +44,13 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     public string Version { get; private set; }
 
     /// <summary>
-    /// History sequence number (for ordering history entries within the same version)
+    /// History sequence number: orders rows that share the SAME <see cref="Version"/> string.
+    /// Not redundant with <see cref="VersionNo"/>/<see cref="IsLatest"/>: same-version rows are
+    /// routine (<c>VersionStrategy.None</c> — the default when <c>AddData</c> gets no strategy —
+    /// keeps the version string), and <see cref="VersionNo"/> is only assigned at persist time
+    /// under the row lock, so unpersisted rows all carry 0 and cannot order themselves. This is
+    /// the in-memory tie-breaker <see cref="InstanceDataVersionComparer"/> relies on before the
+    /// write service has run.
     /// </summary>
     public int HistorySequence { get; private set; }
 
@@ -104,11 +110,15 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         Guid id,
         JsonData jsonData,
         VersionStrategy versionStrategy,
-        int historySequence
+        int historySequence,
+        bool alreadyMerged = false
     )
     {
         var newVersion = IncrementVersion(Version, versionStrategy);
-        var newData = Data.Merge(jsonData);
+        // Full-merge model: the stored row is the complete state (previous full + delta).
+        // alreadyMerged lets a caller that computed the merge for its own comparison (the
+        // AddData no-change dedup) hand it over instead of merging twice.
+        var newData = alreadyMerged ? jsonData : Data.Merge(jsonData);
         IsLatest = false;
         return new InstanceData(
             id,

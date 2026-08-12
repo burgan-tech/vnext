@@ -135,6 +135,12 @@ public sealed class InstanceDataWriteService(
     /// authoritative head and rebases stale semantic versions onto it. Rows are processed in
     /// their in-memory version order; each processed row becomes the effective head for the
     /// next, so multi-row saves chain correctly.
+    /// <para>
+    /// The loop is NOT a defensive leftover — multi-row saves are real: a task step applies all
+    /// of its tasks' snapshot outputs in one save (several OnExecute tasks, parallel-branch
+    /// merges), so one <c>SaveWithVersioningAsync</c> can carry several Added rows. The dominant
+    /// single-row case costs one iteration; do not replace this with head-plus-one arithmetic.
+    /// </para>
     /// </summary>
     internal static void AssignVersions(
         Guid instanceId,
