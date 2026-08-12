@@ -252,10 +252,18 @@ public sealed class TransitionExecutionContext
                 continue;
             }
 
-            Instance.AddDataWithVersion(
+            // Replay by STRATEGY, not by the snapshot's frozen version string. The snapshot's
+            // computed version can sit below the live aggregate's head (a concurrent append
+            // advanced it between snapshot creation and this apply); replaying it verbatim as an
+            // explicit-version append either throws on a latest-only loaded aggregate ("target
+            // version line is not in memory") or silently demotes a newer head. Recomputing from
+            // the live head with the same strategy the task used keeps the row strategy-bearing,
+            // so the InstanceData write service can rebase it against the real database head
+            // under the per-instance row lock.
+            Instance.AddData(
                 data.Id,
                 new JsonData(data.Data.Json),
-                data.Version);
+                data.AppliedVersionStrategy ?? VersionStrategy.IncreasePatch);
 
             applied = true;
         }
