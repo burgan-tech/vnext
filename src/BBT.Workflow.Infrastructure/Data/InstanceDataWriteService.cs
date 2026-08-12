@@ -50,12 +50,44 @@ public sealed class InstanceDataWriteService(
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorkflowDbContext, SemaphoreSlim>
         ContextGates = new();
 
+    /// <summary>
+    /// Striped per-instance gates taken BEFORE the context is even resolved:
+    /// <c>GetDbContextAsync</c> itself can touch the shared connection (context/schema
+    /// materialization in the ambient UnitOfWork), so two branches of the same instance must
+    /// not enter it concurrently either ("A second operation was started on this context").
+    /// Striping bounds memory; a hash collision merely serializes two unrelated instances
+    /// in-process, which the row lock would have done across processes anyway.
+    /// </summary>
+    private static readonly SemaphoreSlim[] InstanceGates =
+        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
+    private static SemaphoreSlim InstanceGate(Guid instanceId) =>
+        InstanceGates[(instanceId.GetHashCode() & int.MaxValue) % InstanceGates.Length];
+
     /// <inheritdoc />
     public async Task<InstanceData?> AppendAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default)
+    {
+        var instanceGate = InstanceGate(instance.Id);
+        await instanceGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
+        }
+        finally
+        {
+            instanceGate.Release();
+        }
+    }
+
+    private async Task<InstanceData?> AppendCoreAsync(
+        Instance instance,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        CancellationToken cancellationToken)
     {
         var context = await dbContextProvider.GetDbContextAsync();
 
@@ -90,6 +122,25 @@ public sealed class InstanceDataWriteService(
         JsonData data,
         CancellationToken cancellationToken = default)
     {
+        var instanceGate = InstanceGate(instance.Id);
+        await instanceGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
+        }
+        finally
+        {
+            instanceGate.Release();
+        }
+    }
+
+    private async Task<InstanceData> AppendExplicitCoreAsync(
+        Instance instance,
+        Guid id,
+        string version,
+        JsonData data,
+        CancellationToken cancellationToken)
+    {
         var context = await dbContextProvider.GetDbContextAsync();
 
         var result = await RunLockedAsync<InstanceData>(context, instance.Id, cancellationToken, async () =>
@@ -116,7 +167,7 @@ public sealed class InstanceDataWriteService(
 
             var row = new InstanceData(id, instance.Id, version, data, takesLatest)
             {
-                VersionNo = (head?.VersionNo ?? 0L) + 1
+                VersionNo = (head?.MaxVersionNo ?? 0L) + 1
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: takesLatest && head is not null, cancellationToken);
@@ -150,7 +201,7 @@ public sealed class InstanceDataWriteService(
             InstanceData.ComputeDataHash(content), head.DataHash, StringComparison.OrdinalIgnoreCase);
 
         var version = InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
-        return new AppendPlan(content, version, head.VersionNo + 1, isDuplicate);
+        return new AppendPlan(content, version, head.MaxVersionNo + 1, isDuplicate);
     }
 
     /// <summary>
@@ -231,7 +282,10 @@ public sealed class InstanceDataWriteService(
 
     /// <summary>
     /// Reads the authoritative head under the lock — version identity plus the content and its
-    /// hash, which the merge and the no-change dedup both need.
+    /// hash, which the merge and the no-change dedup both need. Also carries the instance-wide
+    /// MAX(VersionNo): the latest row's own VersionNo is NOT the maximum once an explicit
+    /// older-line append has run (it takes a higher VersionNo without taking the latest flag),
+    /// so numbering from the latest row would collide on UX_InstancesData_Instance_VersionNo.
     /// </summary>
     private async Task<InstanceDataHeadRow?> ReadHeadAsync(
         WorkflowDbContext context,
@@ -240,7 +294,9 @@ public sealed class InstanceDataWriteService(
     {
         var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
         return await context.Database.SqlQueryRaw<InstanceDataHeadRow>(
-                $"SELECT \"VersionNo\", \"Version\", \"DataHash\", \"Data\"::text AS \"Data\" " +
+                $"SELECT \"VersionNo\", \"Version\", \"DataHash\", \"Data\"::text AS \"Data\", " +
+                $"(SELECT MAX(d2.\"VersionNo\") FROM \"{schema}\".\"InstancesData\" d2 " +
+                $"WHERE d2.\"InstanceId\" = {{0}}) AS \"MaxVersionNo\" " +
                 $"FROM \"{schema}\".\"InstancesData\" WHERE \"InstanceId\" = {{0}} AND \"IsLatest\"",
                 instanceId)
             .FirstOrDefaultAsync(cancellationToken);
@@ -327,6 +383,14 @@ public sealed class InstanceDataWriteService(
 internal sealed class InstanceDataHeadRow
 {
     public long VersionNo { get; set; }
+
+    /// <summary>
+    /// Instance-wide MAX(VersionNo) — the base for the next row's number. Differs from
+    /// <see cref="VersionNo"/> whenever an explicit older-line append exists (it takes a
+    /// higher VersionNo without taking the latest flag).
+    /// </summary>
+    public long MaxVersionNo { get; set; }
+
     public string Version { get; set; } = string.Empty;
     public string DataHash { get; set; } = string.Empty;
     public string Data { get; set; } = string.Empty;

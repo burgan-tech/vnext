@@ -136,12 +136,27 @@ public class InstanceDataWriteServiceTests
         plan.VersionNo.ShouldBe(8L);
     }
 
-    private static InstanceDataHeadRow CreateHeadRow(string json, string version, long versionNo)
+    [Fact]
+    public void PlanAppend_NumbersFromTheInstanceWideMax_NotFromTheLatestRow()
+    {
+        // Regression pin: an explicit older-line append takes a HIGHER VersionNo than the
+        // latest row without taking the latest flag. Numbering the next append from the
+        // latest row's VersionNo (7+1) would collide with the existing row 9 on
+        // UX_InstancesData_Instance_VersionNo — it must come from MAX(VersionNo).
+        var head = CreateHeadRow("{\"a\":1}", "1.2.3", versionNo: 7, maxVersionNo: 9);
+
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch);
+
+        plan.VersionNo.ShouldBe(10L);
+    }
+
+    private static InstanceDataHeadRow CreateHeadRow(string json, string version, long versionNo, long? maxVersionNo = null)
     {
         var data = new JsonData(json);
         return new InstanceDataHeadRow
         {
             VersionNo = versionNo,
+            MaxVersionNo = maxVersionNo ?? versionNo,
             Version = version,
             Data = data.Json,
             DataHash = InstanceData.ComputeDataHash(data)

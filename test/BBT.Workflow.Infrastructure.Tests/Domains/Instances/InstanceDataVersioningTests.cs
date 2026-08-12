@@ -216,6 +216,47 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Appends_After_An_Explicit_OlderLine_Row_Should_Number_From_The_Instance_Max()
+    {
+        // Production regression (publish path): after 1.0.0 -> 1.1.0 -> 1.0.1 the latest row
+        // (1.1.0) carries VersionNo 2 while the older-line row 1.0.1 carries VersionNo 3.
+        // Numbering the next append from the latest row (2+1) collides with row 3 — every
+        // further publish or strategy append then fails with a duplicate-key error.
+        var seeded = await CreateInstanceAsync();
+
+        await using var ctx = CreateContext();
+        var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+        var service = CreateService(ctx);
+
+        await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.0.0", new JsonData("{\"v\":1}"), CancellationToken.None);
+        await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.1.0", new JsonData("{\"v\":2}"), CancellationToken.None);
+        var olderLine = await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.0.1", new JsonData("{\"v\":3}"), CancellationToken.None);
+        olderLine.VersionNo.ShouldBe(3);
+        olderLine.IsLatest.ShouldBeFalse();
+
+        // Both directions must keep working: a higher explicit line, a lower explicit line,
+        // and a strategy append bumping from the semantic head. Latest-flag asserts run at
+        // the moment each row is the head — later appends legitimately demote earlier ones.
+        var higher = await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.2.0", new JsonData("{\"v\":4}"), CancellationToken.None);
+        higher.VersionNo.ShouldBe(4);
+        higher.IsLatest.ShouldBeTrue();
+
+        var lower = await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.0.2", new JsonData("{\"v\":5}"), CancellationToken.None);
+        lower.VersionNo.ShouldBe(5);
+        lower.IsLatest.ShouldBeFalse();
+
+        var strategy = await service.AppendAsync(instance, new JsonData("{\"w\":1}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+        strategy!.VersionNo.ShouldBe(6);
+        strategy.Version.ShouldBe("1.2.1");
+
+        await using var verifyCtx = CreateContext();
+        var list = await verifyCtx.InstancesData
+            .Where(x => x.InstanceId == seeded.Id).OrderBy(x => x.VersionNo).ToListAsync();
+        list.Select(x => x.VersionNo).ShouldBe([1L, 2L, 3L, 4L, 5L, 6L]);
+        list.Single(x => x.IsLatest).Version.ShouldBe("1.2.1");
+    }
+
+    [Fact]
     public async Task Concurrent_Appends_On_A_Shared_DbContext_Should_Serialize_On_The_Context_Gate()
     {
         // Parallel task branches all receive the SAME schema-bound DbContext from the ambient
