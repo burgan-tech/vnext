@@ -94,12 +94,27 @@ public class TimerSchedule : ValueObject
     {
         return ScheduleType switch
         {
-            TimerScheduleType.DateTime => ScheduledDateTime!.Value,
+            TimerScheduleType.DateTime => ToUnambiguousInstant(ScheduledDateTime!.Value),
             TimerScheduleType.Duration => now.Add(Duration!.Value),
             TimerScheduleType.Immediate => now.AddSeconds(2),
             _ => throw new InvalidOperationException($"Unsupported schedule type: {ScheduleType}")
         };
     }
+
+    /// <summary>
+    /// Maps a script-supplied DateTime to the instant it denotes. Utc and Local kinds already
+    /// carry an unambiguous instant. Unspecified is interpreted as UTC: workflow schedules are
+    /// UTC by convention, and the framework's default (interpreting Unspecified through the host
+    /// time zone) would make the firing instant depend on where the runtime happens to run.
+    /// Deployment containers run in UTC, so this is behavior-preserving there. Rejecting non-UTC
+    /// kinds instead was considered and dropped: FromDateTime validates in the constructor, so a
+    /// throw would fault every deployed workflow whose timer script returns a parsed
+    /// (Unspecified-kind) value that works correctly today.
+    /// </summary>
+    private static DateTimeOffset ToUnambiguousInstant(DateTime value) =>
+        value.Kind == DateTimeKind.Unspecified
+            ? new DateTimeOffset(value, TimeSpan.Zero)
+            : value;
 
     /// <summary>
     /// Converts this WorkflowTimerSchedule to a DaprJobSchedule for job scheduling.

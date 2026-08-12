@@ -19,6 +19,38 @@ public class TimerScheduleTests
         Assert.Equal(new DateTimeOffset(scheduledAt), executeAt);
     }
 
+    /// <summary>
+    /// An Unspecified-kind DateTime (the kind DateTime.Parse yields for ISO strings without an
+    /// offset) is interpreted as UTC, never through the host time zone — the firing instant must
+    /// not depend on where the runtime runs. Behavior-preserving on UTC deployment hosts.
+    /// </summary>
+    [Fact]
+    public void ResolveExecuteAt_UnspecifiedKindDateTime_IsInterpretedAsUtc()
+    {
+        var unspecified = DateTime.Parse("2026-08-03T14:30:00",
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(DateTimeKind.Unspecified, unspecified.Kind);
+
+        var executeAt = TimerSchedule.FromDateTime(unspecified).ResolveExecuteAt(Now);
+
+        Assert.Equal(new DateTimeOffset(2026, 8, 3, 14, 30, 0, TimeSpan.Zero), executeAt);
+    }
+
+    /// <summary>
+    /// A Local-kind DateTime is not ambiguous — it denotes exactly one instant (the host's wall
+    /// clock) — so it is honored rather than rejected, matching the pre-existing FromDateTime
+    /// contract.
+    /// </summary>
+    [Fact]
+    public void ResolveExecuteAt_LocalKindDateTime_ResolvesToItsOwnInstant()
+    {
+        var local = new DateTime(2026, 8, 3, 14, 30, 0, DateTimeKind.Local);
+
+        var executeAt = TimerSchedule.FromDateTime(local).ResolveExecuteAt(Now);
+
+        Assert.Equal(local.ToUniversalTime(), executeAt.UtcDateTime);
+    }
+
     [Fact]
     public void ResolveExecuteAt_DurationSchedule_ReturnsNowPlusDuration()
     {
