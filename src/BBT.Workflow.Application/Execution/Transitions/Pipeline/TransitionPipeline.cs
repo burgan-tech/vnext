@@ -22,6 +22,7 @@ public class TransitionPipeline
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
     private readonly IInstanceRepository _instanceRepository;
+    private readonly IInstanceJobRepository _instanceJobRepository;
     private readonly IUnitOfWorkManager _uowManager;
     private readonly ITransitionValidationService _validationService;
     private readonly IPipelineProfileResolver _profileResolver;
@@ -61,6 +62,7 @@ public class TransitionPipeline
         IInstanceBusyManager busyMarker,
         ITransitionContextFactory contextFactory,
         IInstanceRepository instanceRepository,
+        IInstanceJobRepository instanceJobRepository,
         IUnitOfWorkManager uowManager,
         ITransitionValidationService validationService,
         IPipelineProfileResolver profileResolver,
@@ -74,6 +76,7 @@ public class TransitionPipeline
         _busyMarker = busyMarker;
         _contextFactory = contextFactory;
         _instanceRepository = instanceRepository;
+        _instanceJobRepository = instanceJobRepository;
         _uowManager = uowManager;
         _validationService = validationService;
         _profileResolver = profileResolver;
@@ -219,16 +222,34 @@ public class TransitionPipeline
             // updateData continuation handoff: updateData never owns the status, so a satisfied
             // auto transition must not advance under a non-owner. Reserve HERE (short status
             // lock) before any dispatch — inline hops inherit the ownership, enqueued hops
-            // re-enter as genuinely pre-reserved. If the instance is Busy under a competing
-            // chain, drop the continuation: that owner is already advancing, and every later
-            // updateData re-evaluates the same conditions against fresher data.
+            // re-enter as genuinely pre-reserved.
+            //
+            // When the reserve fails the Busy has one of two meanings, and they must be told
+            // apart. A state with automatic transitions PARKS Busy at rest (ResolveAvailableStep
+            // deliberately never resolves it) — every fan-in wait state is such a state, its
+            // Busy has NO owner, and dropping there would stall the gate forever. A Busy with a
+            // LIVE owner shows up as an active transition job for a different transition key
+            // (async accept intents and per-hop chain jobs; armed timers count as owners too —
+            // they will fire and re-evaluate). Only that case is dropped: the owner is already
+            // advancing, and every later updateData re-evaluates against fresher data. Parked
+            // Busy is taken over instead (idempotent flip under the same short lock). An
+            // in-process sync chain leaves no job row and is invisible to this probe — the
+            // duplicate transition-record guard and per-hop policy checks stop the loser.
             var reservedForHandoff = false;
             if (context.Directives.NextTransition is { } handoff
                 && !context.OwnsStatus
                 && context.IsUpdateDataTransition())
             {
                 var reserve = await _admissionService.ReserveAsync(context, cancellationToken);
-                if (reserve.IsSuccess)
+                var handedOff = reserve.IsSuccess;
+
+                if (!handedOff && !await HasLiveTransitionOwnerAsync(context, cancellationToken))
+                {
+                    var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                    handedOff = takeover.IsSuccess;
+                }
+
+                if (handedOff)
                 {
                     context.OwnsStatus = true;
                     reservedForHandoff = true;
@@ -317,6 +338,26 @@ public class TransitionPipeline
 
             context = nextContextResult.Value!;
         }
+    }
+
+    /// <summary>
+    /// Whether the instance's Busy has a LIVE owner: an active transition job (async accept
+    /// intent, per-hop chain job, or an armed/firing timer) targeting a DIFFERENT transition
+    /// than this execution's own. Rows for this execution's own transition key are its own
+    /// accept intent (or a concurrent duplicate of it) — neither is a chain owner. Used by the
+    /// updateData continuation handoff to tell owned Busy (drop and let the owner advance)
+    /// from parked Busy at an auto-gated rest state (take over, or the gate stalls forever).
+    /// </summary>
+    private async Task<bool> HasLiveTransitionOwnerAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var activeJobs = await _instanceJobRepository.GetListActiveAsync(
+            context.InstanceId, cancellationToken);
+
+        return activeJobs.Any(job =>
+            job.JobType is JobType.AsyncTransition or JobType.ScheduledTransition
+            && !string.Equals(job.TransitionKey, context.TransitionKey, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

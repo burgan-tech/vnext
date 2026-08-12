@@ -33,6 +33,7 @@ public class TransitionPipelineTests
     private readonly IInstanceBusyManager _mockBusyMarker;
     private readonly ITransitionContextFactory _mockContextFactory;
     private readonly IInstanceRepository _mockInstanceRepository;
+    private readonly IInstanceJobRepository _mockInstanceJobRepository;
     private readonly IUnitOfWorkManager _mockUowManager;
     private readonly ITransitionValidationService _mockValidationService;
     private readonly IStateNotificationScheduler _mockStateNotificationScheduler;
@@ -47,6 +48,11 @@ public class TransitionPipelineTests
         _mockBusyMarker = Substitute.For<IInstanceBusyManager>();
         _mockContextFactory = Substitute.For<ITransitionContextFactory>();
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
+        _mockInstanceJobRepository = Substitute.For<IInstanceJobRepository>();
+        // Default: no live transition jobs — a Busy without jobs reads as PARKED.
+        _mockInstanceJobRepository
+            .GetListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns(new List<InstanceJob>());
         _mockUowManager = Substitute.For<IUnitOfWorkManager>();
         _mockValidationService = Substitute.For<ITransitionValidationService>();
         _mockStateNotificationScheduler = Substitute.For<IStateNotificationScheduler>();
@@ -110,6 +116,7 @@ public class TransitionPipelineTests
             _mockBusyMarker,
             _mockContextFactory,
             _mockInstanceRepository,
+            _mockInstanceJobRepository,
             _mockUowManager,
             _mockValidationService,
             new PipelineProfileResolver(),
@@ -448,11 +455,11 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_UpdateData_ContinuationReserveFails_DropsContinuation()
+    public async Task RunAsync_UpdateData_BusyWithLiveOwner_DropsContinuation()
     {
-        // A competing chain owns the instance: the continuation is dropped (WARN) instead of
-        // advancing ownerless — the owner is already progressing and a later updateData
-        // re-evaluates the same conditions.
+        // A competing chain owns the instance (visible as an active transition job for a
+        // DIFFERENT transition): the continuation is dropped (WARN) instead of advancing
+        // ownerless — the owner is already progressing and re-evaluates with fresher data.
         var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
         var chainedContext = CreateTransitionExecutionContext("auto-transition");
         var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
@@ -466,6 +473,7 @@ public class TransitionPipelineTests
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(Result.Fail(WorkflowErrors.InstanceBusy(
                 updateDataContext.InstanceId, updateDataContext.TransitionKey)));
+        SetupLiveOwnerJob(updateDataContext.InstanceId, "some-running-transition");
 
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
@@ -473,8 +481,41 @@ public class TransitionPipelineTests
         updateDataContext.OwnsStatus.ShouldBeFalse();
         updateDataContext.Directives.NextTransition.ShouldBeNull(); // consumed and dropped
         contextCallCount().ShouldBe(1); // the chained hop never ran
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
         await _mockInstanceRepository.DidNotReceive()
             .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_UpdateData_ParkedBusy_TakesOverAndContinues()
+    {
+        // The Busy has NO live owner (a fan-in wait state parks Busy at rest): the handoff
+        // takes it over instead of dropping — otherwise the gate could never fire.
+        var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
+        var chainedContext = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
+
+        var contextCallCount = SetupChainedContextFactory(updateDataContext, chainedContext);
+        SetupAutoStepRequestingNextTransition("auto-transition");
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(
+                updateDataContext.InstanceId, updateDataContext.TransitionKey)));
+        // Only this updateData's own accept intent is active — not a chain owner.
+        SetupLiveOwnerJob(updateDataContext.InstanceId, "update-parent-data");
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.Received(1)
+            .TakeOverAsync(updateDataContext, Arg.Any<CancellationToken>());
+        updateDataContext.OwnsStatus.ShouldBeTrue();
+        chainedContext.OwnsStatus.ShouldBeTrue(); // the gate transition ran as a real owner
+        contextCallCount().ShouldBe(2);
     }
 
     [Fact]
@@ -506,6 +547,23 @@ public class TransitionPipelineTests
             step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
         }
+    }
+
+    /// <summary>
+    /// Stubs the active-job probe with one active async-transition job targeting
+    /// <paramref name="transitionKey"/> — a live owner when the key differs from the
+    /// execution's own, this execution's own accept intent when it matches.
+    /// </summary>
+    private void SetupLiveOwnerJob(Guid instanceId, string transitionKey)
+    {
+        var jobId = Guid.NewGuid();
+        var jobName = JobName.ForAsyncTransition(instanceId, "some-state", transitionKey, jobId);
+        _mockInstanceJobRepository
+            .GetListActiveAsync(instanceId, Arg.Any<CancellationToken>())
+            .Returns(new List<InstanceJob>
+            {
+                InstanceJob.Create(jobId, jobName, jobId, "test-domain", "test-flow", instanceId)
+            });
     }
 
     /// <summary>
@@ -827,6 +885,7 @@ public class TransitionPipelineTests
             _mockBusyMarker,
             _mockContextFactory,
             _mockInstanceRepository,
+            _mockInstanceJobRepository,
             _mockUowManager,
             _mockValidationService,
             new PipelineProfileResolver(),

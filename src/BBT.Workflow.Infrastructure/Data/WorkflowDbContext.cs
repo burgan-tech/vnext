@@ -107,7 +107,7 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     {
         foreach (var entry in ChangeTracker.Entries<InstanceData>())
         {
-            if (entry.State == EntityState.Added && entry.Entity.VersionNo == 0)
+            if (entry is { State: EntityState.Added, Entity.VersionNo: 0 })
             {
                 throw new InvalidOperationException(
                     $"InstanceData for instance {entry.Entity.InstanceId} is being saved without an " +
