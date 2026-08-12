@@ -232,10 +232,6 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasMaxLength(WorkflowConstants.MaxVersionLength);
 
-            b.Property(p => p.HistorySequence)
-                .IsRequired()
-                .HasDefaultValue(0);
-
             b.Property(p => p.VersionNo)
                 .IsRequired()
                 .HasDefaultValue(0L);
@@ -280,7 +276,6 @@ public static class InstancesModelCreatingExtensions
                 {
                     p.Version,
                     p.VersionNo,
-                    p.HistorySequence,
                     p.ETag,
                     p.DataHash,
                     p.EnteredAt

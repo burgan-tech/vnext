@@ -21,7 +21,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         Guid id,
         Guid instanceId,
         string version,
-        JsonData data, bool isLatest, int historySequence = 0) : base(id)
+        JsonData data, bool isLatest) : base(id)
     {
         InstanceId = instanceId;
         SetVersion(version);
@@ -30,7 +30,6 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         EnteredAt = DateTime.UtcNow;
         ETag = Ulid.NewUlid().ToString();
         IsLatest = isLatest;
-        HistorySequence = historySequence;
     }
 
     /// <summary>
@@ -42,14 +41,6 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     /// Semantic version number. There may be more than one version on the runtime.
     /// </summary>
     public string Version { get; private set; }
-
-    /// <summary>
-    /// History sequence number: orders rows that share the SAME <see cref="Version"/> string.
-    /// Legacy in-memory tie-breaker from the era of deferred persistence; with the write service
-    /// persisting every row immediately and assigning <see cref="VersionNo"/> under the row lock,
-    /// same-version rows are always ordered by <see cref="VersionNo"/>. Scheduled for removal.
-    /// </summary>
-    public int HistorySequence { get; private set; }
 
     /// <summary>
     /// Instance-global version number. Assigned by the InstanceData write service under the
@@ -118,7 +109,6 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
             Id = Id,
             InstanceId = InstanceId,
             Version = Version,
-            HistorySequence = HistorySequence,
             VersionNo = VersionNo,
             IsLatest = IsLatest,
             ETag = ETag,

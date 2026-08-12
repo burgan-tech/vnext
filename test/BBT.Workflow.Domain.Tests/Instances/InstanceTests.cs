@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether;
@@ -1071,27 +1070,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
 
     private static void AddLatestDataForTest(Instance instance, JsonData data)
     {
-        var ctor = typeof(InstanceData).GetConstructor(
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            null,
-            [typeof(Guid), typeof(Guid), typeof(string), typeof(JsonData), typeof(bool), typeof(int)],
-            null);
-        Assert.NotNull(ctor);
-
-        var instanceData = (InstanceData)ctor.Invoke(
-        [
-            Guid.NewGuid(),
-            instance.Id,
-            WorkflowConstants.DefaultVersion,
-            data,
-            true,
-            0
-        ]);
-
-        var field = typeof(Instance).GetField("_dataList", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(field);
-        var list = Assert.IsType<List<InstanceData>>(field.GetValue(instance));
-        list.Add(instanceData);
+        instance.SeedData(Guid.NewGuid(), data);
     }
 
     private static Instance CreateSubItem(string flowType)
@@ -1643,121 +1622,45 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void GetNextHistorySequence_ShouldReturnZero_ForFirstDataEntry()
+    public void VersionNo_ShouldIncreaseInWriteOrder_AcrossVersionLines()
     {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var data = JsonData.CreateFrom("{\"key\":\"value1\"}");
-
-        // Act
-        var result = instance.SeedDataWithVersion(Guid.NewGuid(), data, "1.0.0");
-
-        // Assert
-        Assert.Equal(0, result.HistorySequence);
-    }
-
-    [Fact]
-    public void GetNextHistorySequence_ShouldReturnOne_ForSecondDataWithSameVersion()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var data1 = JsonData.CreateFrom("{\"key\":\"value1\"}");
-        var data2 = JsonData.CreateFrom("{\"key\":\"value2\"}");
-
-        // Act
-        var result1 = instance.SeedDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
-        var result2 = instance.SeedDataWithVersion(Guid.NewGuid(), data2, "1.0.0");
-
-        // Assert
-        Assert.Equal(0, result1.HistorySequence);
-        Assert.Equal(1, result2.HistorySequence);
-    }
-
-    [Fact]
-    public void GetNextHistorySequence_ShouldIncrementSequentially_ForMultipleDataWithSameVersion()
-    {
-        // Arrange
+        // Arrange — VersionNo is instance-global (write-service assignment order), not per line.
         var instance = InstanceFactory.CreateDefault();
 
         // Act
-        var result0 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        var result1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var result2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
-        var result3 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
-
-        // Assert
-        Assert.Equal(0, result0.HistorySequence);
-        Assert.Equal(1, result1.HistorySequence);
-        Assert.Equal(2, result2.HistorySequence);
-        Assert.Equal(3, result3.HistorySequence);
-    }
-
-    [Fact]
-    public void GetNextHistorySequence_ShouldMaintainSeparateSequences_ForDifferentVersions()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-
-        // Act - Add data for version 1.0.0
         var v1_0 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
         var v1_1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-
-        // Add data for version 2.0.0
         var v2_0 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
-        var v2_1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0");
-
-        // Add more data for version 1.0.0
-        var v1_2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0");
-
-        // Assert - Each version should have its own sequence counter
-        Assert.Equal(0, v1_0.HistorySequence);
-        Assert.Equal(1, v1_1.HistorySequence);
-        Assert.Equal(2, v1_2.HistorySequence);
-        
-        Assert.Equal(0, v2_0.HistorySequence);
-        Assert.Equal(1, v2_1.HistorySequence);
-    }
-
-    [Fact]
-    public void HistorySequence_ShouldResetPerVersionLine_WhenSeededViaStrategy()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-
-        // Act — no strategy keeps the version string, so all three land on the 1.0.0 line;
-        // a strategy bump starts a fresh line whose sequence resets to 0.
-        var result1 = instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"));
-        var result2 = instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"));
-        var result3 = instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), VersionStrategy.IncreasePatch);
+        var v1_2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
 
         // Assert
-        Assert.Equal(0, result1.HistorySequence);
-        Assert.Equal(1, result2.HistorySequence);
-        Assert.Equal(0, result3.HistorySequence);
+        Assert.Equal(1, v1_0.VersionNo);
+        Assert.Equal(2, v1_1.VersionNo);
+        Assert.Equal(3, v2_0.VersionNo);
+        Assert.Equal(4, v1_2.VersionNo);
     }
 
     [Fact]
-    public void GetVersionHistory_ShouldReturnAllEntriesForVersion_OrderedBySequence()
+    public void GetVersionHistory_ShouldReturnAllEntriesForVersion_OrderedByVersionNo()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var first = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        var second = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
         instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
-        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
+        var third = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
 
         // Act
         var history = instance.GetVersionHistory("1.0.0").ToList();
 
         // Assert
-        Assert.Equal(3, history.Count);
-        Assert.Equal(0, history[0].HistorySequence);
-        Assert.Equal(1, history[1].HistorySequence);
-        Assert.Equal(2, history[2].HistorySequence);
+        Assert.Equal(
+            new[] { first.Id, second.Id, third.Id },
+            history.Select(d => d.Id).ToArray());
     }
 
     [Fact]
-    public void GetLatestDataForVersion_ShouldReturnHighestSequence()
+    public void GetLatestDataForVersion_ShouldReturnHighestVersionNo()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
@@ -1771,7 +1674,6 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.NotNull(result);
         Assert.Equal(latest.Id, result.Id);
-        Assert.Equal(2, result.HistorySequence);
     }
 
     [Fact]

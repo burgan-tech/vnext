@@ -13,6 +13,11 @@ namespace BBT.Workflow.Instances;
 /// </summary>
 public static class InstanceDataSeeder
 {
+    // The removed aggregate methods computed identity and mutated the list under one lock; the
+    // seeder reads (LatestData, VersionNo max) and accepts in separate steps, so concurrent
+    // seeding tests need the whole seed serialized per instance.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Instance, object> SeedLocks = new();
+
     /// <summary>
     /// Seeds a strategy append: merges the delta into the current latest (full-merge model),
     /// bumps the version by the strategy, and accepts the row as the new latest.
@@ -23,13 +28,16 @@ public static class InstanceDataSeeder
         JsonData inputData,
         VersionStrategy? versionStrategy = null)
     {
-        var head = instance.LatestData;
-        var content = head is null ? inputData : head.Data.Merge(inputData);
-        var version = head is null
-            ? WorkflowConstants.DefaultVersion
-            : InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
+        lock (SeedLocks.GetOrCreateValue(instance))
+        {
+            var head = instance.LatestData;
+            var content = head is null ? inputData : head.Data.Merge(inputData);
+            var version = head is null
+                ? WorkflowConstants.DefaultVersion
+                : InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
 
-        return instance.SeedRow(id, version, content, isLatest: true);
+            return instance.SeedRow(id, version, content, isLatest: true);
+        }
     }
 
     /// <summary>
@@ -42,11 +50,14 @@ public static class InstanceDataSeeder
         JsonData inputData,
         string version)
     {
-        var head = instance.LatestData;
-        var takesLatest = head is null
-            || InstanceDataVersionComparer.CompareVersionStrings(version, head.Version) >= 0;
+        lock (SeedLocks.GetOrCreateValue(instance))
+        {
+            var head = instance.LatestData;
+            var takesLatest = head is null
+                || InstanceDataVersionComparer.CompareVersionStrings(version, head.Version) >= 0;
 
-        return instance.SeedRow(id, version, inputData, takesLatest);
+            return instance.SeedRow(id, version, inputData, takesLatest);
+        }
     }
 
     private static InstanceData SeedRow(
@@ -56,13 +67,7 @@ public static class InstanceDataSeeder
         JsonData content,
         bool isLatest)
     {
-        var historySequence = instance.DataList
-            .Where(d => d.Version == version)
-            .Select(d => d.HistorySequence)
-            .DefaultIfEmpty(-1)
-            .Max() + 1;
-
-        var row = new InstanceData(id, instance.Id, version, content, isLatest, historySequence)
+        var row = new InstanceData(id, instance.Id, version, content, isLatest)
         {
             VersionNo = instance.DataList.Select(d => d.VersionNo).DefaultIfEmpty(0L).Max() + 1
         };

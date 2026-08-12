@@ -950,7 +950,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             }
 
             // Resolve the selected version back to InstanceData
-            // If multiple entries exist with the same version, return the highest by HistorySequence
+            // If multiple entries exist with the same version, return the highest by VersionNo
             return _dataList
                 .Where(d => d.Version == bestVersion)
                 .OrderByDescending(d => d, InstanceDataVersionComparer.Instance)
@@ -982,7 +982,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
             return _dataList
                 .Where(d => d.Version == version)
-                .OrderBy(d => d.HistorySequence)
+                .OrderBy(d => d.VersionNo)
                 .ToList();
         }
     }
@@ -996,7 +996,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         {
             return _dataList
                 .Where(d => d.Version == version)
-                .OrderByDescending(d => d.HistorySequence)
+                .OrderByDescending(d => d.VersionNo)
                 .FirstOrDefault();
         }
     }

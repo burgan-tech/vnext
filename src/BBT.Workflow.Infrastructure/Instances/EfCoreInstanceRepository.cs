@@ -50,7 +50,7 @@ public sealed class EfCoreInstanceRepository(
         // enabled (WorkflowExecution:LatestOnlyInstanceLoading), only the IsLatest row is
         // included: the full-merge model makes it self-sufficient for pipeline merges, script
         // context and polling (it carries the complete state, the highest version and the
-        // highest HistorySequence of its own version line). History-dependent callers must use
+        // highest VersionNo of its own version line). History-dependent callers must use
         // FindByIdentifierWithFullHistoryAsync / FindByIdentifierWithFullDataAsync — aggregates
         // materialized through the identifier finders are marked partially loaded and fail fast
         // on history reads. ChildCorrelations are always filtered to active-only.

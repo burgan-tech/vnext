@@ -163,8 +163,8 @@ public sealed class InstanceDataFingerprintQueryTests : IAsyncLifetime
         // by the raw-SQL builder (see InstanceFilterQueryTests.SeedAsync).
         await ctx.Database.ExecuteSqlRawAsync(
             "INSERT INTO \"public\".\"InstancesData\" " +
-            "(\"Id\",\"InstanceId\",\"Version\",\"HistorySequence\",\"ETag\",\"DataHash\",\"Data\",\"EnteredAt\",\"VersionNo\",\"IsLatest\") " +
-            "VALUES ({0},{1},{2},0,{3},'hash',{4}::jsonb,{5},{6},{7})",
+            "(\"Id\",\"InstanceId\",\"Version\",\"ETag\",\"DataHash\",\"Data\",\"EnteredAt\",\"VersionNo\",\"IsLatest\") " +
+            "VALUES ({0},{1},{2},{3},'hash',{4}::jsonb,{5},{6},{7})",
             Guid.NewGuid(), instanceId, version, etag, "{}", DateTime.UtcNow, isLatest ? 2 : 1, isLatest);
         return etag;
     }

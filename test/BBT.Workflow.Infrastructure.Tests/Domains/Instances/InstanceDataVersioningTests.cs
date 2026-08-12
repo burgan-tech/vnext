@@ -1,11 +1,19 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
+using BBT.Workflow.BackgroundJobs.Options;
+using BBT.Workflow.Caching;
 using BBT.Workflow.Data;
+using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Schemas;
+using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using NSubstitute;
 using Shouldly;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -13,8 +21,11 @@ using Xunit;
 namespace BBT.Workflow.Domains.Instances;
 
 /// <summary>
-/// Integration tests for InstanceData versioning and concurrency control.
-/// Tests the PostgreSQL trigger and advisory lock mechanism for concurrent inserts.
+/// Integration tests for <see cref="InstanceDataWriteService"/> against a real PostgreSQL:
+/// the per-instance <c>FOR UPDATE</c> row lock serializes concurrent writers, and the row's
+/// whole identity (VersionNo, Version, dedup) is computed under that lock from the
+/// authoritative head. These replace the old trigger-based versioning tests — the trigger was
+/// dropped when identity assignment moved into the application.
 /// </summary>
 public sealed class InstanceDataVersioningTests : IAsyncLifetime
 {
@@ -33,10 +44,8 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         await _postgresContainer.StartAsync();
         _connectionString = _postgresContainer.GetConnectionString();
 
-        // Create schema and apply trigger
         await using var context = CreateContext();
         await context.Database.EnsureCreatedAsync();
-        await ApplyVersioningTrigger(context);
     }
 
     async Task IAsyncLifetime.DisposeAsync()
@@ -54,98 +63,46 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         return new WorkflowDbContext(options, new StaticCurrentSchema("public"));
     }
 
-    /// <summary>
-    /// Applies the versioning trigger and function to the test database.
-    /// </summary>
-    private static async Task ApplyVersioningTrigger(WorkflowDbContext context)
+    private static InstanceDataWriteService CreateService(WorkflowDbContext context) => new(
+        new FixedDbContextProvider(context),
+        new NullWorkflowContext(),
+        Substitute.For<IComponentCacheStore>(),
+        Substitute.For<IJsonSchemaValidator>(),
+        Options.Create(new WorkflowExecutionOptions()),
+        NullLogger<InstanceDataWriteService>.Instance);
+
+    private async Task<Instance> CreateInstanceAsync(string flow = "test-flow")
     {
-        // Create function — mirrors the production trigger
-        // (20260711114525_AlignInstanceDataLatestTriggerWithSemanticVersion): it assigns the
-        // monotonic VersionNo and demotes the previous latest ONLY when the incoming row is
-        // itself marked latest, so the application layer's semantic-version IsLatest decision
-        // is respected instead of overwritten (last-insert-wins).
-        await context.Database.ExecuteSqlRawAsync(@"
-CREATE OR REPLACE FUNCTION set_instance_data_version_and_latest()
-RETURNS trigger AS $$
-DECLARE
-    next_version_no bigint;
-BEGIN
-    PERFORM pg_advisory_xact_lock(hashtext(NEW.""InstanceId""::text));
-
-    SELECT COALESCE(MAX(""VersionNo""), 0) + 1
-      INTO next_version_no
-      FROM ""InstancesData""
-     WHERE ""InstanceId"" = NEW.""InstanceId"";
-
-    NEW.""VersionNo"" := next_version_no;
-
-    IF NEW.""IsLatest"" THEN
-        UPDATE ""InstancesData""
-           SET ""IsLatest"" = FALSE
-         WHERE ""InstanceId"" = NEW.""InstanceId""
-           AND ""IsLatest"" = TRUE;
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-        ");
-
-        // Create trigger (if not exists)
-        await context.Database.ExecuteSqlRawAsync(@"
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_instancesdata_set_version_and_latest'
-    ) THEN
-        CREATE TRIGGER trg_instancesdata_set_version_and_latest
-        BEFORE INSERT ON ""InstancesData""
-        FOR EACH ROW
-        EXECUTE FUNCTION set_instance_data_version_and_latest();
-    END IF;
-END;
-$$;
-        ");
+        await using var ctx = CreateContext();
+        var instance = Instance.Create(Guid.NewGuid(), flow, "1.0.0");
+        ctx.Instances.Add(instance);
+        await ctx.SaveChangesAsync();
+        return instance;
     }
 
     [Fact]
-    public async Task Concurrent_Inserts_For_Same_Instance_Should_Have_Strictly_Increasing_VersionNo_And_Single_Latest()
+    public async Task Concurrent_Appends_For_Same_Instance_Should_Serialize_On_The_Row_Lock()
     {
         // Arrange
-        var instanceId = Guid.NewGuid();
+        var seeded = await CreateInstanceAsync();
         const int count = 20;
-        var baseline = DateTime.UtcNow;
 
-        // First create an Instance (parent) record
-        await using (var ctx = CreateContext())
-        {
-            var instance = Instance.Create(instanceId, "test-flow", "1.0.0");
-            ctx.Instances.Add(instance);
-            await ctx.SaveChangesAsync();
-        }
-
-        // Act - Parallel inserts for the same InstanceId
+        // Act — every writer has its own DbContext (own connection), exactly like parallel
+        // task branches in production; the FOR UPDATE lock serializes them.
         var tasks = Enumerable.Range(0, count)
             .Select(async i =>
             {
-                // Add small jitter to increase concurrency likelihood
                 await Task.Delay(Random.Shared.Next(0, 50));
 
                 await using var ctx = CreateContext();
-                var data = new JsonData("{}");
-                
-                // We need to add InstanceData directly since Instance is already created
-                await ctx.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
-                    Guid.NewGuid(),
-                    instanceId,
-                    "1.0.0",
-                    i,
-                    Ulid.NewUlid().ToString(),
-                    "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-                    "{}",
-                    baseline.AddMilliseconds(i));
+                var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+                var service = CreateService(ctx);
+
+                await service.AppendAsync(
+                    instance,
+                    new JsonData($"{{\"k{i}\":{i}}}"),
+                    VersionStrategy.IncreasePatch,
+                    CancellationToken.None);
             });
 
         await Task.WhenAll(tasks);
@@ -154,221 +111,146 @@ $$;
         await using (var ctx = CreateContext())
         {
             var list = await ctx.InstancesData
-                .Where(x => x.InstanceId == instanceId)
+                .Where(x => x.InstanceId == seeded.Id)
                 .OrderBy(x => x.VersionNo)
                 .ToListAsync();
 
-            // a) Record count should match
+            // a) Every append produced a row (distinct payloads — no dedup)
             list.Count.ShouldBe(count);
 
-            // b) VersionNo should be sequential 1..count
-            var versionNos = list.Select(x => x.VersionNo).ToArray();
+            // b) VersionNo is sequential 1..count — identity computed under the lock
+            list.Select(x => x.VersionNo).ShouldBe(
+                Enumerable.Range(1, count).Select(i => (long)i));
+
+            // c) Exactly one latest, and it is the highest VersionNo
+            var latest = list.Single(x => x.IsLatest);
+            latest.VersionNo.ShouldBe(count);
+
+            // d) Loss-free merge: the final row carries EVERY writer's key
             for (var i = 0; i < count; i++)
             {
-                versionNos[i].ShouldBe(i + 1);
+                latest.Data.Json.ShouldContain($"\"k{i}\"");
             }
-
-            // c) Only one record should have IsLatest = true
-            var latestList = list.Where(x => x.IsLatest).ToList();
-            latestList.Count.ShouldBe(1);
-
-            var latest = latestList.Single();
-
-            // d) Latest record should have the highest VersionNo
-            var maxVersion = versionNos.Max();
-            latest.VersionNo.ShouldBe(maxVersion);
         }
+    }
+
+    [Fact]
+    public async Task Append_With_Identical_Merged_Content_Should_Be_A_NoOp()
+    {
+        // Arrange
+        var seeded = await CreateInstanceAsync();
+
+        await using var ctx = CreateContext();
+        var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+        var service = CreateService(ctx);
+
+        var first = await service.AppendAsync(
+            instance, new JsonData("{\"a\":1}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+
+        // Act — a delta-only duplicate: merged content is byte-identical to the head
+        var duplicate = await service.AppendAsync(
+            instance, new JsonData("{\"a\":1}"), VersionStrategy.IncreaseMinor, CancellationToken.None);
+
+        // Assert
+        first.ShouldNotBeNull();
+        duplicate.ShouldBeNull();
+
+        var rows = await ctx.InstancesData.Where(x => x.InstanceId == seeded.Id).ToListAsync();
+        rows.Count.ShouldBe(1);
+        rows.Single().Version.ShouldBe("1.0.0");
+    }
+
+    [Fact]
+    public async Task Sequential_Appends_Should_Build_Versions_From_The_Database_Head()
+    {
+        // Arrange
+        var seeded = await CreateInstanceAsync();
+
+        await using var ctx = CreateContext();
+        var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+        var service = CreateService(ctx);
+
+        // Act
+        var v1 = await service.AppendAsync(instance, new JsonData("{\"a\":1}"), null, CancellationToken.None);
+        var v2 = await service.AppendAsync(instance, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+        var v3 = await service.AppendAsync(instance, new JsonData("{\"c\":3}"), VersionStrategy.IncreaseMinor, CancellationToken.None);
+
+        // Assert — first row starts the chain, each next version derives from the DB head
+        v1!.Version.ShouldBe("1.0.0");
+        v2!.Version.ShouldBe("1.0.1");
+        v3!.Version.ShouldBe("1.1.0");
+        v3.VersionNo.ShouldBe(3);
+
+        // Aggregate snapshot follows the persisted head
+        instance.LatestData!.Id.ShouldBe(v3.Id);
+        instance.DataList.Count(d => d.IsLatest).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Explicit_Lower_Version_Inserted_After_Higher_Should_Not_Steal_Latest()
+    {
+        // Regression for the IsLatest invariant: appending a lower explicit version (an older
+        // artifact line, e.g. 1.0.5 while 2.0.0 is the head) must NOT steal the latest flag.
+        var seeded = await CreateInstanceAsync();
+
+        await using var ctx = CreateContext();
+        var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+        var service = CreateService(ctx);
+
+        var head = await service.AppendExplicitAsync(
+            instance, Guid.NewGuid(), "2.0.0", new JsonData("{\"v\":\"head\"}"), CancellationToken.None);
+        var olderLine = await service.AppendExplicitAsync(
+            instance, Guid.NewGuid(), "1.0.5", new JsonData("{\"v\":\"line\"}"), CancellationToken.None);
+
+        // Same-version republish dedups to the existing row
+        var republish = await service.AppendExplicitAsync(
+            instance, Guid.NewGuid(), "2.0.0", new JsonData("{\"v\":\"ignored\"}"), CancellationToken.None);
+
+        // Assert
+        olderLine.IsLatest.ShouldBeFalse();
+        republish.Id.ShouldBe(head.Id);
+
+        var list = await ctx.InstancesData.Where(x => x.InstanceId == seeded.Id).ToListAsync();
+        list.Count.ShouldBe(2);
+        list.Single(x => x.IsLatest).Version.ShouldBe("2.0.0");
     }
 
     [Fact]
     public async Task Different_Instances_Should_Have_Independent_Version_Sequences()
     {
         // Arrange
-        var instanceId1 = Guid.NewGuid();
-        var instanceId2 = Guid.NewGuid();
-        var baseline = DateTime.UtcNow;
+        var seeded1 = await CreateInstanceAsync("test-flow-1");
+        var seeded2 = await CreateInstanceAsync("test-flow-2");
 
-        // Create parent Instance records
-        await using (var ctx = CreateContext())
-        {
-            ctx.Instances.Add(Instance.Create(instanceId1, "test-flow-1", "1.0.0"));
-            ctx.Instances.Add(Instance.Create(instanceId2, "test-flow-2","1.0.0"));
-            await ctx.SaveChangesAsync();
-        }
-
-        // Act - Insert records for both instances
-        await using (var ctx = CreateContext())
-        {
-            // Instance 1: 3 records
-            for (int i = 0; i < 3; i++)
-            {
-                await ctx.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
-                    Guid.NewGuid(),
-                    instanceId1,
-                    "1.0.0",
-                    i,
-                    Ulid.NewUlid().ToString(),
-                    "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-                    "{}",
-                    baseline.AddSeconds(i));
-            }
-
-            // Instance 2: 2 records
-            for (int i = 0; i < 2; i++)
-            {
-                await ctx.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                    VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
-                    Guid.NewGuid(),
-                    instanceId2,
-                    "1.0.0",
-                    i,
-                    Ulid.NewUlid().ToString(),
-                    "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-                    "{}",
-                    baseline.AddSeconds(i));
-            }
-        }
-
-        // Assert
-        await using (var ctx = CreateContext())
-        {
-            var list1 = await ctx.InstancesData
-                .Where(x => x.InstanceId == instanceId1)
-                .OrderBy(x => x.VersionNo)
-                .ToListAsync();
-
-            var list2 = await ctx.InstancesData
-                .Where(x => x.InstanceId == instanceId2)
-                .OrderBy(x => x.VersionNo)
-                .ToListAsync();
-
-            // Instance 1: VersionNo should be 1, 2, 3
-            list1.Select(x => x.VersionNo).ShouldBe(new long[] { 1, 2, 3 });
-
-            // Instance 2: VersionNo should be 1, 2
-            list2.Select(x => x.VersionNo).ShouldBe(new long[] { 1, 2 });
-
-            // Each instance should have exactly one IsLatest = true
-            var latest1 = list1.Single(x => x.IsLatest);
-            var latest2 = list2.Single(x => x.IsLatest);
-
-            latest1.VersionNo.ShouldBe(3);
-            latest2.VersionNo.ShouldBe(2);
-        }
-    }
-
-    [Fact]
-    public async Task Sequential_Inserts_Should_Maintain_Version_Order()
-    {
-        // Arrange
-        var instanceId = Guid.NewGuid();
-
-        await using (var ctx = CreateContext())
-        {
-            ctx.Instances.Add(Instance.Create(instanceId, "test-flow", "1.0.0"));
-            await ctx.SaveChangesAsync();
-        }
-
-        // Act - Sequential inserts
-        for (int i = 0; i < 5; i++)
-        {
-            await using var ctx = CreateContext();
-            await ctx.Database.ExecuteSqlRawAsync(@"
-                INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-                VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}::jsonb, {7}, 0, true)",
-                Guid.NewGuid(),
-                instanceId,
-                "1.0.0",
-                i,
-                Ulid.NewUlid().ToString(),
-                "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-                "{}",
-                DateTime.UtcNow);
-        }
-
-        // Assert
-        await using (var ctx = CreateContext())
-        {
-            var list = await ctx.InstancesData
-                .Where(x => x.InstanceId == instanceId)
-                .OrderBy(x => x.VersionNo)
-                .ToListAsync();
-
-            list.Count.ShouldBe(5);
-            list.Select(x => x.VersionNo).ShouldBe(new long[] { 1, 2, 3, 4, 5 });
-
-            // Only the last one should be latest
-            var latestCount = list.Count(x => x.IsLatest);
-            latestCount.ShouldBe(1);
-
-            var latest = list.Single(x => x.IsLatest);
-            latest.VersionNo.ShouldBe(5);
-        }
-    }
-
-    [Fact]
-    public async Task Lower_Semantic_Version_Inserted_After_Higher_Should_Not_Steal_Latest()
-    {
-        // Regression for the domain IsLatest invariant at the DB layer (review): appending a
-        // lower semantic version to an older line (e.g. 1.0.5 while 2.0.0 is the head) must NOT
-        // steal the latest flag. The write service (AppendExplicitAsync) decides via
-        // the semantic-version comparer and inserts the older-line row with IsLatest = false;
-        // the aligned trigger must respect that and leave 2.0.0 as the sole latest — the old
-        // last-insert-wins trigger would instead have marked 1.0.5 latest.
-        var instanceId = Guid.NewGuid();
-        var baseline = DateTime.UtcNow;
-
-        await using (var ctx = CreateContext())
-        {
-            ctx.Instances.Add(Instance.Create(instanceId, "test-flow", "1.0.0"));
-            await ctx.SaveChangesAsync();
-        }
-
-        // Head of history: 2.0.0 (application marks it latest).
-        await InsertInstanceDataRowAsync(instanceId, "2.0.0", isLatest: true, enteredAt: baseline);
-
-        // Older-line append: 1.0.5 (application decided takesLatest = false).
-        await InsertInstanceDataRowAsync(instanceId, "1.0.5", isLatest: false, enteredAt: baseline.AddMilliseconds(1));
-
-        await using (var ctx = CreateContext())
-        {
-            var list = await ctx.InstancesData
-                .Where(x => x.InstanceId == instanceId)
-                .ToListAsync();
-
-            list.Count.ShouldBe(2);
-
-            // Exactly one latest, and it is 2.0.0 — the lower version did not steal it.
-            var latest = list.Single(x => x.IsLatest);
-            latest.Version.ShouldBe("2.0.0");
-
-            list.Single(x => x.Version == "1.0.5").IsLatest.ShouldBeFalse();
-        }
-    }
-
-    /// <summary>
-    /// Inserts a single InstanceData row with the given semantic version and IsLatest flag,
-    /// mirroring how the application layer persists a versioned row (the trigger assigns
-    /// VersionNo and, only when IsLatest = true, demotes the previous latest).
-    /// </summary>
-    private async Task InsertInstanceDataRowAsync(
-        Guid instanceId, string version, bool isLatest, DateTime enteredAt)
-    {
         await using var ctx = CreateContext();
-        await ctx.Database.ExecuteSqlRawAsync(@"
-            INSERT INTO ""InstancesData"" (""Id"", ""InstanceId"", ""Version"", ""HistorySequence"", ""ETag"", ""DataHash"", ""Data"", ""EnteredAt"", ""VersionNo"", ""IsLatest"")
-            VALUES ({0}, {1}, {2}, 0, {3}, {4}, {5}::jsonb, {6}, 0, {7})",
-            Guid.NewGuid(),
-            instanceId,
-            version,
-            Ulid.NewUlid().ToString(),
-            "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-            "{}",
-            enteredAt,
-            isLatest);
+        var service = CreateService(ctx);
+        var instance1 = Instance.Create(seeded1.Id, seeded1.Flow, seeded1.FlowVersion);
+        var instance2 = Instance.Create(seeded2.Id, seeded2.Flow, seeded2.FlowVersion);
+
+        // Act
+        for (var i = 0; i < 3; i++)
+            await service.AppendAsync(instance1, new JsonData($"{{\"a\":{i}}}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+        for (var i = 0; i < 2; i++)
+            await service.AppendAsync(instance2, new JsonData($"{{\"b\":{i}}}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+
+        // Assert — VersionNo sequences are per instance
+        (await ctx.InstancesData.Where(x => x.InstanceId == seeded1.Id).OrderBy(x => x.VersionNo)
+            .Select(x => x.VersionNo).ToListAsync()).ShouldBe([1L, 2L, 3L]);
+        (await ctx.InstancesData.Where(x => x.InstanceId == seeded2.Id).OrderBy(x => x.VersionNo)
+            .Select(x => x.VersionNo).ToListAsync()).ShouldBe([1L, 2L]);
+    }
+
+    private sealed class FixedDbContextProvider(WorkflowDbContext context)
+        : IAetherDbContextProvider<WorkflowDbContext>
+    {
+        public Task<WorkflowDbContext> GetDbContextAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(context);
+    }
+
+    private sealed class NullWorkflowContext : IWorkflowContext
+    {
+        public Definitions.Workflow? Workflow => null;
+        public bool HasWorkflow => false;
+        public void SetWorkflow(Definitions.Workflow workflow) { }
     }
 }
-
