@@ -50,28 +50,19 @@ public sealed class InstanceDataWriteService(
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
+            var plan = PlanAppend(head, delta, versionStrategy);
 
-            var content = head is null ? delta : new JsonData(head.Data).Merge(delta);
-
-            // No-change dedup on the MERGED result, under the lock — an idempotent duplicate
-            // (e.g. a repeated callback stamping a key that is already set) writes nothing.
-            if (head is not null
-                && string.Equals(InstanceData.ComputeDataHash(content), head.DataHash,
-                    StringComparison.OrdinalIgnoreCase))
+            if (plan.IsDuplicate)
             {
                 return null;
             }
 
-            var version = head is null
-                ? WorkflowConstants.DefaultVersion
-                : InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
-
-            await ValidateAgainstSchemaAsync(content, cancellationToken);
+            await ValidateAgainstSchemaAsync(plan.Content, cancellationToken);
 
             // A strategy append always sits at or above the head → it takes the latest flag.
-            var row = new InstanceData(Guid.NewGuid(), instance.Id, version, content, isLatest: true)
+            var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, plan.Content, isLatest: true)
             {
-                VersionNo = (head?.VersionNo ?? 0L) + 1
+                VersionNo = plan.VersionNo
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
@@ -121,6 +112,33 @@ public sealed class InstanceDataWriteService(
         });
 
         return result!;
+    }
+
+    /// <summary>
+    /// Computes a strategy append's whole identity from the authoritative head: the full merged
+    /// content, the no-change dedup verdict (hash of the MERGED result against the head's hash —
+    /// a delta-only duplicate never matches raw), and the version pair. Pure so the contract is
+    /// unit-testable; <see cref="AppendAsync"/> calls it under the row lock.
+    /// </summary>
+    internal static AppendPlan PlanAppend(
+        InstanceDataHeadRow? head,
+        JsonData delta,
+        VersionStrategy? versionStrategy)
+    {
+        if (head is null)
+        {
+            return new AppendPlan(delta, WorkflowConstants.DefaultVersion, 1L, IsDuplicate: false);
+        }
+
+        var content = new JsonData(head.Data).Merge(delta);
+
+        // No-change dedup on the MERGED result — an idempotent duplicate (e.g. a repeated
+        // callback stamping a key that is already set) writes nothing.
+        var isDuplicate = string.Equals(
+            InstanceData.ComputeDataHash(content), head.DataHash, StringComparison.OrdinalIgnoreCase);
+
+        var version = InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
+        return new AppendPlan(content, version, head.VersionNo + 1, isDuplicate);
     }
 
     /// <summary>
@@ -233,8 +251,8 @@ public sealed class InstanceDataWriteService(
 
     /// <summary>
     /// Validates the content against the current workflow's master schema when one is
-    /// configured — the exact behavior the SchemaValidation aspect provided on the old
-    /// aggregate mutation methods. No workflow in context (publish, system paths) → skip.
+    /// configured — the same contract the old aggregate mutation methods enforced. No workflow
+    /// in context (publish, system paths) → skip.
     /// </summary>
     private async Task ValidateAgainstSchemaAsync(JsonData content, CancellationToken cancellationToken)
     {
@@ -245,9 +263,7 @@ public sealed class InstanceDataWriteService(
         var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
         if (!schemaResult.IsSuccess)
         {
-            logger.LogWarning(
-                "Failed to load schema {SchemaKey} for instance data validation: {Error}",
-                workflow.Schema.Key, schemaResult.Error.Message);
+            logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, schemaResult.Error.Message);
             return;
         }
 
@@ -275,3 +291,13 @@ internal sealed class InstanceDataHeadRow
     public string DataHash { get; set; } = string.Empty;
     public string Data { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// The identity of a strategy append computed from the authoritative head:
+/// merged content, dedup verdict, and the version pair the new row will carry.
+/// </summary>
+internal readonly record struct AppendPlan(
+    JsonData Content,
+    string Version,
+    long VersionNo,
+    bool IsDuplicate);

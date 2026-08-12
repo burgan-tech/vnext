@@ -45,17 +45,14 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
 
     /// <summary>
     /// History sequence number: orders rows that share the SAME <see cref="Version"/> string.
-    /// Not redundant with <see cref="VersionNo"/>/<see cref="IsLatest"/>: same-version rows are
-    /// routine (<c>VersionStrategy.None</c> — the default when <c>AddData</c> gets no strategy —
-    /// keeps the version string), and <see cref="VersionNo"/> is only assigned at persist time
-    /// under the row lock, so unpersisted rows all carry 0 and cannot order themselves. This is
-    /// the in-memory tie-breaker <see cref="InstanceDataVersionComparer"/> relies on before the
-    /// write service has run.
+    /// Legacy in-memory tie-breaker from the era of deferred persistence; with the write service
+    /// persisting every row immediately and assigning <see cref="VersionNo"/> under the row lock,
+    /// same-version rows are always ordered by <see cref="VersionNo"/>. Scheduled for removal.
     /// </summary>
     public int HistorySequence { get; private set; }
 
     /// <summary>
-    /// Instance-global version number. Assigned by the persistence write funnel under the
+    /// Instance-global version number. Assigned by the InstanceData write service under the
     /// per-instance <c>FOR UPDATE</c> row lock (head VersionNo + 1) before the row is inserted.
     /// Provides a monotonically increasing sequence per instance for concurrency control,
     /// backed by the unique index <c>UX_InstancesData_Instance_VersionNo</c>.
@@ -63,21 +60,12 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     public long VersionNo { get; internal set; }
 
     /// <summary>
-    /// Indicates if this is the latest data for the instance. Decided by the domain
-    /// (semantic-version comparison); the persistence write funnel demotes any stale latest
-    /// row under the same <c>FOR UPDATE</c> lock, and the partial unique index
+    /// Indicates if this is the latest data for the instance. Decided by the write service
+    /// (semantic-version comparison against the head it read under the <c>FOR UPDATE</c> lock),
+    /// which demotes any stale latest row under that same lock; the partial unique index
     /// <c>UX_InstancesData_Instance_IsLatest</c> enforces at most one latest per instance.
     /// </summary>
     public bool IsLatest { get; private set; }
-
-    /// <summary>
-    /// The version strategy this row was created with (in-memory only, never persisted —
-    /// internal getter keeps it out of the EF model). Null for the very first data row and for
-    /// explicit-version appends (<c>AddDataWithVersion</c>). The persistence write funnel uses
-    /// it to rebase <see cref="Version"/> onto the real database head when the in-memory base
-    /// turns out to be stale (a concurrent writer committed in between).
-    /// </summary>
-    internal VersionStrategy? AppliedVersionStrategy { get; private set; }
 
     /// <summary>
     /// ETag
@@ -104,56 +92,6 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     private void SetVersion(string version)
     {
         Version = Check.NotNullOrWhiteSpace(version, nameof(Version), WorkflowConstants.MaxVersionLength);
-    }
-
-    internal InstanceData NewVersion(
-        Guid id,
-        JsonData jsonData,
-        VersionStrategy versionStrategy,
-        int historySequence,
-        bool alreadyMerged = false
-    )
-    {
-        var newVersion = IncrementVersion(Version, versionStrategy);
-        // Full-merge model: the stored row is the complete state (previous full + delta).
-        // alreadyMerged lets a caller that computed the merge for its own comparison (the
-        // AddData no-change dedup) hand it over instead of merging twice.
-        var newData = alreadyMerged ? jsonData : Data.Merge(jsonData);
-        IsLatest = false;
-        return new InstanceData(
-            id,
-            InstanceId,
-            newVersion,
-            newData,
-            true,
-            historySequence
-        )
-        {
-            AppliedVersionStrategy = versionStrategy
-        };
-    }
-
-    /// <summary>
-    /// Rebases this NEW (not yet persisted) row's semantic version onto the real database head.
-    /// Called by the persistence write funnel under the per-instance <c>FOR UPDATE</c> lock when
-    /// the in-memory base this row was computed from is stale (a concurrent writer committed a
-    /// newer head in between): the row's <see cref="AppliedVersionStrategy"/> is re-applied to
-    /// the database head's version string, keeping version strings monotonic and duplicate-free.
-    /// No-op when the strategy is unknown (first row / explicit-version append) — those keep
-    /// their authored version and are separated by <see cref="VersionNo"/> alone.
-    /// </summary>
-    /// <param name="dbHeadVersion">Version string of the current latest row in the database.</param>
-    /// <param name="dbHeadHistorySequence">HistorySequence of that latest row.</param>
-    internal void RebaseVersion(string dbHeadVersion, int dbHeadHistorySequence)
-    {
-        if (AppliedVersionStrategy is null)
-            return;
-
-        // VersionStrategy.None falls through IncrementVersion's switch and returns the head
-        // string unchanged — the None line continues on the real head, others bump from it.
-        var rebased = IncrementVersion(dbHeadVersion, AppliedVersionStrategy);
-        SetVersion(rebased);
-        HistorySequence = rebased == dbHeadVersion ? dbHeadHistorySequence + 1 : 0;
     }
 
     /// <summary>

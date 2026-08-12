@@ -314,7 +314,7 @@ $$;
     {
         // Regression for the domain IsLatest invariant at the DB layer (review): appending a
         // lower semantic version to an older line (e.g. 1.0.5 while 2.0.0 is the head) must NOT
-        // steal the latest flag. The application layer (Instance.AddDataWithVersion) decides via
+        // steal the latest flag. The write service (AppendExplicitAsync) decides via
         // the semantic-version comparer and inserts the older-line row with IsLatest = false;
         // the aligned trigger must respect that and leave 2.0.0 as the sole latest — the old
         // last-insert-wins trigger would instead have marked 1.0.5 latest.

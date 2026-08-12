@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using BBT.Workflow.Data;
 using BBT.Workflow.Instances;
 using Shouldly;
 using Xunit;
@@ -83,6 +84,68 @@ public class InstanceDataWriteServiceTests
     {
         InstanceData.IncrementVersion("1.0.5-pkg.1.17.0+account", VersionStrategy.IncreasePatch)
             .ShouldBe("1.0.6-pkg.1.17.0+account");
+    }
+
+    [Fact]
+    public void PlanAppend_NoHead_StartsTheChainAtDefaultVersion()
+    {
+        var plan = InstanceDataWriteService.PlanAppend(null, new JsonData("{\"a\":1}"), VersionStrategy.IncreasePatch);
+
+        plan.IsDuplicate.ShouldBeFalse();
+        plan.Version.ShouldBe("1.0.0");
+        plan.VersionNo.ShouldBe(1L);
+    }
+
+    [Fact]
+    public void PlanAppend_DeltaProducingNoChange_IsDuplicate()
+    {
+        // Regression pin: the dedup compares the hash of the MERGED result against the head's
+        // hash. A delta-only duplicate (idempotent callback re-stamping an already-set key)
+        // never matches the head raw — merged it does, and no new version may be written.
+        var head = CreateHeadRow("{\"a\":1,\"rr_doc1\":true}", "1.2.3", versionNo: 7);
+
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"rr_doc1\":true}"), VersionStrategy.IncreaseMinor);
+
+        plan.IsDuplicate.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void PlanAppend_DeltaProducingChange_MergesAndComputesIdentityFromTheHead()
+    {
+        var head = CreateHeadRow("{\"a\":1}", "1.2.3", versionNo: 7);
+
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch);
+
+        plan.IsDuplicate.ShouldBeFalse();
+        // Full-merge model: the new row carries the complete state, not the delta.
+        plan.Content.Json.ShouldContain("\"a\"");
+        plan.Content.Json.ShouldContain("\"b\"");
+        plan.Version.ShouldBe("1.2.4");
+        plan.VersionNo.ShouldBe(8L);
+    }
+
+    [Fact]
+    public void PlanAppend_NoStrategy_ContinuesTheHeadVersionLine()
+    {
+        var head = CreateHeadRow("{\"a\":1}", "1.2.3", versionNo: 7);
+
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"a\":2}"), versionStrategy: null);
+
+        plan.IsDuplicate.ShouldBeFalse();
+        plan.Version.ShouldBe("1.2.3");
+        plan.VersionNo.ShouldBe(8L);
+    }
+
+    private static InstanceDataHeadRow CreateHeadRow(string json, string version, long versionNo)
+    {
+        var data = new JsonData(json);
+        return new InstanceDataHeadRow
+        {
+            VersionNo = versionNo,
+            Version = version,
+            Data = data.Json,
+            DataHash = InstanceData.ComputeDataHash(data)
+        };
     }
 
     private static Instance CreateInstanceWithLatest(string version, out InstanceData latest)

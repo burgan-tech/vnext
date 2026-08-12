@@ -83,7 +83,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void AddData_ShouldAddInitialData_WhenNoPreviousData()
+    public void SeedData_ShouldAddInitialData_WhenNoPreviousData()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
@@ -91,7 +91,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var input = JsonData.CreateFrom("{}");
 
         // Act
-        var result = instance.AddData(dataId, input);
+        var result = instance.SeedData(dataId, input);
 
         // Assert
         Assert.Single(instance.DataList);
@@ -101,15 +101,15 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void AddData_ShouldCreateNewVersion_WhenPreviousDataExists()
+    public void SeedData_ShouldCreateNewVersion_WhenPreviousDataExists()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
         var data1 = JsonData.CreateFrom("{\"key\":\"value1\"}");
         var data2 = JsonData.CreateFrom("{\"key\":\"value2\"}");
 
-        instance.AddData(Guid.NewGuid(), data1);
-        var newData = instance.AddData(Guid.NewGuid(), data2, VersionStrategy.IncreaseMinor);
+        instance.SeedData(Guid.NewGuid(), data1);
+        var newData = instance.SeedData(Guid.NewGuid(), data2, VersionStrategy.IncreaseMinor);
 
         // Assert
         Assert.Equal(2, instance.DataList.Count);
@@ -124,7 +124,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var input = JsonData.CreateFrom("{}");
         var version = "1.0.0";
 
-        instance.AddData(Guid.NewGuid(), input);
+        instance.SeedData(Guid.NewGuid(), input);
         var result = instance.FindData(version);
 
         // Assert
@@ -140,10 +140,10 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
 
         // NewVersion metodu data merge yaptığı için farklı keyler kullanarak 
         // her seferinde gerçekten farklı data oluşturuyoruz
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v1\":1}"), "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v2\":2}"), "1.0.1");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v3\":3}"), "1.0.2");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v4\":4}"), "1.1.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v1\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v2\":2}"), "1.0.1");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v3\":3}"), "1.0.2");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v4\":4}"), "1.1.0");
 
         // Act
         var result = instance.FindData("1.0");
@@ -161,7 +161,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
         var version = "1.0.0-pkg.1.17.0+account";
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), version);
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), version);
 
         // Act
         var result = instance.FindData(version);
@@ -178,9 +178,9 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
 
         // Add multiple versions with same artifact version but different pkg versions
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.17.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.18.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0-pkg.1.16.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.17.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.18.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0-pkg.1.16.0+account");
 
         // Act - Client sends only artifact version
         var result = instance.FindData("1.0.0");
@@ -196,10 +196,10 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
 
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.2.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.2.1+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0-pkg.1.3.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0-pkg.1.3.1+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.2.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.2.1+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0-pkg.1.3.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0-pkg.1.3.1+account");
 
         // Act - Query for artifact version 1.0.0
         var result1 = instance.FindData("1.0.0");
@@ -219,7 +219,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.2.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.2.0+account");
 
         // Act
         var result = instance.FindData("2.0.0");
@@ -234,9 +234,9 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
 
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.2.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.1-pkg.1.2.1+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.1.0-pkg.1.3.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.2.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.1-pkg.1.2.1+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.1.0-pkg.1.3.0+account");
 
         // Act - Partial version "1.0" should find highest matching
         var result = instance.FindData("1.0");
@@ -252,7 +252,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
 
         // Act
         var result = instance.FindData("1.0.0");
@@ -269,8 +269,8 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
 
         // Add a simple version and an extended version with same artifact
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.2.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.2.0+account");
 
         // Act - Query for exact simple version
         var result = instance.FindData("1.0.0");
@@ -286,9 +286,9 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
 
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-alpha.1-pkg.1.17.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-alpha.1-pkg.1.18.0+account");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0-pkg.1.0.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-alpha.1-pkg.1.17.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-alpha.1-pkg.1.18.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0-pkg.1.0.0+account");
 
         // Act - Query for pre-release artifact version
         var result = instance.FindData("1.0.0-alpha.1");
@@ -305,8 +305,8 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
 
         var exactVersion = "1.0.0-beta.2-pkg.1.5.0+customer";
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), exactVersion);
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-beta.2-pkg.1.6.0+customer");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), exactVersion);
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-beta.2-pkg.1.6.0+customer");
 
         // Act - Query for exact version
         var result = instance.FindData(exactVersion);
@@ -322,7 +322,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
 
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.17.0+account+build.123");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.17.0+account+build.123");
 
         // Act - Query for artifact version
         var result = instance.FindData("1.0.0");
@@ -368,9 +368,9 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
 
         // NewVersion metodu data merge yaptığı için farklı keyler kullanarak 
         // her seferinde gerçekten farklı data oluşturuyoruz
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v1\":1}"), "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v2\":2}"), "1.0.1");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v3\":3}"), "1.0.2");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v1\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v2\":2}"), "1.0.1");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v3\":3}"), "1.0.2");
 
         // Act
         var latest = instance.LatestData;
@@ -381,27 +381,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void AddData_ShouldNotCreateNewVersion_WhenDataIsSame()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var dataId1 = Guid.NewGuid();
-        var dataId2 = Guid.NewGuid();
-        var sameData = JsonData.CreateFrom("{\"key\":\"value\"}");
-        
-        // Act
-        var result1 = instance.AddData(dataId1, sameData);
-        var result2 = instance.AddData(dataId2, sameData);
-        
-        // Assert
-        Assert.Single(instance.DataList);
-        Assert.Equal(result1.Id, result2.Id); // Same instance returned
-        Assert.Equal(result1.Version, result2.Version);
-        Assert.Equal(result1.DataHash, result2.DataHash);
-    }
-
-    [Fact]
-    public void AddData_ShouldCreateNewVersion_WhenDataIsDifferent()
+    public void SeedData_ShouldCreateNewVersion_WhenDataIsDifferent()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
@@ -409,11 +389,11 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var dataId2 = Guid.NewGuid();
         var data1 = JsonData.CreateFrom("{\"key\":\"value1\"}");
         var data2 = JsonData.CreateFrom("{\"key\":\"value2\"}");
-        
+
         // Act
-        var result1 = instance.AddData(dataId1, data1);
-        var result2 = instance.AddData(dataId2, data2);
-        
+        var result1 = instance.SeedData(dataId1, data1);
+        var result2 = instance.SeedData(dataId2, data2, VersionStrategy.IncreasePatch);
+
         // Assert
         Assert.Equal(2, instance.DataList.Count);
         Assert.NotEqual(result1.Id, result2.Id);
@@ -424,27 +404,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void AddDataWithVersion_ShouldNotCreateNewVersion_WhenDataIsSame()
-    {
-        // Arrange
-        var instance = InstanceFactory.CreateDefault();
-        var dataId1 = Guid.NewGuid();
-        var dataId2 = Guid.NewGuid();
-        var sameData = JsonData.CreateFrom("{\"key\":\"value\"}");
-        
-        // Act
-        var result1 = instance.AddDataWithVersion(dataId1, sameData, "1.0.0");
-        var result2 = instance.AddDataWithVersion(dataId2, sameData, "2.0.0");
-        
-        // Assert
-        Assert.Single(instance.DataList);
-        Assert.Equal(result1.Id, result2.Id); // Same instance returned
-        Assert.Equal("1.0.0", result2.Version); // Original version maintained
-        Assert.Equal(result1.DataHash, result2.DataHash);
-    }
-
-    [Fact]
-    public void AddDataWithVersion_ShouldCreateNewVersion_WhenDataIsDifferent()
+    public void SeedDataWithVersion_ShouldCreateNewVersion_WhenDataIsDifferent()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
@@ -454,8 +414,8 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var data2 = JsonData.CreateFrom("{\"key\":\"value2\"}");
         
         // Act
-        var result1 = instance.AddDataWithVersion(dataId1, data1, "1.0.0");
-        var result2 = instance.AddDataWithVersion(dataId2, data2, "2.0.0");
+        var result1 = instance.SeedDataWithVersion(dataId1, data1, "1.0.0");
+        var result2 = instance.SeedDataWithVersion(dataId2, data2, "2.0.0");
         
         // Assert
         Assert.Equal(2, instance.DataList.Count);
@@ -474,7 +434,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var data1 = JsonData.CreateFrom("{\"key\":\"value\"}");
         var data2 = JsonData.CreateFrom("{\"key\":\"value\"}");
         var instance = InstanceFactory.CreateDefault();
-        var instanceData = instance.AddDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
+        var instanceData = instance.SeedDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
         
         // Act
         var result = instanceData.HasSameData(data2);
@@ -490,7 +450,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var data1 = JsonData.CreateFrom("{\"key\":\"value1\"}");
         var data2 = JsonData.CreateFrom("{\"key\":\"value2\"}");
         var instance = InstanceFactory.CreateDefault();
-        var instanceData = instance.AddDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
+        var instanceData = instance.SeedDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
         
         // Act
         var result = instanceData.HasSameData(data2);
@@ -506,33 +466,13 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var data1 = JsonData.CreateFrom("{\"key\":\"value\",\"number\":123}");
         var data2 = JsonData.CreateFrom("{ \"number\": 123, \"key\": \"value\" }"); // Different order & spacing
         var instance = InstanceFactory.CreateDefault();
-        var instanceData = instance.AddDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
+        var instanceData = instance.SeedDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
         
         // Act
         var result = instanceData.HasSameData(data2);
         
         // Assert
         Assert.True(result); // Should be true because semantic content is same
-    }
-
-    [Fact]
-    public void AddData_ShouldNotCreateNewVersion_WithDifferentJsonFormatting()
-    {
-        // Arrange - Same semantic content but different formatting
-        var instance = InstanceFactory.CreateDefault();
-        var dataId1 = Guid.NewGuid();
-        var dataId2 = Guid.NewGuid();
-        var data1 = JsonData.CreateFrom("{\"key\":\"value\",\"items\":[1,2,3]}");
-        var data2 = JsonData.CreateFrom("{ \"items\": [1, 2, 3], \"key\": \"value\" }"); // Different formatting
-        
-        // Act
-        var result1 = instance.AddData(dataId1, data1);
-        var result2 = instance.AddData(dataId2, data2);
-        
-        // Assert
-        Assert.Single(instance.DataList);
-        Assert.Equal(result1.Id, result2.Id); // Same instance returned
-        Assert.Equal(result1.DataHash, result2.DataHash); // Same hash
     }
 
     [Fact]
@@ -576,7 +516,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
             {
                 // Add some data first
                 var data = JsonData.CreateFrom($"{{\"thread\":{threadIndex}}}");
-                instance.AddData(Guid.NewGuid(), data, VersionStrategy.IncreasePatch);
+                instance.SeedData(Guid.NewGuid(), data, VersionStrategy.IncreasePatch);
                 
                 // Synchronize all threads
                 barrier.SignalAndWait();
@@ -611,7 +551,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var findTasks = new List<Task<InstanceData?>>();
         
         // Add initial data
-        instance.AddData(Guid.NewGuid(), JsonData.CreateFrom("{}"), VersionStrategy.IncreasePatch); // 1.0.1
+        instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{}"), VersionStrategy.IncreasePatch); // 1.0.1
 
         // Act - Concurrent add and find operations
         for (int i = 0; i < 5; i++)
@@ -622,7 +562,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
                 for (int j = 0; j < 3; j++)
                 {
                     var data = JsonData.CreateFrom($"{{\"operation\":{j}}}");
-                    instance.AddData(Guid.NewGuid(), data, VersionStrategy.IncreasePatch);
+                    instance.SeedData(Guid.NewGuid(), data, VersionStrategy.IncreasePatch);
                 }
             });
             addTasks.Add(addTask);
@@ -1492,7 +1432,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
         instance.SetKey("test-key");
         instance.AddTags(new[] { "tag1", "tag2" });
-        instance.AddData(Guid.NewGuid(), JsonData.CreateFrom("{\"key\":\"value\"}"));
+        instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"key\":\"value\"}"));
         
         var correlation = InstanceCorrelation.Create(
             Guid.NewGuid(),
@@ -1710,7 +1650,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var data = JsonData.CreateFrom("{\"key\":\"value1\"}");
 
         // Act
-        var result = instance.AddDataWithVersion(Guid.NewGuid(), data, "1.0.0");
+        var result = instance.SeedDataWithVersion(Guid.NewGuid(), data, "1.0.0");
 
         // Assert
         Assert.Equal(0, result.HistorySequence);
@@ -1725,8 +1665,8 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var data2 = JsonData.CreateFrom("{\"key\":\"value2\"}");
 
         // Act
-        var result1 = instance.AddDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
-        var result2 = instance.AddDataWithVersion(Guid.NewGuid(), data2, "1.0.0");
+        var result1 = instance.SeedDataWithVersion(Guid.NewGuid(), data1, "1.0.0");
+        var result2 = instance.SeedDataWithVersion(Guid.NewGuid(), data2, "1.0.0");
 
         // Assert
         Assert.Equal(0, result1.HistorySequence);
@@ -1740,10 +1680,10 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
 
         // Act
-        var result0 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        var result1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var result2 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
-        var result3 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
+        var result0 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        var result1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var result2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        var result3 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
 
         // Assert
         Assert.Equal(0, result0.HistorySequence);
@@ -1759,15 +1699,15 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
 
         // Act - Add data for version 1.0.0
-        var v1_0 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        var v1_1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var v1_0 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        var v1_1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
 
         // Add data for version 2.0.0
-        var v2_0 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
-        var v2_1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0");
+        var v2_0 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
+        var v2_1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0");
 
         // Add more data for version 1.0.0
-        var v1_2 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0");
+        var v1_2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0");
 
         // Assert - Each version should have its own sequence counter
         Assert.Equal(0, v1_0.HistorySequence);
@@ -1779,20 +1719,21 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void GetNextHistorySequence_ShouldWorkCorrectly_WhenUsedViaAddData()
+    public void HistorySequence_ShouldResetPerVersionLine_WhenSeededViaStrategy()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
 
-        // Act - AddData internally uses GetNextHistorySequence when creating new versions
-        var result1 = instance.AddData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"));
-        var result2 = instance.AddData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"));
-        var result3 = instance.AddData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"));
+        // Act — no strategy keeps the version string, so all three land on the 1.0.0 line;
+        // a strategy bump starts a fresh line whose sequence resets to 0.
+        var result1 = instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"));
+        var result2 = instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"));
+        var result3 = instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), VersionStrategy.IncreasePatch);
 
         // Assert
         Assert.Equal(0, result1.HistorySequence);
-        Assert.Equal(0, result2.HistorySequence); // New version, so resets to 0
-        Assert.Equal(0, result3.HistorySequence); // New version, so resets to 0
+        Assert.Equal(1, result2.HistorySequence);
+        Assert.Equal(0, result3.HistorySequence);
     }
 
     [Fact]
@@ -1800,10 +1741,10 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
 
         // Act
         var history = instance.GetVersionHistory("1.0.0").ToList();
@@ -1820,9 +1761,9 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var latest = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var latest = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
 
         // Act
         var result = instance.GetLatestDataForVersion("1.0.0");
@@ -1838,7 +1779,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
 
         // Act
         var result = instance.GetLatestDataForVersion("2.0.0");
@@ -1852,7 +1793,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
 
         // Act
         var history = instance.GetVersionHistory("2.0.0").ToList();

@@ -1,7 +1,6 @@
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
-using BBT.Workflow.Aspects;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
 
@@ -907,110 +906,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
     }
 
-    [SchemaValidation]
-    public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)
-    {
-        lock (_dataListLock)
-        {
-            var latestData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
-
-            // Invariant: IsLatest = the highest version across the entire history. An explicit
-            // (possibly older-line) version only takes the flag when it compares >= the current
-            // head; otherwise it becomes the head of its own version line without stealing the
-            // global latest (parallel artifact lines such as 1.0.x vs 2.0.x stay independent).
-            var takesLatest = latestData is null
-                || InstanceDataVersionComparer.CompareVersionStrings(version, latestData.Version) >= 0;
-
-            // Appending to an older line requires that line's rows for dedup + sequence math,
-            // which a latest-only loaded aggregate does not have in memory.
-            if (!takesLatest && IsDataPartiallyLoaded)
-            {
-                throw new InvalidOperationException(
-                    $"Cannot append version '{version}' to instance '{Id}': the aggregate was " +
-                    "loaded latest-only and the target version line is not in memory. Load the " +
-                    "instance with full data history for line-targeted appends.");
-            }
-
-            // Dedup against the head of the SAME version line — not the global latest:
-            // appending data to line 1.0.x must neither be skipped because it happens to equal
-            // the 2.0.0 payload, nor duplicate what its own line already holds.
-            if (ignoreSameData)
-            {
-                var lineHead = _dataList
-                    .Where(d => d.Version == version)
-                    .OrderByDescending(d => d.HistorySequence)
-                    .FirstOrDefault();
-                if (lineHead?.HasSameData(inputData) == true)
-                {
-                    return lineHead;
-                }
-            }
-
-            if (takesLatest)
-            {
-                latestData?.MarkAsNotLatest();
-            }
-
-            var newData = new InstanceData(
-                id,
-                Id,
-                version,
-                inputData,
-                takesLatest,
-                GetNextHistorySequence(version)
-            );
-            _dataList.Add(newData);
-            return newData;
-        }
-    }
-
-    [SchemaValidation]
-    public InstanceData AddData(Guid id, JsonData inputData, VersionStrategy? versionStrategy = null)
-    {
-        //Version Stratejy burasıda lock altında hesaplanacak
-        //Sqeunce kaldıracğaız doğrudan version no ile gidecek.
-        lock (_dataListLock)
-        {
-            var lastData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
-
-            InstanceData newData;
-            if (lastData is null)
-            {
-                newData = new InstanceData(
-                    id,
-                    Id,
-                    WorkflowConstants.DefaultVersion,
-                    inputData,
-                    true
-                );
-            }
-            else
-            {
-                // No-change dedup on the MERGED result: the stored row is always the full merged
-                // state (full-merge model), so the input must be compared post-merge. Comparing
-                // the raw input against the merged head — as this used to do — never matches for
-                // delta-only inputs (e.g. an idempotent duplicate callback stamping a key that is
-                // already set), silently growing the history with byte-identical versions.
-                var merged = lastData.Data.Merge(inputData);
-                if (lastData.HasSameData(merged))
-                {
-                    return lastData;
-                }
-
-                newData = lastData.NewVersion(
-                    id,
-                    merged,
-                    versionStrategy ?? VersionStrategy.None,
-                    GetNextHistorySequence(lastData.Version),
-                    alreadyMerged: true
-                );
-            }
-
-            _dataList.Add(newData);
-            return newData;
-        }
-    }
-
     /// <summary>
     /// Finds instance data by version.
     /// Delegates version resolution to <see cref="InstanceDataVersionComparer.FindBestMatch"/> for consistency.
@@ -1061,18 +956,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 .OrderByDescending(d => d, InstanceDataVersionComparer.Instance)
                 .FirstOrDefault();
         }
-    }
-
-    /// <summary>
-    /// Gets the next history sequence for a specific version
-    /// </summary>
-    private int GetNextHistorySequence(string version)
-    {
-        return _dataList
-            .Where(d => d.Version == version)
-            .Select(d => d.HistorySequence)
-            .DefaultIfEmpty(-1) //For an empty list, it returns -1, and by adding +1 it becomes 0"
-            .Max() + 1;
     }
 
     /// <summary>

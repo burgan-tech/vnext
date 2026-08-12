@@ -270,19 +270,17 @@ public static partial class WorkflowLogs
         int lockTimeoutMs);
 
     /// <summary>
-    /// Logs when a new InstanceData row's semantic version was rebased onto the real database
-    /// head because the in-memory base was stale (a concurrent writer committed in between).
+    /// Logs when the InstanceData write service could not load the workflow's master schema for
+    /// pre-persist validation — the append proceeds unvalidated rather than failing the write.
     /// </summary>
     [LoggerMessage(
-        EventId = 10142,
-        Level = LogLevel.Information,
-        Message = "Instance data version rebased for instance {InstanceId}: {StaleVersion} -> {RebasedVersion} (VersionNo {VersionNo})")]
-    public static partial void InstanceDataVersionRebased(
+        EventId = 10148,
+        Level = LogLevel.Warning,
+        Message = "Failed to load schema {SchemaKey} for instance data validation: {Error}")]
+    public static partial void InstanceDataSchemaLoadFailed(
         this ILogger logger,
-        Guid instanceId,
-        string staleVersion,
-        string rebasedVersion,
-        long versionNo);
+        string schemaKey,
+        string? error);
 
     /// <summary>
     /// Logs when the write funnel demoted a stale latest row (written by a concurrent

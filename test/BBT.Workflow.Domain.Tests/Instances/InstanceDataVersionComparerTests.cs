@@ -275,10 +275,10 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
         var list = new List<InstanceData>
         {
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "1.0.0"),
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "invalid"),
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "2.0.0"),
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "another-invalid")
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "1.0.0"),
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "invalid"),
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "2.0.0"),
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "another-invalid")
         };
 
         // Act & Assert - Should not throw
@@ -291,9 +291,9 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        var data1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        var data2 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var data3 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        var data1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        var data2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var data3 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
 
         // Act & Assert
         // data1 (seq=0) < data2 (seq=1)
@@ -310,12 +310,12 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
         // Version 2.0.0 with sequence 0
-        var data1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0");
+        var data1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0");
         
         // Version 1.0.0 with higher sequence numbers
-        var data2 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var data3 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
-        var data4 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
+        var data2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var data3 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        var data4 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
 
         // Act & Assert
         // Version 2.0.0 (seq=0) > Version 1.0.0 (seq=2) - Version takes priority
@@ -329,11 +329,11 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
         var list = new List<InstanceData>
         {
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0"), // seq=1
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0"), // seq=1
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0"), // seq=2
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0"), // seq=0
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0"), // seq=0
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0"), // seq=1
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0"), // seq=1
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0"), // seq=2
         };
 
         // Act
@@ -363,10 +363,10 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
         var list = new List<InstanceData>
         {
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0"), // seq=1
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0"), // seq=1
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0"), // seq=0
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0"), // seq=1
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0"), // seq=0
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0"), // seq=1
         };
 
         // Act
@@ -996,7 +996,7 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
     private InstanceData CreateInstanceData(string version)
     {
         var instance = InstanceFactory.CreateDefault();
-        return instance.AddDataWithVersion(
+        return instance.SeedDataWithVersion(
             Guid.NewGuid(),
             JsonData.CreateFrom("{}"),
             version

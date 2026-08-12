@@ -1,11 +1,8 @@
 using System;
 using System.Threading.Tasks;
-using BBT.Aether.DependencyInjection;
 using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Xunit;
 
@@ -27,20 +24,9 @@ namespace BBT.Workflow.Infrastructure.Tests.Data;
 public sealed class WorkflowDbContextInstanceDataGuardTests : IDisposable
 {
     private readonly WorkflowDbContext _context;
-    private readonly IServiceProvider _ambient;
-    private readonly IServiceProvider? _previousAmbient;
 
     public WorkflowDbContextInstanceDataGuardTests()
     {
-        // Domain methods carry aspects that resolve through the ambient provider; a workflow-less
-        // context makes the schema-validation aspect a no-op.
-        _ambient = new ServiceCollection()
-            .AddLogging()
-            .AddSingleton<IWorkflowContext>(new NullWorkflowContext())
-            .BuildServiceProvider();
-        _previousAmbient = AmbientServiceProvider.Current;
-        AmbientServiceProvider.Current = _ambient;
-
         // Unreachable on purpose: the model builds, the change tracker works, and any attempt
         // to actually reach the database fails fast with a connection error.
         var options = new DbContextOptionsBuilder<WorkflowDbContext>()
@@ -52,9 +38,7 @@ public sealed class WorkflowDbContextInstanceDataGuardTests : IDisposable
 
     public void Dispose()
     {
-        AmbientServiceProvider.Current = _previousAmbient;
         _context.Dispose();
-        (_ambient as IDisposable)?.Dispose();
     }
 
     [Fact]
@@ -88,15 +72,11 @@ public sealed class WorkflowDbContextInstanceDataGuardTests : IDisposable
 
     private static Instance CreateInstanceWithData()
     {
+        // A row exactly as a service-bypassing writer would produce it: attached to the
+        // aggregate with its VersionNo still unassigned (0).
         var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0");
-        instance.AddData(Guid.NewGuid(), new JsonData("{\"a\":1}"), VersionStrategy.IncreasePatch);
+        instance.AcceptPersistedData(new InstanceData(
+            Guid.NewGuid(), instance.Id, "1.0.0", new JsonData("{\"a\":1}"), true));
         return instance;
-    }
-
-    private sealed class NullWorkflowContext : IWorkflowContext
-    {
-        public BBT.Workflow.Definitions.Workflow? Workflow => null;
-        public bool HasWorkflow => false;
-        public void SetWorkflow(BBT.Workflow.Definitions.Workflow workflow) { }
     }
 }
