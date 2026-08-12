@@ -14,9 +14,10 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline.Steps;
 
 /// <summary>
-/// Unit tests for the updateData advance guard in <see cref="RunAutomaticTransitionsStep"/>:
-/// a data-only updateData (no status ownership) must not evaluate auto transitions — the
-/// owning chain does that with the fresh data; an owning updateData advances normally.
+/// Unit tests pinning that <see cref="RunAutomaticTransitionsStep"/> treats updateData like any
+/// other transition: auto transitions are evaluated against the freshly written data regardless
+/// of status ownership (updateData never owns the status — ownership for a satisfied transition
+/// is acquired later, at the pipeline's continuation boundary).
 /// </summary>
 public class RunAutomaticTransitionsStepUpdateDataTests
 {
@@ -31,25 +32,11 @@ public class RunAutomaticTransitionsStepUpdateDataTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_UpdateDataWithoutOwnership_SkipsAutoEvaluation()
+    public async Task ExecuteAsync_UpdateDataWithoutOwnership_StillEvaluatesAutoTransitions()
     {
+        // The old data-only guard is gone: updateData always evaluates the state's autos.
         var context = CreateContext("update-parent-data");
         context.OwnsStatus = false;
-
-        var result = await _step.ExecuteAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.StopPipeline.ShouldBeFalse();
-        context.Directives.NextTransition.ShouldBeNull();
-        await _evaluator.DidNotReceiveWithAnyArgs()
-            .EvaluateAsync(default!, default!, default);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_UpdateDataWithOwnership_EvaluatesAutoTransitions()
-    {
-        var context = CreateContext("update-parent-data");
-        context.OwnsStatus = true;
         _evaluator.EvaluateAsync(default!, default!, default)
             .ReturnsForAnyArgs(BBT.Aether.Results.Result<AutoConditionEvaluation>.Ok(
                 new AutoConditionEvaluation { TransitionKey = "auto-next", Status = AutoConditionStatus.NotSatisfied }));
@@ -59,6 +46,23 @@ public class RunAutomaticTransitionsStepUpdateDataTests
         result.IsSuccess.ShouldBeTrue();
         await _evaluator.ReceivedWithAnyArgs()
             .EvaluateAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateDataWithoutOwnership_SatisfiedCondition_RequestsNextTransition()
+    {
+        // A satisfied condition is requested as usual; the pipeline's continuation boundary is
+        // what turns it into an owned execution (or drops it when the instance is taken).
+        var context = CreateContext("update-parent-data");
+        context.OwnsStatus = false;
+        _evaluator.EvaluateAsync(default!, default!, default)
+            .ReturnsForAnyArgs(BBT.Aether.Results.Result<AutoConditionEvaluation>.Ok(
+                new AutoConditionEvaluation { TransitionKey = "auto-next", Status = AutoConditionStatus.Satisfied }));
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Directives.NextTransition!.TransitionKey.ShouldBe("auto-next");
     }
 
     [Fact]

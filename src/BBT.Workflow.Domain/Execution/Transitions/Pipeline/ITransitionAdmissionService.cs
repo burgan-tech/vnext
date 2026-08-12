@@ -24,9 +24,11 @@ public enum AdmissionKind
     BypassBusyCheck = 1,
 
     /// <summary>
-    /// UpdateData: accepted unconditionally — no Busy check, no lock, no status flip. Instance
-    /// data writes are safe under the DB versioning trigger (per-instance advisory lock keeps
-    /// VersionNo monotonic and IsLatest unique).
+    /// UpdateData: accepted unconditionally — no Busy check, no reserve, no status flip. The
+    /// execution never owns the status lifecycle; instance-data writes are serialized by the
+    /// FOR UPDATE write funnel. A satisfied auto transition is handed to a real owner at the
+    /// continuation boundary (the pipeline reserves there, or drops the continuation when a
+    /// competing chain holds the instance).
     /// </summary>
     Unconditional = 2,
 
@@ -81,15 +83,6 @@ public interface ITransitionAdmissionService
     /// A concurrent winner surfaces as <c>Instance:100031</c> (409).
     /// </summary>
     Task<Result> ReserveAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Opportunistic reserve for <see cref="AdmissionKind.Unconditional"/> (updateData): under
-    /// the short status lock, flips Active→Busy and returns true (the request owns the status
-    /// lifecycle and may advance the state process). Returns false — NEVER an error — when the
-    /// instance is already Busy, Completed, or the lock could not be acquired: the request is
-    /// still accepted, but degrades to data-only (no auto-transition advancement).
-    /// </summary>
-    Task<bool> TryReserveOpportunisticallyAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Admits a <see cref="AdmissionKind.BypassBusyCheck"/> request (cancel/exit/timeout):

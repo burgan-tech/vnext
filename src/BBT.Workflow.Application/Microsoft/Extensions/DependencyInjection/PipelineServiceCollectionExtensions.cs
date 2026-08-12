@@ -76,6 +76,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, ForwardToActiveSubflowStep>();
         services.AddScoped<ITransitionStep, SetBusyStep>();
         services.AddScoped<ITransitionStep, CreateTransitionRecordStep>();
+        services.AddScoped<ITransitionStep, HandleUpdateDataDataOnlyStep>();
         services.AddScoped<ITransitionStep, ResourceLockStep>();
         services.AddScoped<ITransitionStep, RunOnExecuteTasksStep>();
         services.AddScoped<ITransitionStep, ApplyTimeoutStateStep>();

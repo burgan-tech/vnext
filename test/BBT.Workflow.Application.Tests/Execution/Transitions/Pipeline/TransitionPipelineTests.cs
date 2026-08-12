@@ -411,10 +411,11 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_UpdateData_ActiveInstance_ReservesOpportunisticallyAndOwnsStatus()
+    public async Task RunAsync_UpdateData_WithoutContinuation_NeverOwnsStatusAndNeverReserves()
     {
-        // updateData on an Active instance: opportunistic reserve succeeds → the request owns
-        // the status lifecycle and may advance auto transitions.
+        // updateData is status-neutral: it runs the full pipeline (data + tasks + auto
+        // evaluation) but never reserves and never settles. With no satisfied auto
+        // transition there is nothing to hand over, so no reserve happens at all.
         var context = CreateTransitionExecutionContext("update-parent-data");
         var workflowContext = CreateWorkflowExecutionContext(context);
 
@@ -423,40 +424,69 @@ public class TransitionPipelineTests
 
         _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
             .Returns(AdmissionKind.Unconditional);
-        _mockAdmissionService
-            .TryReserveOpportunisticallyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(true);
-
-        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.OwnsStatus.ShouldBeTrue();
-        await _mockAdmissionService.DidNotReceive()
-            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunAsync_UpdateData_BusyInstance_RunsDataOnlyWithoutOwnership()
-    {
-        // updateData beside an in-flight chain: reserve fails silently → data-only, no
-        // status ownership — the owner's Busy can never be stolen.
-        var context = CreateTransitionExecutionContext("update-parent-data");
-        context.Instance.Busy();
-        var workflowContext = CreateWorkflowExecutionContext(context);
-
-        SetupContextFactory(context);
-        SetupStepsToContinue();
-
-        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
-            .Returns(AdmissionKind.Unconditional);
-        _mockAdmissionService
-            .TryReserveOpportunisticallyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
-            .Returns(false);
 
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.OwnsStatus.ShouldBeFalse();
+        await _mockAdmissionService.DidNotReceive()
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_UpdateData_SatisfiedAuto_ReservesAtContinuationBoundary()
+    {
+        // The satisfied auto transition must run as a real owner: the continuation boundary
+        // reserves (Active→Busy) and the chained hop inherits the ownership.
+        var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
+        var chainedContext = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
+
+        SetupChainedContextFactory(updateDataContext, chainedContext);
+        SetupAutoStepRequestingNextTransition("auto-transition");
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.Received(1)
+            .ReserveAsync(updateDataContext, Arg.Any<CancellationToken>());
+        updateDataContext.OwnsStatus.ShouldBeTrue();
+        chainedContext.OwnsStatus.ShouldBeTrue(); // carried over by the inline continuation
+    }
+
+    [Fact]
+    public async Task RunAsync_UpdateData_ContinuationReserveFails_DropsContinuation()
+    {
+        // A competing chain owns the instance: the continuation is dropped (WARN) instead of
+        // advancing ownerless — the owner is already progressing and a later updateData
+        // re-evaluates the same conditions.
+        var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
+        var chainedContext = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
+
+        var contextCallCount = SetupChainedContextFactory(updateDataContext, chainedContext);
+        SetupAutoStepRequestingNextTransition("auto-transition");
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(
+                updateDataContext.InstanceId, updateDataContext.TransitionKey)));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        updateDataContext.OwnsStatus.ShouldBeFalse();
+        updateDataContext.Directives.NextTransition.ShouldBeNull(); // consumed and dropped
+        contextCallCount().ShouldBe(1); // the chained hop never ran
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -487,6 +517,59 @@ public class TransitionPipelineTests
         {
             step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
+    }
+
+    /// <summary>
+    /// Serves <paramref name="first"/> to the first context creation and <paramref name="chained"/>
+    /// to every later one. Returns an accessor for the number of contexts created, so a test can
+    /// assert whether the chained hop actually ran.
+    /// </summary>
+    private Func<int> SetupChainedContextFactory(
+        TransitionExecutionContext first,
+        TransitionExecutionContext chained)
+    {
+        var contextCallCount = 0;
+        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                contextCallCount++;
+                return Task.FromResult(contextCallCount == 1
+                    ? Result<TransitionExecutionContext>.Ok(first)
+                    : Result<TransitionExecutionContext>.Ok(chained));
+            });
+
+        return () => contextCallCount;
+    }
+
+    /// <summary>
+    /// Stubs the fixture steps so the Auto step requests <paramref name="nextTransitionKey"/> on
+    /// its first invocation (as a satisfied auto condition does) and continues afterwards.
+    /// </summary>
+    private void SetupAutoStepRequestingNextTransition(string nextTransitionKey)
+    {
+        foreach (var step in _mockSteps)
+        {
+            if (step.Order != LifecycleOrder.Auto)
+            {
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+                continue;
+            }
+
+            var autoCallCount = 0;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    autoCallCount++;
+                    if (autoCallCount > 1)
+                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+
+                    callInfo.ArgAt<TransitionExecutionContext>(0).Directives
+                        .RequestNextTransition(new NextTransitionRequest(nextTransitionKey, "auto"));
+                    return Task.FromResult(
+                        Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                });
         }
     }
 

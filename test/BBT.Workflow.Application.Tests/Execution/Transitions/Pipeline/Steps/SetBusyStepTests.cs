@@ -90,6 +90,23 @@ public class SetBusyStepTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenUpdateDataTransition_ShouldNeverMarkBusy()
+    {
+        // updateData is status-neutral. Marking an Active instance Busy here would strand it:
+        // a non-owning execution is barred from ResolveAvailable and settlement, so nothing
+        // would ever flip it back.
+        var context = CreateTransitionExecutionContext("update-parent-data");
+        context.Instance.IsActive.ShouldBeTrue();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Instance.IsActive.ShouldBeTrue();
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenIsSubFlowResume_ShouldSkipAndNotUpdate()
     {
         // Arrange
@@ -121,7 +138,8 @@ public class SetBusyStepTests
         result.Value!.StopPipeline.ShouldBeFalse();
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext()
+    private TransitionExecutionContext CreateTransitionExecutionContext(
+        string transitionKey = "test-transition")
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -130,14 +148,14 @@ public class SetBusyStepTests
         var workflow = CreateMockWorkflow(workflowKey, domain);
         var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
         var state = workflow.GetState("state1").Value!;
-        var transition = Transition.Create("test-transition", null, "state1", TriggerType.Manual, "Patch");
+        var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, "Patch");
 
         return new TransitionExecutionContext
         {
             InstanceId = instanceId,
             Domain = domain,
             WorkflowKey = workflowKey,
-            TransitionKey = "test-transition",
+            TransitionKey = transitionKey,
             Trigger = TriggerType.Manual,
             Actor = ExecutionActor.User,
             CorrelationId = Guid.NewGuid().ToString("N"),

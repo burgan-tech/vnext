@@ -118,25 +118,6 @@ public sealed class TransitionAdmissionService(
     }
 
     /// <inheritdoc />
-    public async Task<bool> TryReserveOpportunisticallyAsync(
-        TransitionExecutionContext context,
-        CancellationToken cancellationToken = default)
-    {
-        await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
-        if (!scope.IsAcquired)
-            return false; // degrade to data-only — an updateData accept is never rejected here
-
-        var outcome = await busyManager.TryMarkBusyWithPropagationAsync(
-            context.InstanceId, cancellationToken);
-
-        if (outcome != BusyMarkOutcome.Marked)
-            return false;
-
-        logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
-        return true;
-    }
-
-    /// <inheritdoc />
     public async Task<Result> TakeOverAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)

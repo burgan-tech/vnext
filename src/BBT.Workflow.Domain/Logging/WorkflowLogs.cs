@@ -212,30 +212,35 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
-    /// Logs when an updateData request gains status ownership (opportunistic reserve succeeded
-    /// or the parent rests in a SubFlow state) and may advance auto transitions.
+    /// Logs when an updateData execution hands its satisfied auto transition to a real owner:
+    /// the continuation boundary reserved the instance (Active→Busy) and the chained transition
+    /// proceeds with full normal behavior.
     /// </summary>
     [LoggerMessage(
         EventId = 10145,
         Level = LogLevel.Information,
-        Message = "UpdateData {TransitionKey} on instance {InstanceId} owns the status lifecycle; auto-transition advancement enabled")]
-    public static partial void UpdateDataAdvanceEnabled(
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} reserved the instance for its auto-transition continuation {NextTransitionKey}")]
+    public static partial void UpdateDataContinuationReserved(
         this ILogger logger,
         Guid instanceId,
-        string transitionKey);
+        string transitionKey,
+        string nextTransitionKey);
 
     /// <summary>
-    /// Logs when an updateData request runs data-only: the instance is Busy with an in-flight
-    /// chain, so the data is written but no auto transitions are advanced.
+    /// Logs when an updateData execution drops its satisfied auto transition because the
+    /// instance could not be reserved (a competing chain owns it). The competing owner is
+    /// already advancing; a later updateData re-evaluates the same conditions.
     /// </summary>
     [LoggerMessage(
         EventId = 10146,
-        Level = LogLevel.Debug,
-        Message = "UpdateData {TransitionKey} on instance {InstanceId} runs data-only (instance Busy with an in-flight chain)")]
-    public static partial void UpdateDataDataOnly(
+        Level = LogLevel.Warning,
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} dropped its auto-transition continuation {NextTransitionKey}: {ErrorCode}")]
+    public static partial void UpdateDataContinuationDropped(
         this ILogger logger,
         Guid instanceId,
-        string transitionKey);
+        string transitionKey,
+        string nextTransitionKey,
+        string? errorCode);
 
     /// <summary>
     /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE

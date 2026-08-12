@@ -27,6 +27,15 @@ public sealed class SetBusyStep(
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(SetBusyStep)}");
 
+        // updateData never touches the instance status: it runs without ownership and must not
+        // flip an Active instance to Busy (nothing would ever settle it back — a non-owner is
+        // barred from ResolveAvailable/settlement). Ownership for a satisfied auto transition
+        // is acquired at the continuation boundary instead.
+        if (context.IsUpdateDataTransition())
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
         // Skip if instance is already Busy (admission reserve or chained auto transitions).
         if (context.Instance.IsBusy)
         {

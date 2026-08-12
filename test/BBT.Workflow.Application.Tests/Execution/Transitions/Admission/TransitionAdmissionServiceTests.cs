@@ -204,52 +204,6 @@ public class TransitionAdmissionServiceTests
 
     #endregion
 
-    #region TryReserveOpportunisticallyAsync (updateData)
-
-    [Fact]
-    public async Task TryReserveOpportunistically_ActiveInstance_ReservesAndReturnsTrue()
-    {
-        var context = CreateContext("update-parent-data");
-        SetupAcquiredLock();
-        _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
-            .Returns(BusyMarkOutcome.Marked);
-
-        var reserved = await CreateService().TryReserveOpportunisticallyAsync(context, CancellationToken.None);
-
-        reserved.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task TryReserveOpportunistically_BusyInstance_ReturnsFalseWithoutError()
-    {
-        // Data-only degradation — an updateData accept is never rejected here.
-        var context = CreateContext("update-parent-data");
-        SetupAcquiredLock();
-        _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
-            .Returns(BusyMarkOutcome.AlreadyBusy);
-
-        var reserved = await CreateService().TryReserveOpportunisticallyAsync(context, CancellationToken.None);
-
-        reserved.ShouldBeFalse();
-    }
-
-    [Fact]
-    public async Task TryReserveOpportunistically_LockNotAcquired_ReturnsFalseWithoutError()
-    {
-        var context = CreateContext("update-parent-data");
-        SetupFailedLock();
-
-        var reserved = await CreateService().TryReserveOpportunisticallyAsync(context, CancellationToken.None);
-
-        reserved.ShouldBeFalse();
-        await _busyManager.DidNotReceive()
-            .TryMarkBusyWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
-    }
-
-    #endregion
-
     #region TakeOverAsync
 
     [Fact]

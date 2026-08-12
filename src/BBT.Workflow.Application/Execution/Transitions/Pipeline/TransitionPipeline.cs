@@ -1,7 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
@@ -125,23 +124,16 @@ public class TransitionPipeline
         {
             case AdmissionKind.Unconditional:
             {
-                // updateData: always accepted. Opportunistic reserve decides how far it goes:
-                // an Active instance is reserved (this request owns the status lifecycle and
-                // may advance auto transitions with the fresh data); a Busy one degrades to
-                // data-only — unless the parent rests in a SubFlow state, where there is no
-                // competing chain and the update may advance the parent's own auto transitions.
+                // updateData: always accepted, and NEVER a status owner — it neither reserves
+                // Busy nor settles it (ResolveAvailable/settlement are owner-gated, SetBusyStep
+                // is exempt). The pipeline still runs in full: the data is written, tasks run
+                // and auto transitions are evaluated against the fresh data. When an auto
+                // transition is satisfied, the continuation boundary in RunChainAsync performs
+                // a REAL reserve and the chained transition proceeds as a proper owner. A
+                // parent with an open SubFlow correlation short-circuits to data-only in
+                // HandleUpdateDataDataOnlyStep.
                 context.Instance.ClearResumePoint();
-
-                var reserved = await _admissionService.TryReserveOpportunisticallyAsync(
-                    context, cancellationToken);
-                context.OwnsStatus = reserved
-                    || context.Current?.StateType == StateType.SubFlow;
-
-                if (context.OwnsStatus)
-                    _logger.UpdateDataAdvanceEnabled(context.InstanceId, context.TransitionKey);
-                else
-                    _logger.UpdateDataDataOnly(context.InstanceId, context.TransitionKey);
-
+                context.OwnsStatus = false;
                 return await RunChainAsync(context, cancellationToken);
             }
 
@@ -232,6 +224,33 @@ public class TransitionPipeline
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
+            // updateData continuation handoff: updateData never owns the status, so a satisfied
+            // auto transition must not advance under a non-owner. Reserve HERE (short status
+            // lock) before any dispatch — inline hops inherit the ownership, enqueued hops
+            // re-enter as genuinely pre-reserved. If the instance is Busy under a competing
+            // chain, drop the continuation: that owner is already advancing, and every later
+            // updateData re-evaluates the same conditions against fresher data.
+            var reservedForHandoff = false;
+            if (context.Directives.NextTransition is { } handoff
+                && !context.OwnsStatus
+                && context.IsUpdateDataTransition())
+            {
+                var reserve = await _admissionService.ReserveAsync(context, cancellationToken);
+                if (reserve.IsSuccess)
+                {
+                    context.OwnsStatus = true;
+                    reservedForHandoff = true;
+                    _logger.UpdateDataContinuationReserved(
+                        context.InstanceId, context.TransitionKey, handoff.TransitionKey);
+                }
+                else
+                {
+                    context.Directives.ConsumeNextTransition();
+                    _logger.UpdateDataContinuationDropped(
+                        context.InstanceId, context.TransitionKey, handoff.TransitionKey, reserve.Error.Code);
+                }
+            }
+
             // A post-commit job marks the handoff boundary. The runner owns executing this
             // remote work after the originating UoW has committed.
             // Do not consume the jobs: it returns the intact directives to the runner.
@@ -245,7 +264,14 @@ public class TransitionPipeline
                     var enqueueResult = await _continuationDispatcher.DispatchAsync(
                         ContinuationMode.Enqueue, context, cancellationToken);
                     if (!enqueueResult.IsSuccess)
+                    {
+                        // A reserve taken for an updateData handoff whose continuation never
+                        // made it out must not strand the instance Busy.
+                        if (reservedForHandoff)
+                            await _admissionService.ReleaseReservationAsync(context, cancellationToken);
+
                         return Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
+                    }
                 }
 
                 return Result<TransitionExecutionContext>.Ok(context);
@@ -266,7 +292,14 @@ public class TransitionPipeline
             var continuationResult = await _continuationDispatcher.DispatchAsync(
                 continuationMode, context, cancellationToken);
             if (!continuationResult.IsSuccess)
+            {
+                // Same compensation as the barrier path: a handoff reserve without a live
+                // continuation would leave the instance Busy with no owner.
+                if (reservedForHandoff)
+                    await _admissionService.ReleaseReservationAsync(context, cancellationToken);
+
                 return Result<TransitionExecutionContext>.Fail(continuationResult.Error);
+            }
 
             if (continuationResult.Value is null)
             {
