@@ -212,6 +212,20 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when a retry re-entry reuses the ORIGINAL transition record so the task journal
+    /// lines up and already-completed tasks are bypassed instead of re-running side effects.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10147,
+        Level = LogLevel.Information,
+        Message = "Retry of transition {TransitionKey} on instance {InstanceId} reuses transition record {TransitionRecordId}; completed tasks will be bypassed")]
+    public static partial void TransitionRecordReusedForRetry(
+        this ILogger logger,
+        Guid instanceId,
+        Guid transitionRecordId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when an updateData execution hands its satisfied auto transition to a real owner:
     /// the continuation boundary reserved the instance (Active→Busy) and the chained transition
     /// proceeds with full normal behavior.

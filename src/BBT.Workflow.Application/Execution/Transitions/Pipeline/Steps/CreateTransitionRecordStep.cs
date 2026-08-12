@@ -7,6 +7,7 @@ using System.Text.Json;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -20,7 +21,8 @@ public sealed class CreateTransitionRecordStep(
     IInstanceDataWriteService instanceDataWriteService,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    ILogger<CreateTransitionRecordStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.CreateTransition;
@@ -42,6 +44,24 @@ public sealed class CreateTransitionRecordStep(
         var transitionKey = GetTransitionKey(context);
         var (instanceTransition, transition) = CreateInstanceTransition(context, transitionKey);
 
+        // Retry re-entry: reuse the ORIGINAL transition record instead of inserting a fresh one,
+        // so the task journal (InstanceTask rows keyed by transition record id) lines up and
+        // already-completed tasks are bypassed rather than re-running their side effects. When
+        // the original record cannot be found, fall back to normal creation — a retry must not
+        // fail on a missing audit row.
+        var isReusedRecord = false;
+        if (context.RetryOfTransitionRecordId is { } retriedRecordId)
+        {
+            var original = await instanceTransitionRepository.FindAsync(
+                retriedRecordId, true, cancellationToken);
+            if (original is not null)
+            {
+                instanceTransition = original;
+                isReusedRecord = true;
+                logger.TransitionRecordReusedForRetry(context.InstanceId, retriedRecordId, transitionKey);
+            }
+        }
+
         // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist.
         // The persist goes through the explicit InstanceData write service: it versions the newly
         // added data rows under the per-instance row lock and owns the SaveChanges.
@@ -50,8 +70,9 @@ public sealed class CreateTransitionRecordStep(
             .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
             .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
             .TapAsync(_ => instanceDataWriteService.SaveWithVersioningAsync(context.Instance, cancellationToken))
-            .TapAsync(_ =>
-                instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
+            .TapAsync(_ => isReusedRecord
+                ? instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken)
+                : instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition))
             .Map(_ => StepOutcome.Continue());
     }

@@ -183,6 +183,16 @@ public sealed class RunOnExitTasksStep(
             TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
+            groupCheckpoint: async checkpointToken =>
+            {
+                // Persist each completed order group's outputs immediately: apply the snapshot
+                // deltas onto the live aggregate and save through the versioning write service.
+                // A crash in a later group then loses only unfinished work, and a retry (which
+                // bypasses journaled-complete tasks) finds their data already persisted.
+                context.ApplyScriptContextChanges(scriptContext);
+                await instanceRepository.UpdateAsync(context.Instance, false, checkpointToken);
+                await instanceDataWriteService.SaveWithVersioningAsync(context.Instance, checkpointToken);
+            },
             cancellationToken);
     }
 

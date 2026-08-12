@@ -133,6 +133,15 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public bool OwnsStatus { get; set; }
 
+    /// <summary>
+    /// Gets or sets the transition record id this execution RETRIES. Set only by the retry
+    /// entry point (<c>RetryInfo.TransitionId</c>): <c>CreateTransitionRecordStep</c> then
+    /// reuses the original record instead of creating a fresh one, so the task journal
+    /// (<c>InstanceTask</c>, keyed by transition record id) lines up and already-completed
+    /// tasks are bypassed instead of re-running their side effects.
+    /// </summary>
+    public Guid? RetryOfTransitionRecordId { get; set; }
+
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
 
