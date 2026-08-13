@@ -400,8 +400,6 @@ public sealed class EfCoreInstanceRepository(
     /// validation. They mirror <see cref="InstanceStateFingerprint.FromInstance"/> term for term —
     /// the full-build path must produce a byte-identical fingerprint or the cache invalidates on every
     /// poll. Served by IX_InstancesCorrelations_ByParent (unfiltered, on ParentInstanceId).
-    /// Scheduled-job rows are deliberately not projected — see the known-gap note on
-    /// <see cref="InstanceStateFingerprint"/>.
     /// </remarks>
     private static IQueryable<InstanceStateFingerprint> ProjectStateFingerprint(IQueryable<Instance> query) =>
         query.Select(i => new InstanceStateFingerprint(

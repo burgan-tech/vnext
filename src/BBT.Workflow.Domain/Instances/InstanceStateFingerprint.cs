@@ -33,14 +33,6 @@ namespace BBT.Workflow.Instances;
 /// Each member is expressed so that LINQ-to-Objects and SQL agree exactly: <c>Count</c> maps to
 /// <c>COUNT</c>, and <c>Max</c> over a nullable projection ignores nulls and yields null for an
 /// all-null (or empty) set in both.
-/// <para>
-/// Scheduled-job changes are deliberately <b>not</b> part of the fingerprint (team decision on
-/// issue #864): the body's <c>scheduledTransitions</c> list can therefore go stale behind a 304 when
-/// the job set changes without a state/status delta — a same-state re-arm (<c>updateData</c>/$self,
-/// where the Busy flip never leaves the transaction), an inline A→B→A chain (single commit), or a
-/// fired job rejected under a lock conflict. Accepted as a known gap; clients rely on the transient
-/// Busy flip where it is externally committed, and on natural state changes otherwise.
-/// </para>
 /// </remarks>
 public sealed record InstanceStateFingerprint(
     Guid Id,
