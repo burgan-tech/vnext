@@ -57,6 +57,21 @@ public sealed class TaskTraceContext
     public string? WorkflowVersion { get; init; }
 
     /// <summary>
+    /// Safe correlation ID propagated from orchestration for cross-service log correlation.
+    /// </summary>
+    public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// Gateway-authenticated primary subject propagated for dependency log correlation.
+    /// </summary>
+    public string? Sub { get; init; }
+
+    /// <summary>
+    /// Gateway-authenticated actor subject propagated for dependency log correlation.
+    /// </summary>
+    public string? ActSub { get; init; }
+
+    /// <summary>
     /// Original HTTP request headers forwarded from orchestration.
     /// Used for <c>{HEADER.*}</c> placeholder resolution.
     /// </summary>
@@ -84,4 +99,3 @@ public sealed class TaskInvokeRequest
     /// </summary>
     public TaskTraceContext? TraceContext { get; init; }
 }
-

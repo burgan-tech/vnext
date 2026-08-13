@@ -32,6 +32,16 @@ public sealed record TaskTraceContext
     public string? CorrelationId { get; init; }
 
     /// <summary>
+    /// Gateway-authenticated primary subject propagated for dependency log correlation.
+    /// </summary>
+    public string? Sub { get; init; }
+
+    /// <summary>
+    /// Gateway-authenticated actor subject propagated for dependency log correlation.
+    /// </summary>
+    public string? ActSub { get; init; }
+
+    /// <summary>
     /// Original HTTP request headers forwarded from orchestration.
     /// </summary>
     public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
@@ -51,15 +61,18 @@ public sealed record TaskTraceContext
         string workflowVersion,
         string? correlationId = null,
         IReadOnlyDictionary<string, string>? headers = null,
-        string? instanceDataJson = null) => new()
+        string? instanceDataJson = null,
+        string? sub = null,
+        string? actSub = null) => new()
     {
         InstanceId = instanceId,
         Domain = domain,
         WorkflowKey = workflowKey,
         WorkflowVersion = workflowVersion,
         CorrelationId = correlationId,
+        Sub = sub,
+        ActSub = actSub,
         RequestHeaders = headers,
         InstanceDataJson = instanceDataJson
     };
 }
-

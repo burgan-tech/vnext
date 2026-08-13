@@ -1,3 +1,6 @@
+using System;
+using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -61,6 +64,48 @@ public sealed class HttpTaskInvokerContentTypeTests
         handler.CapturedContentType.ShouldBe("application/x-www-form-urlencoded");
     }
 
+    [Fact]
+    public async Task InvokeAsync_WithWorkflowBaggage_OverridesMappingCorrelationHeaders()
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+        var instanceId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+
+        using var activity = new Activity("http-task-test").Start();
+        activity.SetBaggage("workflow.instance.id", instanceId.ToString("D"));
+        activity.SetBaggage("correlation.id", correlationId.ToString("N"));
+        activity.SetBaggage("sub", "12345678901");
+        activity.SetBaggage("act.sub", "U0B006");
+
+        await invoker.InvokeAsync(CreateDescriptor(
+            body: "{}",
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"spoofed.value","act_sub":"spoofed.value"}"""));
+
+        handler.GetRequestHeader("X-Workflow-Instance-Id")
+            .ShouldBe(instanceId.ToString("D").ToLowerInvariant());
+        handler.GetRequestHeader("X-Correlation-Id")
+            .ShouldBe(correlationId.ToString("N"));
+        handler.GetRequestHeader("sub").ShouldBe("12345678901");
+        handler.GetRequestHeader("act_sub").ShouldBe("U0B006");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutValidWorkflowBaggage_RemovesMappingCorrelationHeaders()
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+
+        await invoker.InvokeAsync(CreateDescriptor(
+            body: "{}",
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"spoofed.value","act_sub":"spoofed.value"}"""));
+
+        handler.RequestHeaderContains("X-Workflow-Instance-Id").ShouldBeFalse();
+        handler.RequestHeaderContains("X-Correlation-Id").ShouldBeFalse();
+        handler.RequestHeaderContains("sub").ShouldBeFalse();
+        handler.RequestHeaderContains("act_sub").ShouldBeFalse();
+    }
+
     private static HttpTaskInvoker CreateInvoker(CapturingHttpMessageHandler handler) =>
         new(new FakeHttpClientFactory(handler), NullLogger<HttpTaskInvoker>.Instance);
 
@@ -97,6 +142,11 @@ public sealed class HttpTaskInvokerContentTypeTests
         // NonValidated allows querying any header name (including content-header names) without throwing.
         public bool RequestHeaderContains(string name) =>
             _requestHeaders?.NonValidated.Contains(name) ?? false;
+
+        public string? GetRequestHeader(string name) =>
+            _requestHeaders?.NonValidated.TryGetValues(name, out var values) == true
+                ? values.ToString()
+                : null;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
