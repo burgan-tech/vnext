@@ -27,9 +27,9 @@ namespace BBT.Workflow.Data;
 /// in-memory latest refreshed via <c>Instance.AcceptPersistedData</c>.
 /// <para>
 /// A brand-new instance has no row to lock yet — harmless: it cannot have a concurrent writer,
-/// the head read returns empty and numbering starts at 1. The partial unique indexes on
-/// <c>InstancesData</c> remain the database-level backstop, and the SaveChanges guard in
-/// <see cref="WorkflowDbContext"/> rejects any stray writer that bypasses this service.
+/// the head read returns empty and numbering starts at 1. The unique indexes on
+/// <c>InstancesData</c> are the database-level backstop; writing instance data through anything
+/// other than this service is a convention violation caught in review, not at runtime.
 /// </para>
 /// </summary>
 public sealed class InstanceDataWriteService(

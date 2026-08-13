@@ -94,31 +94,6 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     /// </summary>
     public string? CurrentSchemaName => _currentSchema?.Name;
 
-    /// <summary>
-    /// Safety assertion ONLY — performs no locking, versioning or transaction work (architecture
-    /// decision: InstanceData persistence is explicit, owned by <see cref="IInstanceDataWriteService"/>).
-    /// A new <see cref="InstanceData"/> row reaching a plain SaveChanges still carries its unassigned
-    /// <c>VersionNo == 0</c>; letting it through would corrupt the version sequence or trip the
-    /// unique indexes far from the actual mistake. Fail loudly at the source instead.
-    /// </summary>
-    public override Task<int> SaveChangesAsync(
-        bool acceptAllChangesOnSuccess,
-        CancellationToken cancellationToken = default)
-    {
-        foreach (var entry in ChangeTracker.Entries<InstanceData>())
-        {
-            if (entry is { State: EntityState.Added, Entity.VersionNo: 0 })
-            {
-                throw new InvalidOperationException(
-                    $"InstanceData for instance {entry.Entity.InstanceId} is being saved without an " +
-                    "assigned VersionNo. New instance data versions must be persisted via " +
-                    "IInstanceDataWriteService.SaveWithVersioningAsync, not a plain repository save.");
-            }
-        }
-
-        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
-    }
-
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder builder)
     {
