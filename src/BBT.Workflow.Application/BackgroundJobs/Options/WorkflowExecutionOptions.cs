@@ -71,17 +71,6 @@ public sealed class WorkflowExecutionOptions
     public int StatusLockLeaseSeconds { get; set; } = 5;
 
     /// <summary>
-    /// Bounded wait applied when acquiring the status lock. Status flips resolve in
-    /// milliseconds, so a short linear backoff absorbs contention (e.g. settlement racing a
-    /// cancel) instead of failing the caller into a full retry cycle.
-    /// </summary>
-    public LockConflictRetryOptions StatusLockRetry { get; set; } = new()
-    {
-        MaxAttempts = 4,
-        BaseDelayMilliseconds = 50
-    };
-
-    /// <summary>
     /// PostgreSQL timeouts for the InstanceData write funnel: every SaveChanges that inserts
     /// InstanceData rows takes a per-instance <c>FOR UPDATE</c> row lock and runs with these
     /// transaction-scoped (<c>SET LOCAL</c>) limits.

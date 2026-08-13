@@ -18,36 +18,22 @@ public sealed class InstanceStatusLock(
     ILogger<InstanceStatusLock> logger) : IInstanceStatusLock
 {
     private readonly int _leaseSeconds = Math.Max(1, executionOptions.Value.StatusLockLeaseSeconds);
-    private readonly LockAcquireWait _wait = executionOptions.Value.StatusLockRetry.ToLockAcquireWait();
 
     /// <inheritdoc />
     public async Task<ITransitionLockScope> AcquireAsync(
         string lockKey,
         CancellationToken cancellationToken = default)
     {
-        for (var attempt = 1; attempt <= _wait.MaxAttempts; attempt++)
-        {
-            var handle = await distributedLockService.TryAcquireLockAsync(
-                lockKey,
-                _leaseSeconds,
-                cancellationToken);
+        // Single attempt by design (review decision): a held lock means a concurrent hop is
+        // mid-flip; callers surface that as a conflict (409) or proceed unguarded, and the
+        // client retry is the back-pressure mechanism — no in-process wait loop.
+        var handle = await distributedLockService.TryAcquireLockAsync(
+            lockKey,
+            _leaseSeconds,
+            cancellationToken);
 
-            if (handle is not null)
-                return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
-
-            if (attempt == _wait.MaxAttempts)
-                break;
-
-            // Jittered backoff: status flips resolve in milliseconds, so contenders must not
-            // retry in lockstep or they keep colliding on every attempt.
-            var baseDelay = _wait.Delay.TotalMilliseconds * attempt;
-            var jitter = Random.Shared.NextDouble() * _wait.Delay.TotalMilliseconds;
-            var delay = TimeSpan.FromMilliseconds(baseDelay + jitter);
-
-            logger.TransitionLockRetryScheduled(lockKey, attempt, _wait.MaxAttempts, (int)delay.TotalMilliseconds);
-
-            await Task.Delay(delay, cancellationToken);
-        }
+        if (handle is not null)
+            return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
 
         logger.StatusLockAcquireFailed(lockKey);
         return TransitionLockScope.NotAcquired(lockKey);
