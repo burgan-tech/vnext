@@ -23,6 +23,7 @@ public sealed class DefinitionAppService(
     ICurrentSchema currentSchema,
     IRuntimeInfoProvider runtimeInfoProvider,
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     ComponentValidatorProcessor componentValidatorProcessor,
     WorkflowCastProcessor castProcessor,
     IDomainCacheContext cacheContext,
@@ -109,13 +110,9 @@ public sealed class DefinitionAppService(
         if (!validationResult.IsSuccess)
             return validationResult;
 
-        instance.AddDataWithVersion(
-            GuidGenerator.Create(),
-            new JsonData(input.Attributes),
-            input.Version
-        );
-
         await instanceRepository.InsertAsync(instance, true, cancellationToken);
+        await instanceDataWriteService.AppendExplicitAsync(
+            instance, GuidGenerator.Create(), input.Version, new JsonData(input.Attributes), cancellationToken);
 
         await castProcessor.ProcessAsync(
             input.Flow,
@@ -159,14 +156,10 @@ public sealed class DefinitionAppService(
         if (!validationResult.IsSuccess)
             return validationResult;
 
-        instance.AddDataWithVersion(
-            GuidGenerator.Create(),
-            new JsonData(input.Attributes),
-            input.Version,
-            false
-        );
         instance.ModifiedAt = DateTime.UtcNow;
         await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+        await instanceDataWriteService.AppendExplicitAsync(
+            instance, GuidGenerator.Create(), input.Version, new JsonData(input.Attributes), cancellationToken);
 
         await castProcessor.ProcessAsync(
             input.Flow,
@@ -194,9 +187,13 @@ public sealed class DefinitionAppService(
             await using var scopeProvider = ServiceProvider.CreateAsyncScope();
             var instanceRepo = scopeProvider.ServiceProvider.GetRequiredService<IInstanceRepository>();
 
+            // Resolve from the SAME child scope as the repository: the write service must operate
+            // on the DbContext that holds the pending entities, not the outer scope's.
+            var dataWriter = scopeProvider.ServiceProvider.GetRequiredService<IInstanceDataWriteService>();
+
             foreach (var dataItem in input.Data!)
             {
-                var result = await ProcessDataItemAsync(instanceRepo, input, dataItem, cancellationToken);
+                var result = await ProcessDataItemAsync(instanceRepo, dataWriter, input, dataItem, cancellationToken);
                 if (!result.IsSuccess)
                 {
                     return result;
@@ -211,6 +208,7 @@ public sealed class DefinitionAppService(
 
     private async Task<Result> ProcessDataItemAsync(
         IInstanceRepository instanceRepo,
+        IInstanceDataWriteService dataWriter,
         PublishInput input,
         PublishDataInput dataItem,
         CancellationToken cancellationToken)
@@ -231,11 +229,6 @@ public sealed class DefinitionAppService(
             return validationResult;
 
         instance.AddTags(dataItem.Tags.ToArray());
-        instance.AddDataWithVersion(
-            GuidGenerator.Create(),
-            new JsonData(dataItem.Attributes),
-            dataItem.Version
-        );
 
         if (instance.IsTransient)
         {
@@ -246,6 +239,9 @@ public sealed class DefinitionAppService(
             instance.ModifiedAt = DateTime.UtcNow;
             await instanceRepo.UpdateAsync(instance, true, cancellationToken);
         }
+
+        await dataWriter.AppendExplicitAsync(
+            instance, GuidGenerator.Create(), dataItem.Version, new JsonData(dataItem.Attributes), cancellationToken);
 
         await castProcessor.ProcessAsync(
             input.Key,

@@ -41,4 +41,11 @@ public interface IInstanceBusyManager
     /// request instead of silently proceeding.
     /// </summary>
     Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Releases a reservation whose follow-up work never ran (compensation): settles Busy back
+    /// to Active. No-ops when the instance is not Busy or is Completed. Must be called under
+    /// the short status lock and only by the accept path that performed the reserve.
+    /// </summary>
+    Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default);
 }

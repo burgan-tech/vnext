@@ -215,6 +215,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                     return parallelResult;
                 }
             }
+
         }
 
         totalStopwatch.Stop();

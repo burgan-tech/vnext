@@ -10,6 +10,11 @@ namespace BBT.Workflow.Execution.ErrorHandling;
 public sealed class ErrorNormalizer : IErrorNormalizer
 {
     /// <summary>
+    /// Prefix of an error code already wrapped with task context (<c>Task:{type}:{key}[:{status}]</c>).
+    /// </summary>
+    internal const string TaskErrorCodePrefix = "Task:";
+
+    /// <summary>
     /// HTTP status codes that are considered transient/retryable.
     /// </summary>
     private static readonly HashSet<int> TransientStatusCodes =
@@ -58,12 +63,7 @@ public sealed class ErrorNormalizer : IErrorNormalizer
     /// <inheritdoc />
     public NormalizedError Normalize(Error error)
     {
-        // Try to extract status code from error code if it looks like HTTP status
-        int? statusCode = null;
-        if (int.TryParse(error.Code, out var code) && code is >= 100 and < 600)
-        {
-            statusCode = code;
-        }
+        var statusCode = ResolveStatusCode(error);
 
         return new NormalizedError
         {
@@ -77,6 +77,51 @@ public sealed class ErrorNormalizer : IErrorNormalizer
             OriginalCode = error.Code
         };
     }
+
+    /// <summary>
+    /// Resolves the HTTP-equivalent status of a <see cref="Error"/> so error boundaries can tell a
+    /// retryable failure (409 lock contention) from a terminal one (400 not-available), which the
+    /// task-key-derived error code alone cannot express. Three sources, in order: a bare numeric
+    /// code, the trailing status segment of an already-wrapped task code
+    /// (<c>Task:{type}:{key}:{status}</c> — produced by <c>ExecutionError.ToError</c> and re-wrapped
+    /// by the coordinator), then the Aether error prefix.
+    /// </summary>
+    public static int? ResolveStatusCode(Error error)
+    {
+        if (error.Code is not { Length: > 0 } code)
+            return MapPrefixToStatusCode(error.Prefix);
+
+        if (int.TryParse(code, out var numeric) && numeric is >= 100 and < 600)
+            return numeric;
+
+        if (code.StartsWith(TaskErrorCodePrefix, StringComparison.Ordinal))
+        {
+            foreach (var segment in code.Split(':'))
+            {
+                if (int.TryParse(segment, out var embedded) && embedded is >= 100 and < 600)
+                    return embedded;
+            }
+        }
+
+        return MapPrefixToStatusCode(error.Prefix);
+    }
+
+    /// <summary>
+    /// Maps an Aether error prefix to the HTTP status the same failure carries when it crosses a
+    /// service boundary, so local and remote execution of the same task classify identically.
+    /// </summary>
+    public static int? MapPrefixToStatusCode(string? prefix) => prefix switch
+    {
+        ErrorCodes.Prefixes.Conflict => 409,
+        ErrorCodes.Prefixes.NotFound => 404,
+        ErrorCodes.Prefixes.Validation => 400,
+        ErrorCodes.Prefixes.NotSupported => 400,
+        ErrorCodes.Prefixes.Unauthorized => 401,
+        ErrorCodes.Prefixes.Forbidden => 403,
+        ErrorCodes.Prefixes.Transient => 503,
+        ErrorCodes.Prefixes.Dependency => 502,
+        _ => null
+    };
 
     /// <inheritdoc />
     public NormalizedError NormalizeHttpError(int statusCode, string? errorCode, string? message)

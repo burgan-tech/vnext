@@ -34,6 +34,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private readonly IErrorBoundaryResolver _boundaryResolver;
     private readonly IErrorActionExecutor _actionExecutor;
     private readonly IExecutionErrorFactory _errorFactory;
+    private readonly IInstanceDataWriteService _instanceDataWriteService;
     private readonly ILogger<TaskExecutionEngine> _logger;
 
     /// <summary>
@@ -48,6 +49,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         IErrorBoundaryResolver boundaryResolver,
         IErrorActionExecutor actionExecutor,
         IExecutionErrorFactory errorFactory,
+        IInstanceDataWriteService instanceDataWriteService,
         ILogger<TaskExecutionEngine> logger)
     {
         _executorRegistry = executorRegistry;
@@ -58,6 +60,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         _boundaryResolver = boundaryResolver;
         _actionExecutor = actionExecutor;
         _errorFactory = errorFactory;
+        _instanceDataWriteService = instanceDataWriteService;
         _logger = logger;
     }
 
@@ -470,18 +473,36 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <summary>
     /// Applies the output response to the script context.
     /// </summary>
-    private void ApplyOutputToContext(
+    /// <summary>
+    /// Persists a task's data output IMMEDIATELY through the InstanceData write service (row
+    /// identity computed under the per-instance row lock) and refreshes the ScriptContext's
+    /// instance snapshot with the persisted row, so subsequent tasks and rules read the fresh
+    /// merged content. Extension/Function paths never persist instance data (unchanged
+    /// behavior); a dedup no-op (identical merged content) leaves the snapshot as-is.
+    /// </summary>
+    private async Task ApplyOutputToContextAsync(
         StandardTaskResponse response,
         TaskTrigger taskTrigger,
-        ScriptContext context)
+        TaskExecutionOrigin origin,
+        ScriptContext context,
+        CancellationToken cancellationToken)
     {
-        if (taskTrigger != TaskTrigger.Extension && response.Data is not null)
+        if (taskTrigger == TaskTrigger.Extension
+            || origin != TaskExecutionOrigin.Flow
+            || response.Data is null
+            || context.Instance is null)
         {
-            context.Instance?.AddData(
-                _guidGenerator.Create(),
-                new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions)),
-                VersionStrategy.IncreasePatch);
+            return;
         }
+
+        var delta = new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions));
+        var persisted = await _instanceDataWriteService.AppendAsync(
+            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken);
+
+        // The service refreshed the aggregate it was given (the snapshot). Nothing else to do:
+        // the live aggregate in the pipeline scope is fixed up by EF when it shares the
+        // DbContext, and synced from the snapshot at the step boundary otherwise.
+        _ = persisted;
     }
 
     /// <summary>
@@ -604,8 +625,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var response = executeResult.Value!;
         var responseJson = new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
 
-        // ALWAYS apply output to context
-        ApplyOutputToContext(response, taskTrigger, context);
+        // ALWAYS apply output to context (Flow origin: persisted immediately under the row lock)
+        await ApplyOutputToContextAsync(response, taskTrigger, origin, context, cancellationToken);
 
         // Mark task completed with business status
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);

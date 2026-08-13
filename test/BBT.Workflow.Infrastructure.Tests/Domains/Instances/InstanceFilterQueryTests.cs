@@ -264,8 +264,8 @@ public sealed class InstanceFilterQueryTests : IAsyncLifetime
 
         await ctx.Database.ExecuteSqlRawAsync(
             "INSERT INTO \"public\".\"InstancesData\" " +
-            "(\"Id\",\"InstanceId\",\"Version\",\"HistorySequence\",\"ETag\",\"DataHash\",\"Data\",\"EnteredAt\",\"VersionNo\",\"IsLatest\") " +
-            "VALUES ({0},{1},'1.0.0',0,{2},'hash',{3}::jsonb,{4},0,false)",
+            "(\"Id\",\"InstanceId\",\"Version\",\"ETag\",\"DataHash\",\"Data\",\"EnteredAt\",\"VersionNo\",\"IsLatest\") " +
+            "VALUES ({0},{1},'1.0.0',{2},'hash',{3}::jsonb,{4},0,false)",
             Guid.NewGuid(), instanceId, Ulid.NewUlid().ToString(), dataJson, createdAt);
     }
 

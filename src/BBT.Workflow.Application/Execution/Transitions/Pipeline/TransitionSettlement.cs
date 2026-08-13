@@ -11,43 +11,46 @@ namespace BBT.Workflow.Execution.Pipeline;
 /// </summary>
 internal static class TransitionSettlement
 {
+    /// <summary>
+    /// Applies the resolved resting status. <c>statusLock</c> serializes the Busy→Active flip
+    /// with the other status writers (reserve, takeover, fault); pass null when the caller
+    /// ALREADY holds the status lock for this key (post-commit settlement) — a second acquire
+    /// would fail, not reenter.
+    /// </summary>
     public static async Task ApplyAsync(
         TransitionExecutionContext context,
         InstanceStatus? resolvedStatus,
-        bool endChainRequested,
         bool scheduleNotification,
         IInstanceRepository instanceRepository,
         IStateNotificationScheduler stateNotificationScheduler,
         ILogger logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IInstanceStatusLock? statusLock = null)
     {
-        var updated = false;
-        if (context.Instance.IsBusy &&
+        if (context.OwnsStatus &&
+            context.Instance.IsBusy &&
             resolvedStatus is not null &&
             context.Target?.SubType != StateSubType.Busy &&
             !context.Instance.ActiveCorrelations.Any(c =>
                 c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted))
         {
+            // Serialize the flip with reserves/takeovers. On acquisition failure proceed
+            // unguarded — leaving the chain's own settlement unapplied would strand the
+            // instance Busy. The write itself commits with the enclosing UoW; the lock
+            // serializes the flip moment, not the commit (documented, accepted window).
+            ITransitionLockScope? scope = null;
+            if (statusLock is not null)
+                scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+
+            await using var _ = scope;
+
             context.Instance.Active();
-            updated = true;
             logger.LogDebug(
                 "Instance {InstanceId} resolved to Active after chain settlement",
                 context.InstanceId);
-        }
 
-        if (!context.Instance.IsCompleted &&
-            endChainRequested &&
-            context.Instance.ChainToken.HasValue)
-        {
-            context.Instance.EndChain();
-            updated = true;
-            logger.LogDebug(
-                "Instance {InstanceId} released chain ownership at rest",
-                context.InstanceId);
-        }
-
-        if (updated)
             await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        }
 
         if (scheduleNotification && context.Target?.HasStateNotifications == true)
         {

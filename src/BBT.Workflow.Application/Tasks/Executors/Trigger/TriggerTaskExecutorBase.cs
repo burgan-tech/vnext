@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -124,18 +125,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     /// Maps an <see cref="Error"/> to the equivalent HTTP status code based on its prefix.
     /// Used to ensure local execution failures carry the same status codes as remote (Dapr) execution.
     /// </summary>
-    protected static int MapErrorToStatusCode(Error error) => error.Prefix switch
-    {
-        ErrorCodes.Prefixes.Conflict     => 409,
-        ErrorCodes.Prefixes.NotFound     => 404,
-        ErrorCodes.Prefixes.Validation   => 400,
-        ErrorCodes.Prefixes.NotSupported => 400,
-        ErrorCodes.Prefixes.Unauthorized => 401,
-        ErrorCodes.Prefixes.Forbidden    => 403,
-        ErrorCodes.Prefixes.Transient    => 503,
-        ErrorCodes.Prefixes.Dependency   => 502,
-        _                                => 500
-    };
+    protected static int MapErrorToStatusCode(Error error)
+        => ErrorNormalizer.MapPrefixToStatusCode(error.Prefix) ?? 500;
 
     /// <summary>
     /// Converts task headers (JsonElement?) to Dictionary for local Input objects.

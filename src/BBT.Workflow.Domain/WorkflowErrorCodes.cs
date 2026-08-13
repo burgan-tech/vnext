@@ -49,6 +49,8 @@ public static class WorkflowErrorCodes
     public const string SubflowOutputMappingFailed = "Instance:100030";
     public const string InstanceBusy = "Instance:100031";
     public const string RelatedInstanceReadFailed = "Instance:100033";
+    public const string InstanceDataLockTimeout = "Instance:100035";
+    public const string InstanceDataWriteTimeout = "Instance:100036";
 
     #endregion
     

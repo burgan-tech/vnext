@@ -38,11 +38,27 @@ public class ResolveAvailableStepTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenExecutionDoesNotOwnStatus_ShouldNotResolve()
+    {
+        // A non-owning execution (data-only updateData beside an in-flight chain, subflow
+        // forward) must never resolve the owner's Busy to Active.
+        var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
+        context.Instance.Busy();
+        context.OwnsStatus = false;
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Directives.ResolvedStatus.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenAllConditionsMet_ShouldDeferActiveStatus()
     {
         // Arrange
         var context = CreateTransitionExecutionContext(hasOnlyManualTransitions: true);
         context.Instance.Busy(); // Set to Busy first
+        context.OwnsStatus = true; // resolution is gated on Busy-lifecycle ownership
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);
@@ -136,36 +152,32 @@ public class ResolveAvailableStepTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenTargetIsBusySubType_ShouldRequestEndChainAndNotDeferStatus()
+    public async Task ExecuteAsync_WhenTargetIsBusySubType_ShouldNotDeferStatus()
     {
-        // Regression (#725 chain-token gate): an instance that comes to rest in a Busy-subtype
-        // state stays Busy but the auto-chain is finished. The chain-ownership token must be
-        // released so legitimate foreign transitions (e.g. a child sub-process triggering the
-        // initiator's "Ready") are not rejected by the chain-token gate.
+        // An instance that comes to rest in a Busy-subtype state stays Busy until an external
+        // signal (e.g. a child sub-process) advances it.
         var context = CreateTransitionExecutionContextWithBusySubTypeState();
-        context.Instance.BeginChain(Guid.NewGuid()); // Busy + chain token, as a real start sets
+        context.Instance.Busy();
 
         var result = await _step.ExecuteAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();              // stays Busy
         context.Directives.ResolvedStatus.ShouldBeNull();    // not resolved to Active
-        context.Directives.EndChainRequested.ShouldBeTrue(); // but chain ownership released
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenBusySubTypeButNextTransitionPending_ShouldNotRequestEndChain()
+    public async Task ExecuteAsync_WhenBusySubTypeButNextTransitionPending_ShouldNotDeferStatus()
     {
-        // An in-flight auto-chain (NextTransition set) must keep its token — the NextTransition
-        // guard short-circuits before the Busy-subtype branch, so no release is requested.
+        // An in-flight auto-chain (NextTransition set) short-circuits before the Busy-subtype
+        // branch; the status stays deferred to later hops.
         var context = CreateTransitionExecutionContextWithBusySubTypeState();
-        context.Instance.BeginChain(Guid.NewGuid());
+        context.Instance.Busy();
         context.Directives.RequestNextTransition(new NextTransitionRequest("auto-transition", "auto"));
 
         var result = await _step.ExecuteAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        context.Directives.EndChainRequested.ShouldBeFalse();
         context.Directives.ResolvedStatus.ShouldBeNull();
     }
 
@@ -224,6 +236,7 @@ public class ResolveAvailableStepTests
         // Arrange - state with no transitions should be Available
         var context = CreateTransitionExecutionContextWithNoTransitions();
         context.Instance.Busy();
+        context.OwnsStatus = true; // resolution is gated on Busy-lifecycle ownership
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);

@@ -74,7 +74,8 @@ public sealed class RunOnExitTasksStep(
             if (tasksResult.TaskError != null)
                 context.Items[TaskExecutionErrorKey] = tasksResult.TaskError;
 
-            // Apply script context changes before handling boundary
+            // Task outputs are already persisted per record by the write service; only the
+            // aggregate's non-data changes (mutations, sync of the latest snapshot) remain.
             context.ApplyScriptContextChanges(scriptContext);
             await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 

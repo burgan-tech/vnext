@@ -716,9 +716,17 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             Mutations.SetStage(branch.Mutations.Stage);
         }
 
+        // The branch's task outputs were persisted IMMEDIATELY by the InstanceData write
+        // service (row identity computed under the row lock); nothing is re-appended here.
+        // Only sync this context's snapshot with the branch's freshest persisted row so
+        // later tasks and rules read the merged content.
         var branchData = branch.Instance?.LatestData;
-        if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id)
-            Instance.AddData(Guid.NewGuid(), branchData.Data, VersionStrategy.IncreasePatch);
+        if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id
+            && InstanceDataVersionComparer.CompareVersionStrings(
+                branchData.Version, Instance.LatestData?.Version ?? string.Empty) >= 0)
+        {
+            Instance.AcceptPersistedData(branchData.CreateSnapshot());
+        }
     }
 
     private void MergeDictionary(

@@ -54,6 +54,7 @@ public sealed class TaskExecutionEngineTests
         _boundaryResolver,
         _actionExecutor,
         _errorFactory,
+        Substitute.For<BBT.Workflow.Instances.IInstanceDataWriteService>(),
         NullLogger<TaskExecutionEngine>.Instance);
 
     private static ScriptContext CreateScriptContext()

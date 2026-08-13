@@ -13,6 +13,7 @@ namespace BBT.Workflow.SubFlow;
 /// <inheritdoc cref="ISubflowOutputMappingService" />
 public sealed class SubflowOutputMappingService(
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -62,19 +63,17 @@ public sealed class SubflowOutputMappingService(
             var hasData = outputMappingResult?.Data != null;
             if (hasData)
             {
-                parentInstance.AddData(
-                    guidGenerator.Create(),
+                // Persisted IMMEDIATELY — identity computed under the per-instance row lock.
+                await instanceDataWriteService.AppendAsync(
+                    parentInstance,
                     new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
-                    parentState.VersionStrategy);
+                    parentState.VersionStrategy,
+                    cancellationToken);
             }
 
             if (scriptContext.Mutations.HasChanges)
             {
                 scriptContext.Mutations.ApplyTo(parentInstance);
-            }
-
-            if (hasData || scriptContext.Mutations.HasChanges)
-            {
                 await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
             }
 

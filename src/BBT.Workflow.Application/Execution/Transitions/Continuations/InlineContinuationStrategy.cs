@@ -59,7 +59,8 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
             },
             IsReentry = true,
             EnqueueContinuations = currentContext.EnqueueContinuations,
-            ChainToken = currentContext.ChainToken,
+            IsPreReserved = currentContext.IsPreReserved,
+            OwnsStatus = currentContext.OwnsStatus,
             Termination = currentContext.Termination,
             IsErrorBoundaryTransition = string.Equals(nextTransition.Reason, TransitionRequestReasons.ErrorBoundary, StringComparison.OrdinalIgnoreCase)
         };

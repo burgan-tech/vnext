@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting.Functions;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.DependencyInjection;
@@ -155,7 +156,7 @@ public class ScriptValidationTests : ApplicationTestBase<ApplicationEntryPoint>
             };
 
             var instance = InstanceFactory.CreateDefault();
-            instance.AddData(Guid.NewGuid(), new JsonData(JsonSerializer.Serialize(mockInstanceData)), VersionStrategy.IncreaseMajor);
+            instance.SeedData(Guid.NewGuid(), new JsonData(JsonSerializer.Serialize(mockInstanceData)), VersionStrategy.IncreaseMajor);
 
             var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
                 .SetWorkflow(WorkflowFactory.CreateDefault())

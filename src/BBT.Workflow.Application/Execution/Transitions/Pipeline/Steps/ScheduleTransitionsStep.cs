@@ -128,9 +128,14 @@ public sealed class ScheduleTransitionsStep(
         Transition scheduledTransition,
         TimerSchedule timerSchedule)
     {
-        // Scope by the owning state (the state just entered, whose timer this is). The same state is
-        // context.Current when CancelScheduledJobsStep later cancels it, so the source-state key lines up.
-        var jobName = JobName.ForScheduledTransition(context.InstanceId, context.Target!.Key, scheduledTransition.Key);
+        // Scope by the owning state (the state just entered, whose timer this is). The state is
+        // matched from the structured InstanceJob columns when CancelScheduledJobsStep later cancels
+        // it, so the source-state key lines up. The invocation segment additionally makes the name
+        // unique per arming: re-entering the same state re-arms the same timer, and a scheduler
+        // entry is deleted BY NAME once the previous one-shot fires — a shared name would let the
+        // firing timer delete the freshly armed one. It is a uniquifier only; nothing looks it up.
+        var jobName = JobName.ForScheduledTransition(
+            context.InstanceId, context.Target!.Key, scheduledTransition.Key, Guid.NewGuid());
         var activity = Activity.Current;
 
         var payload = new TransitionTimerPayload

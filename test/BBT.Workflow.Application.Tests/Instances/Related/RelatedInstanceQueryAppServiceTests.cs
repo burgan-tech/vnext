@@ -47,7 +47,7 @@ public class RelatedInstanceQueryAppServiceTests : IDisposable
     private static Instance TargetInstance()
     {
         var instance = Instance.Create(TargetId, "loan-application", "2.1.0", "customer-42");
-        instance.AddData(
+        instance.SeedData(
             Guid.NewGuid(),
             new JsonData(JsonSerializer.SerializeToElement(new
             {

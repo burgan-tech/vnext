@@ -146,49 +146,4 @@ public sealed class TransitionLockScopeFactoryTests
         }
     }
 
-    [Fact]
-    public async Task AcquireAsync_WhenChainAlreadyHoldsKey_ShouldReturnReentrantScopeWithoutDistributedAcquire()
-    {
-        // Simulates the sync subflow completion callback: the parent pipeline higher up in
-        // this async chain already holds the parent lock, so re-acquisition must succeed
-        // without touching the distributed lock service (which would reject same-key acquire).
-        const string key = "vnext:bank:parent-flow:reentrant";
-        ChainLockRegistry.Register(key);
-        _lockService.TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns((IDistributedLockHandle?)null);
-
-        await using var scope = await CreateFactory().AcquireAsync(key);
-
-        scope.IsAcquired.ShouldBeTrue();
-        scope.LockKey.ShouldBe(key);
-        await _lockService.DidNotReceive()
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task AcquireAsync_ReentrantScope_ShouldReportExtendAsSucceeded()
-    {
-        // The outer holder owns the real lease; a reentrant scope must not abort chains
-        // that opt into between-hop lease extension.
-        const string key = "vnext:bank:parent-flow:reentrant-extend";
-        ChainLockRegistry.Register(key);
-
-        await using var scope = await CreateFactory().AcquireAsync(key);
-
-        (await scope.ExtendAsync()).ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task AcquireAsync_ReentrantScope_DisposeShouldNotReleaseOuterLock()
-    {
-        const string key = "vnext:bank:parent-flow:reentrant-dispose";
-        ChainLockRegistry.Register(key);
-
-        var scope = await CreateFactory().AcquireAsync(key);
-        await scope.DisposeAsync();
-
-        // No handle was created, so nothing may be released on the lock service.
-        await _lockService.DidNotReceive()
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
 }

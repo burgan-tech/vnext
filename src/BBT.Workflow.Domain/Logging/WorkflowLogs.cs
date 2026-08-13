@@ -149,75 +149,163 @@ public static partial class WorkflowLogs
     public static partial void InstanceMarkedBusy(this ILogger logger, Guid instanceId);
 
     /// <summary>
-    /// Logs when a foreign transition is rejected by the chain-token gate because the instance
-    /// is Busy with an active auto-chain owned by a different token.
+    /// Logs when transition admission rejects a request because the instance is Busy
+    /// (Busy-as-mutex model; surfaces as 409 Instance:100031).
     /// </summary>
     [LoggerMessage(
-        EventId = 10124,
-        Level = LogLevel.Warning,
-        Message = "Foreign transition {TransitionKey} rejected: instance {InstanceId} is Busy with an active chain (token mismatch)")]
-    public static partial void ForeignChainTransitionRejected(
+        EventId = 10135,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} rejected: instance {InstanceId} is Busy")]
+    public static partial void TransitionRejectedInstanceBusy(
         this ILogger logger,
-        string transitionKey,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when an instance is reserved (Active→Busy) under the short status lock. The Busy
+    /// flag carries mutual exclusion for the pipeline body and its auto-chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10136,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} reserved Busy for transition {TransitionKey}")]
+    public static partial void InstanceBusyReserved(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when an instance status settlement (Busy→Active/Completed/Faulted) commits under
+    /// the short status lock.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10138,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} status settled to {Status} under status lock")]
+    public static partial void InstanceStatusSettled(
+        this ILogger logger,
+        Guid instanceId,
+        string status);
+
+    /// <summary>
+    /// Logs when the short status lock could not be acquired within its bounded retry budget.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10139,
+        Level = LogLevel.Warning,
+        Message = "Status lock acquisition failed for {LockKey} after bounded retries")]
+    public static partial void StatusLockAcquireFailed(
+        this ILogger logger,
+        string lockKey);
+
+    /// <summary>
+    /// Logs when the compensation that releases an accept-time reservation failed. The
+    /// instance stays Busy until job-timeout recovery faults it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10140,
+        Level = LogLevel.Warning,
+        Message = "Failed to release reservation for instance {InstanceId}")]
+    public static partial void ReservationReleaseFailed(
+        this ILogger logger,
+        Exception exception,
         Guid instanceId);
 
     /// <summary>
-    /// Logs when the chain reaper faults a stuck-Busy instance whose chain has no live job.
+    /// Logs when a retry re-entry reuses the ORIGINAL transition record so the task journal
+    /// lines up and already-completed tasks are bypassed instead of re-running side effects.
     /// </summary>
     [LoggerMessage(
-        EventId = 10125,
-        Level = LogLevel.Warning,
-        Message = "Chain reaper faulted stuck instance {InstanceId} (chain {ChainToken}); heartbeat stale since {HeartbeatAt:o}")]
-    public static partial void ChainReaperFaultedInstance(
+        EventId = 10147,
+        Level = LogLevel.Information,
+        Message = "Retry of transition {TransitionKey} on instance {InstanceId} reuses transition record {TransitionRecordId}; completed tasks will be bypassed")]
+    public static partial void TransitionRecordReusedForRetry(
         this ILogger logger,
         Guid instanceId,
-        Guid? chainToken,
-        DateTime? heartbeatAt);
+        Guid transitionRecordId,
+        string transitionKey);
 
     /// <summary>
-    /// Logs the result of a chain reaper sweep.
+    /// Logs when an updateData execution hands its satisfied auto transition to a real owner:
+    /// the continuation boundary reserved the instance (Active→Busy) and the chained transition
+    /// proceeds with full normal behavior.
     /// </summary>
     [LoggerMessage(
-        EventId = 10126,
+        EventId = 10145,
         Level = LogLevel.Information,
-        Message = "Chain reaper sweep completed: {Faulted} faulted, {SkippedActive} skipped (active job)")]
-    public static partial void ChainReaperSweepCompleted(
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} reserved the instance for its auto-transition continuation {NextTransitionKey}")]
+    public static partial void UpdateDataContinuationReserved(
         this ILogger logger,
-        int faulted,
-        int skippedActive);
+        Guid instanceId,
+        string transitionKey,
+        string nextTransitionKey);
 
     /// <summary>
-    /// Logs when the per-flow sweep timeout elapses before the reaper finishes a schema.
+    /// Logs when an updateData execution drops its satisfied auto transition because the
+    /// instance could not be reserved (a competing chain owns it). The competing owner is
+    /// already advancing; a later updateData re-evaluates the same conditions.
     /// </summary>
     [LoggerMessage(
-        EventId = 10127,
+        EventId = 10146,
         Level = LogLevel.Warning,
-        Message = "Chain reaper sweep timed out for flow schema {FlowKey}; schema skipped this cycle")]
-    public static partial void ChainReaperFlowSweepTimedOut(
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} dropped its auto-transition continuation {NextTransitionKey}: {ErrorCode}")]
+    public static partial void UpdateDataContinuationDropped(
         this ILogger logger,
-        string flowKey);
+        Guid instanceId,
+        string transitionKey,
+        string nextTransitionKey,
+        string? errorCode);
 
     /// <summary>
-    /// Logs when this replica won the chain-reaper leader lease and will run the sweep this cycle.
+    /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE
+    /// row lock within lock_timeout — a concurrent writer held it for the whole wait budget.
     /// </summary>
     [LoggerMessage(
-        EventId = 10128,
-        Level = LogLevel.Debug,
-        Message = "Chain reaper acquired leader lease ({LeaseSeconds}s); sweeping this cycle")]
-    public static partial void ChainReaperLeadershipAcquired(
+        EventId = 10141,
+        Level = LogLevel.Warning,
+        Message = "Instance data write lock timed out for instance {InstanceId} after {LockTimeoutMs}ms")]
+    public static partial void InstanceDataLockWaitTimeout(
         this ILogger logger,
-        int leaseSeconds);
+        Guid instanceId,
+        int lockTimeoutMs);
 
     /// <summary>
-    /// Logs when another replica holds the chain-reaper leader lease, so this replica skips the
-    /// sweep this cycle (avoids redundant sys_flows discovery and per-flow polling across pods).
+    /// Logs when the InstanceData write service could not load the workflow's master schema for
+    /// pre-persist validation — the append proceeds unvalidated rather than failing the write.
     /// </summary>
     [LoggerMessage(
-        EventId = 10129,
+        EventId = 10148,
+        Level = LogLevel.Warning,
+        Message = "Failed to load schema {SchemaKey} for instance data validation: {Error}")]
+    public static partial void InstanceDataSchemaLoadFailed(
+        this ILogger logger,
+        string schemaKey,
+        string? error);
+
+    /// <summary>
+    /// Logs when the write funnel demoted a stale latest row (written by a concurrent
+    /// transaction) under the FOR UPDATE lock before inserting the new head.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10143,
         Level = LogLevel.Debug,
-        Message = "Chain reaper leader lease held by another replica; skipping sweep this cycle")]
-    public static partial void ChainReaperLeadershipHeldElsewhere(
-        this ILogger logger);
+        Message = "Stale latest InstanceData row demoted for instance {InstanceId} before inserting VersionNo {VersionNo}")]
+    public static partial void InstanceDataStaleLatestDemoted(
+        this ILogger logger,
+        Guid instanceId,
+        long versionNo);
+
+    /// <summary>
+    /// Logs when an InstanceData write statement was cancelled by statement_timeout.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10144,
+        Level = LogLevel.Warning,
+        Message = "Instance data write statement timed out for instance {InstanceId} after {StatementTimeoutMs}ms")]
+    public static partial void InstanceDataWriteStatementTimeout(
+        this ILogger logger,
+        Guid instanceId,
+        int statementTimeoutMs);
 
     /// <summary>
     /// Logs when an active job already exists for the same instance and transition key,
@@ -300,28 +388,6 @@ public static partial class WorkflowLogs
     public static partial void TransitionTimerSkipped(
         this ILogger logger,
         string transitionKey);
-
-    /// <summary>
-    /// Logs when an updateData transition is detected.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10011,
-        Level = LogLevel.Information,
-        Message = "UpdateData transition detected for instance {InstanceId}")]
-    public static partial void UpdateDataTransitionDetected(
-        this ILogger logger,
-        Guid instanceId);
-
-    /// <summary>
-    /// Logs when skipping to finish step for updateData transition.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10012,
-        Level = LogLevel.Information,
-        Message = "Skipping normal pipeline steps for updateData transition, jumping to Finalize step for instance {InstanceId}")]
-    public static partial void UpdateDataSkipToFinish(
-        this ILogger logger,
-        Guid instanceId);
 
     /// <summary>
     /// Logs when an exit transition is detected.
@@ -465,18 +531,6 @@ public static partial class WorkflowLogs
     public static partial void DynamicExpressoConditionEvaluationFailed(
         this ILogger logger,
         string reason);
-
-    /// <summary>
-    /// Logs when attempting to update data on an already completed instance.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10054,
-        Level = LogLevel.Warning,
-        Message = "Cannot update data for instance {InstanceId}: already in {Status} state")]
-    public static partial void UpdateDataInstanceAlreadyCompleted(
-        this ILogger logger,
-        Guid instanceId,
-        string status);
 
     /// <summary>
     /// Logs when attempting to exit an already completed instance.

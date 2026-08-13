@@ -1,7 +1,6 @@
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
-using BBT.Workflow.Aspects;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Events;
 
@@ -124,29 +123,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Status
     /// </summary>
     public InstanceStatus Status { get; private set; }
-
-    /// <summary>
-    /// Durable ownership token for an in-flight auto-chain. While set (and the instance is Busy),
-    /// only transitions carrying the matching token (the chain's own continuations) are admitted;
-    /// foreign transitions are rejected. Reserved transitions (cancel/timeout) are exempt.
-    /// Replaces a long-held distributed lock for chain ownership (transition-per-job). Null when idle.
-    /// </summary>
-    public Guid? ChainToken { get; private set; }
-
-    /// <summary>
-    /// Last heartbeat of the in-flight auto-chain (UTC). Refreshed when the chain begins and on
-    /// each per-transition commit. Used by the stuck-Busy reaper (S7) to detect chains that own a
-    /// Busy instance but have no live/pending job. Null when idle.
-    /// </summary>
-    public DateTime? ChainHeartbeatAt { get; private set; }
-
-    /// <summary>
-    /// Durable resume point (S8): the last committed lifecycle step order within the in-flight
-    /// transition. On crash-resume the pipeline restarts from the next step rather than the
-    /// beginning, and already-committed remote task journal rows (InstanceTask) are bypassed,
-    /// avoiding duplicate irreversible side effects. Null when no transition is mid-flight.
-    /// </summary>
-    public int? ResumePointStepOrder { get; private set; }
 
     /// <summary>
     /// Long-poll acknowledge token. Set when the pipeline pauses on entering a state whose
@@ -377,7 +353,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public void Complete(string domain, bool sync = false)
     {
         Status = InstanceStatus.Completed;
-        ChainToken = null;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
@@ -431,7 +406,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         var effectiveTermination = termination ?? TerminationContext.Direct(Id);
         var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Faulted;
-        ChainToken = null;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
 
@@ -626,41 +600,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     }
 
     /// <summary>
-    /// Begins an auto-chain: marks the instance Busy and stamps the durable ownership token.
-    /// No-op if the instance is already completed.
-    /// </summary>
-    /// <param name="token">The chain ownership token to stamp.</param>
-    public void BeginChain(Guid token)
-    {
-        if (IsCompleted)
-            return;
-
-        Status = InstanceStatus.Busy;
-        ChainToken = token;
-        ChainHeartbeatAt = DateTime.UtcNow;
-    }
-
-    /// <summary>
-    /// Refreshes the chain heartbeat (called on each per-transition commit while the chain owns
-    /// the instance). No-op when there is no active chain token.
-    /// </summary>
-    public void TouchChainHeartbeat()
-    {
-        if (ChainToken.HasValue)
-            ChainHeartbeatAt = DateTime.UtcNow;
-    }
-
-    /// <summary>
-    /// Records the last committed lifecycle step order for crash-resume (S8).
-    /// </summary>
-    public void SetResumePoint(int stepOrder) => ResumePointStepOrder = stepOrder;
-
-    /// <summary>
-    /// Clears the durable resume point (called at transition finalize so it never leaks into the next transition).
-    /// </summary>
-    public void ClearResumePoint() => ResumePointStepOrder = null;
-
-    /// <summary>
     /// Arms the long-poll acknowledge marker with the supplied token (pipeline paused on state entry).
     /// </summary>
     public void ArmLongPollAck(Guid token) => LongPollAckToken = token;
@@ -676,20 +615,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public bool IsAwaitingLongPollAck => LongPollAckToken.HasValue;
 
     /// <summary>
-    /// Returns whether the supplied token matches the instance's current chain ownership token.
-    /// </summary>
-    public bool MatchesChain(Guid token) => ChainToken.HasValue && ChainToken.Value == token;
-
-    /// <summary>
-    /// Clears the chain ownership token + heartbeat (chain complete / instance returning to a resting state).
-    /// </summary>
-    public void EndChain()
-    {
-        ChainToken = null;
-        ChainHeartbeatAt = null;
-    }
-
-    /// <summary>
     /// Sets the instance status to Active.
     /// This is typically called when a transition processing is completed successfully.
     /// </summary>
@@ -699,8 +624,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             return;
 
         Status = InstanceStatus.Active;
-        ChainToken = null;
-        ChainHeartbeatAt = null;
     }
 
     /// <summary>
@@ -947,100 +870,39 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
     }
 
-    [SchemaValidation]
-    public InstanceData AddDataWithVersion(Guid id, JsonData inputData, string version, bool ignoreSameData = true)
+    /// <summary>
+    /// Accepts a row the <see cref="IInstanceDataWriteService"/> just persisted (or found) into
+    /// this aggregate's in-memory data list, keeping the single-latest invariant. Id-idempotent:
+    /// EF relationship fixup may have already attached the row when the service shares this
+    /// aggregate's DbContext — a second accept is a no-op. Snapshot aggregates receive a
+    /// detached copy from the caller, never the tracked entity itself.
+    /// </summary>
+    internal void AcceptPersistedData(InstanceData row)
     {
         lock (_dataListLock)
         {
-            var latestData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
-
-            // Invariant: IsLatest = the highest version across the entire history. An explicit
-            // (possibly older-line) version only takes the flag when it compares >= the current
-            // head; otherwise it becomes the head of its own version line without stealing the
-            // global latest (parallel artifact lines such as 1.0.x vs 2.0.x stay independent).
-            var takesLatest = latestData is null
-                || InstanceDataVersionComparer.CompareVersionStrings(version, latestData.Version) >= 0;
-
-            // Appending to an older line requires that line's rows for dedup + sequence math,
-            // which a latest-only loaded aggregate does not have in memory.
-            if (!takesLatest && IsDataPartiallyLoaded)
+            if (_dataList.Any(d => d.Id == row.Id))
             {
-                throw new InvalidOperationException(
-                    $"Cannot append version '{version}' to instance '{Id}': the aggregate was " +
-                    "loaded latest-only and the target version line is not in memory. Load the " +
-                    "instance with full data history for line-targeted appends.");
+                if (row.IsLatest)
+                {
+                    foreach (var other in _dataList.Where(d => d.IsLatest && d.Id != row.Id))
+                    {
+                        other.MarkAsNotLatest();
+                    }
+                }
+
+                return;
             }
 
-            // Dedup against the head of the SAME version line — not the global latest:
-            // appending data to line 1.0.x must neither be skipped because it happens to equal
-            // the 2.0.0 payload, nor duplicate what its own line already holds.
-            if (ignoreSameData)
+            if (row.IsLatest)
             {
-                var lineHead = _dataList
-                    .Where(d => d.Version == version)
-                    .OrderByDescending(d => d.HistorySequence)
-                    .FirstOrDefault();
-                if (lineHead?.HasSameData(inputData) == true)
+                foreach (var other in _dataList.Where(d => d.IsLatest))
                 {
-                    return lineHead;
+                    other.MarkAsNotLatest();
                 }
             }
 
-            if (takesLatest)
-            {
-                latestData?.MarkAsNotLatest();
-            }
-
-            var newData = new InstanceData(
-                id,
-                Id,
-                version,
-                inputData,
-                takesLatest,
-                GetNextHistorySequence(version)
-            );
-            _dataList.Add(newData);
-            return newData;
-        }
-    }
-
-    [SchemaValidation]
-    public InstanceData AddData(Guid id, JsonData inputData, VersionStrategy? versionStrategy = null)
-    {
-        lock (_dataListLock)
-        {
-            var lastData = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
-
-            // If we have existing data, check if the new data is different
-            if (lastData?.HasSameData(inputData) == true)
-            {
-                // Data hasn't changed, return the existing data
-                return lastData;
-            }
-
-            InstanceData newData;
-            if (lastData is null)
-            {
-                newData = new InstanceData(
-                    id,
-                    Id,
-                    WorkflowConstants.DefaultVersion,
-                    inputData,
-                    true
-                );
-            }
-            else
-            {
-                newData = lastData.NewVersion(
-                    id,
-                    inputData,
-                    versionStrategy ?? VersionStrategy.None,
-                    GetNextHistorySequence(lastData.Version)
-                );
-            }
-
-            _dataList.Add(newData);
-            return newData;
+            _dataList.Add(row);
         }
     }
 
@@ -1088,24 +950,12 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             }
 
             // Resolve the selected version back to InstanceData
-            // If multiple entries exist with the same version, return the highest by HistorySequence
+            // If multiple entries exist with the same version, return the highest by VersionNo
             return _dataList
                 .Where(d => d.Version == bestVersion)
                 .OrderByDescending(d => d, InstanceDataVersionComparer.Instance)
                 .FirstOrDefault();
         }
-    }
-
-    /// <summary>
-    /// Gets the next history sequence for a specific version
-    /// </summary>
-    private int GetNextHistorySequence(string version)
-    {
-        return _dataList
-            .Where(d => d.Version == version)
-            .Select(d => d.HistorySequence)
-            .DefaultIfEmpty(-1) //For an empty list, it returns -1, and by adding +1 it becomes 0"
-            .Max() + 1;
     }
 
     /// <summary>
@@ -1132,7 +982,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
             return _dataList
                 .Where(d => d.Version == version)
-                .OrderBy(d => d.HistorySequence)
+                .OrderBy(d => d.VersionNo)
                 .ToList();
         }
     }
@@ -1146,7 +996,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         {
             return _dataList
                 .Where(d => d.Version == version)
-                .OrderByDescending(d => d.HistorySequence)
+                .OrderByDescending(d => d.VersionNo)
                 .FirstOrDefault();
         }
     }
