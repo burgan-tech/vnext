@@ -43,10 +43,13 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     public string Version { get; private set; }
 
     /// <summary>
-    /// Instance-global version number. Assigned by the InstanceData write service under the
-    /// per-instance <c>FOR UPDATE</c> row lock (head VersionNo + 1) before the row is inserted.
-    /// Provides a monotonically increasing sequence per instance for concurrency control,
-    /// backed by the unique index <c>UX_InstancesData_Instance_VersionNo</c>.
+    /// Line-scoped ordinal: the row's 1-based sequence WITHIN its semantic <see cref="Version"/>
+    /// string (each new version line restarts at 1; same-version appends continue their line).
+    /// Assigned by the InstanceData write service under the per-instance <c>FOR UPDATE</c> row
+    /// lock from the line's current maximum, backed by the unique index
+    /// <c>UX_InstancesData_Instance_Version_VersionNo</c>. Cross-line ordering is semantic
+    /// (see <see cref="InstanceDataVersionComparer"/>); use <see cref="EnteredAt"/> for
+    /// global chronology.
     /// </summary>
     public long VersionNo { get; internal set; }
 

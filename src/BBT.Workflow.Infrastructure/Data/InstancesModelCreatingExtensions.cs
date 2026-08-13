@@ -259,10 +259,11 @@ public static class InstancesModelCreatingExtensions
 
             b.HasIndex(p => p.InstanceId);
 
-            // Unique index: Instance-based VersionNo (for concurrency control)
-            b.HasIndex(p => new { p.InstanceId, p.VersionNo })
+            // Unique index: line-scoped VersionNo — the ordinal is unique WITHIN one semantic
+            // Version string of an instance (each version line restarts at 1).
+            b.HasIndex(p => new { p.InstanceId, p.Version, p.VersionNo })
                 .IsUnique()
-                .HasDatabaseName("UX_InstancesData_Instance_VersionNo");
+                .HasDatabaseName("UX_InstancesData_Instance_Version_VersionNo");
 
             // Partial unique index: Only one record per instance can have IsLatest = true.
             // INCLUDE adds the meta columns the runtime reads alongside the latest snapshot

@@ -67,9 +67,15 @@ public static class InstanceDataSeeder
         JsonData content,
         bool isLatest)
     {
+        // Line-scoped VersionNo: 1-based ordinal within the target Version string, matching
+        // the write service's assignment.
         var row = new InstanceData(id, instance.Id, version, content, isLatest)
         {
-            VersionNo = instance.DataList.Select(d => d.VersionNo).DefaultIfEmpty(0L).Max() + 1
+            VersionNo = instance.DataList
+                .Where(d => d.Version == version)
+                .Select(d => d.VersionNo)
+                .DefaultIfEmpty(0L)
+                .Max() + 1
         };
 
         instance.AcceptPersistedData(row);

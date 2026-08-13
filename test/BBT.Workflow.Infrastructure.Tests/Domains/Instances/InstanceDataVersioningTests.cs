@@ -112,19 +112,18 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         {
             var list = await ctx.InstancesData
                 .Where(x => x.InstanceId == seeded.Id)
-                .OrderBy(x => x.VersionNo)
                 .ToListAsync();
 
             // a) Every append produced a row (distinct payloads — no dedup)
             list.Count.ShouldBe(count);
 
-            // b) VersionNo is sequential 1..count — identity computed under the lock
-            list.Select(x => x.VersionNo).ShouldBe(
-                Enumerable.Range(1, count).Select(i => (long)i));
+            // b) Each Patch append started a NEW version line — line-scoped VersionNo is 1
+            //    on every row, and the version strings are all distinct (no duplicate SemVer).
+            list.ShouldAllBe(x => x.VersionNo == 1);
+            list.Select(x => x.Version).Distinct().Count().ShouldBe(count);
 
-            // c) Exactly one latest, and it is the highest VersionNo
+            // c) Exactly one latest
             var latest = list.Single(x => x.IsLatest);
-            latest.VersionNo.ShouldBe(count);
 
             // d) Loss-free merge: the final row carries EVERY writer's key
             for (var i = 0; i < count; i++)
@@ -132,6 +131,36 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
                 latest.Data.Json.ShouldContain($"\"k{i}\"");
             }
         }
+    }
+
+    [Fact]
+    public async Task SameVersion_Appends_Should_Grow_Their_Own_Line_Ordinal()
+    {
+        // The review-mandated semantics: VersionNo is an ordinal WITHIN one semantic Version
+        // string — None-strategy appends continue their line (1, 2, 3...) and a strategy bump
+        // starts a fresh line back at 1:
+        //   1.0.0|1, 1.0.0|2, 1.0.0|3, 1.1.0|1
+        var seeded = await CreateInstanceAsync();
+
+        await using var ctx = CreateContext();
+        var instance = Instance.Create(seeded.Id, seeded.Flow, seeded.FlowVersion);
+        var service = CreateService(ctx);
+
+        var r1 = await service.AppendAsync(instance, new JsonData("{\"a\":1}"), null, CancellationToken.None);
+        var r2 = await service.AppendAsync(instance, new JsonData("{\"a\":2}"), null, CancellationToken.None);
+        var r3 = await service.AppendAsync(instance, new JsonData("{\"a\":3}"), null, CancellationToken.None);
+        var r4 = await service.AppendAsync(instance, new JsonData("{\"b\":1}"), VersionStrategy.IncreaseMinor, CancellationToken.None);
+
+        (r1!.Version, r1.VersionNo).ShouldBe(("1.0.0", 1L));
+        (r2!.Version, r2.VersionNo).ShouldBe(("1.0.0", 2L));
+        (r3!.Version, r3.VersionNo).ShouldBe(("1.0.0", 3L));
+        (r4!.Version, r4.VersionNo).ShouldBe(("1.1.0", 1L));
+
+        await using var verifyCtx = CreateContext();
+        var list = await verifyCtx.InstancesData
+            .Where(x => x.InstanceId == seeded.Id).ToListAsync();
+        list.Count.ShouldBe(4);
+        list.Single(x => x.IsLatest).Version.ShouldBe("1.1.0");
     }
 
     [Fact]
@@ -175,11 +204,14 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         var v2 = await service.AppendAsync(instance, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch, CancellationToken.None);
         var v3 = await service.AppendAsync(instance, new JsonData("{\"c\":3}"), VersionStrategy.IncreaseMinor, CancellationToken.None);
 
-        // Assert — first row starts the chain, each next version derives from the DB head
+        // Assert — first row starts the chain, each next version derives from the DB head;
+        // every strategy bump opens a new line, so each row's line-scoped VersionNo is 1.
         v1!.Version.ShouldBe("1.0.0");
         v2!.Version.ShouldBe("1.0.1");
         v3!.Version.ShouldBe("1.1.0");
-        v3.VersionNo.ShouldBe(3);
+        v1.VersionNo.ShouldBe(1);
+        v2.VersionNo.ShouldBe(1);
+        v3.VersionNo.ShouldBe(1);
 
         // Aggregate snapshot follows the persisted head
         instance.LatestData!.Id.ShouldBe(v3.Id);
@@ -216,12 +248,12 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Appends_After_An_Explicit_OlderLine_Row_Should_Number_From_The_Instance_Max()
+    public async Task Appends_After_An_Explicit_OlderLine_Row_Should_Not_Collide()
     {
-        // Production regression (publish path): after 1.0.0 -> 1.1.0 -> 1.0.1 the latest row
-        // (1.1.0) carries VersionNo 2 while the older-line row 1.0.1 carries VersionNo 3.
-        // Numbering the next append from the latest row (2+1) collides with row 3 — every
-        // further publish or strategy append then fails with a duplicate-key error.
+        // Production regression (publish path): after 1.0.0 -> 1.1.0 -> 1.0.1 every further
+        // publish or strategy append used to die on the VersionNo unique index because the
+        // next number was derived from the wrong row. Line-scoped numbering makes this
+        // structurally impossible — each distinct version string is its own line at 1.
         var seeded = await CreateInstanceAsync();
 
         await using var ctx = CreateContext();
@@ -231,28 +263,30 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.0.0", new JsonData("{\"v\":1}"), CancellationToken.None);
         await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.1.0", new JsonData("{\"v\":2}"), CancellationToken.None);
         var olderLine = await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.0.1", new JsonData("{\"v\":3}"), CancellationToken.None);
-        olderLine.VersionNo.ShouldBe(3);
+        olderLine.VersionNo.ShouldBe(1);
         olderLine.IsLatest.ShouldBeFalse();
 
         // Both directions must keep working: a higher explicit line, a lower explicit line,
         // and a strategy append bumping from the semantic head. Latest-flag asserts run at
         // the moment each row is the head — later appends legitimately demote earlier ones.
+        // Every distinct version string is its own line, so each row's VersionNo is 1.
         var higher = await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.2.0", new JsonData("{\"v\":4}"), CancellationToken.None);
-        higher.VersionNo.ShouldBe(4);
+        higher.VersionNo.ShouldBe(1);
         higher.IsLatest.ShouldBeTrue();
 
         var lower = await service.AppendExplicitAsync(instance, Guid.NewGuid(), "1.0.2", new JsonData("{\"v\":5}"), CancellationToken.None);
-        lower.VersionNo.ShouldBe(5);
+        lower.VersionNo.ShouldBe(1);
         lower.IsLatest.ShouldBeFalse();
 
         var strategy = await service.AppendAsync(instance, new JsonData("{\"w\":1}"), VersionStrategy.IncreasePatch, CancellationToken.None);
-        strategy!.VersionNo.ShouldBe(6);
+        strategy!.VersionNo.ShouldBe(1);
         strategy.Version.ShouldBe("1.2.1");
 
         await using var verifyCtx = CreateContext();
         var list = await verifyCtx.InstancesData
-            .Where(x => x.InstanceId == seeded.Id).OrderBy(x => x.VersionNo).ToListAsync();
-        list.Select(x => x.VersionNo).ShouldBe([1L, 2L, 3L, 4L, 5L, 6L]);
+            .Where(x => x.InstanceId == seeded.Id).ToListAsync();
+        list.Count.ShouldBe(6);
+        list.ShouldAllBe(x => x.VersionNo == 1);
         list.Single(x => x.IsLatest).Version.ShouldBe("1.2.1");
     }
 
@@ -288,10 +322,11 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         await using var verifyCtx = CreateContext();
         var list = await verifyCtx.InstancesData
             .Where(x => x.InstanceId == seeded.Id)
-            .OrderBy(x => x.VersionNo)
             .ToListAsync();
         list.Count.ShouldBe(count);
-        list.Select(x => x.VersionNo).ShouldBe(Enumerable.Range(1, count).Select(i => (long)i));
+        // Each Patch append opened a fresh version line: line-scoped VersionNo is 1 everywhere.
+        list.ShouldAllBe(x => x.VersionNo == 1);
+        list.Select(x => x.Version).Distinct().Count().ShouldBe(count);
         var latest = list.Single(x => x.IsLatest);
         for (var i = 0; i < count; i++)
         {
@@ -300,9 +335,10 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Different_Instances_Should_Have_Independent_Version_Sequences()
+    public async Task Different_Instances_Should_Have_Independent_Version_Lines()
     {
-        // Arrange
+        // Arrange — same version string ("1.0.0" line) growing on two different instances:
+        // the line ordinal is scoped per (InstanceId, Version), never shared across instances.
         var seeded1 = await CreateInstanceAsync("test-flow-1");
         var seeded2 = await CreateInstanceAsync("test-flow-2");
 
@@ -311,13 +347,14 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         var instance1 = Instance.Create(seeded1.Id, seeded1.Flow, seeded1.FlowVersion);
         var instance2 = Instance.Create(seeded2.Id, seeded2.Flow, seeded2.FlowVersion);
 
-        // Act
+        // Act — None strategy keeps the version string, so all rows land on each
+        // instance's own "1.0.0" line
         for (var i = 0; i < 3; i++)
-            await service.AppendAsync(instance1, new JsonData($"{{\"a\":{i}}}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+            await service.AppendAsync(instance1, new JsonData($"{{\"a\":{i}}}"), null, CancellationToken.None);
         for (var i = 0; i < 2; i++)
-            await service.AppendAsync(instance2, new JsonData($"{{\"b\":{i}}}"), VersionStrategy.IncreasePatch, CancellationToken.None);
+            await service.AppendAsync(instance2, new JsonData($"{{\"b\":{i}}}"), null, CancellationToken.None);
 
-        // Assert — VersionNo sequences are per instance
+        // Assert — line ordinals are per instance
         (await ctx.InstancesData.Where(x => x.InstanceId == seeded1.Id).OrderBy(x => x.VersionNo)
             .Select(x => x.VersionNo).ToListAsync()).ShouldBe([1L, 2L, 3L]);
         (await ctx.InstancesData.Where(x => x.InstanceId == seeded2.Id).OrderBy(x => x.VersionNo)

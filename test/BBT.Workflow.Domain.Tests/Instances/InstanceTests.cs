@@ -1622,9 +1622,11 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void VersionNo_ShouldIncreaseInWriteOrder_AcrossVersionLines()
+    public void VersionNo_ShouldGrowPerVersionLine()
     {
-        // Arrange — VersionNo is instance-global (write-service assignment order), not per line.
+        // Arrange — VersionNo is line-scoped: a 1-based ordinal WITHIN one semantic Version
+        // string. A new version string starts its own line at 1; same-version rows continue
+        // their line regardless of what other lines did in between.
         var instance = InstanceFactory.CreateDefault();
 
         // Act
@@ -1636,8 +1638,8 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Assert
         Assert.Equal(1, v1_0.VersionNo);
         Assert.Equal(2, v1_1.VersionNo);
-        Assert.Equal(3, v2_0.VersionNo);
-        Assert.Equal(4, v1_2.VersionNo);
+        Assert.Equal(1, v2_0.VersionNo);
+        Assert.Equal(3, v1_2.VersionNo);
     }
 
     [Fact]

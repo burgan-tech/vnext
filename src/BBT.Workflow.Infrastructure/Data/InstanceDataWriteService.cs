@@ -20,7 +20,8 @@ namespace BBT.Workflow.Data;
 /// The single InstanceData writer (architecture decision: immediate per-record persistence, no
 /// aggregate-side data mutation). Serializes concurrent writers with the per-instance PostgreSQL
 /// <c>FOR UPDATE</c> row lock and computes the ROW'S WHOLE IDENTITY under that lock from the
-/// authoritative head: <c>VersionNo</c> = head + 1, <c>Version</c> = head version + strategy, and
+/// authoritative head: <c>Version</c> = head version + strategy, <c>VersionNo</c> = the next
+/// ordinal WITHIN that Version line (1-based; each new semantic version restarts at 1), and
 /// the no-change dedup from the merged content's hash. The row is inserted directly (never
 /// through the aggregate navigation) and the caller's aggregate — live or snapshot — has its
 /// in-memory latest refreshed via <c>Instance.AcceptPersistedData</c>.
@@ -104,9 +105,10 @@ public sealed class InstanceDataWriteService(
             await ValidateAgainstSchemaAsync(plan.Content, cancellationToken);
 
             // A strategy append always sits at or above the head → it takes the latest flag.
+            // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
             var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, plan.Content, isLatest: true)
             {
-                VersionNo = plan.VersionNo
+                VersionNo = await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
@@ -167,7 +169,7 @@ public sealed class InstanceDataWriteService(
 
             var row = new InstanceData(id, instance.Id, version, data, takesLatest)
             {
-                VersionNo = (head?.MaxVersionNo ?? 0L) + 1
+                VersionNo = await ReadLineMaxAsync(context, instance.Id, version, cancellationToken) + 1
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: takesLatest && head is not null, cancellationToken);
@@ -178,10 +180,11 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Computes a strategy append's whole identity from the authoritative head: the full merged
+    /// Computes a strategy append's identity from the authoritative head: the full merged
     /// content, the no-change dedup verdict (hash of the MERGED result against the head's hash —
-    /// a delta-only duplicate never matches raw), and the version pair. Pure so the contract is
-    /// unit-testable; <see cref="AppendAsync"/> calls it under the row lock.
+    /// a delta-only duplicate never matches raw), and the semantic version. Pure so the contract
+    /// is unit-testable; <see cref="AppendAsync"/> calls it under the row lock and then assigns
+    /// the line-scoped VersionNo from the target version line's current maximum.
     /// </summary>
     internal static AppendPlan PlanAppend(
         InstanceDataHeadRow? head,
@@ -190,7 +193,7 @@ public sealed class InstanceDataWriteService(
     {
         if (head is null)
         {
-            return new AppendPlan(delta, WorkflowConstants.DefaultVersion, 1L, IsDuplicate: false);
+            return new AppendPlan(delta, WorkflowConstants.DefaultVersion, IsDuplicate: false);
         }
 
         var content = new JsonData(head.Data).Merge(delta);
@@ -201,7 +204,7 @@ public sealed class InstanceDataWriteService(
             InstanceData.ComputeDataHash(content), head.DataHash, StringComparison.OrdinalIgnoreCase);
 
         var version = InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
-        return new AppendPlan(content, version, head.MaxVersionNo + 1, isDuplicate);
+        return new AppendPlan(content, version, isDuplicate);
     }
 
     /// <summary>
@@ -281,11 +284,8 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Reads the authoritative head under the lock — version identity plus the content and its
-    /// hash, which the merge and the no-change dedup both need. Also carries the instance-wide
-    /// MAX(VersionNo): the latest row's own VersionNo is NOT the maximum once an explicit
-    /// older-line append has run (it takes a higher VersionNo without taking the latest flag),
-    /// so numbering from the latest row would collide on UX_InstancesData_Instance_VersionNo.
+    /// Reads the authoritative head under the lock — the semantic version plus the content and
+    /// its hash, which the merge, the no-change dedup and the version increment all need.
     /// </summary>
     private async Task<InstanceDataHeadRow?> ReadHeadAsync(
         WorkflowDbContext context,
@@ -294,12 +294,30 @@ public sealed class InstanceDataWriteService(
     {
         var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
         return await context.Database.SqlQueryRaw<InstanceDataHeadRow>(
-                $"SELECT \"VersionNo\", \"Version\", \"DataHash\", \"Data\"::text AS \"Data\", " +
-                $"(SELECT MAX(d2.\"VersionNo\") FROM \"{schema}\".\"InstancesData\" d2 " +
-                $"WHERE d2.\"InstanceId\" = {{0}}) AS \"MaxVersionNo\" " +
+                $"SELECT \"Version\", \"DataHash\", \"Data\"::text AS \"Data\" " +
                 $"FROM \"{schema}\".\"InstancesData\" WHERE \"InstanceId\" = {{0}} AND \"IsLatest\"",
                 instanceId)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the target version line's current maximum VersionNo under the lock. VersionNo is
+    /// line-scoped: an ordinal WITHIN one semantic Version string (1-based), not an
+    /// instance-global sequence — each new Version line restarts at 1 and same-version appends
+    /// (<c>VersionStrategy.None</c>) continue their own line.
+    /// </summary>
+    private async Task<long> ReadLineMaxAsync(
+        WorkflowDbContext context,
+        Guid instanceId,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
+        return await context.Database.SqlQueryRaw<long>(
+                $"SELECT COALESCE(MAX(\"VersionNo\"), 0) AS \"Value\" " +
+                $"FROM \"{schema}\".\"InstancesData\" WHERE \"InstanceId\" = {{0}} AND \"Version\" = {{1}}",
+                instanceId, version)
+            .FirstAsync(cancellationToken);
     }
 
     /// <summary>
@@ -382,26 +400,17 @@ public sealed class InstanceDataWriteService(
 /// </summary>
 internal sealed class InstanceDataHeadRow
 {
-    public long VersionNo { get; set; }
-
-    /// <summary>
-    /// Instance-wide MAX(VersionNo) — the base for the next row's number. Differs from
-    /// <see cref="VersionNo"/> whenever an explicit older-line append exists (it takes a
-    /// higher VersionNo without taking the latest flag).
-    /// </summary>
-    public long MaxVersionNo { get; set; }
-
     public string Version { get; set; } = string.Empty;
     public string DataHash { get; set; } = string.Empty;
     public string Data { get; set; } = string.Empty;
 }
 
 /// <summary>
-/// The identity of a strategy append computed from the authoritative head:
-/// merged content, dedup verdict, and the version pair the new row will carry.
+/// The identity of a strategy append computed from the authoritative head: merged content,
+/// dedup verdict, and the semantic version the new row will carry. The line-scoped VersionNo
+/// is assigned separately, from the target version line's current maximum.
 /// </summary>
 internal readonly record struct AppendPlan(
     JsonData Content,
     string Version,
-    long VersionNo,
     bool IsDuplicate);

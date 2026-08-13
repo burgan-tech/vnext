@@ -93,7 +93,6 @@ public class InstanceDataWriteServiceTests
 
         plan.IsDuplicate.ShouldBeFalse();
         plan.Version.ShouldBe("1.0.0");
-        plan.VersionNo.ShouldBe(1L);
     }
 
     [Fact]
@@ -102,7 +101,7 @@ public class InstanceDataWriteServiceTests
         // Regression pin: the dedup compares the hash of the MERGED result against the head's
         // hash. A delta-only duplicate (idempotent callback re-stamping an already-set key)
         // never matches the head raw — merged it does, and no new version may be written.
-        var head = CreateHeadRow("{\"a\":1,\"rr_doc1\":true}", "1.2.3", versionNo: 7);
+        var head = CreateHeadRow("{\"a\":1,\"rr_doc1\":true}", "1.2.3");
 
         var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"rr_doc1\":true}"), VersionStrategy.IncreaseMinor);
 
@@ -112,7 +111,7 @@ public class InstanceDataWriteServiceTests
     [Fact]
     public void PlanAppend_DeltaProducingChange_MergesAndComputesIdentityFromTheHead()
     {
-        var head = CreateHeadRow("{\"a\":1}", "1.2.3", versionNo: 7);
+        var head = CreateHeadRow("{\"a\":1}", "1.2.3");
 
         var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch);
 
@@ -121,42 +120,24 @@ public class InstanceDataWriteServiceTests
         plan.Content.Json.ShouldContain("\"a\"");
         plan.Content.Json.ShouldContain("\"b\"");
         plan.Version.ShouldBe("1.2.4");
-        plan.VersionNo.ShouldBe(8L);
     }
 
     [Fact]
     public void PlanAppend_NoStrategy_ContinuesTheHeadVersionLine()
     {
-        var head = CreateHeadRow("{\"a\":1}", "1.2.3", versionNo: 7);
+        var head = CreateHeadRow("{\"a\":1}", "1.2.3");
 
         var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"a\":2}"), versionStrategy: null);
 
         plan.IsDuplicate.ShouldBeFalse();
         plan.Version.ShouldBe("1.2.3");
-        plan.VersionNo.ShouldBe(8L);
     }
 
-    [Fact]
-    public void PlanAppend_NumbersFromTheInstanceWideMax_NotFromTheLatestRow()
-    {
-        // Regression pin: an explicit older-line append takes a HIGHER VersionNo than the
-        // latest row without taking the latest flag. Numbering the next append from the
-        // latest row's VersionNo (7+1) would collide with the existing row 9 on
-        // UX_InstancesData_Instance_VersionNo — it must come from MAX(VersionNo).
-        var head = CreateHeadRow("{\"a\":1}", "1.2.3", versionNo: 7, maxVersionNo: 9);
-
-        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch);
-
-        plan.VersionNo.ShouldBe(10L);
-    }
-
-    private static InstanceDataHeadRow CreateHeadRow(string json, string version, long versionNo, long? maxVersionNo = null)
+    private static InstanceDataHeadRow CreateHeadRow(string json, string version)
     {
         var data = new JsonData(json);
         return new InstanceDataHeadRow
         {
-            VersionNo = versionNo,
-            MaxVersionNo = maxVersionNo ?? versionNo,
             Version = version,
             Data = data.Json,
             DataHash = InstanceData.ComputeDataHash(data)
