@@ -32,6 +32,7 @@ external calls from strongly typed bindings.
 | Task family | Executor examples | Invoker examples |
 | --- | --- | --- |
 | HTTP/SOAP | `HttpTaskExecutor`, `SoapTaskExecutor` | `HttpTaskInvoker`, `SoapTaskInvoker` |
+| Local HTTP (type `21`) | `LocalHttpTaskExecutor` | None — `LocalHttpTaskInvoker` performs the HTTP call in-process inside Orchestration (issue #399) |
 | Dapr | `DaprServiceTaskExecutor`, `DaprPubSubTaskExecutor`, `DaprBindingTaskExecutor` | Matching Dapr invokers |
 | State store | `StateStoreTaskExecutor` | `StateStoreTaskInvoker` — Dapr state store cache access ([details](state-store-task.md)) |
 | Trigger | `StartTriggerTaskExecutor`, `DirectTriggerTaskExecutor`, `SubProcessTaskExecutor` | Remote trigger invokers |
@@ -54,10 +55,35 @@ Execution controller begins a log scope with domain, workflow key, instance id, 
 and task type from the trace context and envelope. Executors should preserve correlation
 and task metadata when sending remote envelopes.
 
+## Local HTTP tasks (type `21`)
+
+`LocalHttpTask` (`type: "21"`, config identical to the type-6 HTTP task) is executed **directly by
+the Orchestrator**: the executor flattens the task through the same `TaskBindingMapper` as the
+remote path and hands the `HttpTaskBinding` to `LocalHttpTaskInvoker`, an in-process port of the
+Execution service's `HttpTaskInvoker` — same named HTTP clients (`validateSsl: false` selects the
+SSL-bypass client), header/Content-Type semantics, response parsing and accepted-status-code
+matching. `/execution/invoke/{type}/{key}` is never called.
+
+Trade-offs to be aware of when choosing type 21 over type 6:
+
+- No Dapr hop means no sidecar circuit breaker and no `ExecutionApi:InvocationTimeoutSeconds`
+  layer — the task's own `timeoutSeconds` (default 30) is the only bound below the job budget.
+- The outbound call runs in the host that owns the database; the Execution service exists
+  precisely to isolate arbitrary egress. Prefer type 6 for untrusted or high-volume targets and
+  keep type 21 for calls that must not depend on the Execution service's availability.
+- `LocalHttpTask` derives from `HttpTask`, so mapping scripts (`task as HttpTask`, `SetUrl`,
+  `SetHeaders`, `SetBody`) work unchanged for both types.
+- Behavioral parity is by construction (shared mapper + ported invoker); a change to either HTTP
+  invoker must be mirrored in the other.
+
 ## Change Safety
 
-- A new task type needs definition, executor, binding contract, invoker, registry
+- A new **remote** task type needs definition, executor, binding contract, invoker, registry
   registration, and tests for envelope routing.
+- A new **orchestrator-executed** task type (like Script, Notification or Local HTTP) needs
+  definition, executor, `[JsonDerivedType]` discriminator, `TaskType` enum member, executor
+  registration, and — if it declares `acceptedStatusCodes` — a match in
+  `TaskExecutorBase.GetAcceptedStatusCodes` (Local HTTP inherits the `HttpTask` arm).
 - Keep bindings strongly typed; do not pass opaque JSON when a stable contract exists.
 - Do not let invokers mutate workflow instance state.
 - Keep task result mapping in executors or application services, not in Execution host controllers.

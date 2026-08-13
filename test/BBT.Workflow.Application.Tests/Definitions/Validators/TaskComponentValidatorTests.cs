@@ -41,6 +41,32 @@ public class TaskComponentValidatorTests
         _validator.CanHandle("unknown").ShouldBeFalse();
     }
 
+    /// <summary>
+    /// Issue #399: the local (orchestrator-executed) HTTP task type publishes like any other —
+    /// discriminator "21" is a known TaskType and the shared HTTP config shape deserializes.
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForLocalHttpTask()
+    {
+        // Arrange
+        var taskJson = """
+        {
+            "type": "21",
+            "config": {
+                "url": "http://google.com",
+                "method": "GET"
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(taskJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
+
     [Fact]
     public void Validate_ShouldReturnSuccess_ForValidTask()
     {

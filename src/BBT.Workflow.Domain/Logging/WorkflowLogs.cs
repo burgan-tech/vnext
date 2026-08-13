@@ -773,6 +773,44 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when a local (orchestrator-executed) HTTP task request fails at the transport level.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10098,
+        Level = LogLevel.Error,
+        Message = "Local HTTP task request failed. TaskKey={TaskKey}, Url={Url}, Error={ErrorMessage}")]
+    public static partial void LocalHttpTaskRequestFailed(
+        this ILogger logger,
+        Exception exception,
+        string? taskKey,
+        string url,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a local (orchestrator-executed) HTTP task request is cancelled.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10099,
+        Level = LogLevel.Warning,
+        Message = "Local HTTP task request was cancelled. TaskKey={TaskKey}, Url={Url}")]
+    public static partial void LocalHttpTaskRequestCancelled(
+        this ILogger logger,
+        string? taskKey,
+        string url);
+
+    /// <summary>
+    /// Logs when a local (orchestrator-executed) HTTP task disables SSL certificate validation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10100,
+        Level = LogLevel.Debug,
+        Message = "SSL certificate validation is disabled for local HTTP task {TaskKey} - URL: {Url}")]
+    public static partial void LocalHttpTaskSslValidationDisabled(
+        this ILogger logger,
+        string? taskKey,
+        string url);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

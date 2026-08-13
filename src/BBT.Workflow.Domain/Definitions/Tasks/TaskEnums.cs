@@ -27,7 +27,8 @@ public enum TaskType
     StateStore = 17,
     CacheAside = 18,
     GetInstance = 19,
-    DaprConversation = 20
+    DaprConversation = 20,
+    LocalHttp = 21
 }
 
 /// <summary>

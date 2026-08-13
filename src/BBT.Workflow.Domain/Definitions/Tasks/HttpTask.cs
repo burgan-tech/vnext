@@ -6,14 +6,19 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Http Task Definition
 /// </summary>
-public sealed class HttpTask : WorkflowTask
+/// <remarks>
+/// Not sealed: <see cref="LocalHttpTask"/> derives from it so the orchestrator-executed
+/// variant shares the whole configuration and scripting surface — mapping scripts that cast
+/// <c>task as HttpTask</c> keep working for both types.
+/// </remarks>
+public class HttpTask : WorkflowTask
 {
-    private HttpTask()
+    protected HttpTask()
     {
     }
 
     [JsonConstructor]
-    private HttpTask(
+    protected HttpTask(
         JsonElement config) : base(config)
     {
         Type = ((int)TaskType.Http).ToString();
