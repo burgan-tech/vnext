@@ -45,10 +45,6 @@ public sealed class FinalizeTransitionStep(
 
         ResolveIncidentOnSuccessfulErrorBoundaryTransition(context);
 
-        // S8: this transition is finalized — drop any durable resume point so it never
-        // leaks into the next transition in the chain.
-        context.Instance.ClearResumePoint();
-
         PerformCleanup(context);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());

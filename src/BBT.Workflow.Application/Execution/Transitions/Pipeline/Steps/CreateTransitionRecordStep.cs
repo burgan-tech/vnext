@@ -7,6 +7,7 @@ using System.Text.Json;
 using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -17,9 +18,11 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 public sealed class CreateTransitionRecordStep(
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    ILogger<CreateTransitionRecordStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.CreateTransition;
@@ -41,13 +44,37 @@ public sealed class CreateTransitionRecordStep(
         var transitionKey = GetTransitionKey(context);
         var (instanceTransition, transition) = CreateInstanceTransition(context, transitionKey);
 
-        // Railway chain: Map data -> Add to instance -> Validate key uniqueness -> Persist
+        // Retry re-entry: reuse the ORIGINAL transition record instead of inserting a fresh one,
+        // so the task journal (InstanceTask rows keyed by transition record id) lines up and
+        // already-completed tasks are bypassed rather than re-running their side effects. When
+        // the original record cannot be found, fall back to normal creation — a retry must not
+        // fail on a missing audit row.
+        var isReusedRecord = false;
+        if (context.RetryOfTransitionRecordId is { } retriedRecordId)
+        {
+            var original = await instanceTransitionRepository.FindAsync(
+                retriedRecordId, true, cancellationToken);
+            if (original is not null)
+            {
+                instanceTransition = original;
+                isReusedRecord = true;
+                logger.TransitionRecordReusedForRetry(context.InstanceId, retriedRecordId, transitionKey);
+            }
+        }
+
+        // Railway chain: Map data -> Validate key uniqueness -> Persist data (immediately,
+        // through the write service — row identity computed under the per-instance row lock)
+        // -> Persist the record. Non-data field changes (tags/stage/key) ride the same
+        // SaveChanges the write service (or the record persist) performs.
         return await MapTransitionDataAsync(context, transition, cancellationToken)
-            .Tap(mappedData => AddMappedDataToInstance(context, mappedData, transition, instanceTransition))
-            .BindAsync(_ => ValidateAndSetInstanceKeyAsync(context, cancellationToken))
-            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, true, cancellationToken))
-            .TapAsync(_ =>
-                instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
+            .BindAsync(mappedData => ValidateAndSetInstanceKeyAsync(context, cancellationToken)
+                .MapAsync(_ => mappedData))
+            .TapAsync(mappedData => AppendMappedDataAsync(
+                context, mappedData, transition, instanceTransition, cancellationToken))
+            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
+            .TapAsync(_ => isReusedRecord
+                ? instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken)
+                : instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition))
             .Map(_ => StepOutcome.Continue());
     }
@@ -109,27 +136,18 @@ public sealed class CreateTransitionRecordStep(
     }
 
     /// <summary>
-    /// Adds mapped data to instance and updates the transition body when a mapping script was applied.
+    /// Applies non-data field mutations (tags/stage), persists the mapped data IMMEDIATELY
+    /// through the InstanceData write service (identity computed under the row lock; identical
+    /// merged content dedups to no row), and updates the transition body when a mapping script
+    /// was applied.
     /// </summary>
-    private void AddMappedDataToInstance(
+    private async Task AppendMappedDataAsync(
         TransitionExecutionContext context,
         object? mappedData,
         Definitions.Transition? transition,
-        InstanceTransition instanceTransition)
+        InstanceTransition instanceTransition,
+        CancellationToken cancellationToken)
     {
-        if (mappedData != null)
-        {
-            context.Instance.AddData(
-                guidGenerator.Create(),
-                new JsonData(mappedData),
-                transition?.VersionStrategy);
-
-            if (transition?.Mapping is not null)
-            {
-                instanceTransition.SetBody(new JsonData(mappedData));
-            }
-        }
-
         if (context.Tags != null)
         {
             context.Instance.AddTags(context.Tags);
@@ -138,6 +156,20 @@ public sealed class CreateTransitionRecordStep(
         if (!string.IsNullOrWhiteSpace(context.Stage))
         {
             context.Instance.SetStage(context.Stage);
+        }
+
+        if (mappedData != null)
+        {
+            await instanceDataWriteService.AppendAsync(
+                context.Instance,
+                new JsonData(mappedData),
+                transition?.VersionStrategy,
+                cancellationToken);
+
+            if (transition?.Mapping is not null)
+            {
+                instanceTransition.SetBody(new JsonData(mappedData));
+            }
         }
     }
 

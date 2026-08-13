@@ -72,12 +72,6 @@ public sealed class TransitionContinuationRequested : IDistributedEvent
     /// <summary>W3C tracestate, if available.</summary>
     public string? TraceState { get; init; }
 
-    /// <summary>
-    /// The chain ownership token (see ChainToken gate spec). Carried so the resumed job is
-    /// recognized as the chain's own continuation and not rejected as a foreign transition.
-    /// </summary>
-    public Guid? ChainToken { get; init; }
-
     /// <summary>The chain depth of the continuation (for the chain-depth guard).</summary>
     public int ChainDepth { get; init; }
 

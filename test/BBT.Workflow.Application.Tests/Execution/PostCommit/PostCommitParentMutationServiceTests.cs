@@ -62,18 +62,16 @@ public sealed class PostCommitParentMutationServiceTests
 
         var result = await fixture.Service.SettleAsync(
             CreateSnapshot(sourceInstance.Id),
-            CreateContinuations(resolvedStatus: InstanceStatus.Active, endChainRequested: true),
+            CreateContinuations(resolvedStatus: InstanceStatus.Active),
             CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.PipelineInstance.ShouldBeSameAs(authoritative);
         result.Value.Status.ShouldBe(InstanceStatus.Active);
         authoritative.Status.ShouldBe(InstanceStatus.Active);
-        authoritative.ChainToken.ShouldBeNull();
         sourceInstance.Status.ShouldBe(InstanceStatus.Busy);
-        sourceInstance.ChainToken.ShouldNotBeNull();
         calls.ShouldBe(["lock", "uow", "reload", "update", "commit", "unlock"]);
-        await fixture.LockScopeFactory.Received(1).AcquireAsync(
+        await fixture.StatusLock.Received(1).AcquireAsync(
             $"vnext:{Domain}:{WorkflowKey}:{authoritative.Id}",
             Arg.Any<CancellationToken>());
         fixture.UowManager.Received(1).Begin(
@@ -110,7 +108,7 @@ public sealed class PostCommitParentMutationServiceTests
 
         var result = await fixture.Service.SettleAsync(
             CreateSnapshot(sourceInstance.Id),
-            CreateContinuations(resolvedStatus: InstanceStatus.Active, endChainRequested: true),
+            CreateContinuations(resolvedStatus: InstanceStatus.Active),
             CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
@@ -166,29 +164,6 @@ public sealed class PostCommitParentMutationServiceTests
         result.Value!.Status.ShouldBe(InstanceStatus.Active);
         await fixture.Repository.DidNotReceiveWithAnyArgs()
             .UpdateAsync(default!, default, default);
-        await fixture.NotificationScheduler.DidNotReceiveWithAnyArgs()
-            .ScheduleAsync(default!, default);
-    }
-
-    [Fact]
-    public async Task SettleAsync_ReleasesFreshChainOwnershipWithoutDuplicatingStateNotification()
-    {
-        var authoritative = CreateBusyInstance();
-        authoritative.ChangeState(CreateNotifyingState("fresh-resting-state"));
-        var fixture = CreateFixture(authoritative, workflow: CreateWorkflow(CreateNotifyingState("fresh-resting-state")));
-
-        var result = await fixture.Service.SettleAsync(
-            CreateSnapshot(authoritative.Id),
-            CreateContinuations(endChainRequested: true),
-            CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        authoritative.Status.ShouldBe(InstanceStatus.Busy);
-        authoritative.ChainToken.ShouldBeNull();
-        await fixture.Repository.Received(1).UpdateAsync(
-            authoritative,
-            true,
-            Arg.Any<CancellationToken>());
         await fixture.NotificationScheduler.DidNotReceiveWithAnyArgs()
             .ScheduleAsync(default!, default);
     }
@@ -290,8 +265,8 @@ public sealed class PostCommitParentMutationServiceTests
             return ValueTask.CompletedTask;
         });
 
-        var lockFactory = Substitute.For<ITransitionLockScopeFactory>();
-        lockFactory.AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        var statusLock = Substitute.For<BBT.Workflow.Execution.Pipeline.IInstanceStatusLock>();
+        statusLock.AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls.Add("lock");
@@ -333,18 +308,18 @@ public sealed class PostCommitParentMutationServiceTests
         var service = new PostCommitParentMutationService(
             uowManager,
             repository,
-            lockFactory,
+            statusLock,
             workflowContext,
             notificationScheduler,
             NullLogger<PostCommitParentMutationService>.Instance);
 
-        return new Fixture(service, repository, uowManager, lockFactory, notificationScheduler);
+        return new Fixture(service, repository, uowManager, statusLock, notificationScheduler);
     }
 
     private static Instance CreateBusyInstance(Guid? id = null)
     {
         var instance = Instance.Create(id ?? Guid.NewGuid(), WorkflowKey, WorkflowVersion, "instance-key");
-        instance.BeginChain(Guid.NewGuid());
+        instance.Busy();
         return instance;
     }
 
@@ -361,15 +336,13 @@ public sealed class PostCommitParentMutationServiceTests
         null);
 
     private static ContinuationSet CreateContinuations(
-        InstanceStatus? resolvedStatus = null,
-        bool endChainRequested = false) => new(
+        InstanceStatus? resolvedStatus = null) => new(
         null,
         Array.Empty<IPostCommitJob>(),
         resolvedStatus,
         null,
         false,
-        EpilogueMode.Run,
-        endChainRequested);
+        EpilogueMode.Run);
 
     private static Definitions.Workflow CreateWorkflow(State state)
     {
@@ -400,6 +373,6 @@ public sealed class PostCommitParentMutationServiceTests
         PostCommitParentMutationService Service,
         IInstanceRepository Repository,
         IUnitOfWorkManager UowManager,
-        ITransitionLockScopeFactory LockScopeFactory,
+        BBT.Workflow.Execution.Pipeline.IInstanceStatusLock StatusLock,
         IStateNotificationScheduler NotificationScheduler);
 }

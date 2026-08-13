@@ -62,10 +62,12 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
         // First compare by version
         var versionComparison = CompareVersionStrings(x.Version, y.Version);
 
-        // If versions are equal, compare by HistorySequence
+        // If versions are equal, compare by VersionNo — the line-scoped ordinal the write
+        // service assigns under the row lock (1-based within one Version string). Every
+        // persisted row carries one; rows without an identity no longer exist.
         if (versionComparison == 0)
         {
-            return x.HistorySequence.CompareTo(y.HistorySequence);
+            return x.VersionNo.CompareTo(y.VersionNo);
         }
 
         return versionComparison;

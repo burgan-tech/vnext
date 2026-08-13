@@ -422,7 +422,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             VersionStrategy.IncreaseMinor.Code);
         instance.ChangeState(state);
         dataId = Guid.NewGuid();
-        instance.AddDataWithVersion(dataId, new JsonData("{\"key\":\"value\"}"), TestVersion);
+        instance.SeedDataWithVersion(dataId, new JsonData("{\"key\":\"value\"}"), TestVersion);
         return instance;
     }
 

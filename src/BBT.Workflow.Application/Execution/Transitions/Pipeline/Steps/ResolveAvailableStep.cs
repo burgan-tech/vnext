@@ -52,6 +52,17 @@ public sealed class ResolveAvailableStep(
     /// </summary>
     private bool ShouldSetAvailable(TransitionExecutionContext context)
     {
+        // Only the execution that owns the Busy lifecycle may resolve the status. A non-owning
+        // execution (data-only updateData beside an in-flight chain, subflow forward) would
+        // otherwise steal the owner's Busy by resolving it to Active here.
+        if (!context.OwnsStatus)
+        {
+            logger.LogDebug(
+                "Instance {InstanceId} status not owned by this execution, skipping ResolveAvailableStep",
+                context.InstanceId);
+            return false;
+        }
+
         // Already completed or not busy - nothing to do
         if (context.Instance.IsCompleted || !context.Instance.IsBusy)
         {
@@ -103,13 +114,8 @@ public sealed class ResolveAvailableStep(
                 context.InstanceId,
                 context.Target.Key);
 
-            // The instance comes to rest in a Busy-subtype state with no in-flight chain
-            // (earlier guards guarantee NextTransition == null and !TerminalReached here),
-            // so the auto-chain has finished. Release the durable chain-ownership token while
-            // keeping the Busy status: leaving the token set would make the chain-token gate
-            // reject legitimate foreign transitions (e.g. a child sub-process signalling its
-            // initiator) and would make the ChainReaper treat this resting instance as stuck.
-            context.Directives.RequestEndChain();
+            // The instance deliberately comes to rest in a Busy-subtype state; the status stays
+            // Busy until an external signal (e.g. a child sub-process) advances it.
             return false;
         }
 

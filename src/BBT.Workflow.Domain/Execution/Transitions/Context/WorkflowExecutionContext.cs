@@ -70,11 +70,21 @@ public sealed class WorkflowExecutionContext
     public bool EnqueueContinuations { get; set; }
 
     /// <summary>
-    /// Gets or sets the incoming auto-chain ownership token carried by a continuation (S6).
-    /// Null for a fresh request (a new token is minted at SetBusy); non-null when this execution
-    /// is the chain's own continuation, which the chain-token gate admits past a Busy instance.
+    /// Gets or sets whether the instance was already reserved (flipped to Busy) for this
+    /// execution before the pipeline runs — set by the transition job handler for async-accept
+    /// re-entries and chain continuation jobs. Pre-reserved executions skip the Busy admission
+    /// check and the reserve.
     /// </summary>
-    public Guid? ChainToken { get; set; }
+    public bool IsPreReserved { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this execution owns the instance's Busy lifecycle. Set by the
+    /// pipeline admission (reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
+    /// updateData ⇒ opportunistic). Only status owners may resolve/settle the instance status —
+    /// a non-owning updateData running beside an in-flight chain must never flip the owner's
+    /// Busy. Propagated across inline continuation hops.
+    /// </summary>
+    public bool OwnsStatus { get; set; }
 
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }

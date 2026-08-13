@@ -27,20 +27,6 @@ public sealed class DistributedLockRegistrationTests
     }
 
     [Fact]
-    public void ChainReaper_requires_the_postgres_specific_contract()
-    {
-        var constructor = typeof(BBT.Workflow.HostedServices.ChainReaperHostedService)
-            .GetConstructors()
-            .Single();
-        var parameterTypes = constructor.GetParameters()
-            .Select(parameter => parameter.ParameterType)
-            .ToArray();
-
-        parameterTypes.ShouldContain(typeof(IPostgreSqlDistributedLockService));
-        parameterTypes.ShouldNotContain(typeof(IDistributedLockService));
-    }
-
-    [Fact]
     public void AddDistributedLock_keeps_dapr_as_default_and_registers_postgres_separately()
     {
         var configuration = new ConfigurationBuilder()
@@ -88,7 +74,6 @@ public sealed class DistributedLockRegistrationTests
         configuration.GetSection(WorkflowExecutionOptions.SectionName).Bind(options);
 
         configuration["WorkflowExecution:LockProvider"].ShouldBeNull();
-        options.EnableLockLeaseExtension.ShouldBeFalse();
     }
 
     private static string FindRepositoryRoot()

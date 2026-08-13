@@ -27,11 +27,18 @@ public sealed class SetBusyStep(
     {
         Activity.Current?.SetDisplayName($"[{Order}] {nameof(SetBusyStep)}");
 
-        // Skip if instance is already Busy (chained auto transitions). Adopt the instance's
-        // existing chain token so continuations from this hop carry it forward.
+        // updateData never touches the instance status: it runs without ownership and must not
+        // flip an Active instance to Busy (nothing would ever settle it back — a non-owner is
+        // barred from ResolveAvailable/settlement). Ownership for a satisfied auto transition
+        // is acquired at the continuation boundary instead.
+        if (context.IsUpdateDataTransition())
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
+        // Skip if instance is already Busy (admission reserve or chained auto transitions).
         if (context.Instance.IsBusy)
         {
-            context.ChainToken ??= context.Instance.ChainToken;
             logger.LogDebug(
                 "Instance {InstanceId} is already Busy, skipping SetBusyStep",
                 context.InstanceId);
@@ -53,18 +60,14 @@ public sealed class SetBusyStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Begin (or adopt) the auto-chain ownership token, mark Busy, and persist.
-        // A fresh request mints a new token; a continuation carries one in via context.ChainToken.
-        var chainToken = context.ChainToken ?? Guid.NewGuid();
-        context.ChainToken = chainToken;
-
+        // Mark Busy and persist (admission normally does this up front; this is the in-pipeline
+        // safety net for profiles that reach here with an Active aggregate).
         return await Result.Ok(context)
-            .Tap(ctx => ctx.Instance.BeginChain(chainToken))
+            .Tap(ctx => ctx.Instance.Busy())
             .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
             .Tap(ctx => logger.LogDebug(
-                "Instance {InstanceId} set to Busy (chain {ChainToken}) for transition {TransitionKey}",
+                "Instance {InstanceId} set to Busy for transition {TransitionKey}",
                 ctx.InstanceId,
-                chainToken,
                 ctx.TransitionKey))
             .Map(_ => StepOutcome.Continue());
     }

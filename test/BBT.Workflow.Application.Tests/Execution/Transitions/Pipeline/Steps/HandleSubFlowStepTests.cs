@@ -40,7 +40,29 @@ public class HandleSubFlowStepTests
         job.ContinuationBehavior.ShouldBe(expectedBehavior);
     }
 
-    private static TransitionExecutionContext CreateContext(string subFlowType)
+    [Fact]
+    public async Task ExecuteAsync_UpdateDataTransition_ShouldNeverStartSubflowAndContinue()
+    {
+        // updateData's $self transition through a SubFlow state must leave the subflow
+        // machinery untouched: no StartSubflowJob (even when no active correlation exists —
+        // the completed-correlation window), and the pipeline CONTINUES so the parent's own
+        // auto transitions (order 90) can advance with the fresh data.
+        var repository = Substitute.For<IInstanceRepository>();
+        var step = new HandleSubFlowStep(
+            repository,
+            Substitute.For<IGuidGenerator>(),
+            Substitute.For<ILogger<HandleSubFlowStep>>());
+        var context = CreateContext("S", transitionKey: "update-parent-data");
+
+        var result = await step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.SkipToOrder.ShouldBeNull();          // continues to Auto
+        context.Directives.PostCommitJobs.ShouldBeEmpty(); // no StartSubflowJob
+    }
+
+    private static TransitionExecutionContext CreateContext(
+        string subFlowType, string transitionKey = "enter-child")
     {
         var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0");
         var target = StateFactory.CreateDefault("child", StateType.SubFlow);
@@ -55,7 +77,7 @@ public class HandleSubFlowStepTests
             InstanceId = instance.Id,
             Domain = "parent-domain",
             WorkflowKey = instance.Flow,
-            TransitionKey = "enter-child",
+            TransitionKey = transitionKey,
             Trigger = TriggerType.Manual,
             CorrelationId = Guid.NewGuid().ToString("N"),
             ExecutionChainId = Guid.NewGuid().ToString("N"),
@@ -63,7 +85,7 @@ public class HandleSubFlowStepTests
             Workflow = Definitions.Workflow.Create(),
             Current = StateFactory.CreateDefault("current"),
             Target = target,
-            Transition = Transition.Create("enter-child", "current", "child", TriggerType.Manual, "Patch"),
+            Transition = Transition.Create(transitionKey, "current", "child", TriggerType.Manual, "Patch"),
             Instance = instance,
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]

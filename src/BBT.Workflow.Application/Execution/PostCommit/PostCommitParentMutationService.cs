@@ -16,7 +16,7 @@ namespace BBT.Workflow.Execution.PostCommit;
 public sealed class PostCommitParentMutationService(
     IUnitOfWorkManager uowManager,
     IInstanceRepository instanceRepository,
-    ITransitionLockScopeFactory transitionLockScopeFactory,
+    IInstanceStatusLock instanceStatusLock,
     IWorkflowContext workflowContext,
     IStateNotificationScheduler stateNotificationScheduler,
     ILogger<PostCommitParentMutationService> logger) : IPostCommitParentMutationService
@@ -40,7 +40,6 @@ public sealed class PostCommitParentMutationService(
             await TransitionSettlement.ApplyAsync(
                 context,
                 continuations.ResolvedStatus,
-                continuations.EndChainRequested,
                 scheduleNotification: shouldScheduleNotification,
                 instanceRepository,
                 stateNotificationScheduler,
@@ -87,9 +86,9 @@ public sealed class PostCommitParentMutationService(
         Func<Instance, CancellationToken, Task> mutation,
         CancellationToken cancellationToken)
     {
-        await using var lockScope = await transitionLockScopeFactory.AcquireAsync(
-            source.LockKey,
-            cancellationToken);
+        // Post-commit mutations are status flips — the short status lock serializes them,
+        // and the mutation commits inside this scope before release.
+        await using var lockScope = await instanceStatusLock.AcquireAsync(source.LockKey, cancellationToken);
         if (!lockScope.IsAcquired)
             return Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(source.InstanceId));
 
@@ -140,7 +139,11 @@ public sealed class PostCommitParentMutationService(
             Workflow = workflow,
             Instance = instance,
             Current = freshState!,
-            Target = freshState
+            Target = freshState,
+            // Post-commit settlement always acts on behalf of the chain that handed off —
+            // the owner of the Busy lifecycle. Without this, TransitionSettlement's
+            // ownership guard would skip the settle and strand the parent Busy.
+            OwnsStatus = true
         };
     }
 }

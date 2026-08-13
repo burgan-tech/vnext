@@ -256,6 +256,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<BBT.Workflow.Execution.Pipeline.ITransitionLockScopeFactory,
             BBT.Workflow.Infrastructure.Execution.Locks.TransitionLockScopeFactory>();
+        services.AddScoped<BBT.Workflow.Execution.Pipeline.IInstanceStatusLock,
+            BBT.Workflow.Infrastructure.Execution.Locks.InstanceStatusLock>();
         return services;
     }
 
@@ -301,6 +303,10 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // error. 503 is transient (TransientHttpStatus) so the inbox relay redelivers.
             opt.Map(WorkflowErrorCodes.SubflowTerminalLockNotAcquired, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.InstanceBusy, HttpStatusCode.Conflict);
+            // InstanceData write funnel: FOR UPDATE lock wait exceeded → caller-retryable
+            // conflict; statement cancelled by statement_timeout → transient (retried by relays).
+            opt.Map(WorkflowErrorCodes.InstanceDataLockTimeout, HttpStatusCode.Conflict);
+            opt.Map(WorkflowErrorCodes.InstanceDataWriteTimeout, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);

@@ -21,7 +21,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         Guid id,
         Guid instanceId,
         string version,
-        JsonData data, bool isLatest, int historySequence = 0) : base(id)
+        JsonData data, bool isLatest) : base(id)
     {
         InstanceId = instanceId;
         SetVersion(version);
@@ -30,7 +30,6 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         EnteredAt = DateTime.UtcNow;
         ETag = Ulid.NewUlid().ToString();
         IsLatest = isLatest;
-        HistorySequence = historySequence;
     }
 
     /// <summary>
@@ -44,19 +43,21 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     public string Version { get; private set; }
 
     /// <summary>
-    /// History sequence number (for ordering history entries within the same version)
-    /// </summary>
-    public int HistorySequence { get; private set; }
-
-    /// <summary>
-    /// Instance-global version number. Auto-incremented by database trigger.
-    /// Provides a monotonically increasing sequence per instance for concurrency control.
+    /// Line-scoped ordinal: the row's 1-based sequence WITHIN its semantic <see cref="Version"/>
+    /// string (each new version line restarts at 1; same-version appends continue their line).
+    /// Assigned by the InstanceData write service under the per-instance <c>FOR UPDATE</c> row
+    /// lock from the line's current maximum, backed by the unique index
+    /// <c>UX_InstancesData_Instance_Version_VersionNo</c>. Cross-line ordering is semantic
+    /// (see <see cref="InstanceDataVersionComparer"/>); use <see cref="EnteredAt"/> for
+    /// global chronology.
     /// </summary>
     public long VersionNo { get; internal set; }
 
     /// <summary>
-    /// Indicates if this is the latest data for the instance.
-    /// Managed by database trigger to ensure only one record per instance has IsLatest = true.
+    /// Indicates if this is the latest data for the instance. Decided by the write service
+    /// (semantic-version comparison against the head it read under the <c>FOR UPDATE</c> lock),
+    /// which demotes any stale latest row under that same lock; the partial unique index
+    /// <c>UX_InstancesData_Instance_IsLatest</c> enforces at most one latest per instance.
     /// </summary>
     public bool IsLatest { get; private set; }
 
@@ -87,32 +88,14 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         Version = Check.NotNullOrWhiteSpace(version, nameof(Version), WorkflowConstants.MaxVersionLength);
     }
 
-    internal InstanceData NewVersion(
-        Guid id,
-        JsonData jsonData,
-        VersionStrategy versionStrategy,
-        int historySequence
-    )
-    {
-        var newVersion = IncrementVersion(Version, versionStrategy);
-        var newData = Data.Merge(jsonData);
-        IsLatest = false;
-        return new InstanceData(
-            id,
-            InstanceId,
-            newVersion,
-            newData,
-            true,
-            historySequence
-        );
-    }
-
     /// <summary>
-    /// Computes SHA1 hash of the JSON data for change detection
+    /// Computes SHA1 hash of the JSON data for change detection. Internal so the InstanceData
+    /// write service can run the no-change dedup comparison under the database row lock with
+    /// exactly the same normalization as the stored <see cref="DataHash"/>.
     /// </summary>
     /// <param name="data">The JSON data to hash</param>
     /// <returns>SHA1 hash as hex string</returns>
-    private static string ComputeDataHash(JsonData data)
+    internal static string ComputeDataHash(JsonData data)
     {
         using var sha1 = SHA1.Create();
 
@@ -129,7 +112,6 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
             Id = Id,
             InstanceId = InstanceId,
             Version = Version,
-            HistorySequence = HistorySequence,
             VersionNo = VersionNo,
             IsLatest = IsLatest,
             ETag = ETag,
@@ -177,7 +159,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     ///     <item><description>1.0.0-alpha.1 + Major → 2.0.0</description></item>
     /// </list>
     /// </remarks>
-    private static string IncrementVersion(string currentVersion, VersionStrategy versionStrategy)
+    internal static string IncrementVersion(string currentVersion, VersionStrategy versionStrategy)
     {
         // Parse extended version format: MAJOR.MINOR.PATCH[-PRERELEASE][-pkg.PKG_VERSION][+BUILD_METADATA]
         // Pre-release can be: -alpha, -alpha.1, -beta.2, -rc.1, etc. (but NOT -pkg which is reserved)

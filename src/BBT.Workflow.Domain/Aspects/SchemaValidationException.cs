@@ -3,7 +3,8 @@ using System.ComponentModel.DataAnnotations;
 namespace BBT.Workflow.Aspects;
 
 /// <summary>
-/// Exception thrown when schema validation fails in the <see cref="SchemaValidationAttribute"/> aspect.
+/// Exception thrown when instance data fails master-schema validation (raised by the
+/// InstanceData write service before a row is persisted).
 /// </summary>
 public class SchemaValidationException : Exception
 {

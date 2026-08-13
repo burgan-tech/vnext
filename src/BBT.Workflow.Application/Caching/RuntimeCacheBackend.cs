@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -11,6 +12,12 @@ namespace BBT.Workflow.Caching;
 /// Implementation of ICacheBackend that uses IRuntimeService to load entities from the database.
 /// This class provides the bridge between the cache layer and the runtime data access layer.
 /// Infrastructure errors (database, connection) are allowed to throw exceptions per Railway Pattern guidelines.
+/// <para>
+/// Loads run in their OWN unit of work (<c>RequiresNew</c>, non-transactional): a cache miss can
+/// fire from anywhere — including a parallel task branch — and the ambient (AsyncLocal) UnitOfWork
+/// would otherwise hand this read the caller's shared DbContext, where a concurrent command means
+/// "a second operation was started on this context instance".
+/// </para>
 /// </summary>
 /// <typeparam name="T">The type of entity to load from the runtime backend</typeparam>
 public sealed class RuntimeCacheBackend<T>(
@@ -20,20 +27,40 @@ public sealed class RuntimeCacheBackend<T>(
     where T : class, IDomainEntity, IReferenceSetter
 {
     /// <summary>
+    /// Runs a backend read inside a fresh scope + detached (RequiresNew) unit of work so the
+    /// load never shares the caller's DbContext/connection.
+    /// </summary>
+    private async Task<TResult> RunDetachedAsync<TResult>(
+        Func<IServiceProvider, Task<TResult>> body,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var uowManager = scope.ServiceProvider.GetRequiredService<IUnitOfWorkManager>();
+        await using var uow = uowManager.Begin(new UnitOfWorkOptions
+        {
+            Scope = UnitOfWorkScopeOption.RequiresNew,
+            IsTransactional = false
+        });
+
+        var result = await body(scope.ServiceProvider);
+        await uow.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    /// <summary>
     /// Loads every active version of a component key in the given domain.
     /// </summary>
     /// <param name="domain">The domain identifier</param>
     /// <param name="key">The entity key/name</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A Result containing all active versions, which may be empty</returns>
-    public async Task<Result<List<T>>> LoadAllByKeyAsync(
+    public Task<Result<List<T>>> LoadAllByKeyAsync(
         string domain,
         string key,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => RunDetachedAsync(async services =>
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
-        var runtimeInfoProvider = scope.ServiceProvider.GetRequiredService<IRuntimeInfoProvider>();
+        var runtimeService = services.GetRequiredService<IRuntimeService>();
+        var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
 
         runtimeInfoProvider.Check(domain);
 
@@ -45,17 +72,16 @@ public sealed class RuntimeCacheBackend<T>(
             .ToList();
 
         return Result<List<T>>.Ok(filtered);
-    }
+    }, cancellationToken);
 
-    public async Task<Result<T>> LoadAsync(
+    public Task<Result<T>> LoadAsync(
         string domain,
         string key,
         string? version,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => RunDetachedAsync(async services =>
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var runtimeService = scope.ServiceProvider.GetRequiredService<IRuntimeService>();
-        var runtimeInfoProvider = scope.ServiceProvider.GetRequiredService<IRuntimeInfoProvider>();
+        var runtimeService = services.GetRequiredService<IRuntimeService>();
+        var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
 
         runtimeInfoProvider.Check(domain);
 
@@ -108,7 +134,7 @@ public sealed class RuntimeCacheBackend<T>(
         }
 
         return Result<T>.Ok(matched);
-    }
+    }, cancellationToken);
 
     /// <summary>
     /// Resolves a full-version request by canonical identity, ignoring build metadata.

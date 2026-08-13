@@ -37,21 +37,16 @@ public sealed class PostCommitTransitionCoordinatorTests
     }
 
     [Fact]
-    public async Task CoordinateAsync_WhenJobHandsOffToChild_ShouldExecuteOutsideParentLockAndNeverDispatchOuterContinuation()
+    public async Task CoordinateAsync_WhenJobHandsOffToChild_ShouldNeverDispatchOuterContinuation()
     {
         var source = CreateContext();
         source.Directives.EnqueuePostCommit(new TestContinuationJob(PostCommitContinuationBehavior.HandoffToChild));
         source.Directives.RequestNextTransition(new NextTransitionRequest("stale-parent-next", "automatic"));
-        var observedParentLockHeld = true;
         _executor.ExecuteAsync(
                 Arg.Any<IReadOnlyList<IPostCommitJob>>(),
                 source,
                 Arg.Any<CancellationToken>())
-            .Returns(_ =>
-            {
-                observedParentLockHeld = ChainLockRegistry.IsHeld(source.LockKey);
-                return PostCommitResult.Ok();
-            });
+            .Returns(_ => PostCommitResult.Ok());
         var strategy = new RecordingInlineStrategy();
         var coordinator = CreateCoordinator(strategy);
 
@@ -60,7 +55,6 @@ public sealed class PostCommitTransitionCoordinatorTests
         result.IsSuccess.ShouldBeTrue();
         result.Value!.SourceContext.ShouldBeSameAs(source);
         result.Value.NextContext.ShouldBeNull();
-        observedParentLockHeld.ShouldBeFalse();
         strategy.DispatchCount.ShouldBe(0);
         source.Directives.PostCommitJobs.ShouldBeEmpty();
 
