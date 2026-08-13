@@ -189,6 +189,16 @@ public static class WorkflowErrors
             target: transitionKey);
 
     /// <summary>
+    /// A well-known workflow-level transition (cancel / updateData / exit) was requested from a state its
+    /// <c>availableIn</c> list does not cover.
+    /// </summary>
+    public static Error WellKnownTransitionNotAvailableInState(string transitionKey, string currentState)
+        => Error.Validation(
+            WorkflowErrorCodes.WellKnownTransitionNotAvailableInState,
+            $"Transition '{transitionKey}' is not available in state '{currentState}'. Check AvailableIn configuration.",
+            target: transitionKey);
+
+    /// <summary>
     /// When the instance has an active SubFlow, a shared transition's target must be $self so the state does not change.
     /// </summary>
     /// <param name="transitionKey">The shared transition key.</param>
@@ -462,6 +472,46 @@ public static class WorkflowErrors
         => Error.Forbidden(
             WorkflowErrorCodes.FunctionScopeNotSatisfied,
             $"Function '{functionKey}' with scope '{scope}' cannot be invoked in this context.");
+
+    /// <summary>
+    /// The function declares a set of supported HTTP verbs and the request's verb is not among them.
+    /// Maps to HTTP 405; the allowed verbs travel in <c>Error.Target</c> so the HTTP layer can emit
+    /// the <c>Allow</c> response header without re-reading the definition.
+    /// </summary>
+    /// <param name="functionKey">The key of the function that was invoked.</param>
+    /// <param name="httpMethod">The rejected HTTP method.</param>
+    /// <param name="allowedVerbs">The verbs the function declares support for.</param>
+    public static Error FunctionVerbNotAllowed(
+        string functionKey,
+        string httpMethod,
+        IEnumerable<string> allowedVerbs)
+    {
+        var allowed = string.Join(", ", allowedVerbs);
+        return Error.Validation(
+            WorkflowErrorCodes.FunctionVerbNotAllowed,
+            $"Function '{functionKey}' does not support HTTP {httpMethod}. Allowed: {allowed}.",
+            target: allowed);
+    }
+
+    /// <summary>
+    /// The requested contract slot produced no reference: either the function declares nothing for it,
+    /// or every declared entry carried a rule and none matched this request.
+    /// </summary>
+    /// <param name="functionKey">The key of the function that was queried.</param>
+    /// <param name="slot">The contract slot name, e.g. <c>inputView</c>.</param>
+    public static Error FunctionContractNotResolved(string functionKey, string slot)
+        => Error.NotFound(
+            WorkflowErrorCodes.FunctionContractNotResolved,
+            $"Function '{functionKey}' has no {slot} for this request.");
+
+    /// <summary>
+    /// The <c>target</c> query value on a function view/schema request was not recognized.
+    /// </summary>
+    /// <param name="target">The rejected target value.</param>
+    public static Error FunctionContractTargetInvalid(string? target)
+        => Error.Validation(
+            WorkflowErrorCodes.FunctionContractTargetInvalid,
+            $"Unknown target '{target}'. Expected 'input' or 'output'.");
 
     #endregion
 

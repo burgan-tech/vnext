@@ -1,5 +1,6 @@
 using System.Net;
 using BBT.Workflow.Authorization.Remote;
+using BBT.Workflow.Gateway;
 using BBT.Workflow.Infrastructure.Instances.Remote;
 using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Remote.Configuration;
@@ -48,6 +49,7 @@ public static class RemoteServiceExtensions
         services.AddRemoteService<IRemoteInstanceRetryAppService, RemoteInstanceRetryAppService>(options);
         services.AddRemoteService<IRemoteInstanceQueryAppService, RemoteInstanceQueryAppService>(options);
         services.AddRemoteService<IRemoteAuthorizeAppService, RemoteAuthorizeAppService>(options);
+        services.AddRemoteService<RemoteRelatedInstanceReader, RemoteRelatedInstanceReader>(options);
 
         return services;
     }

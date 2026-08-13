@@ -68,6 +68,55 @@ public class ExtensionComponentValidatorTests
     }
 
     [Fact]
+    public void Validate_ShouldReturnError_WhenTaskMappingDeclaresOnlyLocation()
+    {
+        // Arrange - the build step never inlined the .csx body, so the mapping would be silently skipped.
+        var extensionJson = """
+        {
+            "type": "global",
+            "scope": "everywhere",
+            "task": {
+                "order": 1,
+                "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "mapping": { "location": "./src/EnrichMapping.csx" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(extensionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Extension.Task.Mapping"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_WhenTaskMappingCarriesCode()
+    {
+        // Arrange - "cmV0dXJuIHRydWU7" == "return true;"
+        var extensionJson = """
+        {
+            "type": "global",
+            "scope": "everywhere",
+            "task": {
+                "order": 1,
+                "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "mapping": { "location": "./src/EnrichMapping.csx", "code": "cmV0dXJuIHRydWU7" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(extensionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
     public void Validate_ShouldReturnError_ForMissingTask()
     {
         // Arrange

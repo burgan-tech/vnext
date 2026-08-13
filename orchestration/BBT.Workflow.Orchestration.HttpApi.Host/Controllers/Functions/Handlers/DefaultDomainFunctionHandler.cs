@@ -22,6 +22,7 @@ public sealed class DefaultDomainFunctionHandler(
             request.Headers,
             request.QueryParameters,
             request.Body,
+            request.HttpContext.Request.Method,
             cancellationToken);
 
         return FunctionResponseActionResultMapper.ToActionResult(result, request.HttpContext);

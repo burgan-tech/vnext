@@ -50,7 +50,7 @@ public sealed class EfCoreInstanceRepository(
         // enabled (WorkflowExecution:LatestOnlyInstanceLoading), only the IsLatest row is
         // included: the full-merge model makes it self-sufficient for pipeline merges, script
         // context and polling (it carries the complete state, the highest version and the
-        // highest HistorySequence of its own version line). History-dependent callers must use
+        // highest VersionNo of its own version line). History-dependent callers must use
         // FindByIdentifierWithFullHistoryAsync / FindByIdentifierWithFullDataAsync — aggregates
         // materialized through the identifier finders are marked partially loaded and fail fast
         // on history reads. ChildCorrelations are always filtered to active-only.
@@ -318,6 +318,27 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<List<Instance>> FindByIdsAsReadOnlyAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+            return [];
+
+        // Data-only include (via IncludeListData over the plain DbSet, not the overridden
+        // WithDetailsAsync): callers of this batch API never read ChildCorrelations, so that
+        // include — and the extra round trip it costs under split-query — is deliberately skipped.
+        var dbSet = await GetDbSetAsync();
+        var instances = await IncludeListData(dbSet.AsQueryable())
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Where(i => ids.Contains(i.Id))
+            .ToListAsync(cancellationToken);
+
+        return MarkListIfPartiallyLoaded(instances);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierSlimAsync(
         string identifier,
         CancellationToken cancellationToken = default)
@@ -373,12 +394,71 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <remarks>
+    /// The correlation members deliberately run over the unfiltered <c>ChildCorrelations</c> set: the
+    /// state response carries the full correlation list, so completed rows must take part in cache
+    /// validation. They mirror <see cref="InstanceStateFingerprint.FromInstance"/> term for term —
+    /// the full-build path must produce a byte-identical fingerprint or the cache invalidates on every
+    /// poll. Served by IX_InstancesCorrelations_ByParent (unfiltered, on ParentInstanceId).
+    /// </remarks>
     private static IQueryable<InstanceStateFingerprint> ProjectStateFingerprint(IQueryable<Instance> query) =>
         query.Select(i => new InstanceStateFingerprint(
             i.Id,
             i.Key,
             i.EffectiveState,
             i.Status,
+            i.FlowVersion,
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
+            i.ChildCorrelations.Count,
+            i.ChildCorrelations.Count(c => c.IsCompleted),
+            i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
+            i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()));
+
+    /// <inheritdoc />
+    public async Task<InstanceExecutionSnapshot?> GetExecutionSnapshotAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await QueryExecutionSnapshotAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+    }
+
+    /// <summary>
+    /// Core execution-snapshot projection over an instance queryable. Internal so integration tests
+    /// can run the exact production query against a real database without composing the repository.
+    /// </summary>
+    internal static async Task<InstanceExecutionSnapshot?> QueryExecutionSnapshotAsync(
+        IQueryable<Instance> query,
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await ProjectExecutionSnapshot(query.Where(i => i.Id == instanceId))
+                .FirstOrDefaultAsync(cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic, mirroring QueryStateFingerprintAsync.
+        return await ProjectExecutionSnapshot(
+                query.Where(i => i.Key == identifier).OrderByDescending(i => i.CreatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <remarks>
+    /// The subflow member deliberately mirrors <c>ProjectStateFingerprint</c>'s expression so it
+    /// is served by IX_InstancesCorrelations_ActiveBlockingSubFlow (partial: IsCompleted = false
+    /// AND SubFlowType = 'S'). No includes — a single-row projection for admission checks.
+    /// </remarks>
+    private static IQueryable<InstanceExecutionSnapshot> ProjectExecutionSnapshot(IQueryable<Instance> query) =>
+        query.Select(i => new InstanceExecutionSnapshot(
+            i.Id,
+            i.Key,
+            i.Status,
+            i.CurrentState,
+            i.Flow,
             i.FlowVersion,
             i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
 
@@ -1439,44 +1519,6 @@ public sealed class EfCoreInstanceRepository(
             .Include(i => i.ChildCorrelations)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
-    }
-
-    public async Task<List<Instance>> GetStuckBusyChainsAsync(
-        DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default)
-    {
-        var limit = maxCount <= 0 ? 100 : maxCount;
-
-        var dbSet = await GetDbSetAsync();
-
-        // Schema is resolved by the schema-aware DbContext from the ambient ICurrentSchema,
-        // established by the caller (ChainReaperHostedService via IcurrentSchema.Change(flowKey)).
-        // Tracked (no AsNoTracking): the reaper faults / updates the returned instances.
-        return await dbSet
-            .Where(i => i.Status == InstanceStatus.Busy
-                && i.ChainToken != null
-                && i.ChainHeartbeatAt != null
-                && i.ChainHeartbeatAt < olderThanUtc)
-            .OrderBy(i => i.ChainHeartbeatAt)
-            .Take(limit)
-            .ToListAsync(cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(
-        CancellationToken cancellationToken = default)
-    {
-        // Flow definitions are stored as instances in the sys_flows schema; switch to it for this
-        // read only so a background sweep (no request scope) can enumerate the per-flow schemas.
-        // Mirrors the discovery in SchemaMigrationRunner.
-        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
-        {
-            var dbSet = await GetDbSetAsync();
-            return await dbSet
-                .AsNoTracking()
-                .Where(i => i.Key != null)
-                .Select(i => i.Key!)
-                .Distinct()
-                .ToListAsync(cancellationToken);
-        }
     }
 
     private static string SanitizeIdentifier(string identifier)

@@ -168,7 +168,7 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
 
         // Assert
         Assert.Single(transition.AvailableIn);
-        Assert.Contains("state-1", transition.AvailableIn);
+        Assert.True(transition.IsAvailableInState("state-1"));
     }
 
     [Fact]
@@ -198,9 +198,9 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
 
         // Assert
         Assert.Equal(3, transition.AvailableIn.Count);
-        Assert.Contains("state-1", transition.AvailableIn);
-        Assert.Contains("state-2", transition.AvailableIn);
-        Assert.Contains("state-3", transition.AvailableIn);
+        Assert.True(transition.IsAvailableInState("state-1"));
+        Assert.True(transition.IsAvailableInState("state-2"));
+        Assert.True(transition.IsAvailableInState("state-3"));
     }
 
     [Fact]

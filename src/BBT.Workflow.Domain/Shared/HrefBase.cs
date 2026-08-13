@@ -96,7 +96,68 @@ public sealed class ViewHref : HrefBase
 }
 
 /// <summary>
-/// Active correlation with href link and additional properties
+/// Executable href for a function, carrying the HTTP verbs the function accepts. An empty verb list
+/// means the function declares no restriction and answers any verb.
+/// </summary>
+public sealed class FunctionHref : HrefBase
+{
+    /// <summary>
+    /// HTTP verbs the function accepts, upper-cased. Empty means unrestricted.
+    /// </summary>
+    public List<string> Verbs { get; set; } = [];
+}
+
+/// <summary>
+/// Pointer to the workflow's function catalog. Emitted in the state response so a client learns
+/// whether the flow ships any functions at all, and where to enumerate them, without the state
+/// response having to carry — or resolve — the list itself.
+/// </summary>
+public sealed class FunctionsHref : HrefBase
+{
+    /// <summary>
+    /// Whether the workflow declares any functions. When false the catalog endpoint returns an empty
+    /// list, so a client can skip the call entirely.
+    /// </summary>
+    public bool HasFunctions { get; set; }
+}
+
+/// <summary>
+/// A function declared on the workflow, linked to its discovery (<c>info</c>) endpoint. Returned by
+/// the <c>catalog</c> function.
+/// </summary>
+public sealed class WorkflowFunctionHref : HrefBase
+{
+    /// <summary>The function key.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>The function version the workflow pins, or empty when it tracks the latest.</summary>
+    public string Version { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Scope code the function declares: <c>D</c> (Domain), <c>F</c> (Flow) or <c>I</c> (Instance).
+    /// <see cref="HrefBase.Href"/> is built to match — a Domain-scoped function links to the
+    /// domain route, Flow and Instance scopes to the instance route, since the domain route rejects them.
+    /// </summary>
+    public string Scope { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// The workflow's function catalog: every function the flow declares that the caller may actually
+/// invoke, each linked to its <c>info</c> endpoint.
+/// </summary>
+public sealed class FunctionCatalogOutput
+{
+    /// <summary>
+    /// Functions in declaration order. Empty when the workflow declares none, or when the caller's
+    /// roles exclude all of them.
+    /// </summary>
+    public List<WorkflowFunctionHref> Functions { get; set; } = [];
+}
+
+/// <summary>
+/// Child correlation with href link and additional properties. Used for both the active-only
+/// <c>activeCorrelations</c> list and the full <c>correlations</c> list (active + completed);
+/// <see cref="IsCompleted"/> distinguishes the two within the full list.
 /// </summary>
 public sealed class ActiveCorrelationHref : HrefBase
 {
@@ -141,12 +202,35 @@ public sealed class ActiveCorrelationHref : HrefBase
     public bool IsCompleted { get; set; }
 
     /// <summary>
-    /// Status of the correlation (optional)
+    /// When the correlation was completed; null while it is still active.
+    /// </summary>
+    public DateTime? CompletedAt { get; set; }
+
+    /// <summary>
+    /// How the sub item terminated (Completed / Faulted / Canceled). Null while the correlation is
+    /// active, and also null for legacy rows completed before the outcome was recorded.
+    /// </summary>
+    public SubItemTerminalOutcome? TerminalOutcome { get; set; }
+
+    /// <summary>
+    /// When the correlation was created — the stable ordering key for the full correlation list.
+    /// </summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Reserved for the sub item's instance status. Not populated today — use the sub item's own
+    /// state endpoint (see <see cref="HrefBase.Href"/>) when the live status is required.
     /// </summary>
     public InstanceStatus? Status { get; set; }
 
     /// <summary>
-    /// Current state of the correlation (optional)
+    /// Last known state of the sub item, tracked on the parent correlation so the parent does not
+    /// need a cross-domain query. Null until the sub item reports its first state change.
     /// </summary>
     public string? CurrentState { get; set; }
+
+    /// <summary>
+    /// When <see cref="CurrentState"/> was last updated.
+    /// </summary>
+    public DateTime? StateChangedAt { get; set; }
 }

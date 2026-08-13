@@ -15,6 +15,7 @@ using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.LongPoll;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
@@ -78,12 +79,14 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             workflowExecutionService: Substitute.For<IWorkflowExecutionService>(),
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
+            instanceDataWriteService: Substitute.For<IInstanceDataWriteService>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             backgroundJobService: Substitute.For<IBackgroundJobService>(),
             guidGenerator: Substitute.For<IGuidGenerator>(),
             headerService: Substitute.For<IHeaderService>(),
             transitionDataMapper: Substitute.For<ITransitionDataMapper>(),
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
+            transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
             transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
             workflowContext: _workflowContext,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),

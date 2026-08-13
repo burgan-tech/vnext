@@ -7,7 +7,24 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
     Task<List<InstanceJob>> GetListActiveAsync(Guid instanceId, CancellationToken cancellationToken = default);
     Task MarkAsProcessedAsync(Guid instanceId, string jobName, CancellationToken cancellationToken = default);
     Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId, CancellationToken cancellationToken = default);
-    Task<bool> AnyActiveByJobNameAsync(Guid instanceId, string jobName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether an active job of the given kind already targets this transition on this instance.
+    /// This is the LOGICAL identity of a transition job — matched on the structured columns, never
+    /// on <see cref="InstanceJob.JobName"/>, which is unique per enqueue (see <see cref="JobName"/>)
+    /// and therefore matches nothing across two enqueues of the same transition.
+    /// </summary>
+    /// <param name="instanceId">The owning instance.</param>
+    /// <param name="jobType">The job kind (async vs scheduled transition).</param>
+    /// <param name="sourceState">The state the transition fires from; <c>null</c> matches rows without source-state scoping.</param>
+    /// <param name="transitionKey">The targeted transition key.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    Task<bool> AnyActiveTransitionJobAsync(
+        Guid instanceId,
+        JobType jobType,
+        string? sourceState,
+        string transitionKey,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-only: active jobs for a given flow (workflow) in the current schema, optionally
@@ -52,10 +69,4 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>A list of active <see cref="InstanceJob"/> records for the specified domain.</returns>
     Task<List<InstanceJob>> GetActiveByDomainAsync(string domain, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns the subset of <paramref name="instanceIds"/> that have at least one active job.
-    /// Used by the chain reaper to avoid N+1 queries when checking a batch of stuck instances.
-    /// </summary>
-    Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default);
 }

@@ -28,35 +28,52 @@ public sealed class TransitionLockScopeFactory(
     private readonly int _leaseSeconds = executionOptions.Value.GetEffectiveLockLeaseSeconds();
 
     /// <inheritdoc />
-    public async Task<ITransitionLockScope> AcquireAsync(
+    public Task<ITransitionLockScope> AcquireAsync(
         string lockKey,
         CancellationToken cancellationToken = default)
+        => AcquireAsync(lockKey, LockAcquireWait.None, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<ITransitionLockScope> AcquireAsync(
+        string lockKey,
+        LockAcquireWait wait,
+        CancellationToken cancellationToken = default)
     {
-        // Chain-reentrant acquisition: when this exact key is already held higher up in the
-        // same async call chain (e.g. a sync subflow completion callback running inside the
-        // parent pipeline's post-commit phase), the outer holder already provides mutual
-        // exclusion — and the provider (SET NX) would reject the re-acquire anyway.
-        if (ChainLockRegistry.IsHeld(lockKey))
+        var attempts = Math.Max(1, wait.MaxAttempts);
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            logger.TransitionLockReentrantAcquired(lockKey);
-            return TransitionLockScope.Reentrant(lockKey);
+            var handle = await distributedLockService.TryAcquireLockAsync(
+                lockKey,
+                _leaseSeconds,
+                cancellationToken);
+
+            if (handle is not null)
+            {
+                logger.LogDebug("Transition lock acquired for {LockKey} (lease={LeaseSeconds}s, attempt={Attempt})",
+                    lockKey, _leaseSeconds, attempt);
+
+                return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
+            }
+
+            if (attempt == attempts)
+            {
+                break;
+            }
+
+            // Jittered backoff: concurrent duplicate deliveries of the same key must not retry in
+            // lockstep, or they would keep colliding on every attempt.
+            var baseDelay = wait.Delay.TotalMilliseconds * attempt;
+            var jitter = Random.Shared.NextDouble() * wait.Delay.TotalMilliseconds;
+            var delay = TimeSpan.FromMilliseconds(baseDelay + jitter);
+
+            logger.TransitionLockRetryScheduled(lockKey, attempt, attempts, (int)delay.TotalMilliseconds);
+
+            await Task.Delay(delay, cancellationToken);
         }
 
-        var handle = await distributedLockService.TryAcquireLockAsync(
-            lockKey,
-            _leaseSeconds,
-            cancellationToken);
-
-        if (handle is null)
-        {
-            logger.InstanceLockFailed(lockKey);
-            return TransitionLockScope.NotAcquired(lockKey);
-        }
-
-        logger.LogDebug("Transition lock acquired for {LockKey} (lease={LeaseSeconds}s)",
-            lockKey, _leaseSeconds);
-
-        return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
+        logger.InstanceLockFailed(lockKey);
+        return TransitionLockScope.NotAcquired(lockKey);
     }
 }
 

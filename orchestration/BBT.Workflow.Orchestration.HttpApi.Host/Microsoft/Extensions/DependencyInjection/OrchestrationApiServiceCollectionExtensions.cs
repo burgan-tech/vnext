@@ -78,6 +78,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, AuthorizationMatrixFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, HierarchyFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, MasterFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, CatalogFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
 
         services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();
@@ -122,7 +123,6 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddHostedService<MultiSchemaMigrationHostedService>();
         #endif
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
-        // services.AddHostedService<ChainReaperHostedService>();
         return services;
     }
 }

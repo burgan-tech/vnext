@@ -3,8 +3,10 @@ using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Events;
@@ -13,6 +15,8 @@ using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.Instances.Related;
+using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
@@ -38,7 +42,9 @@ public sealed class InstanceController(
     IChildSubflowFaultService childSubflowFaultService,
     ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway,
-    IEventAppService eventAppService) : AetherControllerBase
+    IEventAppService eventAppService,
+    IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
+    ICurrentUser currentUser) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -290,6 +296,62 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Reads a single instance's raw data for related-instance access from another runtime.
+    /// Internal-to-internal: no caller identity, no query-role check, no x-roles field filtering and
+    /// no extensions. Never expose this route publicly.
+    /// </summary>
+    /// <response code="200">The instance snapshot.</response>
+    /// <response code="204">No such instance — absence, not an error.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/internal/related-data")]
+    public async Task<IActionResult> GetRelatedDataAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await relatedInstanceQueryAppService.ReadAsync(
+            new RelatedInstanceRef(instance, domain, workflow, version),
+            cancellationToken);
+
+        // FromResult is the house pattern for this controller. A successful read of a nonexistent
+        // instance maps to 204 No Content — deliberately NOT 404, which would be indistinguishable
+        // from a misrouted request or a wrong app id. Absence is data; a wrong route is a fault.
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Reads several instances' raw data in one call for related-instance access from another runtime.
+    /// Internal-to-internal, same caveats as the single read. Ids that do not resolve are omitted.
+    /// </summary>
+    /// <response code="200">The resolved instance snapshots (possibly an empty array).</response>
+    /// <response code="400">More ids were requested than <see cref="RelatedDataBatchInput.MaxInstanceIds"/> allows.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/internal/related-data/batch")]
+    public async Task<IActionResult> GetRelatedDataBatchAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromBody] RelatedDataBatchInput input,
+        [FromQuery] string? version,
+        CancellationToken cancellationToken = default)
+    {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the caller's
+        // batch size. The real cap lives in the calling runtime and cannot be enforced from here.
+        if (input.InstanceIds.Count > RelatedDataBatchInput.MaxInstanceIds)
+            return BadRequest(
+                $"At most {RelatedDataBatchInput.MaxInstanceIds} instance ids may be read in one batch.");
+
+        var references = input.InstanceIds
+            .Select(id => new RelatedInstanceRef(id, domain, workflow, version))
+            .ToList();
+
+        var result = await relatedInstanceQueryAppService.ReadManyAsync(references, cancellationToken);
+
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Enqueues a (chained) transition as a background job. Internal endpoint the Inbox forwards
     /// <c>TransitionContinuationRequested</c> events to when outbox continuations are enabled, so
     /// the Dapr job is enqueued in the Orchestration process (never in the Inbox). Preserves the
@@ -326,8 +388,7 @@ public sealed class InstanceController(
             ExecutionActor = actor,
             CallerSync = false,
             TraceParent = continuation.TraceParent,
-            TraceState = continuation.TraceState,
-            ChainToken = continuation.ChainToken
+            TraceState = continuation.TraceState
         };
 
         await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);
@@ -718,7 +779,10 @@ public sealed class InstanceController(
             IfNoneMatch = ifNoneMatch,
             Version = version,
             Headers = requestContext.Headers,
-            QueryParameters = requestContext.QueryParameters
+            QueryParameters = requestContext.QueryParameters,
+            // Without this the queryRoles gate evaluates a role-less caller, so this route would
+            // disagree with the `data` function handler about the very same instance.
+            Roles = currentUser.ResolveCallerRoles(requestContext.Headers)
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);

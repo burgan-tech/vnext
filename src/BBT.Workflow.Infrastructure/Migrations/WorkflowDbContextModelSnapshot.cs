@@ -163,12 +163,6 @@ namespace BBT.Workflow.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime?>("ChainHeartbeatAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("ChainToken")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -254,9 +248,6 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("character varying(36)")
                         .HasColumnName("ModifiedByBehalfOf");
 
-                    b.Property<int?>("ResumePointStepOrder")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Stage")
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
@@ -271,14 +262,6 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("text[]");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ChainHeartbeatAt")
-                        .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
-                        .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
-
-                    b.HasIndex("ChainToken")
-                        .HasDatabaseName("IX_Instances_ChainToken")
-                        .HasFilter("\"ChainToken\" IS NOT NULL");
 
                     b.HasIndex("EffectiveState")
                         .HasDatabaseName("IX_Instances_EffectiveState");
@@ -438,6 +421,8 @@ namespace BBT.Workflow.Migrations
 
                     NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ActiveByParent_Covering"), new[] { "SubFlowType", "SubFlowInstanceId", "SubFlowDomain", "SubFlowName", "SubFlowVersion", "SubFlowCurrentState", "SubFlowStateChangedAt", "ParentState" });
 
+                    b.HasIndex(new[] { "ParentInstanceId" }, "IX_InstancesCorrelations_ByParent");
+
                     b.ToTable("InstancesCorrelations", "public");
                 });
 
@@ -460,11 +445,6 @@ namespace BBT.Workflow.Migrations
 
                     b.Property<DateTime>("EnteredAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("HistorySequence")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0);
 
                     b.Property<Guid>("InstanceId")
                         .HasColumnType("uuid");
@@ -491,11 +471,11 @@ namespace BBT.Workflow.Migrations
                         .HasDatabaseName("UX_InstancesData_Instance_IsLatest")
                         .HasFilter("\"IsLatest\" = true");
 
-                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("InstanceId"), new[] { "Version", "VersionNo", "HistorySequence", "ETag", "DataHash", "EnteredAt" });
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("InstanceId"), new[] { "Version", "VersionNo", "ETag", "DataHash", "EnteredAt" });
 
-                    b.HasIndex("InstanceId", "VersionNo")
+                    b.HasIndex("InstanceId", "Version", "VersionNo")
                         .IsUnique()
-                        .HasDatabaseName("UX_InstancesData_Instance_VersionNo");
+                        .HasDatabaseName("UX_InstancesData_Instance_Version_VersionNo");
 
                     b.ToTable("InstancesData", "public");
                 });

@@ -48,10 +48,6 @@ public sealed class SubFlowBypassSpecification : ITransitionSpecification
         if (sharedTransition == null)
             return false;
 
-        // If AvailableIn is empty or null, transition is available in all states
-        if (sharedTransition.AvailableIn == null || !sharedTransition.AvailableIn.Any())
-            return true;
-
-        return sharedTransition.AvailableIn.Contains(context.Current.Key);
+        return sharedTransition.IsAvailableInState(context.Current.Key);
     }
 }

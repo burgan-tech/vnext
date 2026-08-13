@@ -21,9 +21,15 @@ public sealed class GetViewOutput
     public string Type { get; set; }
 
     /// <summary>
-    /// Display mode
+    /// Display mode for SDI (single-document interface) clients. Preserved for clients predating
+    /// MDI support; equivalent to <c>Modes.Sdi</c>. Empty when the view only declares an MDI display.
     /// </summary>
     public string Display { get; set; }
+
+    /// <summary>
+    /// Per-client-mode display declaration. Null when the view declares no display.
+    /// </summary>
+    public ViewDisplayModesDto? Modes { get; set; }
 
     /// <summary>
     /// Localization label

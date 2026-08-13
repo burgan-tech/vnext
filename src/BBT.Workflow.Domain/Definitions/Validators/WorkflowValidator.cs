@@ -48,6 +48,9 @@ public class WorkflowValidator
         ValidateTransitionLabels(workflow, result);
         ValidateTransitionRules(workflow, result);
 
+        // Script slot validations (transition-level slots run inside ValidateSingleTransition)
+        ValidateWorkflowScriptCodes(workflow, result);
+
         // Error boundary validations
         ValidateErrorBoundaries(workflow, result, stateKeys);
 
@@ -124,15 +127,24 @@ public class WorkflowValidator
     private void ValidateTransitionInStates(Workflow workflow, WorkflowValidationResult result, HashSet<string> stateKeys)
     {
         // Validate StartTransition availableIn
-        foreach (var availableState in workflow.StartTransition.AvailableIn)
-        {
-            if (!stateKeys.Contains(availableState))
-            {
-                result.AddError(new ValidationResult(
-                    $"The 'availableIn' value in StartTransition does not match any state '{availableState}'.",
-                    [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.AvailableIn)}"]));
-            }
-        }
+        ValidateAvailableIn(
+            workflow.StartTransition,
+            "StartTransition",
+            $"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}",
+            result,
+            stateKeys);
+
+        // Validate the well-known workflow-level transitions' availableIn. These carry role grants
+        // that the discovery and authorize surfaces now enforce, so their state keys and grants must
+        // be validated exactly like a shared transition's.
+        if (workflow.Cancel != null)
+            ValidateAvailableIn(workflow.Cancel, "cancel transition", $"{nameof(Workflow)}.{nameof(Workflow.Cancel)}", result, stateKeys);
+
+        if (workflow.UpdateData != null)
+            ValidateAvailableIn(workflow.UpdateData, "updateData transition", $"{nameof(Workflow)}.{nameof(Workflow.UpdateData)}", result, stateKeys);
+
+        if (workflow.Exit != null)
+            ValidateAvailableIn(workflow.Exit, "exit transition", $"{nameof(Workflow)}.{nameof(Workflow.Exit)}", result, stateKeys);
 
         // Validate StartTransition target
         if (!workflow.StartTransition.Target.IsNullOrEmpty())
@@ -148,15 +160,12 @@ public class WorkflowValidator
         // Validate SharedTransitions availableIn
         foreach (var transition in workflow.SharedTransitions)
         {
-            foreach (var availableState in transition.AvailableIn)
-            {
-                if (!stateKeys.Contains(availableState))
-                {
-                    result.AddError(new ValidationResult(
-                        $"The 'availableIn' value in shared transition '{transition.Key}' does not match any state '{availableState}'.",
-                        [$"{nameof(Workflow)}.{nameof(Workflow.SharedTransitions)}[{transition.Key}].{nameof(Transition.AvailableIn)}"]));
-                }
-            }
+            ValidateAvailableIn(
+                transition,
+                $"shared transition '{transition.Key}'",
+                $"{nameof(Workflow)}.{nameof(Workflow.SharedTransitions)}[{transition.Key}]",
+                result,
+                stateKeys);
 
             // Validate SharedTransitions target
             if (!string.IsNullOrEmpty(transition.Target) && !stateKeys.Contains(transition.Target))
@@ -429,10 +438,22 @@ public class WorkflowValidator
             ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false);
         }
 
-        // Validate Cancel transition — AvailableIn is allowed (same as shared transitions)
+        // Validate well-known workflow-level transitions — AvailableIn is allowed (same as shared transitions).
+        // These carry role grants that the runtime now enforces when building availableTransitions,
+        // so they must go through the same role-grant and trigger-type validation as every other transition.
         if (workflow.Cancel != null)
         {
             ValidateSingleTransition(workflow.Cancel, "Cancel", result, isSharedTransition: true);
+        }
+
+        if (workflow.UpdateData != null)
+        {
+            ValidateSingleTransition(workflow.UpdateData, "UpdateData", result, isSharedTransition: true);
+        }
+
+        if (workflow.Exit != null)
+        {
+            ValidateSingleTransition(workflow.Exit, "Exit", result, isSharedTransition: true);
         }
 
         // Validate SharedTransitions - AvailableIn is allowed here
@@ -471,6 +492,7 @@ public class WorkflowValidator
         }
 
         ValidateRoleGrants(transition.Roles, $"{basePath}.{nameof(Transition.Roles)}", result);
+        ValidateTransitionScriptCodes(transition, basePath, result);
 
         switch (transition.TriggerType)
         {
@@ -541,6 +563,12 @@ public class WorkflowValidator
 
     /// <summary>
     /// When rule location selects Dynamic Expresso, the decoded expression must be non-empty and within length limits.
+    /// <para>
+    /// This owns the emptiness/decodability checks for a Dynamic Expresso rule rather than deferring to
+    /// <see cref="ScriptCodeValidator"/>: the generic advice ("inline the script body into 'code'") is
+    /// wrong for an inline boolean expression. <see cref="ValidateTransitionScriptCodes"/> therefore skips
+    /// the rule slot for this location so the author gets one accurate error, not two.
+    /// </para>
     /// </summary>
     private static void ValidateDynamicExpressoRule(Transition transition, string basePath, WorkflowValidationResult result)
     {
@@ -651,7 +679,63 @@ public class WorkflowValidator
     }
 
     /// <summary>
+    /// Validates a transition's <c>availableIn</c> list: every entry must name an existing state, no
+    /// state may be listed twice, and any per-state role grants must be well formed.
+    /// <para>
+    /// Duplicates matter because <see cref="Transition.FindAvailableIn"/> takes the first match — a
+    /// second entry for the same state is silently dead, and if it is the one carrying the role
+    /// narrowing the restriction never applies.
+    /// </para>
+    /// </summary>
+    /// <param name="transition">Transition whose availableIn is validated.</param>
+    /// <param name="contextLabel">Human-readable transition description used in error messages.</param>
+    /// <param name="basePath">Dotted member path of the transition, without the trailing member name.</param>
+    /// <param name="result">Accumulating validation result.</param>
+    /// <param name="stateKeys">All state keys declared by the workflow, plus reserved target keys.</param>
+    private static void ValidateAvailableIn(
+        Transition transition,
+        string contextLabel,
+        string basePath,
+        WorkflowValidationResult result,
+        HashSet<string> stateKeys)
+    {
+        if (transition.AvailableIn.Count == 0)
+            return;
+
+        var memberPath = $"{basePath}.{nameof(Transition.AvailableIn)}";
+        var seenStates = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var entry in transition.AvailableIn)
+        {
+            if (!stateKeys.Contains(entry.State))
+            {
+                result.AddError(new ValidationResult(
+                    $"The 'availableIn' value in {contextLabel} does not match any state '{entry.State}'.",
+                    [memberPath]));
+            }
+
+            if (!seenStates.Add(entry.State))
+            {
+                result.AddError(new ValidationResult(
+                    $"The 'availableIn' list in {contextLabel} lists state '{entry.State}' more than once. Only the first entry takes effect.",
+                    [memberPath]));
+            }
+
+            ValidateRoleGrants(entry.Roles, $"{memberPath}[{entry.State}].{nameof(AvailableInEntry.Roles)}", result);
+        }
+    }
+
+    /// <summary>
     /// Validates a collection of role grants, checking dynamic role references for correct format.
+    /// <para>
+    /// Static role names (<c>backoffice.operator</c>) and the four predefined instance roles
+    /// (<c>$InstanceStarter</c>, <c>$PreviousUser</c>, <c>$InstanceBehalfOfStarter</c>,
+    /// <c>$PreviousBehalfOfUser</c>) are free-form and carry nothing to validate — only grants that
+    /// declare dynamic-role intent via a qualifier prefix are checked, and only against the exact
+    /// rules the runtime parser applies. Classification lives in
+    /// <see cref="DynamicRoleGrant.Classify"/> so this rule cannot drift from
+    /// <see cref="DynamicRoleGrant.TryParse"/>.
+    /// </para>
     /// </summary>
     private static void ValidateRoleGrants(
         IReadOnlyCollection<RoleGrant> roleGrants,
@@ -661,29 +745,130 @@ public class WorkflowValidator
         if (roleGrants.Count == 0)
             return;
 
+        const string contextPrefix = "$.context.";
+
         foreach (var grant in roleGrants)
         {
-            if (!DynamicRoleGrant.IsDynamicRole(grant.Role))
-                continue;
-
-            var dynamic = DynamicRoleGrant.TryParse(grant.Role)!;
-            const string contextPrefix = "$.context.";
-
-            if (!dynamic.ContextPath.StartsWith(contextPrefix, StringComparison.OrdinalIgnoreCase))
+            var message = DynamicRoleGrant.Classify(grant.Role) switch
             {
-                result.AddError(new ValidationResult(
-                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}'.",
-                    [$"{context}"]));
-                continue;
-            }
-
-            var navPath = dynamic.ContextPath[contextPrefix.Length..];
-            if (string.IsNullOrWhiteSpace(navPath))
-            {
-                result.AddError(new ValidationResult(
+                DynamicRoleFormat.MissingContextPrefix =>
+                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
+                DynamicRoleFormat.EmptyNavigationPath =>
                     $"Dynamic role '{grant.Role}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
-                    [$"{context}"]));
+                _ => null
+            };
+
+            if (message != null)
+                result.AddError(new ValidationResult(message, [context]));
+        }
+    }
+
+    #endregion
+
+    #region Script Slot Validations
+
+    /// <summary>
+    /// Validates every workflow- and state-level script slot. Transition slots are covered by
+    /// <see cref="ValidateTransitionScriptCodes"/>, which runs for each transition family
+    /// (start / cancel / updateData / exit / shared / state) from <see cref="ValidateSingleTransition"/>.
+    /// <para>
+    /// A slot published with only a <c>location</c> is never executed and nothing downstream complains —
+    /// see <see cref="ScriptCodeValidator"/>. Every slot the runtime can compile must be listed here, so
+    /// add the new path whenever a definition object gains a <see cref="ScriptCode"/> property.
+    /// </para>
+    /// </summary>
+    private static void ValidateWorkflowScriptCodes(Workflow workflow, WorkflowValidationResult result)
+    {
+        var errors = result.ValidationErrors;
+
+        ScriptCodeValidator.Validate(
+            workflow.Output, $"{nameof(Workflow)}.{nameof(Workflow.Output)}", errors);
+
+        ScriptCodeValidator.Validate(
+            workflow.Timeout?.Mapping,
+            $"{nameof(Workflow)}.{nameof(Workflow.Timeout)}.{nameof(WorkflowTimeout.Mapping)}",
+            errors);
+
+        foreach (var state in workflow.States)
+        {
+            var statePath = $"{nameof(Workflow)}.States[{state.Key}]";
+
+            ValidateTaskScriptCodes(state.OnEntries, $"{statePath}.{nameof(State.OnEntries)}", errors);
+            ValidateTaskScriptCodes(state.OnExits, $"{statePath}.{nameof(State.OnExits)}", errors);
+
+            ScriptCodeValidator.Validate(
+                state.SubFlow?.Mapping,
+                $"{statePath}.{nameof(State.SubFlow)}.{nameof(SubFlow.Mapping)}",
+                errors);
+
+            foreach (var (notification, index) in state.Notifications.Select((n, i) => (n, i)))
+            {
+                var path = $"{statePath}.{nameof(State.Notifications)}[{index}]";
+                ScriptCodeValidator.Validate(notification.Rule, $"{path}.{nameof(StateNotification.Rule)}", errors);
+                ScriptCodeValidator.Validate(notification.Mapping, $"{path}.{nameof(StateNotification.Mapping)}", errors);
             }
+
+            ValidateViewRules(state.View, $"{statePath}.{nameof(State.View)}", errors);
+        }
+    }
+
+    /// <summary>
+    /// Validates the script slots a single transition can carry, including its OnExecute task mappings
+    /// and view-selection rules.
+    /// </summary>
+    private static void ValidateTransitionScriptCodes(
+        Transition transition,
+        string basePath,
+        WorkflowValidationResult result)
+    {
+        var errors = result.ValidationErrors;
+
+        ScriptCodeValidator.Validate(transition.Timer, $"{basePath}.{nameof(Transition.Timer)}", errors);
+        ScriptCodeValidator.Validate(transition.Mapping, $"{basePath}.{nameof(Transition.Mapping)}", errors);
+
+        // ValidateDynamicExpressoRule already covers the Dynamic Expresso rule form with an accurate
+        // message; only the script-body form is this pass's business.
+        if (!ConditionScriptLocations.IsDynamicExpresso(transition.Rule?.Location))
+        {
+            ScriptCodeValidator.Validate(transition.Rule, $"{basePath}.{nameof(Transition.Rule)}", errors);
+        }
+
+        ValidateTaskScriptCodes(
+            transition.OnExecutionTasks, $"{basePath}.{nameof(Transition.OnExecutionTasks)}", errors);
+
+        ValidateViewRules(transition.View, $"{basePath}.{nameof(Transition.View)}", errors);
+    }
+
+    /// <summary>
+    /// Validates the mapping of each task in an OnExecute collection.
+    /// </summary>
+    private static void ValidateTaskScriptCodes(
+        IEnumerable<OnExecuteTask> tasks,
+        string basePath,
+        IList<ValidationResult> errors)
+    {
+        foreach (var (task, index) in tasks.Select((t, i) => (t, i)))
+        {
+            ScriptCodeValidator.Validate(
+                task.Mapping, $"{basePath}[{index}].{nameof(OnExecuteTask.Mapping)}", errors);
+        }
+    }
+
+    /// <summary>
+    /// Validates the selection rule of each entry in a view definition. A broken rule here does not
+    /// degrade gracefully: view selection compiles the rule mid-request.
+    /// </summary>
+    private static void ValidateViewRules(
+        ViewDefinition? viewDefinition,
+        string basePath,
+        IList<ValidationResult> errors)
+    {
+        if (viewDefinition is null)
+            return;
+
+        foreach (var (entry, index) in viewDefinition.Views.Select((v, i) => (v, i)))
+        {
+            ScriptCodeValidator.Validate(entry.Rule, $"{basePath}[{index}].{nameof(ViewEntry.Rule)}", errors);
         }
     }
 

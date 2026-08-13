@@ -8,7 +8,7 @@ namespace BBT.Workflow.Instances;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Wire format: <c>vnext.job.v1.{type}.{instanceId}[.{sourceState}].{key}</c>
+/// Wire format: <c>vnext.job.v1.{type}.{instanceId}[.{sourceState}].{key}[.{invocation}]</c>
 /// </para>
 /// <list type="bullet">
 ///   <item>Delimiter is <c>.</c> — accepted by Dapr's Jobs API (the name becomes the
@@ -24,8 +24,18 @@ namespace BBT.Workflow.Instances;
 ///   scopes the name so two transitions that share a key across different states do not collide
 ///   into one Dapr job. Omitted for long-poll-ack / state-notify, and for legacy names written
 ///   before source-state scoping (which parse with <see cref="SourceState"/> = <c>null</c>).</item>
-///   <item><c>{key}</c> is the final field: the transition key for transition jobs, the well-known
-///   key for long-poll-ack, the state key for state-notify; absent for timeout.</item>
+///   <item><c>{key}</c> is the transition key for transition jobs, the well-known key for
+///   long-poll-ack, the state key for state-notify; absent for timeout.</item>
+///   <item><c>{invocation}</c> (transition jobs only) makes the name unique PER ENQUEUE. The
+///   scheduler entry is keyed by name and is deleted by name once a one-shot job completes, so two
+///   enqueues sharing a name are destructive: a <c>$self</c> automatic loop re-enqueues the same
+///   (instance, sourceState, key) on every iteration, and the completing iteration would delete the
+///   next one's trigger — the chain dies mid-loop and the instance stays Busy with no job to settle
+///   it. It also keeps <c>MarkAsProcessedAsync</c> unambiguous. Logical identity (the "is a job for
+///   this transition already active" guard) lives in the structured <c>InstanceJob</c> columns
+///   instead — never in this string. Absent for timeout / long-poll-ack / state-notify (armed once
+///   per instance or per state entry) and for names written before invocation scoping, which parse
+///   with <see cref="Invocation"/> = <c>null</c>.</item>
 /// </list>
 /// <para>
 /// State and transition keys are required to be within <c>[A-Za-z0-9_-]</c> (no <c>.</c>). A key
@@ -38,12 +48,22 @@ public sealed record JobName
     private const string Prefix = "vnext.job.v1";
     private const char Delimiter = '.';
 
-    private JobName(JobType type, Guid instanceId, string? sourceState, string? transitionKey, string value)
+    /// <summary>Hex characters of the job id kept as the per-enqueue invocation segment.</summary>
+    private const int InvocationLength = 8;
+
+    private JobName(
+        JobType type,
+        Guid instanceId,
+        string? sourceState,
+        string? transitionKey,
+        string? invocation,
+        string value)
     {
         Type = type;
         InstanceId = instanceId;
         SourceState = sourceState;
         TransitionKey = transitionKey;
+        Invocation = invocation;
         Value = value;
     }
 
@@ -66,6 +86,13 @@ public sealed record JobName
     /// </summary>
     public string? TransitionKey { get; }
 
+    /// <summary>
+    /// The per-enqueue uniquifier of a transition job. <c>null</c> for job kinds that are armed once
+    /// (timeout, long-poll-ack, state-notify) and for names written before invocation scoping.
+    /// Carries no meaning beyond uniqueness — never match or look up a job by it.
+    /// </summary>
+    public string? Invocation { get; }
+
     /// <summary>Back-compatible alias for the final key field. Prefer <see cref="TransitionKey"/>.</summary>
     public string? Segment => TransitionKey;
 
@@ -73,32 +100,40 @@ public sealed record JobName
     public string Value { get; }
 
     /// <summary>
-    /// Builds the name of an async transition continuation job, scoped by the source state so that
-    /// two transitions sharing a key across different states never collide into one Dapr job.
+    /// Builds the name of an async transition job (request accept or auto-chain continuation),
+    /// scoped by the source state so two transitions sharing a key across different states never
+    /// collide, and by <paramref name="invocationId"/> so two enqueues of the SAME transition never
+    /// collide either (the scheduler entry is keyed by this name and deleted by name on completion).
+    /// Pass the job's own id so the name and the durable <c>InstanceJob</c> row stay traceable.
     /// </summary>
-    public static JobName ForAsyncTransition(Guid instanceId, string sourceState, string transitionKey)
-        => BuildScopedTransition(JobType.AsyncTransition, instanceId, sourceState, transitionKey);
+    public static JobName ForAsyncTransition(
+        Guid instanceId, string sourceState, string transitionKey, Guid invocationId)
+        => BuildScopedTransition(
+            JobType.AsyncTransition, instanceId, sourceState, transitionKey, invocationId);
 
     /// <summary>
-    /// Builds the name of a timer-based scheduled transition job, scoped by the source state (see
-    /// <see cref="ForAsyncTransition"/> for the collision rationale).
+    /// Builds the name of a timer-based scheduled transition job, scoped by the source state and the
+    /// invocation (see <see cref="ForAsyncTransition"/> — a re-entered state re-arms the same timer).
     /// </summary>
-    public static JobName ForScheduledTransition(Guid instanceId, string sourceState, string transitionKey)
-        => BuildScopedTransition(JobType.ScheduledTransition, instanceId, sourceState, transitionKey);
+    public static JobName ForScheduledTransition(
+        Guid instanceId, string sourceState, string transitionKey, Guid invocationId)
+        => BuildScopedTransition(
+            JobType.ScheduledTransition, instanceId, sourceState, transitionKey, invocationId);
 
     /// <summary>Builds the name of a workflow timeout job.</summary>
     public static JobName ForTimeout(Guid instanceId)
-        => Build(JobType.Timeout, instanceId, sourceState: null, transitionKey: null);
+        => Build(JobType.Timeout, instanceId, sourceState: null, transitionKey: null, invocation: null);
 
     /// <summary>Builds the name of a long-poll acknowledge fallback job.</summary>
     public static JobName ForLongPollAck(Guid instanceId)
         => Build(JobType.LongPollAck, instanceId, sourceState: null,
-            transitionKey: ValidateKey(LongPollAckConstants.JobKey, nameof(LongPollAckConstants.JobKey)));
+            transitionKey: ValidateKey(LongPollAckConstants.JobKey, nameof(LongPollAckConstants.JobKey)),
+            invocation: null);
 
     /// <summary>Builds the name of a state-level notification dispatch job.</summary>
     public static JobName ForStateNotify(Guid instanceId, string stateKey)
         => Build(JobType.StateNotify, instanceId, sourceState: null,
-            transitionKey: ValidateKey(stateKey, nameof(stateKey)));
+            transitionKey: ValidateKey(stateKey, nameof(stateKey)), invocation: null);
 
     /// <summary>
     /// Attempts to parse a structured job name. Returns <c>false</c> for any value that does not
@@ -118,8 +153,8 @@ public sealed record JobName
             return false;
         }
 
-        // {type}.{instanceId}[.{sourceState}].{key} — every field is a plain, delimiter-free token,
-        // so a full split is unambiguous.
+        // {type}.{instanceId}[.{sourceState}].{key}[.{invocation}] — every field is a plain,
+        // delimiter-free token, so counting the split segments is unambiguous.
         var parts = value[expectedPrefix.Length..].Split(Delimiter);
         if (parts.Length < 2)
         {
@@ -140,6 +175,7 @@ public sealed record JobName
         var trailing = parts.Length - 2; // number of key fields after type + instanceId
         string? sourceState = null;
         string? transitionKey = null;
+        string? invocation = null;
 
         switch (type)
         {
@@ -152,8 +188,15 @@ public sealed record JobName
 
             case JobType.AsyncTransition:
             case JobType.ScheduledTransition:
-                // Current: {sourceState}.{key}. Legacy (pre source-state scoping): {key} only.
-                if (trailing == 2)
+                // Current: {sourceState}.{key}.{invocation}. Legacy: {sourceState}.{key} (pre
+                // invocation scoping) or {key} only (pre source-state scoping).
+                if (trailing == 3)
+                {
+                    sourceState = parts[2];
+                    transitionKey = parts[3];
+                    invocation = parts[4];
+                }
+                else if (trailing == 2)
                 {
                     sourceState = parts[2];
                     transitionKey = parts[3];
@@ -181,7 +224,7 @@ public sealed record JobName
                 return false;
         }
 
-        result = new JobName(type, instanceId, sourceState, transitionKey, value);
+        result = new JobName(type, instanceId, sourceState, transitionKey, invocation, value);
         return true;
     }
 
@@ -195,16 +238,26 @@ public sealed record JobName
     public override string ToString() => Value;
 
     private static JobName BuildScopedTransition(
-        JobType type, Guid instanceId, string sourceState, string transitionKey)
+        JobType type, Guid instanceId, string sourceState, string transitionKey, Guid invocationId)
     {
         ValidateKey(transitionKey, nameof(transitionKey));
 
         // No source state available (rare edge paths) → emit a legacy-shaped single-key name.
         var source = string.IsNullOrEmpty(sourceState) ? null : ValidateKey(sourceState, nameof(sourceState));
-        return Build(type, instanceId, source, transitionKey);
+
+        // The invocation segment only has to separate enqueues of the same transition on one
+        // instance; the first 8 hex of the job id is short, Dapr-safe and traceable back to the row.
+        // It is only appended when a source state is present: without one, `{key}.{invocation}` would
+        // be indistinguishable from a source-state-scoped `{sourceState}.{key}` on the way back in.
+        var invocation = source is null || invocationId == Guid.Empty
+            ? null
+            : invocationId.ToString("N")[..InvocationLength];
+
+        return Build(type, instanceId, source, transitionKey, invocation);
     }
 
-    private static JobName Build(JobType type, Guid instanceId, string? sourceState, string? transitionKey)
+    private static JobName Build(
+        JobType type, Guid instanceId, string? sourceState, string? transitionKey, string? invocation)
     {
         var builder = new StringBuilder(Prefix)
             .Append(Delimiter).Append(ToWireCode(type))
@@ -220,6 +273,11 @@ public sealed record JobName
             builder.Append(Delimiter).Append(transitionKey);
         }
 
+        if (invocation is not null)
+        {
+            builder.Append(Delimiter).Append(invocation);
+        }
+
         var value = builder.ToString();
         if (value.Length > InstanceJobConstants.MaxJobNameLength)
         {
@@ -228,7 +286,7 @@ public sealed record JobName
                 nameof(transitionKey));
         }
 
-        return new JobName(type, instanceId, sourceState, transitionKey, value);
+        return new JobName(type, instanceId, sourceState, transitionKey, invocation, value);
     }
 
     /// <summary>

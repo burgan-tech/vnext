@@ -7,6 +7,8 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Logging;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -33,7 +35,7 @@ public class AsyncTransitionStrategyTests
     private readonly ReservedTransitionResolver _reservedTransitionResolver = new();
     private readonly Mock<ITransitionValidationService> _mockValidationService = new();
     private readonly Mock<IUnitOfWorkManager> _uowManager = new();
-    private readonly Mock<IInstanceBusyManager> _mockBusyManager = new();
+    private readonly Mock<ITransitionAdmissionService> _mockAdmissionService = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger = new();
     private readonly AsyncTransitionStrategy _strategy;
@@ -50,14 +52,6 @@ public class AsyncTransitionStrategyTests
         _mockValidationService
             .Setup(x => x.ValidateAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
-
-        _mockBusyManager
-            .Setup(x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BusyMarkOutcome.Marked);
 
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
@@ -82,6 +76,14 @@ public class AsyncTransitionStrategyTests
                 return true;
             });
 
+        // Default: admission accepts and reserves successfully (Classify defaults to Normal).
+        _mockAdmissionService
+            .Setup(x => x.CheckAdmission(It.IsAny<TransitionExecutionContext>()))
+            .Returns(Result.Ok());
+        _mockAdmissionService
+            .Setup(x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
         _strategy = new AsyncTransitionStrategy(
             _mockContextFactory.Object,
             _mockJobRepository.Object,
@@ -89,7 +91,7 @@ public class AsyncTransitionStrategyTests
             _reservedTransitionResolver,
             _mockValidationService.Object,
             _uowManager.Object,
-            _mockBusyManager.Object,
+            _mockAdmissionService.Object,
             _mockEnqueueGateway.Object,
             _mockLogger.Object);
     }
@@ -115,29 +117,32 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldCallBusyManagerBeforeEnqueue()
+    public async Task ExecuteAsync_ShouldReserveBeforeEnqueue()
     {
+        // A Normal request reserves the instance (Busy under the short status lock) at accept
+        // time, before the job is persisted and enqueued.
         var (wfCtx, txCtx) = SetupSuccessfulContext();
-        var busyManagerCalled = false;
-        var enqueueCalledAfterBusy = false;
+        var reserveCalled = false;
+        var enqueueCalledAfterReserve = false;
 
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
-            .Callback(() => busyManagerCalled = true)
-            .ReturnsAsync(BusyMarkOutcome.Marked);
+        _mockAdmissionService
+            .Setup(x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback(() => reserveCalled = true)
+            .ReturnsAsync(Result.Ok());
 
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()))
-            .Callback(() => enqueueCalledAfterBusy = busyManagerCalled)
+            .Callback(() => enqueueCalledAfterReserve = reserveCalled)
             .Returns(Task.CompletedTask);
 
-        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        busyManagerCalled.ShouldBeTrue();
-        enqueueCalledAfterBusy.ShouldBeTrue();
+        result.IsSuccess.ShouldBeTrue();
+        reserveCalled.ShouldBeTrue();
+        enqueueCalledAfterReserve.ShouldBeTrue();
     }
 
     #endregion
@@ -236,61 +241,81 @@ public class AsyncTransitionStrategyTests
     #region Busy manager delegation
 
     [Fact]
-    public async Task ExecuteAsync_WithNormalTransition_ShouldTryMarkBusyViaManager()
+    public async Task ExecuteAsync_WithNormalTransition_ShouldReserveViaAdmission()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _mockBusyManager.Verify(
-            x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()),
+        _mockAdmissionService.Verify(
+            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Once);
-        _mockBusyManager.Verify(
-            x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithReservedTransition_ShouldMarkBusyUnconditionally()
+    public async Task ExecuteAsync_WithBypassKind_ShouldAcceptWithoutReserve()
     {
-        // Reserved transitions (cancel/exit/...) are accepted while the instance is Busy by design,
-        // so they must not go through the Try guard.
+        // Cancel/exit/timeout/updateData are accepted while the instance is Busy by design —
+        // no reserve at accept; the job's pipeline prologue admits them by kind.
         var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "cancel");
+        _mockAdmissionService
+            .Setup(x => x.Classify(It.IsAny<TransitionExecutionContext>()))
+            .Returns(AdmissionKind.BypassBusyCheck);
 
-        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _mockBusyManager.Verify(
-            x => x.MarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()),
-            Times.Once);
-        _mockBusyManager.Verify(
-            x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+        result.IsSuccess.ShouldBeTrue();
+        _mockAdmissionService.Verify(
+            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenIsInternalResume_ShouldSkipBusyManager()
+    public async Task ExecuteAsync_BusyParentWithActiveSubflow_ShouldEnqueueWithoutReserve()
+    {
+        // Busy + aktif SubFlow: 409 yok, reserve yok — job'un pipeline'ı isteği subflow'a
+        // forward eder (ForwardToActiveSubflowStep).
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        _mockAdmissionService
+            .Setup(x => x.IsSubflowForward(It.IsAny<TransitionExecutionContext>()))
+            .Returns(true);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockAdmissionService.Verify(
+            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenIsInternalResume_ShouldSkipReserve()
     {
         var (wfCtx, txCtx) = SetupSuccessfulContext();
         txCtx.Directives.MarkAsSubFlowResume();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _mockBusyManager.Verify(
-            x => x.MarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-        _mockBusyManager.Verify(
-            x => x.TryMarkBusyWithPropagationAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+        _mockAdmissionService.Verify(
+            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Fact]
     public async Task ExecuteAsync_WhenInstanceAlreadyBusy_ShouldReturn409WithoutEnqueue()
     {
+        // Busy-as-mutex: a Normal request against a Busy instance is rejected at accept time.
         var (wfCtx, txCtx) = SetupSuccessfulContext();
 
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BusyMarkOutcome.AlreadyBusy);
+        _mockAdmissionService
+            .Setup(x => x.CheckAdmission(It.IsAny<TransitionExecutionContext>()))
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(txCtx.Instance.Id, txCtx.TransitionKey)));
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
@@ -306,26 +331,25 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenBusyMarkSkipped_ShouldStillEnqueue()
+    public async Task ExecuteAsync_WhenReserveFails_ShouldNotEnqueue()
     {
-        // Skipped = instance not found or completed — preserves the previous silent no-op
-        // semantics; upstream instance resolution gates those states.
+        // A failed reserve (lock conflict / completed instance) must not persist a job.
         var (wfCtx, txCtx) = SetupSuccessfulContext();
 
-        _mockBusyManager
-            .Setup(x => x.TryMarkBusyWithPropagationAsync(txCtx.Instance.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BusyMarkOutcome.Skipped);
+        _mockAdmissionService
+            .Setup(x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(WorkflowErrors.InstanceLockConflict(txCtx.Instance.Id)));
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        result.IsSuccess.ShouldBeTrue();
+        result.IsSuccess.ShouldBeFalse();
 
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Never);
     }
 
     #endregion

@@ -34,13 +34,12 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var expected = new[]
         {
             LifecycleOrder.Preflight,
-            LifecycleOrder.CheckParentUpdateDataTransition,
             LifecycleOrder.ForwardToActiveSubflow,
             LifecycleOrder.SetBusy,
             LifecycleOrder.ApplyTimeoutState,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected);
-        profile.ExcludedStepOrders.Count.ShouldBe(5);
+        profile.ExcludedStepOrders.Count.ShouldBe(4);
         // ResourceLock must NOT be excluded: a `resourceLock` on an auto-chained transition must run.
         profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.ResourceLock);
     }
@@ -61,11 +60,10 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var expected = new[]
         {
             LifecycleOrder.Preflight,
-            LifecycleOrder.CheckParentUpdateDataTransition,
             LifecycleOrder.ForwardToActiveSubflow,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected);
-        profile.ExcludedStepOrders.Count.ShouldBe(3);
+        profile.ExcludedStepOrders.Count.ShouldBe(2);
     }
 
     [Fact]
@@ -106,13 +104,12 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var expected = new[]
         {
             LifecycleOrder.Preflight,
-            LifecycleOrder.CheckParentUpdateDataTransition,
             LifecycleOrder.ForwardToActiveSubflow,
             LifecycleOrder.ResourceLock,
             LifecycleOrder.Schedule,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected);
-        profile.ExcludedStepOrders.Count.ShouldBe(5);
+        profile.ExcludedStepOrders.Count.ShouldBe(4);
     }
 
     [Fact]

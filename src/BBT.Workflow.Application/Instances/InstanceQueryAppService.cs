@@ -336,6 +336,62 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
+    /// Data-function href for a correlation's sub item, carrying the caller's extensions when present.
+    /// </summary>
+    private string BuildCorrelationDataHref(
+        string subFlowDomain, string subFlowName, Guid subFlowInstanceId, string[] allExtensions) =>
+        allExtensions.Length > 0
+            ? urlTemplateBuilder.BuildDataWithExtensionsUrl(
+                subFlowDomain, subFlowName, subFlowInstanceId.ToString(), allExtensions)
+            : urlTemplateBuilder.BuildDataUrl(
+                subFlowDomain, subFlowName, subFlowInstanceId.ToString());
+
+    /// <summary>
+    /// Maps an active-correlation projection onto its response entry — the <c>activeCorrelations</c>
+    /// list. Terminal and state-tracking details are absent from the projection and stay unset; they
+    /// are meaningless for an active correlation anyway.
+    /// </summary>
+    private ActiveCorrelationHref BuildCorrelationHref(InstanceCorrelationInfo correlation, string[] allExtensions) =>
+        new()
+        {
+            CorrelationId = correlation.CorrelationId,
+            ParentState = correlation.ParentState,
+            SubFlowInstanceId = correlation.SubFlowInstanceId,
+            SubFlowType = correlation.SubFlowType,
+            SubFlowDomain = correlation.SubFlowDomain,
+            SubFlowName = correlation.SubFlowName,
+            SubFlowVersion = correlation.SubFlowVersion,
+            IsCompleted = correlation.IsCompleted,
+            Href = BuildCorrelationDataHref(
+                correlation.SubFlowDomain, correlation.SubFlowName, correlation.SubFlowInstanceId, allExtensions)
+        };
+
+    /// <summary>
+    /// Maps a correlation entity onto its response entry — the full <c>correlations</c> list. Carries the
+    /// terminal details (<c>completedAt</c>, <c>terminalOutcome</c>) and the tracked sub-item state that
+    /// let a client reconstruct which sub items ran and how each one ended.
+    /// </summary>
+    private ActiveCorrelationHref BuildCorrelationHref(InstanceCorrelation correlation, string[] allExtensions) =>
+        new()
+        {
+            CorrelationId = correlation.Id,
+            ParentState = correlation.ParentState,
+            SubFlowInstanceId = correlation.SubFlowInstanceId,
+            SubFlowType = correlation.SubFlowType,
+            SubFlowDomain = correlation.SubFlowDomain,
+            SubFlowName = correlation.SubFlowName,
+            SubFlowVersion = correlation.SubFlowVersion,
+            IsCompleted = correlation.IsCompleted,
+            CompletedAt = correlation.CompletedAt,
+            TerminalOutcome = correlation.TerminalOutcome,
+            CreatedAt = correlation.CreatedAt,
+            CurrentState = correlation.SubFlowCurrentState,
+            StateChangedAt = correlation.SubFlowStateChangedAt,
+            Href = BuildCorrelationDataHref(
+                correlation.SubFlowDomain, correlation.SubFlowName, correlation.SubFlowInstanceId, allExtensions)
+        };
+
+    /// <summary>
     /// Gets available transitions and state information from a remote SubFlow instance.
     /// Includes view extensions and active correlations from the SubFlow.
     /// </summary>
@@ -398,6 +454,7 @@ public sealed class InstanceQueryAppService(
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
                     SubFlowActiveCorrelations: subFlowValue.ActiveCorrelations,
+                    SubFlowCorrelations: subFlowValue.Correlations,
                     SubFlowTransitionItems: subFlowValue.Transitions,
                     // Bubble the (possibly deeper) subflow's long-poll termination signal up the chain.
                     Interaction: subFlowValue.Interaction);
@@ -418,8 +475,11 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Merges subflow transition names with the parent workflow's shared transitions and cancel transition (manual/event, available in current state).
-    /// When in active subflow, clients see subflow transitions plus parent's shared transitions and cancel; state-level parent transitions are not included.
+    /// Merges subflow transition names with the parent workflow's shared transitions and its well-known
+    /// workflow-level transitions — cancel, updateData and exit (manual/event, available in current state).
+    /// When in active subflow, clients see subflow transitions plus those parent transitions; state-level
+    /// parent transitions are not included. updateData in particular only does work while the parent sits
+    /// in a SubFlow state (updateData executes on the parent and is never forwarded to the subflow), so this merge is its primary surface.
     /// </summary>
     private static List<string> MergeWithParentAvailableTransitions(
         List<string> subflowTransitionNames,
@@ -434,9 +494,18 @@ public sealed class InstanceQueryAppService(
         var parentSharedOnly = currentWorkflow.GetAvailableSharedTransitionKeysOnly(currentState);
         var merged = subflowTransitionNames.Union(parentSharedOnly);
 
-        var cancelKey = currentWorkflow.GetCancelTransitionKey(currentState);
-        if (cancelKey != null)
-            merged = merged.Union(new[] { cancelKey });
+        string?[] wellKnownKeys =
+        [
+            currentWorkflow.GetCancelTransitionKey(currentState),
+            currentWorkflow.GetUpdateDataTransitionKey(currentState),
+            currentWorkflow.GetExitTransitionKey(currentState)
+        ];
+
+        foreach (var key in wellKnownKeys)
+        {
+            if (key != null)
+                merged = merged.Union([key]);
+        }
 
         return merged.ToList();
     }
@@ -591,7 +660,9 @@ public sealed class InstanceQueryAppService(
         response.Extensions = extensionsResult.Value!;
 
         response.Attributes =
-            await schemaFieldFilterService.ApplyAsync(flow, response.Attributes, instance, cancellationToken) ??
+            await schemaFieldFilterService.ApplyAsync(
+                flow, response.Attributes, instance,
+                new AuthorizationRequestContext(headers, queryParameters), cancellationToken) ??
             response.Attributes;
 
         return Result<GetInstanceOutput>.Ok(response);
@@ -652,7 +723,10 @@ public sealed class InstanceQueryAppService(
                     else
                     {
                         result.Data = instanceData?.Data.JsonElement;
-                        result.Data = await schemaFieldFilterService.ApplyAsync(flow, result.Data, instance, cancellationToken) ??
+                        result.Data = await schemaFieldFilterService.ApplyAsync(
+                                          flow, result.Data, instance,
+                                          new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                                          cancellationToken) ??
                                       result.Data;
                     }
 
@@ -800,6 +874,14 @@ public sealed class InstanceQueryAppService(
             : char.ToLowerInvariant(name[0]) + name[1..];
     }
 
+    /// <summary>
+    /// Client-facing <see cref="TransitionItem.Kind"/> value for the updateData transition.
+    /// Deliberately not <see cref="WellKnownTransitionKeys.UpdateData"/> ("update-parent-data"):
+    /// the kind vocabulary mirrors the workflow-definition field names (cancel, exit, updateData),
+    /// while the request-side well-known alias stays unchanged.
+    /// </summary>
+    private const string UpdateDataTransitionKind = "updateData";
+
     private static string ResolveTransitionKind(
         Definitions.Workflow workflow,
         State currentState,
@@ -815,7 +897,7 @@ public sealed class InstanceQueryAppService(
 
         if (IsTransitionKey(workflow.UpdateData, transitionKey) ||
             transitionKey.Equals(WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase))
-            return WellKnownTransitionKeys.UpdateData;
+            return UpdateDataTransitionKind;
 
         if (workflow.Timeout?.Key.Equals(transitionKey, StringComparison.OrdinalIgnoreCase) == true ||
             transitionKey.Equals(WellKnownTransitionKeys.Timeout, StringComparison.OrdinalIgnoreCase))
@@ -864,7 +946,18 @@ public sealed class InstanceQueryAppService(
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
-                    var buildResult = await BuildInstanceStateOutputAsync(data.instance, data.workflow, input, cancellationToken);
+                    // Full correlation set (active + completed), ordered by creation time. The aggregate's
+                    // own ChildCorrelations collection is loaded with an active-only filtered include, so
+                    // the completed rows the response exposes require this dedicated read. Ordering is
+                    // applied here rather than in the shared repository method, whose ParentState ordering
+                    // the hierarchy and monitor consumers already depend on.
+                    var allCorrelations = (await instanceCorrelationRepository
+                            .GetByParentAsync(data.instance.Id, cancellationToken))
+                        .OrderBy(c => c.CreatedAt)
+                        .ToList();
+
+                    var buildResult = await BuildInstanceStateOutputAsync(
+                        data.instance, data.workflow, input, allCorrelations, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
 
@@ -872,10 +965,12 @@ public sealed class InstanceQueryAppService(
                     var entityEtag = data.instance.LatestData?.ETag ?? string.Empty;
                     output.EntityEtag = entityEtag;
 
-                    // Same fingerprint-ETag the fast path computes from the projection query.
+                    // Same fingerprint-ETag the fast path computes from the projection query. The
+                    // correlation members must come from allCorrelations, not from the aggregate, so both
+                    // paths hash the same set — see InstanceStateFingerprint.FromInstance.
                     // Active-subflow responses fold the live displayed state/status into the hash:
                     // the parent row alone cannot see subflow-internal Busy/Active flips.
-                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance);
+                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance, allCorrelations);
                     var etag = data.instance.HasActiveSubFlow
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
@@ -957,10 +1052,18 @@ public sealed class InstanceQueryAppService(
     /// Builds the complete instance state output including transitions, correlations, and view information.
     /// When there's an active SubFlow, includes the SubFlow's view extensions in data href and merges active correlations.
     /// </summary>
+    /// <param name="instance">The loaded instance aggregate (child correlations active-only).</param>
+    /// <param name="currentWorkflow">The workflow definition bound to the instance.</param>
+    /// <param name="input">The state request.</param>
+    /// <param name="allCorrelations">Full child correlation set (active + completed), CreatedAt ascending.
+    /// Feeds the <c>correlations</c> response list only — the active-subflow detection below deliberately
+    /// keeps using the aggregate, whose active set drives Busy/settlement semantics.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
+        IReadOnlyCollection<InstanceCorrelation> allCorrelations,
         CancellationToken cancellationToken)
     {
         // Build instance transition information using shared logic (no DB call - uses instance.ActiveCorrelations)
@@ -1013,6 +1116,11 @@ public sealed class InstanceQueryAppService(
             // When this instance was started as a SubFlow with parent-defined transition overrides,
             // apply combined filtering: parent override grants for overridden transitions,
             // own role filtering for non-overridden transitions.
+            // The same request context the authorize function passes, so a transition guarded by a dynamic
+            // grant reading $.context.Headers/QueryParameters is listed here exactly when authorize would
+            // allow it. Without it those namespaces are empty and the grant silently never matches.
+            var authRequestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
+
             var parentTransitionOverrides = TryGetParentTransitionRoleOverrides(instance);
             if (parentTransitionOverrides is { Count: > 0 })
             {
@@ -1022,9 +1130,11 @@ public sealed class InstanceQueryAppService(
                     if (parentTransitionOverrides.TryGetValue(key, out var tOverride) &&
                         tOverride.Roles is { Count: > 0 })
                     {
-                        // Parent override (replace mode): use parent-defined grants
+                        // Parent override (replace mode): use parent-defined grants verbatim.
+                        // No availableIn narrowing here — these overrides key off the SUBFLOW's
+                        // transitions, so the parent's availableIn states would not apply to them.
                         var allowed = await transitionAuthorizationManager
-                            .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, cancellationToken: cancellationToken);
+                            .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, authRequestContext, cancellationToken);
                         if (allowed) filteredKeys.Add(key);
                     }
                     else
@@ -1035,7 +1145,7 @@ public sealed class InstanceQueryAppService(
                         if (ownTransition != null)
                         {
                             var result = await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                                currentWorkflow, currentStateValue, instance, [key], input.Role, cancellationToken);
+                                currentWorkflow, currentStateValue, instance, [key], input.Role, authRequestContext, cancellationToken);
                             filteredKeys.AddRange(result);
                         }
                         else
@@ -1058,7 +1168,7 @@ public sealed class InstanceQueryAppService(
                     .ToList();
                 var filteredParentSharedKeys = parentSharedKeys.Count > 0
                     ? (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                            currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Role, cancellationToken))
+                            currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Role, authRequestContext, cancellationToken))
                       .ToList()
                     : parentSharedKeys;
                 keysForTransitions = keysForTransitions
@@ -1069,7 +1179,7 @@ public sealed class InstanceQueryAppService(
             else
             {
                 keysForTransitions = (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                        currentWorkflow, currentStateValue, instance, keysForTransitions, input.Role, cancellationToken))
+                        currentWorkflow, currentStateValue, instance, keysForTransitions, input.Role, authRequestContext, cancellationToken))
                     .ToList();
             }
         }
@@ -1184,26 +1294,21 @@ public sealed class InstanceQueryAppService(
         {
             Href = urlTemplateBuilder.BuildMasterUrl(input.Domain, input.Workflow, instance.Id.ToString())
         };
-        var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations.Select(correlation =>
-            new ActiveCorrelationHref
-            {
-                CorrelationId = correlation.CorrelationId,
-                ParentState = correlation.ParentState,
-                SubFlowInstanceId = correlation.SubFlowInstanceId,
-                SubFlowType = correlation.SubFlowType,
-                SubFlowDomain = correlation.SubFlowDomain,
-                SubFlowName = correlation.SubFlowName,
-                SubFlowVersion = correlation.SubFlowVersion,
-                IsCompleted = correlation.IsCompleted,
-                Href = allExtensions.Length > 0
-                    ? urlTemplateBuilder.BuildDataWithExtensionsUrl(correlation.SubFlowDomain, correlation.SubFlowName,
-                        correlation.SubFlowInstanceId.ToString(), allExtensions)
-                    : urlTemplateBuilder.BuildDataUrl(correlation.SubFlowDomain, correlation.SubFlowName,
-                        correlation.SubFlowInstanceId.ToString())
-            }).ToList();
+        var mainFlowCorrelationHrefs = transitionInfo.ActiveCorrelations
+            .Select(correlation => BuildCorrelationHref(correlation, allExtensions))
+            .ToList();
         var allActiveCorrelations = subFlowStateInfo.SubFlowActiveCorrelations != null
             ? mainFlowCorrelationHrefs.Concat(subFlowStateInfo.SubFlowActiveCorrelations).ToList()
             : mainFlowCorrelationHrefs;
+
+        // Full set (active + completed) for clients that need the sub item history. Merged with the
+        // subflow's own full set exactly as the active list is, so a nested chain stays consistent.
+        var fullCorrelationHrefs = allCorrelations
+            .Select(correlation => BuildCorrelationHref(correlation, allExtensions))
+            .ToList();
+        var allCorrelationHrefs = subFlowStateInfo.SubFlowCorrelations != null
+            ? fullCorrelationHrefs.Concat(subFlowStateInfo.SubFlowCorrelations).ToList()
+            : fullCorrelationHrefs;
 
         // Role-aware state alias: when the displayed state is the main-flow current state and that
         // state defines aliases, return the role-resolved alias (localized label, else name) instead
@@ -1246,6 +1351,15 @@ public sealed class InstanceQueryAppService(
             : await ResolveInteractionAsync(
                 input, instance, currentStateValue, displayedState, cancellationToken);
 
+        // Only the flag and the link — never the list. Enumerating the functions means one component
+        // read per declared function plus a role evaluation each, which this response cannot afford.
+        var functionsHref = new FunctionsHref
+        {
+            HasFunctions = currentWorkflow.Functions.Count > 0,
+            Href = urlTemplateBuilder.BuildFunctionCatalogUrl(
+                input.Domain, input.Workflow, instance.Id.ToString())
+        };
+
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
             Data = dataHref,
@@ -1257,7 +1371,9 @@ public sealed class InstanceQueryAppService(
                 : subFlowStateInfo.StateType!,
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
+            Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
+            Functions = functionsHref,
             Interaction = interaction
         });
     }
@@ -2121,6 +2237,7 @@ public sealed class InstanceQueryAppService(
     /// <inheritdoc />
     public async Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
         string domain,
+        IReadOnlyDictionary<string, string?>? headers = null,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
@@ -2137,7 +2254,10 @@ public sealed class InstanceQueryAppService(
         const int humanTaskFanoutParallelism = 10;
 
         var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var userRoles = currentUser.Roles ?? [];
+        // Honor the legacy `role` header: a caller whose roles arrive only as a header must not be
+        // treated as role-less, which would silently drop every task guarded by a role grant.
+        var userRoles = currentUser.ResolveCallerRoles(headers) ?? [];
+        var requestContext = new AuthorizationRequestContext(headers);
         var allItems = new System.Collections.Concurrent.ConcurrentBag<HumanTaskItemOutput>();
 
         var parallelOptions = new ParallelOptions
@@ -2174,7 +2294,7 @@ public sealed class InstanceQueryAppService(
                 return;
 
             var filtered = await FilterAuthorizedInstancesAsync(
-                instances, currentWorkflow, domain, userRoles, ct);
+                instances, currentWorkflow, domain, userRoles, requestContext, ct);
 
             foreach (var instance in filtered)
             {
@@ -2251,7 +2371,9 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Filters instances by checking whether the current user is authorized to trigger
     /// at least one transition. For each instance, resolves the correct workflow and state
-    /// (main flow or active SubFlow via correlation), then checks static roles and predefined roles.
+    /// (main flow or active SubFlow via correlation), then evaluates that transition's grants through the
+    /// shared role evaluator — the same decision the transition-execution path makes, so a task appears in
+    /// the list exactly when its transition is executable.
     /// When a SubFlow transition is overridden by the parent, the parent's role grants are used instead.
     /// </summary>
     private async Task<List<Instance>> FilterAuthorizedInstancesAsync(
@@ -2259,6 +2381,7 @@ public sealed class InstanceQueryAppService(
         Definitions.Workflow parentWorkflow,
         string domain,
         string[] userRoles,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
         var result = new List<Instance>(instances.Count);
@@ -2277,73 +2400,36 @@ public sealed class InstanceQueryAppService(
 
             var parentOverrides = GetParentTransitionOverrides(instance, parentWorkflow);
 
-            var isAuthorized = false;
-
+            // Resolve every candidate first so the evaluator's prefetch hint covers the whole instance:
+            // one previous-transition fetch serves all of this instance's transitions and caller roles.
+            var candidates = new List<(Transition Transition, IReadOnlyCollection<RoleGrant> Grants)>(transitions.Count);
             foreach (var transitionKey in transitions)
-            {                
-                List<RoleGrant> transitionRoles = [];
+            {
                 var transition = workflow.FindTransitionInContext(transitionKey);
                 if (transition == null)
                     continue;
 
-                if (parentOverrides != null
-                    && parentOverrides.TryGetValue(transitionKey, out var tOverride)
-                    && tOverride.Roles is { Count: > 0 })
-                {
-                    transitionRoles = tOverride.Roles;
-                }
-                else
-                {
-                    transitionRoles = transition.Roles.ToList();
-                }
+                var grants = parentOverrides != null
+                             && parentOverrides.TryGetValue(transitionKey, out var tOverride)
+                             && tOverride.Roles is { Count: > 0 }
+                    ? tOverride.Roles!
+                    : transition.Roles;
 
-                var staticRoles = transitionRoles
-                    .Where(r => !PredefinedInstanceRoles.IsPredefinedRole(r.Role))
-                    .ToList();
-
-                var predefinedRoles = transitionRoles
-                    .Where(r => PredefinedInstanceRoles.IsPredefinedRole(r.Role))
-                    .ToList();
-
-                var hasStaticRoles = staticRoles.Count > 0;
-                var hasPredefinedRoles = predefinedRoles.Count > 0;
-
-                if (!hasStaticRoles && !hasPredefinedRoles)
-                {
-                    isAuthorized = true;
-                    break;
-                }
-
-                // Blacklist decision is made over the WHOLE grant list, not the split subsets:
-                // when no ALLOW grant exists anywhere, both subsets evaluate as deny-only blacklists.
-                var applyBlacklistFallback = !transitionRoles.Any(g => g.IsAllow);
-
-                var staticMatch = !hasStaticRoles;
-                if (hasStaticRoles)
-                {
-                    foreach (var role in userRoles)
-                    {
-                        if (TransitionAuthorizationManager.EvaluateRolesStatic(role, staticRoles, applyBlacklistFallback))
-                        {
-                            staticMatch = true;
-                            break;
-                        }
-                    }
-                }
-
-                var predefinedMatch = !hasPredefinedRoles;
-                if (hasPredefinedRoles)
-                {
-                    predefinedMatch = await transitionAuthorizationManager.IsPredefinedRoleMatchAsync(
-                        predefinedRoles, instance, cancellationToken, applyBlacklistFallback);
-                }
-
-                if (staticMatch && predefinedMatch)
-                {
-                    isAuthorized = true;
-                    break;
-                }
+                candidates.Add((transition, grants));
             }
+
+            if (candidates.Count == 0)
+                continue;
+
+            var evaluator = await transitionAuthorizationManager.CreateEvaluatorAsync(
+                instance,
+                workflow,
+                requestContext,
+                candidates.SelectMany(c => c.Grants),
+                cancellationToken);
+
+            var isAuthorized = candidates.Any(c =>
+                evaluator.IsAnyRoleAllowed(userRoles, c.Grants, c.Transition));
 
             if (isAuthorized)
                 result.Add(instance);
@@ -2440,6 +2526,7 @@ public sealed class InstanceQueryAppService(
     /// <param name="SubFlowData">Data href from SubFlow (contains extensions info) - null for main flow</param>
     /// <param name="SubFlowView">View href from SubFlow - null for main flow</param>
     /// <param name="SubFlowActiveCorrelations">Active correlations from SubFlow - empty for main flow</param>
+    /// <param name="SubFlowCorrelations">Full correlation set (active + completed) from SubFlow - empty for main flow</param>
     /// <param name="SubFlowTransitionItems">Transition items from SubFlow (includes HasView) - null for main flow</param>
     private sealed record SubFlowStateInfo(
         List<string> AvailableTransitions,
@@ -2449,6 +2536,7 @@ public sealed class InstanceQueryAppService(
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
+        List<ActiveCorrelationHref>? SubFlowCorrelations = null,
         List<TransitionItem>? SubFlowTransitionItems = null,
         InstanceInteractionOutput? Interaction = null);
 

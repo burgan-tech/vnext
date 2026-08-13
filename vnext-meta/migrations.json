@@ -10,6 +10,39 @@
       "title": "State notification channel payload slimmed to a pointer",
       "description": "The platform-managed 'state' notification channel (NotificationTask state channel and the new state-level notification directive) no longer embeds the full State function output (GetInstanceStateOutput) in the message data. The data payload is now the slim pointer { domain, flow, id, version } inside the CloudEvents envelope; consumers must re-fetch the full state via the State function. Binding metadata and IStateNotificationMapping enrichment are unchanged.",
       "action": "Update state-channel consumers to treat the message as a change pointer and call the State function for full state instead of reading data.data.* fields."
+    },
+    {
+      "id": "x-roles-deny-now-wins-across-grant-set",
+      "type": "behavior",
+      "component": "schema",
+      "path": "schema.properties[].x-roles",
+      "since": "0.0.79",
+      "severity": "error",
+      "title": "Schema x-roles DENY now applies across the whole grant set",
+      "description": "Field-level visibility used to evaluate each caller role against a path's grants in isolation, and a path was visible if any single role passed. A DENY naming a predefined role was therefore defeated whenever the caller also held some unrelated role: that role matched nothing, the deny-only set fell through to the blacklist rule, and the field stayed visible. Evaluation now runs the canonical rule over the whole grant set, so a matching DENY hides the field regardless of the caller's other roles. Fields previously exposed by this gap become hidden.",
+      "action": "Review every schema declaring a DENY in x-roles. If a field was relied upon as visible while a DENY grant matched the caller, the declaration was not expressing that — replace the DENY with an explicit ALLOW list for the roles that should see the field."
+    },
+    {
+      "id": "x-roles-deny-only-visible-to-roleless-caller",
+      "type": "behavior",
+      "component": "schema",
+      "path": "schema.properties[].x-roles",
+      "since": "0.0.79",
+      "severity": "warning",
+      "title": "Schema x-roles: a role-less caller now sees deny-only fields",
+      "description": "A caller with no roles was rejected before the grant rule was applied, so a path guarded only by DENY grants was hidden from them. The canonical blacklist rule now applies: a grant set with no ALLOW grant allows anyone it does not explicitly deny, including a role-less caller. Note that a path guarded by an ALLOW grant is still hidden from a role-less caller, so allowlist declarations are unaffected.",
+      "action": "If a field must never reach an unauthenticated or role-less caller, declare it with an explicit ALLOW list instead of relying on DENY grants alone."
+    },
+    {
+      "id": "human-task-list-matches-transition-execution",
+      "type": "behavior",
+      "component": "function",
+      "path": "GET {domain}/functions/human-task",
+      "since": "0.0.79",
+      "severity": "warning",
+      "title": "Human-task list authorization now matches the transition-execution rule",
+      "description": "The list split a transition's grants into static and predefined subsets, evaluated each separately and required BOTH to match. A transition declaring [allow: teller, allow: $InstanceStarter] was therefore only listed for a caller who was both a teller and the instance starter, even though either one alone was enough to execute it — the task was hidden from users who could act on it. The list now applies the same any-matching-ALLOW rule as execution and additionally honors dynamic $.context.* grants, which it previously ignored entirely. Expect more tasks to appear for the same caller.",
+      "action": "Re-check human-task expectations for transitions that mix static and predefined grants. To require both conditions, model the second as a DENY for the complement rather than relying on the old AND behavior."
     }
   ]
 }

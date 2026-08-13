@@ -72,6 +72,29 @@ public sealed class InstanceBusyManager(
         return BusyMarkOutcome.Marked;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var result = await instanceRepository.GetResultAsync(
+            instanceId.ToString(), includeDetails: false, cancellationToken);
+
+        if (!result.IsSuccess || result.Value is null)
+            return false;
+
+        var instance = result.Value;
+        if (!instance.IsBusy || instance.IsCompleted)
+            return false;
+
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+        instance.Active();
+        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+
+        return true;
+    }
+
     /// <summary>
     /// Persists the Busy flip for an already-loaded instance in an isolated RequiresNew transaction.
     /// </summary>

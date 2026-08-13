@@ -597,6 +597,187 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldIncludeUpdateDataAndExit_WhenConfigured()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var stateA = State.Create("state-a", StateType.Intermediate, StateSubType.None, "Patch");
+        var stateB = State.Create("state-b", StateType.SubFlow, StateSubType.None, "Patch");
+        workflow.AddState(stateA);
+        workflow.AddState(stateB);
+
+        workflow.SetCancel(Transition.Create("cancel", null, "cancelled", TriggerType.Manual, "Patch"));
+        workflow.SetUpdateData(Transition.Create("update-data", null, "$self", TriggerType.Manual, "Patch"));
+        workflow.SetExit(Transition.Create("exit", null, "exited", TriggerType.Manual, "Patch"));
+
+        // Act — well-known transitions are exposed from every state
+        var resultA = workflow.GetAvailableUserTransitionKeys(stateA);
+        var resultB = workflow.GetAvailableUserTransitionKeys(stateB);
+
+        // Assert
+        Assert.Contains("cancel", resultA);
+        Assert.Contains("update-data", resultA);
+        Assert.Contains("exit", resultA);
+        Assert.Contains("update-data", resultB);
+        Assert.Contains("exit", resultB);
+    }
+
+    [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldExcludeUpdateDataAndExit_WhenNotConfigured()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var state = State.Create("state-a", StateType.Intermediate, StateSubType.None, "Patch");
+        state.AddTransition(Transition.Create("submit", "state-a", "next", TriggerType.Manual, "Patch"));
+        workflow.AddState(state);
+
+        // Act
+        var result = workflow.GetAvailableUserTransitionKeys(state);
+
+        // Assert
+        Assert.Equal(["submit"], result);
+    }
+
+    [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldUseConfiguredKey_NotWellKnownAlias()
+    {
+        // Arrange — a workflow that names its exit transition something other than "exit".
+        // The configured key must be listed, because role filtering resolves keys via
+        // FindTransitionInContext, which matches on the configured key.
+        var workflow = Workflow.Create();
+        workflow.SetStartTransition(Transition.Create("start", "", "state-a", TriggerType.Manual, "Patch"));
+        var state = State.Create("state-a", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(state);
+        workflow.SetExit(Transition.Create("leave-process", null, "exited", TriggerType.Manual, "Patch"));
+
+        // Act
+        var result = workflow.GetAvailableUserTransitionKeys(state);
+
+        // Assert
+        Assert.Contains("leave-process", result);
+        Assert.DoesNotContain(WellKnownTransitionKeys.Exit, result);
+        Assert.NotNull(workflow.FindTransitionInContext("leave-process"));
+    }
+
+    [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldExcludeExit_WhenAvailableInDoesNotContainCurrentState()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var reviewState = State.Create("review", StateType.Intermediate, StateSubType.None, "Patch");
+        var pendingState = State.Create("pending", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(reviewState);
+        workflow.AddState(pendingState);
+
+        var exit = Transition.Create("exit", null, "exited", TriggerType.Manual, "Patch");
+        exit.AddAvailableIn("review");
+        workflow.SetExit(exit);
+
+        // Act
+        var resultReview = workflow.GetAvailableUserTransitionKeys(reviewState);
+        var resultPending = workflow.GetAvailableUserTransitionKeys(pendingState);
+
+        // Assert
+        Assert.Contains("exit", resultReview);
+        Assert.DoesNotContain("exit", resultPending);
+    }
+
+    /// <summary>
+    /// Closes the schema-to-runtime loop: `availableIn` authored on the well-known transitions in
+    /// component JSON (vnext-schema cancelTransition/exitTransition/updateDataTransition) must reach
+    /// the availability gate. Constructing the objects in code would not prove the JSON binds.
+    /// </summary>
+    [Fact]
+    public void GetAvailableUserTransitionKeys_ShouldHonourAvailableInFromJson()
+    {
+        // Arrange
+        const string json = """
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "review",
+                    "stateType": 2,
+                    "versionStrategy": "Minor",
+                    "labels": [{"label": "Review", "language": "en"}],
+                    "transitions": []
+                },
+                {
+                    "key": "pending",
+                    "stateType": 2,
+                    "versionStrategy": "Minor",
+                    "labels": [{"label": "Pending", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "review",
+                "versionStrategy": "Minor",
+                "triggerType": 0,
+                "labels": [{"label": "Start", "language": "en"}]
+            },
+            "exit": {
+                "key": "exit",
+                "target": "review",
+                "versionStrategy": "Minor",
+                "triggerType": 0,
+                "labels": [{"label": "Exit", "language": "en"}],
+                "availableIn": ["review"]
+            },
+            "updateData": {
+                "key": "update-data",
+                "target": "$self",
+                "versionStrategy": "Minor",
+                "triggerType": 0,
+                "labels": [{"label": "Update", "language": "en"}],
+                "availableIn": []
+            }
+        }
+        """;
+
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Workflow>(
+            json, JsonSerializerConstants.JsonOptions)!;
+
+        // Act
+        var review = workflow.GetAvailableUserTransitionKeys(workflow.FindState("review")!);
+        var pending = workflow.GetAvailableUserTransitionKeys(workflow.FindState("pending")!);
+
+        // Assert — availableIn bound from JSON and gates exit; an empty list means every state
+        Assert.Equal(["review"], workflow.Exit!.AvailableIn.Select(e => e.State));
+        Assert.Contains("exit", review);
+        Assert.DoesNotContain("exit", pending);
+        Assert.Contains("update-data", review);
+        Assert.Contains("update-data", pending);
+    }
+
+    [Fact]
+    public void GetUpdateDataAndExitTransitionKey_ShouldRespectConfigurationAndAvailableIn()
+    {
+        // Arrange
+        var workflow = Workflow.Create();
+        var stateA = State.Create("state-a", StateType.SubFlow, StateSubType.None, "Patch");
+        var stateB = State.Create("state-b", StateType.Intermediate, StateSubType.None, "Patch");
+        workflow.AddState(stateA);
+        workflow.AddState(stateB);
+
+        workflow.SetUpdateData(Transition.Create("update-data", null, "$self", TriggerType.Manual, "Patch"));
+
+        var exit = Transition.Create("exit", null, "exited", TriggerType.Manual, "Patch");
+        exit.AddAvailableIn("state-a");
+        workflow.SetExit(exit);
+
+        // Act & Assert
+        Assert.Equal("update-data", workflow.GetUpdateDataTransitionKey(stateA));
+        Assert.Equal("update-data", workflow.GetUpdateDataTransitionKey(stateB));
+        Assert.Equal("exit", workflow.GetExitTransitionKey(stateA));
+        Assert.Null(workflow.GetExitTransitionKey(stateB));
+        Assert.Null(Workflow.Create().GetExitTransitionKey(stateA));
+    }
+
+    [Fact]
     public void FindTransitionInContext_ShouldSearchAllTransitions()
     {
         // Arrange

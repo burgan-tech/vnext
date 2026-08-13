@@ -37,6 +37,15 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
         }
 
+        // updateData always executes on the instance it targets — the parent's data is updated
+        // and the parent's own auto transitions may advance with it. It is never forwarded to
+        // (or resumed on) the active subflow; a subflow's data is updated by addressing the
+        // subflow instance directly.
+        if (context.IsUpdateDataTransition())
+        {
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+        }
+
         // Enqueue post-commit job - actual forward happens after lock release.
         // ForwardToSubflowJob hands continuation ownership to the active blocking SubFlow.
         context.Directives.EnqueuePostCommit(new ForwardToSubflowJob(

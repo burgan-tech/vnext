@@ -61,6 +61,9 @@ public sealed class RoleGrant
     /// </summary>
     public string Grant { get; private set; } = string.Empty;
 
-    public bool IsDeny => GrantKind.IsDeny(Grant);
-    public bool IsAllow => GrantKind.IsAllow(Grant);
+    // Computed projections of Grant — never serialized. Without [JsonIgnore] they are written out as
+    // "isDeny"/"isAllow" siblings, and the schema declares roleGrant additionalProperties: false, so a
+    // re-serialized definition would fail schema re-validation.
+    [JsonIgnore] public bool IsDeny => GrantKind.IsDeny(Grant);
+    [JsonIgnore] public bool IsAllow => GrantKind.IsAllow(Grant);
 }

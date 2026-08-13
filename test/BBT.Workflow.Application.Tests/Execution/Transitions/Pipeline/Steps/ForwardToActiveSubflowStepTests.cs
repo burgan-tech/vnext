@@ -27,7 +27,23 @@ public class ForwardToActiveSubflowStepTests
         job.ContinuationBehavior.ShouldBe(PostCommitContinuationBehavior.HandoffToChild);
     }
 
-    private static TransitionExecutionContext CreateContextWithActiveSubFlow()
+    [Fact]
+    public async Task ExecuteAsync_UpdateDataTransition_ShouldNotForwardToSubflow()
+    {
+        // updateData executes on the instance it targets: the parent's data updates and its
+        // own auto transitions may advance — it is never forwarded to the active subflow.
+        var step = new ForwardToActiveSubflowStep();
+        var context = CreateContextWithActiveSubFlow(transitionKey: "update-parent-data");
+
+        var result = await step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.SkipToOrder.ShouldBeNull();     // continues down the normal pipeline
+        context.Directives.PostCommitJobs.ShouldBeEmpty(); // no ForwardToSubflowJob
+    }
+
+    private static TransitionExecutionContext CreateContextWithActiveSubFlow(
+        string transitionKey = "child-transition")
     {
         var instance = Instance.Create(Guid.NewGuid(), "parent-workflow", "1.0.0");
         instance.AddCorrelation(InstanceCorrelation.Create(
@@ -45,14 +61,14 @@ public class ForwardToActiveSubflowStepTests
             InstanceId = instance.Id,
             Domain = "parent-domain",
             WorkflowKey = instance.Flow,
-            TransitionKey = "child-transition",
+            TransitionKey = transitionKey,
             Trigger = TriggerType.Manual,
             CorrelationId = Guid.NewGuid().ToString("N"),
             ExecutionChainId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Workflow = Definitions.Workflow.Create(),
             Current = StateFactory.CreateDefault("waiting-child", StateType.SubFlow),
-            Transition = Transition.Create("child-transition", "waiting-child", "waiting-child", TriggerType.Manual, "Patch"),
+            Transition = Transition.Create(transitionKey, "waiting-child", "waiting-child", TriggerType.Manual, "Patch"),
             Instance = instance,
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]

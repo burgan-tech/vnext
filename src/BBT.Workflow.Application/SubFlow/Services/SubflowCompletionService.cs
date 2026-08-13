@@ -1,4 +1,5 @@
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
@@ -7,6 +8,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Shared;
@@ -22,9 +24,13 @@ public sealed class SubflowCompletionService(
     IWorkflowExecutionService workflowExecutionService,
     ISubflowOutputMappingService outputMappingService,
     ITransitionLockScopeFactory transitionLockScopeFactory,
+    ISubItemTerminalGuard terminalGuard,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowCompletionService> logger)
     : ISubflowCompletionService
 {
+    private LockAcquireWait TerminalLockWait => executionOptions.Value.SubItemTerminalLockRetry.ToLockAcquireWait();
+
     /// <inheritdoc />
     public async Task CompletionAsync(
         FlowCompletedInput completedInput,
@@ -83,10 +89,36 @@ public sealed class SubflowCompletionService(
                 // Per-subInstance terminal lock, independent of the main-flow lock and reserved keys:
                 // a long-held chain lease never blocks the signal, parallel SubProcess terminal-closes
                 // don't contend, and only duplicate deliveries of the SAME subInstance serialize.
-                // Sync/async safe: distinct from the parent's held key (no self-deadlock); nested
-                // same-key reentry is still handled by ChainLockRegistry.
+                // Sync/async safe: distinct from every instance-status lock key (no self-deadlock).
                 var lockKey = $"vnext:{completedInput.Domain}:{completedInput.Flow}:{completedInput.InstanceId}:sub:{completedInput.SubInstanceId:N}";
-                await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(lockKey, cancellationToken))
+
+                // Lock-free duplicate short-circuit. This signal is delivered at least twice by
+                // design (DurablePostCommit hook + Inbox worker), so the common case is a duplicate
+                // whose work is already persisted. Answering it from a read-only snapshot keeps it
+                // off the distributed lock entirely; only genuinely-open deliveries contend.
+                var probe = await terminalGuard.ProbeAsync(
+                    completedInput.InstanceId,
+                    completedInput.SubInstanceId,
+                    SubItemTerminalOutcome.Completed,
+                    cancellationToken);
+
+                if (probe != SubItemTerminalProbe.Proceed)
+                {
+                    activity?.SetTag("vnext.subflow.result",
+                        probe == SubItemTerminalProbe.AlreadySettled
+                            ? "correlation_already_settled_prelock"
+                            : "terminal_outcome_conflict_prelock");
+                    SubFlowActivityHelper.SetSuccess(activity);
+                    return;
+                }
+
+                // Bounded wait rather than fail-fast: a duplicate that arrives while the original is
+                // still inside its transaction cannot see the pending write, so short-circuiting
+                // above is impossible and failing immediately would push it into a full broker
+                // re-delivery cycle. The critical section is one short transaction — waiting it out
+                // is far cheaper, and the re-read after acquisition settles the outcome correctly.
+                await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(
+                                 lockKey, TerminalLockWait, cancellationToken))
                 {
                     if (!lockScope.IsAcquired)
                     {

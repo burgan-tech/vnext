@@ -32,6 +32,12 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 10. Read [Event-Driven Workflows](domain/event-driven-workflows.md) before wiring external events into workflows or transitions (event mappings, Dapr subscriptions, correlation).
 11. Read [Instance Filtering and Queries](runtime/instance-filtering-and-queries.md) before writing instance queries in mapping scripts (fluent `InstanceQuery`, operator reference, `GetInstancesTask` vs `DaprServiceTask`, migration from hand-written GraphQL filters).
 12. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `18`, local/remote response parity).
+13. Read [Script Related Instance Access](runtime/script-related-instance-access.md) before using or changing `context.Related` in mapping scripts (parent/correlation reads, unfiltered `x-roles` behavior, internal endpoint security posture).
+14. Read [View Display Modes](domain/view-display-modes.md) before changing a view's `display` declaration or how clients present views (SDI / MDI shapes, response `modes` contract).
+15. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
+16. Read [Well-Known Transitions](domain/well-known-transitions.md) before changing `cancel` / `updateData` / `exit` behavior, what `availableTransitions` contains, or the `kind` discriminator clients switch on.
+17. Read [Role Grant Authorization](domain/role-grant-authorization.md) before touching any role check — `roles`, `queryRoles`, schema `x-roles` — or adding an authorization decision point. Covers the single-evaluator rule, batching, and why discovery must pass the same request context as enforcement.
+18. Read [Function Contract Resolution](runtime/function-contract-resolution.md) before authoring or changing a function's `inputSchema` / `outputSchema` / `inputView` / `outputView`, or the `/info` discovery endpoint. Covers the rule-based wire shapes, first-match-wins semantics, and why "no match" is not an error.
 
 ## Documentation Rules
 

@@ -3,6 +3,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Related;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -17,7 +18,11 @@ namespace BBT.Workflow.Application.Tests.Scripting;
 public class ScriptContextRawBodyTests
 {
     private static ScriptContextFactory CreateFactory(IRequestRawBodyProvider provider) =>
-        new(Substitute.For<IComponentCacheStore>(), NullLogger<ScriptContext>.Instance, provider);
+        new(
+            Substitute.For<IComponentCacheStore>(),
+            NullLogger<ScriptContext>.Instance,
+            NullLogger<RelatedInstanceAccessor>.Instance,
+            provider);
 
     [Fact]
     public async Task BuildAsync_PopulatesRawBody_FromProvider()

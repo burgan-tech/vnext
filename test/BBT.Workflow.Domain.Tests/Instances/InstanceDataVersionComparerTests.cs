@@ -275,10 +275,10 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
         var instance = InstanceFactory.CreateDefault();
         var list = new List<InstanceData>
         {
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "1.0.0"),
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "invalid"),
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "2.0.0"),
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "another-invalid")
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "1.0.0"),
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "invalid"),
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "2.0.0"),
+            instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{}"), "another-invalid")
         };
 
         // Act & Assert - Should not throw
@@ -287,103 +287,76 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void Compare_ShouldCompareByHistorySequence_WhenVersionsAreEqual()
+    public void Compare_ShouldCompareByVersionNo_WhenVersionsAreEqual()
     {
-        // Arrange
+        // Arrange — same version line, ascending VersionNo (write-service assignment order)
         var instance = InstanceFactory.CreateDefault();
-        var data1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
-        var data2 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var data3 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        var data1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        var data2 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var data3 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
 
         // Act & Assert
-        // data1 (seq=0) < data2 (seq=1)
         Assert.True(_comparer.Compare(data1, data2) < 0);
-        // data2 (seq=1) < data3 (seq=2)
         Assert.True(_comparer.Compare(data2, data3) < 0);
-        // data1 (seq=0) < data3 (seq=2)
         Assert.True(_comparer.Compare(data1, data3) < 0);
     }
 
     [Fact]
-    public void Compare_ShouldPrioritizeVersion_OverHistorySequence()
+    public void Compare_ShouldPrioritizeVersion_OverVersionNo()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        // Version 2.0.0 with sequence 0
-        var data1 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0");
-        
-        // Version 1.0.0 with higher sequence numbers
-        var data2 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
-        var data3 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
-        var data4 = instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
+        // Version 2.0.0 written first (lowest VersionNo)
+        var data1 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0");
 
-        // Act & Assert
-        // Version 2.0.0 (seq=0) > Version 1.0.0 (seq=2) - Version takes priority
+        // Version 1.0.0 rows written later (higher VersionNo)
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        var data4 = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "1.0.0");
+
+        // Act & Assert — semantic version takes priority over write order
         Assert.True(_comparer.Compare(data1, data4) > 0);
     }
 
     [Fact]
-    public void Compare_WithMixedVersionsAndSequences_ShouldSortCorrectly()
+    public void Compare_WithMixedVersionsAndWriteOrder_ShouldSortCorrectly()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        var list = new List<InstanceData>
-        {
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0"), // seq=1
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0"), // seq=1
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0"), // seq=2
-        };
+        var v2First = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "2.0.0");
+        var v1First = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var v1Second = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "1.0.0");
+        var v2Second = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0");
+        var v1Third = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":5}"), "1.0.0");
+        var list = new List<InstanceData> { v2First, v1First, v1Second, v2Second, v1Third };
 
         // Act
         var sorted = list.OrderBy(x => x, _comparer).ToList();
 
-        // Assert - Should be sorted by version first, then by sequence
-        Assert.Equal("1.0.0", sorted[0].Version);
-        Assert.Equal(0, sorted[0].HistorySequence);
-        
-        Assert.Equal("1.0.0", sorted[1].Version);
-        Assert.Equal(1, sorted[1].HistorySequence);
-        
-        Assert.Equal("1.0.0", sorted[2].Version);
-        Assert.Equal(2, sorted[2].HistorySequence);
-        
-        Assert.Equal("2.0.0", sorted[3].Version);
-        Assert.Equal(0, sorted[3].HistorySequence);
-        
-        Assert.Equal("2.0.0", sorted[4].Version);
-        Assert.Equal(1, sorted[4].HistorySequence);
+        // Assert - Sorted by version first, then by VersionNo within the same version
+        Assert.Equal(
+            new[] { v1First.Id, v1Second.Id, v1Third.Id, v2First.Id, v2Second.Id },
+            sorted.Select(d => d.Id).ToArray());
     }
 
     [Fact]
-    public void Compare_WithDescending_ShouldRespectVersionAndSequence()
+    public void Compare_WithDescending_ShouldRespectVersionAndVersionNo()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
-        var list = new List<InstanceData>
-        {
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0"), // seq=1
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0"), // seq=0
-            instance.AddDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0"), // seq=1
-        };
+        var v1First = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
+        var v1Second = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0");
+        var v2First = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":3}"), "2.0.0");
+        var v2Second = instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":4}"), "2.0.0");
+        var list = new List<InstanceData> { v1First, v1Second, v2First, v2Second };
 
         // Act
         var sorted = list.OrderByDescending(x => x, _comparer).ToList();
 
-        // Assert - Descending: highest version first, highest sequence within same version
-        Assert.Equal("2.0.0", sorted[0].Version);
-        Assert.Equal(1, sorted[0].HistorySequence);
-        
-        Assert.Equal("2.0.0", sorted[1].Version);
-        Assert.Equal(0, sorted[1].HistorySequence);
-        
-        Assert.Equal("1.0.0", sorted[2].Version);
-        Assert.Equal(1, sorted[2].HistorySequence);
-        
-        Assert.Equal("1.0.0", sorted[3].Version);
-        Assert.Equal(0, sorted[3].HistorySequence);
+        // Assert - Descending: highest version first, highest VersionNo within same version
+        Assert.Equal(
+            new[] { v2Second.Id, v2First.Id, v1Second.Id, v1First.Id },
+            sorted.Select(d => d.Id).ToArray());
     }
 
     [Theory]
@@ -802,10 +775,201 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region Cache Key Algebra (NormalizeRequest / CanonicalFullVersion / GetMajor / GetMajorMinor)
+
+    [Theory]
+    [InlineData(null, "latest")]
+    [InlineData("", "latest")]
+    [InlineData("   ", "latest")]
+    [InlineData("latest", "latest")]
+    [InlineData("LATEST", "latest")]
+    [InlineData("  Latest  ", "latest")]
+    [InlineData("1", "1")]
+    [InlineData(" 1.2 ", "1.2")]
+    [InlineData("2.3.5", "2.3.5")]
+    [InlineData(" 1.5.6-PKG.1.1.56+Core ", "1.5.6-pkg.1.1.56+core")]
+    public void NormalizeRequest_ShouldCollapseEquivalentSpellings(string? requested, string expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.NormalizeRequest(requested);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void NormalizeRequest_ShouldAgreeWithCaseInsensitiveMatching()
+    {
+        // Arrange - FindBestMatch resolves these two spellings identically (exact match is
+        // case-insensitive), so they must normalize to the same cache key.
+        var versions = new List<string> { "1.0.0-alpha.1" };
+
+        // Act
+        var lower = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-alpha.1");
+        var upper = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-ALPHA.1");
+
+        // Assert
+        Assert.Equal(lower, upper);
+        Assert.Equal(
+            InstanceDataVersionComparer.NormalizeRequest("1.0.0-alpha.1"),
+            InstanceDataVersionComparer.NormalizeRequest("1.0.0-ALPHA.1"));
+    }
+
+    [Theory]
+    [InlineData("1.5.6-pkg.1.1.56+core", "1.5.6-pkg.1.1.56")]
+    [InlineData("1.5.6-pkg.1.1.56", "1.5.6-pkg.1.1.56")]
+    [InlineData("1.0.0-pkg.1.17.0+account+build.123", "1.0.0-pkg.1.17.0")]
+    [InlineData("1.0.0", "1.0.0")]
+    [InlineData("1", "1")]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    public void CanonicalFullVersion_ShouldStripBuildMetadata(string? version, string expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.CanonicalFullVersion(version);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void CanonicalFullVersion_ShouldGiveSameIdentityToVersionsThatCompareEqual()
+    {
+        // Arrange - build metadata does not affect ordering, so these are the same version and must
+        // therefore canonicalize to a single identity.
+        const string withMetadata = "1.5.6-pkg.1.1.56+core";
+        const string withoutMetadata = "1.5.6-pkg.1.1.56";
+
+        // Act & Assert
+        Assert.Equal(0, InstanceDataVersionComparer.StringVersionComparer.Instance
+            .Compare(withMetadata, withoutMetadata));
+        Assert.Equal(
+            InstanceDataVersionComparer.CanonicalFullVersion(withMetadata),
+            InstanceDataVersionComparer.CanonicalFullVersion(withoutMetadata));
+    }
+
+    [Theory]
+    [InlineData("1.2.3-pkg.1.0.0+account", "1")]
+    [InlineData("12.0.0-pkg.1.0.0+account", "12")]
+    [InlineData("1.0.0-alpha.1-pkg.1.17.0+account", "1")]
+    [InlineData("2.3.5", "2")]
+    [InlineData("1", null)]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    public void GetMajor_ShouldExtractArtifactMajor(string? version, string? expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.GetMajor(version);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("1.2.3-pkg.1.0.0+account", "1.2")]
+    [InlineData("1.20.0-pkg.1.0.0+account", "1.20")]
+    [InlineData("1.0.0-alpha.1-pkg.1.17.0+account", "1.0")]
+    [InlineData("2.3.5", "2.3")]
+    [InlineData("1", null)]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    public void GetMajorMinor_ShouldExtractArtifactMajorMinor(string? version, string? expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.GetMajorMinor(version);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("1.2.3-pkg.1.0.0+account", "1", true)]
+    [InlineData("12.0.0-pkg.1.0.0+account", "1", false)] // must not be a prefix false-positive
+    [InlineData("12.0.0-pkg.1.0.0+account", "12", true)]
+    public void MatchesMajor_ShouldStillAvoidPrefixFalsePositives(string fullVersion, string major, bool expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.MatchesMajor(fullVersion, major);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("1.0.5-pkg.1.0.0+account", "1.0", true)]
+    [InlineData("1.20.0-pkg.1.0.0+account", "1.2", false)] // must not be a prefix false-positive
+    [InlineData("1.2.3-pkg.1.0.0+account", "1.2", true)]
+    public void MatchesPartial_ShouldStillAvoidPrefixFalsePositives(string fullVersion, string partial, bool expected)
+    {
+        // Act
+        var result = InstanceDataVersionComparer.MatchesPartial(fullVersion, partial);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    #endregion
+
+    #region Artifact-Over-Package Priority
+
+    [Fact]
+    public void StringVersionComparer_ShouldRankArtifactVersionAbovePackageVersion()
+    {
+        // Arrange - a lower artifact with a much higher package version must still lose.
+        const string higherArtifactLowerPackage = "1.6.0-pkg.1.0.0+core";
+        const string lowerArtifactHigherPackage = "1.5.0-pkg.9.9.9+core";
+
+        // Act
+        var comparison = InstanceDataVersionComparer.StringVersionComparer.Instance
+            .Compare(higherArtifactLowerPackage, lowerArtifactHigherPackage);
+
+        // Assert
+        Assert.True(comparison > 0);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("latest")]
+    [InlineData(null)]
+    public void FindBestMatch_ShouldPreferHigherArtifactOverHigherPackage(string? requested)
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.5.0-pkg.9.9.9+core",
+            "1.6.0-pkg.1.0.0+core"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, requested);
+
+        // Assert
+        Assert.Equal("1.6.0-pkg.1.0.0+core", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ShouldPreferHighestPackageWithinTheSameArtifact()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.5.0-pkg.2.0.0+core",
+            "1.5.0-pkg.3.0.0+core"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.5.0");
+
+        // Assert
+        Assert.Equal("1.5.0-pkg.3.0.0+core", result);
+    }
+
+    #endregion
+
     private InstanceData CreateInstanceData(string version)
     {
         var instance = InstanceFactory.CreateDefault();
-        return instance.AddDataWithVersion(
+        return instance.SeedDataWithVersion(
             Guid.NewGuid(),
             JsonData.CreateFrom("{}"),
             version

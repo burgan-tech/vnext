@@ -123,6 +123,94 @@ public sealed class DynamicRoleGrantTests
 
     #endregion
 
+    #region Classify
+
+    [Theory]
+    [InlineData("$user.$.context.Instance.Data.ownerId")]
+    [InlineData("$userBehalfOf.$.context.Instance.Data.behalfOfId")]
+    [InlineData("$role.$.context.Transition.Key")]
+    [InlineData("$user.$.context.Instance.Data.assignedUsers[*].userId")]
+    public void Classify_WhenWellFormedDynamicRole_ReturnsWellFormed(string role)
+    {
+        DynamicRoleGrant.Classify(role).ShouldBe(DynamicRoleFormat.WellFormed);
+    }
+
+    [Theory]
+    // Static role names and the four predefined instance roles carry nothing to validate.
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("backoffice.operator")]
+    [InlineData("$InstanceStarter")]
+    [InlineData("$PreviousUser")]
+    [InlineData("$InstanceBehalfOfStarter")]
+    [InlineData("$PreviousBehalfOfUser")]
+    // No trailing dot: not a qualifier prefix, so this is a static role name to the runtime too.
+    [InlineData("$user")]
+    [InlineData("$role")]
+    public void Classify_WhenNotDynamicRole_ReturnsNotDynamic(string? role)
+    {
+        DynamicRoleGrant.Classify(role).ShouldBe(DynamicRoleFormat.NotDynamic);
+    }
+
+    [Theory]
+    [InlineData("$user.customer")]
+    [InlineData("$role.someRole")]
+    [InlineData("$userBehalfOf.")]
+    [InlineData("$user.context.Instance.Data.x")]
+    // Case variants: TryParse compares the "$.context." literal with Ordinal, so the runtime would
+    // treat these as static role names that can never match. Validation must reject them, not accept
+    // them with a looser OrdinalIgnoreCase comparison.
+    [InlineData("$user.$.CONTEXT.Instance.Data.x")]
+    [InlineData("$user.$.Context.Instance.Data.x")]
+    public void Classify_WhenQualifierPresentButContextPrefixMissing_ReturnsMissingContextPrefix(string role)
+    {
+        DynamicRoleGrant.Classify(role).ShouldBe(DynamicRoleFormat.MissingContextPrefix);
+    }
+
+    [Theory]
+    [InlineData("$user.$.context.")]
+    [InlineData("$role.$.context.   ")]
+    [InlineData("$userBehalfOf.$.context.")]
+    public void Classify_WhenNavigationPathEmpty_ReturnsEmptyNavigationPath(string role)
+    {
+        DynamicRoleGrant.Classify(role).ShouldBe(DynamicRoleFormat.EmptyNavigationPath);
+    }
+
+    [Fact]
+    public void Classify_ChecksUserBehalfOfBeforeUser()
+    {
+        // "$userBehalfOf." also starts with "$user", so a naive order would strip the wrong prefix
+        // and leave "BehalfOf.$.context.A", which does not open with "$.context.".
+        DynamicRoleGrant.Classify("$userBehalfOf.$.context.A").ShouldBe(DynamicRoleFormat.WellFormed);
+    }
+
+    /// <summary>
+    /// The invariant that keeps definition-time validation honest: Classify reports WellFormed for
+    /// exactly the inputs TryParse accepts. If this ever fails, the validator is either rejecting
+    /// grants the runtime honors or accepting grants the runtime silently ignores.
+    /// </summary>
+    [Theory]
+    [InlineData("backoffice.operator")]
+    [InlineData("$InstanceStarter")]
+    [InlineData("$user")]
+    [InlineData("$user.customer")]
+    [InlineData("$user.$.context.")]
+    [InlineData("$user.$.Context.Instance.Data.x")]
+    [InlineData("$user.$.context.Instance.Data.x")]
+    [InlineData("$userBehalfOf.$.context.Instance.Data.x")]
+    [InlineData("$role.$.context.Transition.Key")]
+    [InlineData("$userBehalfOf.")]
+    public void Classify_WellFormed_MatchesTryParseExactly(string role)
+    {
+        var wellFormed = DynamicRoleGrant.Classify(role) == DynamicRoleFormat.WellFormed;
+
+        wellFormed.ShouldBe(DynamicRoleGrant.TryParse(role) != null);
+        wellFormed.ShouldBe(DynamicRoleGrant.IsDynamicRole(role));
+    }
+
+    #endregion
+
     #region IsArrayPath
 
     [Fact]

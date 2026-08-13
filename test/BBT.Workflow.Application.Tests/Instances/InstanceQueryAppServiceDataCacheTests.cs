@@ -204,7 +204,8 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         // Field filtering skipped; entry not re-written.
         await _schemaFieldFilterService.DidNotReceive()
             .ApplyAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<System.Text.Json.JsonElement?>(),
-                Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+                Arg.Any<Instance>(), Arg.Any<Authorization.AuthorizationRequestContext?>(),
+                Arg.Any<CancellationToken>());
         await _dataFunctionCache.DidNotReceive()
             .SetAsync(Arg.Any<string>(), Arg.Any<Caching.DataFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
@@ -421,7 +422,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             VersionStrategy.IncreaseMinor.Code);
         instance.ChangeState(state);
         dataId = Guid.NewGuid();
-        instance.AddDataWithVersion(dataId, new JsonData("{\"key\":\"value\"}"), TestVersion);
+        instance.SeedDataWithVersion(dataId, new JsonData("{\"key\":\"value\"}"), TestVersion);
         return instance;
     }
 

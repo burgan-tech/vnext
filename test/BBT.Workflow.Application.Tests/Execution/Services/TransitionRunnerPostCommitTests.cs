@@ -386,7 +386,7 @@ public sealed class TransitionRunnerPostCommitTests
             PostCommitExecutions++;
             PostCommitObservedDisposedStage = StageScopes.Last().IsDisposed && StageScopes.Last().UowDisposed;
             PostCommitObservedReleasedTransitionLock =
-                Volatile.Read(ref _activeTransitionLocks) == 0 && !ChainLockRegistry.IsHeld(source.LockKey);
+                Volatile.Read(ref _activeTransitionLocks) == 0;
             PostCommitStarted.TrySetResult();
             if (PostCommitGate is not null)
                 await PostCommitGate.Task.WaitAsync(cancellationToken);
@@ -418,7 +418,7 @@ public sealed class TransitionRunnerPostCommitTests
                 owner.BusinessCalls.Add(plan.Label);
 
                 var instance = Instance.Create(owner.InstanceId, WorkflowKey, WorkflowVersion, "instance-key");
-                instance.BeginChain(Guid.NewGuid());
+                instance.Busy();
                 var executionContext = new TransitionExecutionContext
                 {
                     Domain = Domain,
@@ -441,8 +441,6 @@ public sealed class TransitionRunnerPostCommitTests
                                  cancellationToken))
                 {
                     transitionLock.IsAcquired.ShouldBeTrue();
-                    ChainLockRegistry.Register(executionContext.LockKey);
-                    ChainLockRegistry.IsHeld(executionContext.LockKey).ShouldBeTrue();
                 }
 
                 if (plan.PostCommitBehavior is { } behavior)
@@ -481,6 +479,12 @@ public sealed class TransitionRunnerPostCommitTests
                 Interlocked.Increment(ref owner._activeTransitionLocks);
                 return Task.FromResult<ITransitionLockScope>(new RecordingTransitionLockScope(owner, lockKey));
             }
+
+            public Task<ITransitionLockScope> AcquireAsync(
+                string lockKey,
+                LockAcquireWait wait,
+                CancellationToken cancellationToken = default)
+                => AcquireAsync(lockKey, cancellationToken);
         }
 
         private sealed class RecordingTransitionLockScope(RunnerHarness owner, string lockKey)

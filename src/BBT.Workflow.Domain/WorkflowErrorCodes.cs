@@ -48,6 +48,9 @@ public static class WorkflowErrorCodes
     public const string TimeoutConfigMissing = "Instance:100029";
     public const string SubflowOutputMappingFailed = "Instance:100030";
     public const string InstanceBusy = "Instance:100031";
+    public const string RelatedInstanceReadFailed = "Instance:100033";
+    public const string InstanceDataLockTimeout = "Instance:100035";
+    public const string InstanceDataWriteTimeout = "Instance:100036";
 
     #endregion
     
@@ -66,6 +69,7 @@ public static class WorkflowErrorCodes
     public const string SharedTransitionNotAvailableInState = "Transition:100021";
     public const string StartTransitionNotFromInitialState = "Transition:100022";
     public const string SharedTransitionTargetMustBeSelfWhenInSubFlow = "Transition:100023";
+    public const string WellKnownTransitionNotAvailableInState = "Transition:100024";
 
     #endregion
     
@@ -130,6 +134,18 @@ public static class WorkflowErrorCodes
     
     public const string FunctionNotInWorkflow = "Function:800001";
     public const string FunctionScopeNotSatisfied = "Function:800002";
+
+    /// <summary>The function does not declare support for the request's HTTP verb. Maps to HTTP 405.</summary>
+    public const string FunctionVerbNotAllowed = "Function:800003";
+
+    /// <summary>
+    /// The requested contract slot resolved to nothing: the function declares no view/schema for it, or
+    /// every declared entry carried a rule and none matched this request. Maps to HTTP 404.
+    /// </summary>
+    public const string FunctionContractNotResolved = "Function:800004";
+
+    /// <summary>The <c>target</c> query value is neither <c>input</c> nor <c>output</c>. Maps to HTTP 400.</summary>
+    public const string FunctionContractTargetInvalid = "Function:800005";
 
     #endregion
 

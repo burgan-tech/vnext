@@ -4,8 +4,8 @@ using System.Text.Json.Serialization;
 namespace BBT.Workflow;
 
 /// <summary>
-/// Custom JSON converter for ViewDefinition that supports both old "view" format and new "views" array format.
-/// This ensures backward compatibility with existing workflows.
+/// Custom JSON converter for ViewDefinition that supports the single "view" format, the "views" array
+/// format, and a bare component reference. This ensures backward compatibility with existing workflows.
 /// The converter reads the JSON object and passes it to ViewDefinition's JsonConstructor which handles both formats.
 /// </summary>
 public sealed class ViewDefinitionJsonConverter : JsonConverter<ViewDefinition>
@@ -58,6 +58,14 @@ public sealed class ViewDefinitionJsonConverter : JsonConverter<ViewDefinition>
                     loadData = loadDataElement.GetBoolean();
                     
                 return ViewDefinition.CreateDefault(viewRef, extensions, loadData);
+            }
+
+            // Bare component reference (the shape function contract slots are authored in):
+            // { "key": ..., "domain": ..., "flow": "sys-views", "version": ... }
+            if (ContractDefinitionJsonReader.IsBareReference(root))
+            {
+                var bareRef = ContractDefinitionJsonReader.ReadReference(root, options);
+                return bareRef == null ? null : ViewDefinition.CreateDefault(bareRef);
             }
 
             // Empty object - return null

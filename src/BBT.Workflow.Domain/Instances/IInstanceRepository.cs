@@ -25,6 +25,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Loads several instances by id for read-only projection, including only their data rows.
+    /// Unlike <see cref="FindByIdentifierAsReadOnlyAsync"/> this omits the ChildCorrelations include,
+    /// because callers of this method never read correlations. Ids with no matching row are omitted.
+    /// </summary>
+    Task<List<Instance>> FindByIdsAsReadOnlyAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds an instance by its identifier (GUID or key) without loading DataList.
     /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
     /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.
@@ -39,6 +48,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// Returns null when no instance matches.
     /// </summary>
     Task<InstanceStateFingerprint?> GetStateFingerprintAsync(string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Projects the execution-admission snapshot (status, chain token, current state) for the
+    /// instance matching the identifier (GUID or key) in a single projection query — no includes,
+    /// no aggregate materialization. Used by the Busy pre-check and the reserve re-check under the
+    /// status lock. Identifier resolution mirrors <see cref="GetStateFingerprintAsync"/>
+    /// (id first, then most recent row by key). Returns null when no instance matches.
+    /// </summary>
+    Task<InstanceExecutionSnapshot?> GetExecutionSnapshotAsync(string identifier,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -242,26 +261,6 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     /// <summary>Read-only: per-current-state count of faulted instances in the current schema (additive, monitor-only).</summary>
     Task<List<StateCountStat>> GetFaultStateCountsAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns Busy instances that own an auto-chain token whose heartbeat is older than
-    /// <paramref name="olderThanUtc"/> — candidates for the stuck-Busy reaper (S7).
-    /// Scoped to the current schema; the reaper sweeps schemas it is invoked for.
-    /// </summary>
-    /// <param name="olderThanUtc">Heartbeat staleness threshold (UTC).</param>
-    /// <param name="maxCount">Maximum number of candidates to return per sweep.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<List<Instance>> GetStuckBusyChainsAsync(
-        DateTime olderThanUtc, int maxCount, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns the distinct flow keys registered as definitions in the <c>sys_flows</c> schema.
-    /// Each flow key maps to its own runtime-created database schema. Used by background sweeps
-    /// (e.g. the stuck-Busy chain reaper) to enumerate the per-flow schemas to scan, since a
-    /// hosted service has no request-scoped <c>ICurrentSchema</c> and the real instances live in
-    /// the per-flow schemas — not in any single ambient/default schema.
-    /// </summary>
-    Task<IReadOnlyList<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns a paged list of active-instance + data pairs projected to a slim summary,

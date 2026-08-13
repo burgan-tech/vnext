@@ -23,6 +23,35 @@ namespace BBT.Workflow.Authorization;
 public interface ITransitionAuthorizationManager
 {
     /// <summary>
+    /// Creates a batch-scoped <see cref="IRoleGrantEvaluator"/>: performs the instance-bound prefetch once,
+    /// then evaluates any number of grant sets synchronously. Use this instead of calling the per-check
+    /// methods in a loop whenever many grant sets are evaluated for the same instance — schema field paths,
+    /// the transitions available from a state, the instances of a list.
+    /// </summary>
+    /// <param name="instance">
+    /// The instance predefined and dynamic grants resolve against. When null the evaluator degrades to
+    /// static comparison only.
+    /// </param>
+    /// <param name="workflow">Optional workflow supplying the <c>$.context.Workflow.*</c> namespace.</param>
+    /// <param name="requestContext">
+    /// Optional request context supplying the <c>$.context.Headers.*</c>, <c>$.context.QueryParameters.*</c>
+    /// and <c>$.context.RouteValues.*</c> namespaces. Omitting it makes those namespaces empty, so dynamic
+    /// grants that reference them can never match.
+    /// </param>
+    /// <param name="grantsForPrefetchHint">
+    /// Every grant the returned evaluator will be asked about. Only used to decide whether the previous
+    /// manual transition must be loaded, so it must cover the whole batch: a <c>$PreviousUser</c> or
+    /// <c>$PreviousBehalfOfUser</c> grant that is evaluated but was not in the hint can never match.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IRoleGrantEvaluator> CreateEvaluatorAsync(
+        Instance? instance,
+        WorkflowDefinition? workflow,
+        AuthorizationRequestContext? requestContext,
+        IEnumerable<RoleGrant> grantsForPrefetchHint,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Evaluates whether the given role is allowed for the transition using transition.Roles.
     /// When instance is present, predefined and dynamic role grants are resolved and matched against current user.
     /// When role is null, only predefined/dynamic role grants are evaluated; regular role grants yield no match.
@@ -32,11 +61,43 @@ public interface ITransitionAuthorizationManager
     /// <param name="transition">The transition whose Roles are evaluated (provides Transition context for dynamic role evaluation).</param>
     /// <param name="instance">Optional instance for resolving predefined and dynamic roles.</param>
     /// <param name="role">The caller's role to check. Null is allowed; predefined/dynamic roles are still evaluated.</param>
+    /// <param name="requestContext">Optional request context for <c>$.context.Headers/QueryParameters/RouteValues</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>True if the role is allowed for the transition; false otherwise.</returns>
     Task<bool> IsTransitionAllowedForRoleAsync(
         WorkflowDefinition workflow,
         Transition transition,
+        Instance? instance,
+        string? role,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates a transition for a caller <b>in a specific state</b>: the state must be offered by the
+    /// transition's <c>availableIn</c>, and both the transition's own grants and any grants the matching
+    /// <c>availableIn</c> entry adds for that state must allow the caller (AND).
+    /// <para>
+    /// This is the state-aware counterpart to <see cref="IsTransitionAllowedForRoleAsync"/> and should be
+    /// preferred wherever the instance's current state is known, so that the discovery surface
+    /// (<c>availableTransitions</c>) and the <c>authorize</c> function cannot disagree about the same
+    /// transition.
+    /// </para>
+    /// </summary>
+    /// <param name="workflow">The workflow definition (provides the <c>$.context.Workflow.*</c> namespace).</param>
+    /// <param name="transition">The transition being evaluated.</param>
+    /// <param name="currentStateKey">
+    /// The instance's current state key. Null or empty means "no state in scope": the state gate and any
+    /// per-state narrowing are skipped and only <c>transition.Roles</c> is evaluated.
+    /// </param>
+    /// <param name="instance">Optional instance for resolving predefined and dynamic roles.</param>
+    /// <param name="role">The caller's role to check. Null is allowed; predefined/dynamic grants still apply.</param>
+    /// <param name="requestContext">Optional request context for <c>$.context.Headers/QueryParameters/RouteValues</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when the transition is available in the state and both grant levels allow the caller.</returns>
+    Task<bool> IsTransitionAllowedInStateAsync(
+        WorkflowDefinition workflow,
+        Transition transition,
+        string? currentStateKey,
         Instance? instance,
         string? role,
         AuthorizationRequestContext? requestContext = null,
@@ -52,6 +113,12 @@ public interface ITransitionAuthorizationManager
     /// <param name="instance">Optional instance for predefined and dynamic role resolution.</param>
     /// <param name="transitionKeys">Candidate transition keys to filter.</param>
     /// <param name="role">The caller's role. Null is allowed; predefined/dynamic roles are still evaluated.</param>
+    /// <param name="requestContext">
+    /// Optional request context for <c>$.context.Headers/QueryParameters/RouteValues</c>. Pass the same context
+    /// the <c>authorize</c> function passes, otherwise those namespaces are empty here, a transition guarded by
+    /// a dynamic grant reading them silently never matches, and discovery drops a transition that
+    /// <c>authorize</c> reports as allowed.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of transition keys that are allowed for the role.</returns>
     Task<IReadOnlyList<string>> FilterAuthorizedTransitionKeysAsync(
@@ -60,6 +127,7 @@ public interface ITransitionAuthorizationManager
         Instance? instance,
         IReadOnlyList<string> transitionKeys,
         string? role,
+        AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -100,37 +168,4 @@ public interface ITransitionAuthorizationManager
         IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Builds the effective caller roles list for schema field-level visibility.
-    /// Returns static roles (ICurrentUser.Roles); when instance is present, adds applicable predefined roles:
-    /// <c>$InstanceStarter</c>, <c>$PreviousUser</c> (matched via ActorUserName),
-    /// <c>$InstanceBehalfOfStarter</c>, <c>$PreviousBehalfOfUser</c> (matched via UserName).
-    /// </summary>
-    /// <param name="instance">Optional instance for resolving predefined roles.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>List of role strings to use when evaluating schema path visibility.</returns>
-    Task<IReadOnlyList<string>> GetEffectiveCallerRolesForFieldVisibilityAsync(
-        Instance? instance,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Checks whether the current user matches any predefined role ($InstanceStarter, $PreviousUser)
-    /// in the given role grants. Only evaluates predefined roles; static roles are ignored.
-    /// DENY always wins. If at least one ALLOW grant exists, this is an allowlist (default deny).
-    /// A grant set with no ALLOW grant is a blacklist (default allow unless a matching DENY applies),
-    /// controlled by <paramref name="defaultAllowWhenNoAllowGrant"/>.
-    /// </summary>
-    /// <param name="roleGrants">The grant set to evaluate (predefined roles only).</param>
-    /// <param name="instance">The instance used to resolve predefined roles.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <param name="defaultAllowWhenNoAllowGrant">
-    /// When true (default), a grant set with no ALLOW grant allows callers that are not explicitly denied.
-    /// Set to false to force strict allowlist semantics (used when the blacklist decision is made over a wider grant set).
-    /// </param>
-    Task<bool> IsPredefinedRoleMatchAsync(
-        IReadOnlyCollection<RoleGrant> roleGrants,
-        Instance instance,
-        CancellationToken cancellationToken = default,
-        bool defaultAllowWhenNoAllowGrant = true);
 }

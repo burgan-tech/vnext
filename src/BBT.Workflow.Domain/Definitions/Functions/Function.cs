@@ -23,7 +23,8 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         ScriptCode? output = null,
         List<RoleGrant>? roles = null,
         bool rawResponse = false,
-        FunctionCache? cache = null
+        FunctionCache? cache = null,
+        List<string>? verbs = null
     ) : this()
     {
         Scope = scope;
@@ -33,6 +34,7 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         this.roles = roles ?? [];
         RawResponse = rawResponse;
         Cache = cache;
+        this.verbs = NormalizeVerbs(verbs);
     }
 
     /// <summary>
@@ -91,6 +93,69 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     [JsonInclude] [JsonPropertyName("cache")]
     public FunctionCache? Cache { get; private set; }
 
+    [JsonInclude] [JsonPropertyName("verbs")]
+    private List<string> verbs = [];
+
+    /// <summary>
+    /// HTTP verbs this function supports, normalized to upper case.
+    /// Empty means no verb restriction is applied, preserving the behaviour of definitions authored
+    /// before verb declaration existed. Well-known values are defined in <see cref="FunctionVerb"/>.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyCollection<string> Verbs => verbs.AsReadOnly();
+
+    /// <summary>
+    /// Optional <c>sys-schemas</c> contract describing this function's request body. When set, the
+    /// runtime validates the request body against the winning entry before executing any task.
+    /// Authored either as a single component reference or as rule-based entries evaluated in
+    /// declaration order (first match wins, a trailing rule-less entry is the fallback).
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("inputSchema")]
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    public SchemaSelection?InputSchema { get; private set; }
+
+    /// <summary>
+    /// Optional <c>sys-schemas</c> contract describing this function's response body.
+    /// Declarative only - the runtime does not validate responses against it.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("outputSchema")]
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    public SchemaSelection?OutputSchema { get; private set; }
+
+    /// <summary>
+    /// Optional <c>sys-views</c> contract the client renders to collect this function's input.
+    /// Supports the same single-reference and rule-based forms as <see cref="InputSchema"/>.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("inputView")]
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
+    public ViewDefinition? InputView { get; private set; }
+
+    /// <summary>
+    /// Optional <c>sys-views</c> contract the client renders to present this function's output.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("outputView")]
+    [JsonConverter(typeof(ViewDefinitionJsonConverter))]
+    public ViewDefinition? OutputView { get; private set; }
+
+    /// <summary>
+    /// True when the function declares at least one input schema entry. A definition whose entries all
+    /// carry rules can still resolve to no schema at request time; this only reports the declaration.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasInputSchema => InputSchema is { Schemas.Count: > 0 };
+
+    /// <summary>True when the function declares at least one output schema entry.</summary>
+    [JsonIgnore]
+    public bool HasOutputSchema => OutputSchema is { Schemas.Count: > 0 };
+
+    /// <summary>True when the function declares at least one input view entry.</summary>
+    [JsonIgnore]
+    public bool HasInputView => InputView is { Views.Count: > 0 };
+
+    /// <summary>True when the function declares at least one output view entry.</summary>
+    [JsonIgnore]
+    public bool HasOutputView => OutputView is { Views.Count: > 0 };
+
     [JsonInclude] [JsonPropertyName("roles")]
     private List<RoleGrant> roles = new();
 
@@ -120,6 +185,36 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
 
     public List<OnExecuteTask> GetExecuteTasks() =>
         onExecutionTasks.Count > 0 ? onExecutionTasks : [Task!];
+
+    /// <summary>
+    /// True when this function accepts the given HTTP verb. A function that declares no verbs
+    /// accepts every verb, so existing definitions keep their current behaviour.
+    /// </summary>
+    /// <param name="httpMethod">The incoming HTTP method. A null or blank value is treated as unrestricted.</param>
+    public bool SupportsVerb(string? httpMethod)
+    {
+        if (verbs.Count == 0 || string.IsNullOrWhiteSpace(httpMethod))
+            return true;
+
+        var normalized = FunctionVerb.Normalize(httpMethod);
+        return verbs.Contains(normalized, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Trims, upper-cases and de-duplicates authored verbs so comparison and the <c>Allow</c> header
+    /// are stable regardless of how the component JSON was written.
+    /// </summary>
+    private static List<string> NormalizeVerbs(List<string>? authored)
+    {
+        if (authored is null || authored.Count == 0)
+            return [];
+
+        return authored
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(FunctionVerb.Normalize)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
 
     public void SetReference(IReference reference)
     {

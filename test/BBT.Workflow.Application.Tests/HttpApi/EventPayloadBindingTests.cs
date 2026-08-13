@@ -8,6 +8,7 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Related;
 using BBT.Workflow.Orchestration.Controllers.Instances;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Http;
@@ -113,7 +114,9 @@ public sealed class EventPayloadBindingTests
             childSubflowFaultService: Substitute.For<IChildSubflowFaultService>(),
             transitionJobEnqueuer: Substitute.For<ITransitionJobEnqueuer>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
-            eventAppService: Substitute.For<IEventAppService>());
+            eventAppService: Substitute.For<IEventAppService>(),
+            relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
+            currentUser: Substitute.For<BBT.Aether.Users.ICurrentUser>());
 
         // AetherControllerBase resolves its Logger through the request services.
         var services = new ServiceCollection();

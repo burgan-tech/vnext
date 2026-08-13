@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Shared.Merging;
 using Microsoft.Extensions.Logging;
 
@@ -200,6 +201,13 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 RouteValues = null;
                 CurrentTransition = null;
                 Incident = null;
+
+                // Backing field, not the property: the property getter throws once disposed, and
+                // Dispose must stay callable twice.
+                if (_related is RelatedInstanceAccessor accessor)
+                    accessor.ClearMemo();
+
+                _related = NullRelatedInstanceAccessor.Instance;
             }
             catch (InvalidOperationException ex)
             {
@@ -358,6 +366,39 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// Null when no instance is loaded in the script context.
     /// </value>
     public ScriptIncidentInfo? Incident { get; private set; }
+
+    /// <summary>
+    /// Access to instances related to <see cref="Instance"/> — one hop up (the parent that started this
+    /// instance as a SubFlow/SubProcess) or one hop down (this instance's own correlations).
+    /// Nothing is pre-fetched; the first call that needs data performs the read, and results are
+    /// memoized until this context is disposed.
+    /// </summary>
+    /// <remarks>
+    /// Reads are unfiltered by design (no query-role check, no x-roles field filtering, no extensions).
+    /// Copying a related instance's field into this instance's data therefore makes that field reachable
+    /// by any client entitled to read this instance — x-roles protection does not follow the copy, so
+    /// copy only the fields you intend to expose. Every cross-domain read is logged
+    /// (<c>RelatedInstanceCrossDomainRead</c>, event id 20432) by the infrastructure-layer routed
+    /// reader, identifying the target instance being read — not this instance — since the router only
+    /// ever sees the target's reference, never the caller's.
+    /// Never null: defaults to <see cref="NullRelatedInstanceAccessor"/> when no reader is wired.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The context has been disposed.</exception>
+    public IRelatedInstanceAccessor Related
+    {
+        get
+        {
+            // Deliberately guarded, unlike Body/Incident which merely go null. Those are nullable
+            // values; this is an accessor whose contract is "null means no parent". Handing back the
+            // null accessor after disposal would answer HasParent == false — a definite claim, not an
+            // absence.
+            ThrowIfDisposed();
+            return _related;
+        }
+        private set => _related = value;
+    }
+
+    private IRelatedInstanceAccessor _related = NullRelatedInstanceAccessor.Instance;
 
     /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
@@ -643,6 +684,15 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         if (Mutations.HasStageChange)
             branch.Mutations.SetStage(Mutations.Stage);
 
+        // A real accessor is bound to a specific instance, so a branch without one must not inherit
+        // it — that would answer the branch's questions from the coordinator's instance.
+        if (Related is RelatedInstanceAccessor branchSource && branch.Instance != null)
+            branch.Related = branchSource.ForBranch(branch.Instance);
+        else if (Related is RelatedInstanceAccessor && branch.Instance == null)
+            branch.Related = NullRelatedInstanceAccessor.Instance;
+        else
+            branch.Related = Related;
+
         return branch;
     }
 
@@ -666,9 +716,17 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             Mutations.SetStage(branch.Mutations.Stage);
         }
 
+        // The branch's task outputs were persisted IMMEDIATELY by the InstanceData write
+        // service (row identity computed under the row lock); nothing is re-appended here.
+        // Only sync this context's snapshot with the branch's freshest persisted row so
+        // later tasks and rules read the merged content.
         var branchData = branch.Instance?.LatestData;
-        if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id)
-            Instance.AddData(Guid.NewGuid(), branchData.Data, VersionStrategy.IncreasePatch);
+        if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id
+            && InstanceDataVersionComparer.CompareVersionStrings(
+                branchData.Version, Instance.LatestData?.Version ?? string.Empty) >= 0)
+        {
+            Instance.AcceptPersistedData(branchData.CreateSnapshot());
+        }
     }
 
     private void MergeDictionary(
@@ -789,6 +847,18 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 ActiveIncident = instance.Incidents.LastOrDefault(i => !i.IsResolved),
                 TotalIncidentCount = instance.Incidents.Count
             };
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the related-instance accessor. When omitted, the context uses
+        /// <see cref="NullRelatedInstanceAccessor"/> and reports no parent and no correlations.
+        /// </summary>
+        public Builder SetRelated(IRelatedInstanceAccessor? related)
+        {
+            if (related != null)
+                _context.Related = related;
+
             return this;
         }
 

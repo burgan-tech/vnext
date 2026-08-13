@@ -126,7 +126,7 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
     public void VaryKey_InstanceVaryBy_OverridesConfig_AndIgnoresOtherHeaders()
     {
         var instance = Instance.Create(Guid.NewGuid(), "flow", "1.0", "k");
-        instance.AddData(Guid.NewGuid(), new JsonData("""{ "varyBy": ["x-param-userroles"] }"""));
+        instance.SeedData(Guid.NewGuid(), new JsonData("""{ "varyBy": ["x-param-userroles"] }"""));
 
         var script = ScriptCode.FromNative("varyKey(context)", ConditionScriptLocations.DynamicExpresso);
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)

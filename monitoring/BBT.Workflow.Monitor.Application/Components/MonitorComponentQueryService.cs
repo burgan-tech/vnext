@@ -558,7 +558,7 @@ public sealed class MonitorComponentQueryService(
                      : (JsonElement?)null;
 
         string? scope    = el.TryGetProperty("scope",    out var scopeEl)    && scopeEl.ValueKind    == JsonValueKind.String ? scopeEl.GetString()    : null;
-        string? display  = el.TryGetProperty("display",  out var displayEl)  && displayEl.ValueKind  == JsonValueKind.String ? displayEl.GetString()  : null;
+        string? display  = ExtractSdiDisplay(el);
         string? renderer = el.TryGetProperty("renderer", out var rendererEl) && rendererEl.ValueKind == JsonValueKind.String ? rendererEl.GetString() : null;
         string? name     = el.TryGetProperty("name",     out var nameEl)     && nameEl.ValueKind     == JsonValueKind.String ? nameEl.GetString()     : null;
         return new MonitorComponentSummaryItem
@@ -577,6 +577,25 @@ public sealed class MonitorComponentQueryService(
             Name        = componentType == MonitorComponentTypes.Mappings ? name : null,
             CreatedAt   = createdAt,
             ModifiedAt  = modifiedAt
+        };
+    }
+
+    /// <summary>
+    /// Reads the view's SDI display value. Views author <c>display</c> either as a bare string
+    /// (legacy, SDI-only) or as <c>{ "sdi": "...", "mdi": "..." }</c>; both shapes project to the
+    /// same summary field so existing display filters keep matching.
+    /// </summary>
+    private static string? ExtractSdiDisplay(JsonElement el)
+    {
+        if (!el.TryGetProperty("display", out var displayEl))
+            return null;
+
+        return displayEl.ValueKind switch
+        {
+            JsonValueKind.String => displayEl.GetString(),
+            JsonValueKind.Object when displayEl.TryGetProperty("sdi", out var sdiEl)
+                                      && sdiEl.ValueKind == JsonValueKind.String => sdiEl.GetString(),
+            _ => null
         };
     }
 

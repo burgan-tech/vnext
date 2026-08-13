@@ -1,7 +1,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: vnext-execution-config
+  name: vnext-config
 spec:
   type: configuration.redis
   metadata:

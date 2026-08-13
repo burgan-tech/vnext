@@ -62,21 +62,6 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
-            // Durable auto-chain ownership token (S6). Nullable; filtered by the chain-token gate.
-            b.Property(p => p.ChainToken);
-            b.HasIndex(p => p.ChainToken)
-                .HasDatabaseName("IX_Instances_ChainToken")
-                .HasFilter("\"ChainToken\" IS NOT NULL");
-
-            // Auto-chain heartbeat (S7) — drives the stuck-Busy reaper sweep.
-            b.Property(p => p.ChainHeartbeatAt);
-            b.HasIndex(p => p.ChainHeartbeatAt)
-                .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
-                .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
-
-            // Durable resume point for crash-resume (S8).
-            b.Property(p => p.ResumePointStepOrder);
-
             // Long-poll acknowledge marker (declarative long-poll termination on state entry).
             b.Property(p => p.LongPollAckToken);
             b.HasIndex(p => p.LongPollAckToken)
@@ -224,6 +209,12 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ActiveBlockingSubFlow")
                 .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
 
+            // Unfiltered counterpart for the reads that must see completed rows too: GetByParentAsync
+            // (state-function correlation list, hierarchy tree, monitor) and the correlation aggregates
+            // in ProjectStateFingerprint. Neither partial index above can serve those — both exclude
+            // exactly the completed rows these reads are after.
+            b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ByParent");
+
             // SubFlowInstanceId is 1-1 with the started SubFlow instance (subflow start is
             // unique per parent state). UNIQUE both enforces this invariant and gives the
             // hot SubFlow-completion lookup (FindBySubInstanceIdAsync) a direct B-tree probe.
@@ -240,10 +231,6 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.Version)
                 .IsRequired()
                 .HasMaxLength(WorkflowConstants.MaxVersionLength);
-
-            b.Property(p => p.HistorySequence)
-                .IsRequired()
-                .HasDefaultValue(0);
 
             b.Property(p => p.VersionNo)
                 .IsRequired()
@@ -272,10 +259,11 @@ public static class InstancesModelCreatingExtensions
 
             b.HasIndex(p => p.InstanceId);
 
-            // Unique index: Instance-based VersionNo (for concurrency control)
-            b.HasIndex(p => new { p.InstanceId, p.VersionNo })
+            // Unique index: line-scoped VersionNo — the ordinal is unique WITHIN one semantic
+            // Version string of an instance (each version line restarts at 1).
+            b.HasIndex(p => new { p.InstanceId, p.Version, p.VersionNo })
                 .IsUnique()
-                .HasDatabaseName("UX_InstancesData_Instance_VersionNo");
+                .HasDatabaseName("UX_InstancesData_Instance_Version_VersionNo");
 
             // Partial unique index: Only one record per instance can have IsLatest = true.
             // INCLUDE adds the meta columns the runtime reads alongside the latest snapshot
@@ -289,7 +277,6 @@ public static class InstancesModelCreatingExtensions
                 {
                     p.Version,
                     p.VersionNo,
-                    p.HistorySequence,
                     p.ETag,
                     p.DataHash,
                     p.EnteredAt
@@ -480,11 +467,11 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(i => i.JobId)
                 .IsUnique();
 
-            // Partial composite index for the three hot-path queries that filter by
-            // InstanceId + JobName + IsActive (GetListActiveAsync, MarkAsProcessedAsync,
-            // AnyActiveByJobNameAsync). Active jobs are a small subset per instance, so
-            // the partial filter keeps the index compact while covering all three patterns
-            // via the (InstanceId, JobName) leftmost prefix.
+            // Partial composite index for the hot-path queries that filter by InstanceId +
+            // IsActive: GetListActiveAsync, MarkAsProcessedAsync and AnyActiveTransitionJobAsync
+            // (which narrows further on the structured JobType/SourceState/TransitionKey columns —
+            // covered by the leftmost InstanceId prefix, and active jobs are a small subset per
+            // instance so the residual filter is cheap). The partial filter keeps it compact.
             b.HasIndex(i => new { i.InstanceId, i.JobName })
                 .HasFilter("\"IsActive\" = true")
                 .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");

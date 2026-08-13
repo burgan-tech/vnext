@@ -18,6 +18,7 @@ public interface IFunctionAppService : IApplicationService
     /// <param name="version">Request Version</param>
     /// <param name="headers">Request Headers</param>
     /// <param name="queryParameters">Request Query Params</param>
+    /// <param name="httpMethod">Request HTTP method, checked against the function's declared verbs. Null skips the check.</param>
     /// <param name="cancellationToken">Cancellation Token</param>
     Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
         string key,
@@ -26,6 +27,7 @@ public interface IFunctionAppService : IApplicationService
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         JsonElement? body = null,
+        string? httpMethod = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -37,6 +39,7 @@ public interface IFunctionAppService : IApplicationService
     /// <param name="instance">Instance Identifier</param>
     /// <param name="headers">Request Headers</param>
     /// <param name="queryParameters">Request Query Params</param>
+    /// <param name="httpMethod">Request HTTP method, checked against the function's declared verbs. Null skips the check.</param>
     /// <param name="cancellationToken">Cancellation Token</param>
     Task<Result<FunctionResponseOutput>> GetFunctionByInstanceAsync(
         string key,
@@ -46,6 +49,7 @@ public interface IFunctionAppService : IApplicationService
         Dictionary<string, string?>? headers = null,
         Dictionary<string, string?>? queryParameters = null,
         JsonElement? body = null,
+        string? httpMethod = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

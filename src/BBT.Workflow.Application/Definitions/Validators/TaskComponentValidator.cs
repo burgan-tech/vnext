@@ -42,6 +42,21 @@ public sealed class TaskComponentValidator : IComponentValidator
                 }
             }
 
+            // CacheAside is the only task type whose own config carries script slots; every other task
+            // gets its mapping from the OnExecuteTask that references it, validated with the flow.
+            if (task is CacheAsideTask cacheAside)
+            {
+                ScriptCodeValidator.Validate(
+                    cacheAside.SourceMapping,
+                    $"{nameof(CacheAsideTask)}.{nameof(CacheAsideTask.SourceMapping)}",
+                    result.ValidationErrors);
+
+                ScriptCodeValidator.Validate(
+                    cacheAside.KeyExpression,
+                    $"{nameof(CacheAsideTask)}.{nameof(CacheAsideTask.KeyExpression)}",
+                    result.ValidationErrors);
+            }
+
             return result;
         }
         catch (JsonException ex)

@@ -25,7 +25,6 @@ public sealed class TransitionExecutor
 {
     private readonly IReadOnlyList<ITransitionStep> _steps;
     private readonly ILogger<TransitionExecutor> _logger;
-
     /// <summary>
     /// Initializes a new instance of the <see cref="TransitionExecutor"/>.
     /// </summary>
@@ -52,12 +51,6 @@ public sealed class TransitionExecutor
     {
         EnrichTelemetry(context);
 
-        // S8 crash-resume: if a durable resume point survived (set by per-transition checkpointing),
-        // restart from the next step rather than the beginning. Already-committed remote task
-        // journal rows are bypassed downstream, avoiding duplicate irreversible side effects.
-        if (context.Instance.ResumePointStepOrder is { } resumeOrder && context.Directives.ResumeFromOrder is null)
-            context.Directives.RequestResumeFrom(resumeOrder + 1);
-
         var profile = context.Profile ?? PipelineExecutionProfile.ForManual();
         var state = CreateInitialState(context, profile);
 
@@ -77,20 +70,6 @@ public sealed class TransitionExecutor
                         return Result.Fail(stepResult.Error);
 
                     var flowControl = DetermineFlowControl(stepResult.Value!, state.CurrentStep, context, state);
-
-                    // S8 checkpoint: record the last successfully completed step so a crash /
-                    // retry / job-redelivery of the SAME transition resumes from the next step
-                    // instead of the top (see the resume read above). The value rides the next
-                    // step's own SaveChanges — zero extra round trips. Never advanced at or
-                    // after Finalize: FinalizeTransitionStep clears the checkpoint, and a later
-                    // set (e.g. ResolveAvailable) would leak it into the next transition.
-                    // The heartbeat touch keeps the chain reaper's staleness window measured
-                    // from live progress rather than chain start.
-                    if (state.CurrentStep.Order < LifecycleOrder.Finalize)
-                    {
-                        context.Instance.SetResumePoint(state.CurrentStep.Order);
-                        context.Instance.TouchChainHeartbeat();
-                    }
 
                     if (flowControl.ShouldStop)
                         break;
@@ -176,6 +155,8 @@ public sealed class TransitionExecutor
         activity.SetTag(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
         activity.SetTag(TelemetryConstants.TagNames.TransitionKey, context.TransitionKey);
+        activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         if (context.Transition != null)
         {
             activity.SetTag(TelemetryConstants.TagNames.TriggerType, context.Transition.TriggerType.ToString());

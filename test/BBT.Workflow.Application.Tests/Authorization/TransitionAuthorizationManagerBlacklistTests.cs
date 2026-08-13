@@ -107,7 +107,7 @@ public sealed class TransitionAuthorizationManagerBlacklistTests
         (await _sut.IsRoleAllowedForGrantsAsync("someone-else", grants, NewInstance())).ShouldBeFalse();
     }
 
-    // ── IsPredefinedRoleMatchAsync (predefined-only path) ────────────────────────
+    // ── Predefined-only grant sets (blacklist semantics via the shared evaluator) ─
 
     [Fact]
     public async Task Predefined_DenyOnly_AllowsCallerNotDenied()
@@ -115,16 +115,16 @@ public sealed class TransitionAuthorizationManagerBlacklistTests
         _currentUser.ActorUserName.Returns("actor");
         var instance = NewInstance(); // CreatedBy is not "actor" → $InstanceStarter deny does not match
         var grants = Grants($$"""[{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]""");
-        (await _sut.IsPredefinedRoleMatchAsync(grants, instance)).ShouldBeTrue();
+        (await _sut.IsRoleAllowedForGrantsAsync("teller", grants, instance)).ShouldBeTrue();
     }
 
     [Fact]
-    public async Task Predefined_DenyOnly_StrictFlag_DeniesUnmatched()
+    public async Task Predefined_DenyOnly_DeniesMatchingStarter()
     {
-        _currentUser.ActorUserName.Returns("actor");
         var instance = NewInstance();
+        instance.CreatedBy = "actor";
+        _currentUser.ActorUserName.Returns("actor");
         var grants = Grants($$"""[{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]""");
-        (await _sut.IsPredefinedRoleMatchAsync(grants, instance, CancellationToken.None,
-            defaultAllowWhenNoAllowGrant: false)).ShouldBeFalse();
+        (await _sut.IsRoleAllowedForGrantsAsync("teller", grants, instance)).ShouldBeFalse();
     }
 }

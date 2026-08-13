@@ -3,6 +3,7 @@ using BBT.Aether.Aspects;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -11,6 +12,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
@@ -44,7 +46,7 @@ public sealed class AsyncTransitionStrategy(
     IReservedTransitionResolver reservedTransitionResolver,
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
-    IInstanceBusyManager instanceBusyManager,
+    ITransitionAdmissionService admissionService,
     ITransitionEnqueueGateway enqueueGateway,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
@@ -112,11 +114,15 @@ public sealed class AsyncTransitionStrategy(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        // Source-state key scopes the job name (see JobName). Must match the value used when the job
-        // is persisted in EnqueueAndSaveJobAsync so the AnyActiveByJobNameAsync guard below lines up.
+        // One id, one name, built ONCE here: the job name is unique per enqueue (see JobName), so
+        // rebuilding it downstream would produce a different string than the row and the scheduler
+        // entry. The active-job guard below matches the LOGICAL identity instead (structured
+        // columns), which is what "a job for this transition is already queued" actually means.
+        var jobId = Guid.NewGuid();
+        var sourceStateKey = ctx.Current?.Key ?? string.Empty;
         var jobName = JobName.ForAsyncTransition(
-            Guid.Parse(context.InstanceId), ctx.Current?.Key ?? string.Empty, context.TransitionKey).Value;
-        EnrichTelemetry(activity, ctx, jobName);
+            ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId);
+        EnrichTelemetry(activity, ctx, jobName.Value);
 
         Result<TransitionExecutionContext> lockScopeResult =
             Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
@@ -135,51 +141,66 @@ public sealed class AsyncTransitionStrategy(
             lockKey,
             async () =>
             {
-                if (await jobRepository.AnyActiveByJobNameAsync(ctx.InstanceId, jobName, cancellationToken))
+                if (await jobRepository.AnyActiveTransitionJobAsync(
+                        ctx.InstanceId,
+                        JobType.AsyncTransition,
+                        jobName.SourceState,
+                        ctx.TransitionKey,
+                        cancellationToken))
                 {
-                    logger.TransitionJobAlreadyQueued(jobName, ctx.InstanceId, ctx.TransitionKey);
+                    logger.TransitionJobAlreadyQueued(jobName.Value, ctx.InstanceId, ctx.TransitionKey);
                     lockScopeResult = Result<TransitionExecutionContext>.Fail(
                         WorkflowErrors.TransitionJobAlreadyActive(ctx.InstanceId, ctx.TransitionKey));
                     return;
                 }
 
-                if (!ctx.Directives.IsInternalResume)
+                var reserved = false;
+
+                // Busy-as-mutex accept: Normal requests reserve the instance NOW (Busy under
+                // the short status lock) so a competing request gets 409 immediately; the job
+                // re-enters as the owner (IsPreReserved). Bypass/unconditional kinds (cancel/
+                // exit/timeout/updateData) are accepted without a reserve — the job's pipeline
+                // prologue admits them by kind. A Busy parent with an active SubFlow is also
+                // accepted without a reserve: the job's pipeline forwards it to the subflow.
+                if (!ctx.Directives.IsInternalResume
+                    && admissionService.Classify(ctx) == AdmissionKind.Normal
+                    && !admissionService.IsSubflowForward(ctx))
                 {
-                    await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
-                    // if (isReserved)
-                    // {
-                    //     // Reserved transitions are accepted while the instance is Busy by design.
-                    //     await instanceBusyManager.MarkBusyWithPropagationAsync(ctx.Instance.Id, cancellationToken);
-                    // }
-                    // else
-                    // {
-                    //     // Explicit Busy admission guard: with the accept lock scoped away from the
-                    //     // execution lock, an in-flight transition no longer blocks this key — reject
-                    //     // here so a normal transition cannot be accepted while another is queued/running.
-                    //     var busyOutcome = await instanceBusyManager.TryMarkBusyWithPropagationAsync(
-                    //         ctx.Instance.Id, cancellationToken);
-                    //     if (busyOutcome == BusyMarkOutcome.AlreadyBusy)
-                    //     {
-                    //         logger.AsyncTransitionRejectedInstanceBusy(ctx.TransitionKey, ctx.InstanceId);
-                    //         lockScopeResult = Result<TransitionExecutionContext>.Fail(
-                    //             WorkflowErrors.InstanceBusy(ctx.InstanceId, ctx.TransitionKey));
-                    //         return;
-                    //     }
-                    // }
+                    var admission = admissionService.CheckAdmission(ctx);
+                    if (!admission.IsSuccess)
+                    {
+                        lockScopeResult = Result<TransitionExecutionContext>.Fail(admission.Error);
+                        return;
+                    }
+
+                    var reserve = await admissionService.ReserveAsync(ctx, cancellationToken);
+                    if (!reserve.IsSuccess)
+                    {
+                        lockScopeResult = Result<TransitionExecutionContext>.Fail(reserve.Error);
+                        return;
+                    }
+
+                    reserved = true;
                 }
 
-                var enqueueResult = await EnqueueAndSaveJobAsync(context, ctx, activity, cancellationToken);
-                lockScopeResult = enqueueResult.Match(
-                    onSuccess: _ =>
-                    {
-                        LogEnqueueSuccess(context, jobName);
-                        return Result<TransitionExecutionContext>.Ok(ctx);
-                    },
-                    onFailure: error =>
-                    {
-                        LogEnqueueFailure(context);
-                        return Result<TransitionExecutionContext>.Fail(error);
-                    });
+                var enqueueResult = await EnqueueAndSaveJobAsync(
+                    context, ctx, jobName, jobId, activity, cancellationToken);
+                if (enqueueResult.IsSuccess)
+                {
+                    LogEnqueueSuccess(context, jobName.Value);
+                    lockScopeResult = Result<TransitionExecutionContext>.Ok(ctx);
+                }
+                else
+                {
+                    LogEnqueueFailure(context);
+
+                    // Compensate a reserve whose job never made it to the queue — otherwise the
+                    // instance stays Busy with no job to settle it.
+                    if (reserved)
+                        await admissionService.ReleaseReservationAsync(ctx, cancellationToken);
+
+                    lockScopeResult = Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
+                }
             },
             DefaultLockLeaseSeconds,
             cancellationToken);
@@ -202,13 +223,11 @@ public sealed class AsyncTransitionStrategy(
     private async Task<Result<string>> EnqueueAndSaveJobAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
+        JobName jobName,
+        Guid jobId,
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var jobName = JobName.ForAsyncTransition(
-            transContext.InstanceId, transContext.Current?.Key ?? string.Empty, transContext.TransitionKey);
-        var jobId = Guid.NewGuid();
-
         var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity);
         var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity);
 
@@ -286,7 +305,6 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            ChainToken = transContext.ChainToken,
             ChainDepth = transContext.ChainDepth
         };
     }

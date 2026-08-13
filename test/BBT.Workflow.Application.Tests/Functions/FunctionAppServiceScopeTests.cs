@@ -11,6 +11,8 @@ using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Contracts;
+using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -47,6 +49,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     private readonly ITaskCoordinator _taskCoordinator;
     private readonly IStateStoreCacheGateway _cacheGateway;
     private readonly IDynamicExpressoValueEvaluator _keyEvaluator;
+    private readonly IFunctionRequestValidationService _functionRequestValidationService;
     private readonly FunctionAppService _service;
 
     private readonly IServiceProvider _ambientServiceProvider;
@@ -59,6 +62,15 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         _taskCoordinator = Substitute.For<ITaskCoordinator>();
         _cacheGateway = Substitute.For<IStateStoreCacheGateway>();
         _keyEvaluator = Substitute.For<IDynamicExpressoValueEvaluator>();
+        _functionRequestValidationService = Substitute.For<IFunctionRequestValidationService>();
+        _functionRequestValidationService
+            .ValidateRequestAsync(
+                Arg.Any<Function>(),
+                Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
 
         // Ambient provider needed by PostSharp UnitOfWork interception.
         var mockUoW = Substitute.For<IUnitOfWork>();
@@ -109,11 +121,15 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             currentSchema: Substitute.For<ICurrentSchema>(),
             taskCoordinator: _taskCoordinator,
             scriptEngine: Substitute.For<IScriptEngine>(),
-            currentUser: Substitute.For<ICurrentUser>(),
-            transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             keyEvaluator: _keyEvaluator,
             cacheGateway: _cacheGateway,
-            remoteInvoker: Substitute.For<IRemoteInvokerService>());
+            remoteInvoker: Substitute.For<IRemoteInvokerService>(),
+            // The real policy, so these tests keep covering the scope and role gates end to end
+            // after they moved out of FunctionAppService.
+            functionAccessPolicy: new FunctionAccessPolicy(
+                Substitute.For<ICurrentUser>(),
+                Substitute.For<ITransitionAuthorizationManager>()),
+            functionRequestValidationService: _functionRequestValidationService);
     }
 
     public void Dispose()
@@ -154,6 +170,87 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionScopeNotSatisfied);
+    }
+
+    // ─── Verb enforcement ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ByKey_NoVerbsDeclared_AcceptsAnyVerb()
+    {
+        SetupFunction(TaskScope.Domain);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "DELETE");
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ByKey_NullHttpMethod_SkipsVerbCheck()
+    {
+        SetupFunction(TaskScope.Domain, verbs: ["POST"]);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: null);
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ByKey_DeclaredVerb_Succeeds()
+    {
+        SetupFunction(TaskScope.Domain, verbs: ["POST", "PATCH"]);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "PATCH");
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ByKey_UndeclaredVerb_Returns405Error()
+    {
+        SetupFunction(TaskScope.Domain, verbs: ["POST", "PATCH"]);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "DELETE");
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionVerbNotAllowed);
+        // Target carries the Allow header value.
+        result.Error.Target.ShouldBe("POST, PATCH");
+    }
+
+    [Fact]
+    public async Task ByKey_VerbComparisonIsCaseInsensitive()
+    {
+        SetupFunction(TaskScope.Domain, verbs: ["post"]);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "POST");
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ByKey_InputSchemaValidationFailure_ShortCircuitsBeforeTasks()
+    {
+        SetupFunction(TaskScope.Domain);
+        _functionRequestValidationService
+            .ValidateRequestAsync(
+                Arg.Any<Function>(),
+                Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(Error.Validation("schema.invalid", "body does not match schema")));
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "POST");
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("schema.invalid");
+        await _taskCoordinator.DidNotReceive().ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(),
+            Arg.Any<Guid?>(),
+            Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(),
+            Arg.Any<ScriptContext>(),
+            Arg.Any<CancellationToken>());
     }
 
     // ─── Instance-level endpoint (GetFunctionByInstanceAsync) ───────────────────
@@ -341,13 +438,13 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             .Returns(Result<Function>.Ok(function));
     }
 
-    private void SetupFunction(TaskScope scope)
+    private void SetupFunction(TaskScope scope, List<string>? verbs = null)
     {
         var task = OnExecuteTask.Create(
             1,
             new Reference("my-task", TestDomain, "sys-tasks", TestVersion),
             ScriptCode.FromNative(string.Empty));
-        var function = new Function(scope, task);
+        var function = new Function(scope, task, verbs: verbs);
         function.SetReference(new Reference(FunctionKey, TestDomain, "sys-functions", TestVersion));
 
         _componentCacheStore

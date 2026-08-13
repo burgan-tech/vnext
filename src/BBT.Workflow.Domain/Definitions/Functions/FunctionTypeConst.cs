@@ -20,5 +20,7 @@ namespace BBT.Workflow.Definitions.Functions
         public const string HumanTask = "human-task";
         /// <summary>System function: returns the flow-level master schema the instance is bound to (forwards to the active subflow when present).</summary>
         public const string Master = "master";
+        /// <summary>System function: returns the workflow's declared functions, each linked to its info endpoint.</summary>
+        public const string Catalog = "catalog";
     }
 }

@@ -90,7 +90,11 @@ public sealed class TransitionJobHandler(
                             args.TransitionKey);
                     context.Actor = args.ExecutionActor;
                     context.CallerMode = args.CallerSync ? ExecMode.Sync : ExecMode.Async;
-                    context.ChainToken = args.ChainToken;
+
+                    // Every job this handler consumes was created by an accept that already
+                    // reserved the instance (async accept) or by a chain continuation of a
+                    // Busy instance — the pipeline must not re-run the Busy admission check.
+                    context.IsPreReserved = true;
 
                     // Transition-per-job: this job runs exactly ONE transition; its auto-chain
                     // continuation is enqueued as the next job via ITransitionEnqueueGateway

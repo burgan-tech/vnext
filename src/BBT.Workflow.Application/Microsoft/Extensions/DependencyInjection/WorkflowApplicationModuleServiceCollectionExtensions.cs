@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Caching;
+using BBT.Workflow.Instances.Related;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
@@ -16,7 +17,10 @@ using BBT.Workflow.Authorization;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Functions;
+using BBT.Workflow.Functions.Contracts;
+using BBT.Workflow.Functions.Validation;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -78,10 +82,15 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();
+        services.AddScoped<IRelatedInstanceQueryAppService, RelatedInstanceQueryAppService>();
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
         services.AddScoped<IStateStoreCacheGateway, StateStoreCacheGateway>();
+        services.AddScoped<IFunctionContractResolver, FunctionContractResolver>();
+        services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
+        services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        services.AddScoped<IFunctionInfoAppService, FunctionInfoAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
         services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
@@ -92,6 +101,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();
+        services.AddScoped<ISubItemTerminalGuard, SubItemTerminalGuard>();
         services.AddScoped<ISubflowCompletionService, SubflowCompletionService>();
         services.AddScoped<ISubflowCancellationService, SubflowCancellationService>();
         services.AddScoped<ISubflowFaultService, SubflowFaultService>();
@@ -134,6 +144,17 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<ICacheBackend<View>, RuntimeCacheBackend<View>>();
         services.AddSingleton<ICacheBackend<Extension>, RuntimeCacheBackend<Extension>>();
         services.AddSingleton<ICacheBackend<Mapping>, RuntimeCacheBackend<Mapping>>();
+
+        // Registered here rather than with the other application options so read-only hosts, which wire
+        // only the cache module, still bind configuration instead of silently falling back to defaults.
+        services.AddOptions<ComponentCacheOptions>()
+            .BindConfiguration(ComponentCacheOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // Scopes cached version resolutions so a publish invalidates them all at once.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IComponentGenerationProvider, ComponentGenerationProvider>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();

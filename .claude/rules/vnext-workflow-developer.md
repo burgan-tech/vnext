@@ -63,6 +63,103 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+
+## Well-Known Transitions (`cancel` / `updateData` / `exit`)
+
+- All three are workflow-level `Transition` objects (`Workflow.Cancel/UpdateData/Exit`) — full surface
+  including `roles`, `view`, `schema`, `annotations`.
+- **Listed in `availableTransitions`** from every state (subject to `triggerType` Manual/Event and
+  `availableIn`), and merged from the **parent** into a subflow's list — that merge is `updateData`'s
+  primary surface, since `HandleUpdateDataPreflightStep` only acts while the current state is `SubFlow`.
+- The **configured key** is listed, never the alias (`cancel` / `update-parent-data` / `exit`): role
+  filtering resolves via `FindTransitionInContext`, which matches these three on the configured key.
+  Aliases stay accepted on the request side (`ResolveWellKnownKey`).
+- `kind` discriminator mirrors the JSON field names: `cancel` | `updateData` | `exit` — note
+  `updateData`, *not* the `update-parent-data` alias.
+- `roles` are enforced at discovery (state function filtering, `/functions/authorize`,
+  authorization-matrix) — **not** at `POST .../transitions/{key}`, which is true for every transition
+  type, not just these.
+- `WorkflowValidator` runs all three through `ValidateSingleTransition` (role-grant syntax +
+  trigger-type rules); `updateData.target` must be `$self`.
+- Schema (`vnext-schema` `cancelTransition`/`exitTransition`/`updateDataTransition`) accepts both
+  `roles` and `availableIn` — `availableIn` was added in 0.0.79 to match runtime behavior that had
+  always been there but was unauthorable under `additionalProperties: false`.
+- Full guide: `docs/domain/well-known-transitions.md`.
+
+## `availableIn` (shared + cancel/updateData/exit)
+
+- Two authorable shapes, mixable in one array: bare state key, or `{ state, roles }`
+  (`AvailableInJsonConverter`, modelled on `ViewDisplayJsonConverter`). Role-less entry ⇔ bare string.
+- `Write` derives the shape from `HasRoles`, it does **not** remember how the entry was authored: the
+  string form and the roles-bearing object form round-trip byte-for-byte, while a role-less *object*
+  (`{state}` or `{state, roles: []}`) normalizes to the equivalent string. Lossless and deliberate —
+  same rule as `ViewDisplayJsonConverter` collapsing SDI-only to a bare string. Don't add an
+  "authored shape" flag to defeat it.
+- Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
+  empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
+  duplicate states ⇒ first match wins, validator errors.
+- **Roles compose as AND**: `transition.roles` is the global gate, `availableIn[state].roles` narrows
+  it for that state; both must allow. Empty set allows, so legacy definitions are unaffected.
+- Three surfaces, and they must not diverge: state function **state+roles**, `authorize`
+  **state+roles**, execution policy **state only** (roles have never been enforced at execution for
+  any transition type). Both role-aware surfaces go through
+  `IsTransitionAllowedInStateAsync` / `FilterAuthorizedTransitionKeysAsync` — do not add a third path.
+- `grantsForPrefetchHint` must include the per-state grants too, or a `$PreviousUser` grant living only
+  on an `availableIn` entry can never match.
+- Execution gate for the well-known three is `WellKnownTransitionSpecification` (error code
+  `Transition:100024`); it claims keys via `Workflow.IsWellKnownTransitionKey`, which matches reserved
+  aliases **and** configured custom keys — matching aliases only leaves a custom-keyed transition
+  ungated by every spec.
+
+## Role Grant Validation
+
+- Three role forms: **static** (`backoffice.operator`), **predefined** (`$InstanceStarter`,
+  `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`), **dynamic**
+  (`$user.` / `$userBehalfOf.` / `$role.` + `$.context.<path>`). Only dynamic is validated; the
+  other two are free-form.
+- A qualifier prefix ⇒ dynamic *intent*. The remainder must be the literal `$.context.`
+  (**Ordinal — case-sensitive**) plus a non-empty nav path. `$user.customer`,
+  `$user.$.Context.x` and `$role.$.context.` are all errors.
+- Why strict: `DynamicRoleGrant.TryParse` returns null on any deviation, and runtime `IsMatch` then
+  falls through to the **static** comparison — the grant becomes silently inert (an ALLOW that never
+  grants, a DENY that never denies). Definition time is the only place it is visible.
+- Never re-implement the parse rules in a validator. Use `DynamicRoleGrant.Classify`, which shares
+  `TryParse`'s constants and comparisons; the `Classify == WellFormed ⟺ TryParse != null` invariant
+  is pinned by `DynamicRoleGrantTests`.
+
+## Role Grant Evaluation (runtime)
+
+- **One evaluator, no exceptions.** All instance-bound evaluation goes through `IRoleGrantEvaluator`
+  (`ITransitionAuthorizationManager.CreateEvaluatorAsync`). The manager's other methods are thin
+  wrappers. Never add a second matcher — three diverged inside the manager once and the surfaces
+  disagreed about the same transition. `RoleGrantEvaluatorTests` pins the equivalence.
+- Canonical rule over the **whole** grant set: DENY wins → matching ALLOW allows → a set with no ALLOW
+  grant is a blacklist (allow unless denied) → empty set allows. Multi-role: any allowed role wins.
+  A caller with **no** roles is still evaluated once so predefined/dynamic grants apply.
+- **`CreatedBy` pairs with the actor (`ActorUserName`); `BehalfOf` pairs with `UserName`.** Predefined
+  and dynamic grants match on the *grant* side, independent of the caller role being evaluated — that
+  is what makes `[deny: $InstanceStarter]` bind regardless of the caller's other roles.
+- **Batch, don't loop.** Create one evaluator per instance/schema and query it. `grantsForPrefetchHint`
+  must cover every grant you will evaluate: a `$PreviousUser` / `$PreviousBehalfOfUser` grant missing
+  from the hint can never match. The auth context is built lazily and memoized per transition key —
+  building it serializes the instance's full latest data.
+- **Every surface evaluating a grant set must be given the same `AuthorizationRequestContext`.** Omitting
+  it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
+  grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
+  function, which does pass the context, still answers *allowed* for it.
+- **`transition.roles` is not enforced at execution, by design.** `POST .../transitions/{key}` runs
+  schema validation + `TransitionExecutionPolicy`, and no specification there reads `Roles`;
+  `IsTransitionAllowedForRoleAsync`'s only production caller is `AuthorizeAppService`. Roles describe
+  what a client should *offer*, not a capability boundary — put real boundaries in `queryRoles`, a
+  function's `roles`, or the transition's task logic. Do not "fix" this; it is a deliberate decision.
+- **Never read `currentUser.Roles` directly at a decision point.** Use
+  `currentUser.ResolveCallerRoles(headers)`: `ChangeFromHeaders` is *not* in the HTTP pipeline (only
+  `TransitionRunner`), so a legacy-`role`-header caller would be treated as role-less — 403 from an
+  allowlist, or every guarded field pruned. Resolution is `ICurrentUser.Roles` first, header as
+  **fallback, not merge**. The same role set must feed the decision, the field filtering, and
+  `CallerScopeHash`.
+- Full guide: `docs/domain/role-grant-authorization.md`.
 
 ## Sync vs Async
 
@@ -104,6 +201,27 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
 - Full-merge model: each version = full state + delta.
 - `LatestData` = current; `DataList` = history.
 - Queryable via filters on instance columns and `attributes.*` JSON paths.
+
+## Related Instance Access (scripts)
+
+- `context.Related` (`IRelatedInstanceAccessor`) — one hop only: `HasParent` (sync), `ParentAsync()` (up,
+  from `parent.*` ExtraProperties), `SubAsync(key)` / `SubsAsync(key?)` / `SubKeysAsync()` (down, from
+  correlations incl. completed).
+- Key = `InstanceCorrelation.SubFlowName` (sub workflow key, no alias field). `SubAsync` = newest by
+  `CreatedAt`; `SubsAsync` returns all, oldest first, batched (never N+1).
+- `IsCompleted` = target instance status `C`; `CorrelationCompleted` = relationship closed (always null
+  for the parent direction). They disagree during the subflow completion window — don't conflate them.
+- Reads are **system-identity and unfiltered**: no query-role check, no `x-roles` filter, no extensions,
+  no data-function cache. Copying a related field into instance data bypasses `x-roles` for that field —
+  document it where you copy it.
+- Runs inside the current transition's DB transaction — sees that transition's own uncommitted writes.
+- Absence → `null`/empty list. Read failure or resolution-cap breach → `RelatedInstanceAccessException`.
+  Reading after `ScriptContext` disposal → `ObjectDisposedException`.
+- Same domain → in-process (`RoutedRelatedInstanceReader`); cross-domain → internal `related-data` /
+  `related-data/batch` endpoints (no in-app authorization — network isolation only; see
+  `docs/contracts/api-and-service-contracts.md` § Internal-Only Endpoints). Memoized per `ScriptContext`;
+  cap `Workflow:Scripting:RelatedAccess:MaxResolutionsPerContext` (default 10). Full guide:
+  `docs/runtime/script-related-instance-access.md`.
 
 ## View Selection
 

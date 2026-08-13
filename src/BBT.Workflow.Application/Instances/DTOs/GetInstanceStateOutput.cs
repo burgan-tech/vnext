@@ -44,9 +44,32 @@ public sealed class GetInstanceStateOutput
     public List<ActiveCorrelationHref> ActiveCorrelations { get; set; } = [];
 
     /// <summary>
+    /// Full child correlation set — active and completed — ordered by creation time ascending.
+    /// Clients that need the sub item history (which subflows ran and how they terminated) read this
+    /// list and filter on <see cref="ActiveCorrelationHref.IsCompleted"/>;
+    /// <see cref="ActiveCorrelations"/> keeps its active-only semantics.
+    /// Read from a dedicated query, so under concurrent completion its active subset can be a moment
+    /// fresher than <see cref="ActiveCorrelations"/>.
+    /// </summary>
+    public List<ActiveCorrelationHref> Correlations { get; set; } = [];
+
+    /// <summary>
     /// Available transition items with href links
     /// </summary>
     public List<TransitionItem> Transitions { get; set; } = [];
+
+    /// <summary>
+    /// Pointer to the workflow's function catalog: whether the flow declares any functions, and where
+    /// to enumerate them.
+    /// </summary>
+    /// <remarks>
+    /// Only the flag and the href live here, never the list. Resolving the list means reading every
+    /// declared function's component to learn its scope and evaluating its roles — far too much for a
+    /// response served on every long-poll. Deliberately outside the ETag material: <c>hasFunctions</c>
+    /// is a property of the flow version, which the fingerprint already covers, so it cannot change
+    /// while an instance is parked. See <c>StateFunctionCache.ResponseShapeVersion</c>.
+    /// </remarks>
+    public FunctionsHref Functions { get; set; } = new();
 
     /// <summary>
     /// Client-workflow-manager interaction directives for the current state. Present only when the

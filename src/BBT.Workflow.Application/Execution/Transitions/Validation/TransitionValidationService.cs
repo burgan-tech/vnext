@@ -27,26 +27,29 @@ public class TransitionValidationService(
         CancellationToken cancellationToken = default)
     {
         // 1. Schema Validation
-        var schemaResult = await ValidateTransitionSchemaAsync(context, cancellationToken);
+        var schemaResult = await ValidateSchemaAsync(context, cancellationToken);
         if (!schemaResult.IsSuccess)
             return schemaResult;
 
         // 2. State Machine Validation using Specification Pattern
         // Includes: Actor authorization, state transition rules, SubFlow bypass, etc.
-        var policyResult = transitionExecutionPolicy.Validate(context);
-        if (!policyResult.IsSuccess)
-            return policyResult;
-
-        return Result.Ok();
+        return await ValidatePolicyAsync(context, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<Result> ValidatePolicyAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(transitionExecutionPolicy.Validate(context));
+
+    /// <inheritdoc />
     /// <summary>
     /// Validates transition data against JSON schema.
     /// Chains GetSchemaAsync Result into validation.
     /// </summary>
-    private async Task<Result> ValidateTransitionSchemaAsync(
+    public async Task<Result> ValidateSchemaAsync(
         TransitionExecutionContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken = default)
     {
         // Guard: No schema defined
         if (context.Transition?.Schema is null)

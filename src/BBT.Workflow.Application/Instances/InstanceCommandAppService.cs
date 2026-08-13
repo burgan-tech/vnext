@@ -14,9 +14,11 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Execution.Transitions.Services;
@@ -42,12 +44,14 @@ public sealed class InstanceCommandAppService(
     IWorkflowExecutionService workflowExecutionService,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
+    IInstanceDataWriteService instanceDataWriteService,
     IInstanceJobRepository instanceJobRepository,
     IBackgroundJobService backgroundJobService,
     IGuidGenerator guidGenerator,
     IHeaderService headerService,
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
+    ITransitionAdmissionService transitionAdmissionService,
     ITransitionContextFactory transitionContextFactory,
     IWorkflowContext workflowContext,
     IRepresentationEtagService representationEtagService,
@@ -82,7 +86,7 @@ public sealed class InstanceCommandAppService(
         if (existingInstanceResult.HasValue)
         {
             if (input.Sync && existingInstanceResult.Value.IsSuccess)
-                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input.Extensions, cancellationToken);
+                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
             return existingInstanceResult.Value;
         }
 
@@ -204,9 +208,10 @@ public sealed class InstanceCommandAppService(
         var ackRoles = state?.LongPollAckRoles;
         if (ackRoles is { Count: > 0 })
         {
-            var callerRoles = BuildCallerRoles(input.Role);
+            var callerRoles = BuildCallerRoles(input.Role, input.Headers);
             var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                callerRoles, ackRoles, instance, cancellationToken: cancellationToken);
+                callerRoles, ackRoles, instance,
+                new AuthorizationRequestContext(input.Headers), cancellationToken);
             if (!allowed)
                 return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
         }
@@ -220,13 +225,22 @@ public sealed class InstanceCommandAppService(
             workflow.Domain, workflow.Key, workflow.Version, instance.Id, cancellationToken);
     }
 
-    private IReadOnlyCollection<string> BuildCallerRoles(string? explicitRole)
+    /// <summary>
+    /// Builds the caller role set for the long-poll acknowledge check: the explicit <c>role</c> parameter
+    /// plus the caller's resolved roles. Resolution honors the legacy <c>role</c> header, because
+    /// <c>ChangeFromHeaders</c> does not run on the HTTP path and a header-only caller would otherwise be
+    /// rejected with 403 by an allowlist grant set.
+    /// </summary>
+    private IReadOnlyCollection<string> BuildCallerRoles(
+        string? explicitRole,
+        IReadOnlyDictionary<string, string?>? headers)
     {
         var roles = new List<string>();
         if (!string.IsNullOrWhiteSpace(explicitRole))
             roles.Add(explicitRole.Trim());
-        if (currentUser.Roles is { Length: > 0 })
-            roles.AddRange(currentUser.Roles);
+        var resolved = currentUser.ResolveCallerRoles(headers);
+        if (resolved is { Length: > 0 })
+            roles.AddRange(resolved);
         return roles;
     }
 
@@ -282,8 +296,8 @@ public sealed class InstanceCommandAppService(
                 input.Instance.Callback,
                 cancellationToken)
             .ThenAsync(instance => ValidateStartTransitionAsync(workflow, instance, input, cancellationToken))
-            .ThenAsync(instance => MapInstanceDataAsync(workflow, instance, input, cancellationToken))
-            .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken));
+            .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken))
+            .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
         await uow.CommitAsync(cancellationToken);
         return result;
@@ -317,40 +331,8 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Maps and adds instance data if provided.
-    /// </summary>
-    private async Task<Result<Instance>> MapInstanceDataAsync(
-        Definitions.Workflow workflow,
-        Instance instance,
-        StartInstanceInput input,
-        CancellationToken cancellationToken)
-    {
-        if (input.Instance.Attributes == null)
-            return Result<Instance>.Ok(instance);
-
-        return await transitionDataMapper.MapTransitionDataAsync(
-                input.Instance.Attributes,
-                workflow.StartTransition,
-                workflow,
-                instance,
-                runtimeInfoProvider,
-                input.Headers,
-                cancellationToken)
-            .Tap(mappedData =>
-            {
-                if (mappedData != null)
-                {
-                    instance.AddData(
-                        guidGenerator.Create(),
-                        new JsonData(mappedData),
-                        workflow.StartTransition.VersionStrategy);
-                }
-            })
-            .MapAsync(_ => instance);
-    }
-
-    /// <summary>
-    /// Persists the instance to the repository.
+    /// Persists the instance to the repository (data-less — the initial data version is
+    /// appended AFTERWARDS through the write service, so its row lock has a row to grab).
     /// Infrastructure errors (DB connection, etc.) propagate to middleware - not wrapped in Result.
     /// </summary>
     private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PersistInstanceAsync(
@@ -360,6 +342,40 @@ public sealed class InstanceCommandAppService(
     {
         await instanceRepository.InsertAsync(instance, true, cancellationToken);
         return Result<(Definitions.Workflow, Instance)>.Ok((workflow, instance));
+    }
+
+    /// <summary>
+    /// Maps the start payload and appends the initial data version IMMEDIATELY through the
+    /// InstanceData write service (identity computed under the per-instance row lock).
+    /// </summary>
+    private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> MapAndAppendInstanceDataAsync(
+        (Definitions.Workflow Workflow, Instance Instance) data,
+        StartInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        if (input.Instance.Attributes == null)
+            return Result<(Definitions.Workflow, Instance)>.Ok(data);
+
+        return await transitionDataMapper.MapTransitionDataAsync(
+                input.Instance.Attributes,
+                data.Workflow.StartTransition,
+                data.Workflow,
+                data.Instance,
+                runtimeInfoProvider,
+                input.Headers,
+                cancellationToken)
+            .TapAsync(async mappedData =>
+            {
+                if (mappedData != null)
+                {
+                    await instanceDataWriteService.AppendAsync(
+                        data.Instance,
+                        new JsonData(mappedData),
+                        data.Workflow.StartTransition.VersionStrategy,
+                        cancellationToken);
+                }
+            })
+            .MapAsync(_ => data);
     }
 
     /// <summary>
@@ -374,6 +390,14 @@ public sealed class InstanceCommandAppService(
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
 
+        // Creation is the reservation: a sub-item is persisted Busy at creation (IsSubItem seed
+        // in CreateAndPrepareInstanceAsync), and this request — the one that just created the
+        // row — owns it. Without this, the child's own start transition classifies as Normal
+        // and rejects itself with 409 against its birth-Busy status. Regular instances are
+        // created Active and keep the normal reserve path. Applies uniformly to sync/async and
+        // local/cross-domain subflow starts, since every start funnels through here.
+        context.IsPreReserved = data.Instance.IsBusy;
+
         // Execute transition - lock is managed by TransitionPipeline
         return workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
@@ -384,7 +408,7 @@ public sealed class InstanceCommandAppService(
                 Status = transitionOutput.Status
             })
             .ThenAsync(output => input.Sync
-                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input.Extensions, cancellationToken)
+                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken)
                 : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
 
@@ -541,24 +565,59 @@ public sealed class InstanceCommandAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        // Resolve instance first; workflow is loaded from instance's Flow and FlowVersion (not from request)
+        // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
+        //    Busy rejection never pays the full aggregate load. The snapshot also carries the
+        //    bound Flow/FlowVersion, so the workflow definition is resolved ONCE here (from the
+        //    component cache) and reused for the rest of the request. Classification decides the
+        //    fast-fail: cancel/exit/updateData are exempt, and a Busy parent with an active
+        //    SubFlow is admitted so the pipeline can forward the request to the subflow. This is
+        //    a fast-fail only — the authoritative decision is the reserve under the status lock.
+        var snapshot = await instanceRepository.GetExecutionSnapshotAsync(instance, cancellationToken);
+
+        Definitions.Workflow? workflowDefinition = null;
+        if (snapshot is not null)
+        {
+            var snapshotWorkflow = await LoadWorkflowAsync(
+                input.Domain, snapshot.Flow!, snapshot.FlowVersion, cancellationToken);
+            if (!snapshotWorkflow.IsSuccess)
+                return Result<TransitionOutput>.Fail(snapshotWorkflow.Error);
+
+            workflowDefinition = snapshotWorkflow.Value!;
+
+            if (snapshot is { IsBusy: true, HasActiveSubFlow: false }
+                && transitionAdmissionService.ClassifyKey(workflowDefinition, transitionKey)
+                    == AdmissionKind.Normal)
+            {
+                logger.TransitionRejectedInstanceBusy(snapshot.Id, transitionKey);
+                return Result<TransitionOutput>.Fail(
+                    WorkflowErrors.InstanceBusy(snapshot.Id, transitionKey));
+            }
+        }
+
+        // 2) Admitted (or no snapshot row) — resolve the full instance.
         var instanceResult = await instanceRepository.GetActiveAsync(instance, cancellationToken);
         if (!instanceResult.IsSuccess)
             return Result<TransitionOutput>.Fail(instanceResult.Error);
 
         var resolvedInstance = instanceResult.Value!;
 
-        var workflowResult = await LoadWorkflowAsync(
-            input.Domain,
-            resolvedInstance.Flow,
-            resolvedInstance.FlowVersion,
-            cancellationToken);
-        if (!workflowResult.IsSuccess)
-            return Result<TransitionOutput>.Fail(workflowResult.Error);
+        // The definition loaded above already belongs to this instance in the normal case; load
+        // only when there was no snapshot, or when the two identifier resolutions disagreed —
+        // the workflow must always match the instance's own Flow, never the request's.
+        if (workflowDefinition is null || workflowDefinition.Key != resolvedInstance.Flow)
+        {
+            var workflowResult = await LoadWorkflowAsync(
+                input.Domain,
+                resolvedInstance.Flow,
+                resolvedInstance.FlowVersion,
+                cancellationToken);
+            if (!workflowResult.IsSuccess)
+                return Result<TransitionOutput>.Fail(workflowResult.Error);
+
+            workflowDefinition = workflowResult.Value;
+        }
 
         var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
-
-        var workflowDefinition = workflowResult.Value;
 
         // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
         // dispatching to the execution service. This guarantees consistent 400 Bad Request
@@ -581,7 +640,7 @@ public sealed class InstanceCommandAppService(
             .ThenAsync(output =>
             {
                 if (input.Sync)
-                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, cancellationToken);
+                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
                 output.Key = resolvedInstance.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
@@ -603,6 +662,13 @@ public sealed class InstanceCommandAppService(
         var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
         if (!contextResult.IsSuccess)
             return Result.Fail(contextResult.Error);
+
+        // Busy-as-mutex: reject a Busy instance BEFORE spending validation work — a request
+        // that cannot be admitted should not fetch schemas or evaluate specifications.
+        // No-op for exempt kinds (cancel/exit/updateData/owner re-entry).
+        var admission = transitionAdmissionService.CheckAdmission(contextResult.Value!);
+        if (!admission.IsSuccess)
+            return Result.Fail(admission.Error);
 
         return await transitionValidationService.ValidateAsync(contextResult.Value!, cancellationToken);
     }
@@ -659,8 +725,9 @@ public sealed class InstanceCommandAppService(
         Guid instanceId,
         Definitions.Workflow? workflow,
         string[]? extensionRequested,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
-        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, cancellationToken);
+        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, requestContext, cancellationToken);
 
     /// <summary>
     /// Enriches a sync=true TransitionOutput with attributes (schema-filtered), etag, entityEtag, key and extensions.
@@ -671,14 +738,16 @@ public sealed class InstanceCommandAppService(
         Guid instanceId,
         Definitions.Workflow? workflow,
         string[]? extensionRequested,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
-        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, cancellationToken);
+        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, requestContext, cancellationToken);
 
     private async Task<Result<TOutput>> EnrichOutputCoreAsync<TOutput>(
         TOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
         string[]? extensionRequested,
+        AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
         where TOutput : class
     {
@@ -707,7 +776,7 @@ public sealed class InstanceCommandAppService(
 
         var latestData = instance.LatestData;
         var rawAttributes = latestData?.Data.JsonElement;
-        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, instance, cancellationToken);
+        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, instance, requestContext, cancellationToken);
 
         var key = instance.Key;
         var entityEtag = latestData?.ETag;

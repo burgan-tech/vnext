@@ -62,7 +62,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
     private static Instance CreateInstance(string dataJson)
     {
         var instance = Instance.Create(Guid.NewGuid(), "flow", "1.0.0", "key");
-        instance.AddData(Guid.NewGuid(), JsonData.CreateFrom(dataJson), VersionStrategy.None);
+        instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom(dataJson), VersionStrategy.None);
         return instance;
     }
 

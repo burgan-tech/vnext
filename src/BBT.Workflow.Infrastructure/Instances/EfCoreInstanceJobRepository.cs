@@ -39,10 +39,20 @@ public sealed class EfCoreInstanceJobRepository(
             .FirstOrDefaultAsync(p => p.JobId == jobId, cancellationToken);
     }
 
-    public async Task<bool> AnyActiveByJobNameAsync(Guid instanceId, string jobName,
+    public async Task<bool> AnyActiveTransitionJobAsync(
+        Guid instanceId,
+        JobType jobType,
+        string? sourceState,
+        string transitionKey,
         CancellationToken cancellationToken = default)
         => await (await GetQueryableAsync())
-            .AnyAsync(j => j.InstanceId == instanceId && j.JobName == jobName && j.IsActive == true, cancellationToken);
+            .AnyAsync(
+                j => j.InstanceId == instanceId
+                     && j.IsActive == true
+                     && j.JobType == jobType
+                     && j.SourceState == sourceState
+                     && j.TransitionKey == transitionKey,
+                cancellationToken);
 
     /// <inheritdoc />
     public async Task<List<InstanceJob>> GetActiveByFlowAsync(
@@ -92,20 +102,4 @@ public sealed class EfCoreInstanceJobRepository(
             .ToListAsync(cancellationToken);
     }
 
-    /// <inheritdoc />
-    public async Task<HashSet<Guid>> GetInstanceIdsWithActiveJobAsync(
-        IEnumerable<Guid> instanceIds, CancellationToken cancellationToken = default)
-    {
-        var ids = instanceIds.ToList();
-        if (ids.Count == 0)
-            return [];
-
-        var result = await (await GetQueryableAsync())
-            .Where(j => ids.Contains(j.InstanceId) && j.IsActive == true)
-            .Select(j => j.InstanceId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
-        return [.. result];
-    }
 }

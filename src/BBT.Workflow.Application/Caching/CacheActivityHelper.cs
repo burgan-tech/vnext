@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using BBT.Workflow.Logging;
+using BBT.Aether.Telemetry;
 
 namespace BBT.Workflow.Caching;
 
@@ -21,10 +23,14 @@ public static class CacheActivityHelper
     public const string OperationSet = "Cache.Set";
     public const string OperationRemove = "Cache.Remove";
     public const string OperationWarmup = "Cache.Warmup";
-    public const string OperationVersionIndex = "Cache.VersionIndex";
+    public const string OperationGenerationGet = "Cache.GenerationGet";
+    public const string OperationGenerationSet = "Cache.GenerationSet";
 
     private const string TagCacheKey = "cache.key";
     private const string TagCacheHit = "cache.hit";
+    private const string TagCacheNegative = "cache.negative";
+    private const string TagCacheCoalesced = "cache.coalesced";
+    private const string TagCacheGeneration = "cache.generation";
     private const string TagCacheStore = "cache.store";
     private const string TagCacheItemCount = "cache.item_count";
     private const string TagComponentType = "cache.component_type";
@@ -38,6 +44,9 @@ public static class CacheActivityHelper
         string? cacheKey = null,
         string? componentType = null)
     {
+        if (!AetherTracingRuntime.IsVerbose)
+            return null;
+
         var activity = ActivitySource.StartActivity(
             operationName,
             ActivityKind.Client,
@@ -46,6 +55,8 @@ public static class CacheActivityHelper
         if (activity is not null)
         {
             activity.SetTag(TagCacheStore, "dapr");
+            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
             if (!string.IsNullOrEmpty(cacheKey))
                 activity.SetTag(TagCacheKey, cacheKey);
             if (!string.IsNullOrEmpty(componentType))
@@ -69,6 +80,32 @@ public static class CacheActivityHelper
     public static void SetItemCount(Activity? activity, int count)
     {
         activity?.SetTag(TagCacheItemCount, count);
+    }
+
+    /// <summary>
+    /// Records that the hit was a negative (no matching version) entry rather than a component body.
+    /// </summary>
+    public static void SetNegative(Activity? activity, bool negative)
+    {
+        activity?.SetTag(TagCacheNegative, negative);
+    }
+
+    /// <summary>
+    /// Records that this call waited on a resolution already in flight instead of loading from the
+    /// backend itself.
+    /// </summary>
+    public static void SetCoalesced(Activity? activity, bool coalesced)
+    {
+        activity?.SetTag(TagCacheCoalesced, coalesced);
+    }
+
+    /// <summary>
+    /// Records the generation token a version resolution was scoped to.
+    /// </summary>
+    public static void SetGeneration(Activity? activity, string? generation)
+    {
+        if (activity is not null && !string.IsNullOrEmpty(generation))
+            activity.SetTag(TagCacheGeneration, generation);
     }
 
     /// <summary>

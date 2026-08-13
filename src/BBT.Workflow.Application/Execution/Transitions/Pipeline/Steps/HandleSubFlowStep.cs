@@ -36,6 +36,16 @@ public sealed class HandleSubFlowStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // updateData never starts, restarts or parks on a subflow: its $self transition through
+        // a SubFlow state must leave the subflow machinery untouched and CONTINUE, so the
+        // parent's own auto transitions (order 90) can advance with the fresh data. Covers both
+        // the active-correlation re-entry and the completed-correlation window — restarting the
+        // subflow from a data update would be catastrophic.
+        if (context.IsUpdateDataTransition())
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
+
         // Idempotent re-entry: already in this SubFlow state with active correlation - do not start subflow again
         if (HasActiveCorrelationForSameState(context))
         {

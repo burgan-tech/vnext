@@ -10,13 +10,7 @@ public static class LifecycleOrder
     /// Subflow
     /// </summary>
     public const int Preflight = 5;
-    
-    /// <summary>
-    /// Order for checking shared transitions in SubFlow states.
-    /// Skips to CreateTransition if current state is SubFlow and transition is shared.
-    /// </summary>
-    public const int CheckParentUpdateDataTransition = ForwardToActiveSubflow - 1;
-    
+
     /// <summary>
     /// Subflow
     /// </summary>
@@ -33,6 +27,13 @@ public static class LifecycleOrder
     /// This should be the first step to track the transition attempt.
     /// </summary>
     public const int CreateTransition = 20;
+
+    /// <summary>
+    /// Order for the updateData data-only short-circuit: right after the data write, an
+    /// updateData request against a parent with an open SubFlow correlation skips straight
+    /// to Finalize — only the data is updated, no tasks/schedule/auto run.
+    /// </summary>
+    public const int UpdateDataDataOnly = CreateTransition + 1;
     
     /// <summary>
     /// Order for executing resource lock operations (Acquire / Release / Extend).

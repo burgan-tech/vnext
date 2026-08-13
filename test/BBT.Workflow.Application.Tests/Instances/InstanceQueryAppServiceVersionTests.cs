@@ -259,12 +259,12 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             VersionStrategy.IncreaseMinor.Code);
         instance.ChangeState(state);
 
-        instance.AddDataWithVersion(
+        instance.SeedDataWithVersion(
             Guid.NewGuid(),
             new JsonData("{\"key\":\"older-value\"}"),
             OlderVersion);
 
-        instance.AddDataWithVersion(
+        instance.SeedDataWithVersion(
             Guid.NewGuid(),
             new JsonData("{\"key\":\"latest-value\"}"),
             LatestVersion);

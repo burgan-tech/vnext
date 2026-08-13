@@ -116,11 +116,31 @@ public sealed class TransitionExecutionContext
     public bool EnqueueContinuations { get; set; }
 
     /// <summary>
-    /// Gets or sets the auto-chain ownership token for this execution (S6). Minted at SetBusy
-    /// for a fresh chain, or carried in from a continuation. Stamped on the instance via
-    /// <c>BeginChain</c> and propagated to subsequent continuations so the gate admits them.
+    /// Gets or sets whether the instance was already reserved (flipped to Busy) for this
+    /// execution before the pipeline ran — background-job re-entry after an async accept, or a
+    /// chain continuation job. Pre-reserved executions skip the Busy admission check and the
+    /// reserve; the accept that created them owns the Busy flag.
     /// </summary>
-    public Guid? ChainToken { get; set; }
+    public bool IsPreReserved { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this execution owns the instance's Busy lifecycle. Assigned by the
+    /// pipeline admission: reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
+    /// updateData ⇒ true only when its opportunistic reserve succeeded or the parent rests in a
+    /// SubFlow state. Gates status resolution (<c>ResolveAvailableStep</c>), settlement and
+    /// auto-transition advancement for updateData: a non-owner must never flip a Busy it does
+    /// not hold, and must not start a competing chain.
+    /// </summary>
+    public bool OwnsStatus { get; set; }
+
+    /// <summary>
+    /// Gets or sets the transition record id this execution RETRIES. Set only by the retry
+    /// entry point (<c>RetryInfo.TransitionId</c>): <c>CreateTransitionRecordStep</c> then
+    /// reuses the original record instead of creating a fresh one, so the task journal
+    /// (<c>InstanceTask</c>, keyed by transition record id) lines up and already-completed
+    /// tasks are bypassed instead of re-running their side effects.
+    /// </summary>
+    public Guid? RetryOfTransitionRecordId { get; set; }
 
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
@@ -231,26 +251,17 @@ public sealed class TransitionExecutionContext
             return;
         }
 
-        var applied = false;
-        var existingIds = new HashSet<Guid>(Instance.DataList.Select(data => data.Id));
-
-        foreach (var data in scriptInstance.DataList)
+        // Task outputs are persisted IMMEDIATELY by the InstanceData write service (identity
+        // computed under the per-instance row lock) — there is no data replay here anymore.
+        // What remains is keeping the LIVE aggregate's in-memory latest in sync with the
+        // snapshot's freshest persisted row (parallel-branch scopes write through their own
+        // DbContext, so EF fixup cannot attach those rows to this aggregate) and applying the
+        // non-data mutations.
+        var snapshotLatest = scriptInstance.LatestData;
+        if (snapshotLatest is not null
+            && Instance.DataList.All(data => data.Id != snapshotLatest.Id))
         {
-            if (!existingIds.Add(data.Id))
-            {
-                continue;
-            }
-
-            Instance.AddDataWithVersion(
-                data.Id,
-                new JsonData(data.Data.Json),
-                data.Version);
-
-            applied = true;
-        }
-
-        if (applied)
-        {
+            Instance.AcceptPersistedData(snapshotLatest.CreateSnapshot());
             Data = Instance.Data;
         }
 

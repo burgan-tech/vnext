@@ -2,6 +2,7 @@ using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
@@ -70,7 +71,7 @@ public sealed class AuthorizeAppService(
             {
                 if (IsParentOwnedTransition(wf, transitionKey))
                 {
-                    var parentCallerRoles = GetCallerRoles(role);
+                    var parentCallerRoles = GetCallerRoles(role, requestContext);
                     var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles, transitionKey, null, instance, false, domain, workflowVersion, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, parentAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
@@ -81,7 +82,7 @@ public sealed class AuthorizeAppService(
                     subFlowConfig.Overrides!.Transitions!.TryGetValue(transitionKey, out var transitionOverride) &&
                     transitionOverride.Roles is { Count: > 0 })
                 {
-                    var overrideCallerRoles = GetCallerRoles(role);
+                    var overrideCallerRoles = GetCallerRoles(role, requestContext);
                     var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, transitionOverride.Roles!, instance, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
@@ -96,7 +97,7 @@ public sealed class AuthorizeAppService(
                     subFlowConfig.Overrides!.States!.TryGetValue(subFlowCurrentState, out var stateOverride) &&
                     stateOverride.QueryRoles is { Count: > 0 })
                 {
-                    var overrideCallerRoles = GetCallerRoles(role);
+                    var overrideCallerRoles = GetCallerRoles(role, requestContext);
                     var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, stateOverride.QueryRoles!, instance, requestContext, cancellationToken);
                     logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
@@ -104,7 +105,10 @@ public sealed class AuthorizeAppService(
             }
 
             // Forward to SubFlow (functionKey, no-override transition, no-override queryRoles)
-            var roleForForward = currentUser.Roles?.Length > 0 ? string.Join(",", currentUser.Roles) : role;
+            var resolvedForForward = GetCallerRoles(role, requestContext);
+            var roleForForward = resolvedForForward is { Count: > 0 }
+                ? string.Join(",", resolvedForForward)
+                : role;
             return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,
@@ -118,22 +122,25 @@ public sealed class AuthorizeAppService(
                 cancellationToken);
         }
 
-        var callerRoles = GetCallerRoles(role);
+        var callerRoles = GetCallerRoles(role, requestContext);
         var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
         logger.AuthorizeRequest(domain, workflow, role, allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
 
     /// <summary>
-    /// Resolves caller roles: ICurrentUser.Roles when present; otherwise single role parameter as fallback.
+    /// Resolves caller roles in precedence order: <c>ICurrentUser.Roles</c>, then the explicit <c>role</c>
+    /// request parameter, then the legacy <c>role</c> header. The header leg matters because
+    /// <c>ChangeFromHeaders</c> is not applied on the HTTP path, so a header-only caller would otherwise
+    /// be evaluated as role-less here while other surfaces resolve their roles.
     /// </summary>
-    private IReadOnlyList<string>? GetCallerRoles(string? roleParameter)
+    private IReadOnlyList<string>? GetCallerRoles(string? roleParameter, AuthorizationRequestContext? requestContext)
     {
         if (currentUser.Roles is { Length: > 0 } roles)
             return roles;
         if (!string.IsNullOrWhiteSpace(roleParameter))
             return [roleParameter.Trim()];
-        return null;
+        return currentUser.ResolveCallerRoles(requestContext?.Headers);
     }
     
     private async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixAsync(
@@ -282,8 +289,23 @@ public sealed class AuthorizeAppService(
                 Key = t.Key,
                 From = t.From,
                 Target = t.Target,
-                Roles = ToRoleGrantDtos(t.Roles)
+                Roles = ToRoleGrantDtos(t.Roles),
+                AvailableIn = ToAvailableInDtos(t.AvailableIn)
             });
+    }
+
+    /// <summary>Maps availableIn entries to DTOs; returns empty list when none (schema consistency).</summary>
+    private static List<AuthorizationMatrixAvailableInDto> ToAvailableInDtos(IReadOnlyCollection<AvailableInEntry> entries)
+    {
+        if (entries.Count == 0)
+            return [];
+        return entries
+            .Select(e => new AuthorizationMatrixAvailableInDto
+            {
+                State = e.State,
+                Roles = ToRoleGrantDtos(e.Roles)
+            })
+            .ToList();
     }
 
     /// <summary>
@@ -374,7 +396,24 @@ public sealed class AuthorizeAppService(
             var transition = workflow.FindTransitionInContext(transitionKey);
             if (transition == null)
                 return false;
-            return await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(workflow, transition, instance, role, requestContext, cancellationToken);
+
+            // State-aware: the transition's availableIn must offer the instance's current state, and any
+            // grants that entry adds for the state narrow the transition's own grants (AND). Previously
+            // this ignored the state entirely, so authorize answered "allowed" for a transition the
+            // execution policy then rejected with Transition:100021 — the two surfaces disagreed.
+            // A null instance (workflow-scoped authorize) has no state in scope and is unaffected.
+            // CurrentState, not GetEffectiveState: availableIn lists states of THIS workflow, while
+            // EffectiveState can carry an active subflow's state key, which the parent definition does
+            // not contain — that would deny every parent transition. The discovery surface keys off
+            // CurrentState too (GetMainFlowTransitions / MergeWithParentAvailableTransitions).
+            return await transitionAuthorizationManager.IsTransitionAllowedInStateAsync(
+                workflow,
+                transition,
+                instance?.CurrentState,
+                instance,
+                role,
+                requestContext,
+                cancellationToken);
         }
 
         if (!string.IsNullOrWhiteSpace(functionKey))
