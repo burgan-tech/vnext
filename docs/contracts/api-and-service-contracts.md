@@ -158,9 +158,13 @@ client can render countdowns and upcoming-action information without polling any
 - An entry may briefly remain visible with a past `executeAtUtc` while the fired transition's
   pipeline is still settling — the list reflects the persisted job rows, and the row is marked
   processed when the handler completes.
-- Changes to the scheduled-job set participate in the state ETag (count + newest row), so a
-  cancel-and-reschedule on a `$self` re-entry moves the ETag even though state and status do not —
-  see [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+- **Known freshness gap (accepted, issue #864)**: changes to the scheduled-job set deliberately do
+  **not** participate in the state ETag. When the job set changes without a state/status delta —
+  a same-state re-arm via `updateData`/`$self`, an inline A→B→A chain, or a fired job rejected
+  under a lock conflict — a client validating with `If-None-Match` keeps receiving `304` and holds
+  a stale `executeAtUtc` until the next fingerprint-visible change. Clients that need the fresh
+  time after triggering such an update should re-fetch without the ETag. See
+  [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
 ### Client-facing hrefs and the `UrlTemplates` section
 

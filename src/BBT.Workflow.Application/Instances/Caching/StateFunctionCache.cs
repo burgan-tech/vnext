@@ -77,9 +77,9 @@ public sealed class StateFunctionCache(
         // The correlation members participate because the response body carries the full correlation
         // set: a sub item starting, terminating or advancing its state changes the body without
         // touching the instance's own state or status, and must still invalidate the caller's ETag.
-        // The scheduled-job members participate for the same reason: the body carries the
-        // scheduledTransitions list, and a $self re-entry can re-arm a timer with a new execution
-        // time while state, status and correlations all stay put.
+        // Scheduled-job changes deliberately do NOT participate (team decision, issue #864): a
+        // same-state re-arm can leave the scheduledTransitions list stale behind a 304 — accepted
+        // as a known gap; see the note on InstanceStateFingerprint.
         var material = string.Join('|',
             ResponseShapeVersion,
             fingerprint.Id,
@@ -92,9 +92,7 @@ public sealed class StateFunctionCache(
             fingerprint.CorrelationCount,
             fingerprint.CompletedCorrelationCount,
             FormatTimestamp(fingerprint.LastCorrelationCompletedAt),
-            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt),
-            fingerprint.ActiveScheduledTransitionJobCount,
-            FormatTimestamp(fingerprint.LastScheduledTransitionJobCreatedAt));
+            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt));
 
         return Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];

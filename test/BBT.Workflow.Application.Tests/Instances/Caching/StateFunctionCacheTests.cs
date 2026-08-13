@@ -273,37 +273,6 @@ public class StateFunctionCacheTests
     }
 
     /// <summary>
-    /// The response body carries the scheduledTransitions list, so the scheduled-job set changing must
-    /// move the ETag even though state, status and correlations are untouched. The created-at member
-    /// covers the cancel-and-reschedule case — a $self re-entry re-arms the same transition with a new
-    /// execution time, leaving the count at its old value.
-    /// </summary>
-    [Fact]
-    public void ComputeEtag_ChangesWithEveryScheduledJobSetMutation()
-    {
-        var sut = CreateSut();
-        var input = CreateInput();
-        var fingerprint = CreateFingerprint(
-            activeScheduledTransitionJobCount: 1,
-            lastScheduledTransitionJobCreatedAt: new DateTime(2026, 8, 1, 10, 0, 0, DateTimeKind.Utc));
-        var baseline = sut.ComputeEtag(input, fingerprint);
-
-        // The job fired or was cancelled without a replacement.
-        sut.ComputeEtag(input, fingerprint with { ActiveScheduledTransitionJobCount = 0 })
-            .ShouldNotBe(baseline);
-        // Cancel-and-reschedule: same count, newer row.
-        sut.ComputeEtag(input, fingerprint with
-        {
-            LastScheduledTransitionJobCreatedAt = new DateTime(2026, 8, 1, 10, 0, 1, DateTimeKind.Utc)
-        }).ShouldNotBe(baseline);
-        // An unchanged job set reproduces the same ETag, so a parked instance keeps answering 304.
-        sut.ComputeEtag(input, CreateFingerprint(
-                activeScheduledTransitionJobCount: 1,
-                lastScheduledTransitionJobCreatedAt: new DateTime(2026, 8, 1, 10, 0, 0, DateTimeKind.Utc)))
-            .ShouldBe(baseline);
-    }
-
-    /// <summary>
     /// The counterpart guarantee: an unchanged correlation set must reproduce the same ETag, so a quiet
     /// instance keeps answering 304 instead of re-sending the body on every poll.
     /// </summary>
@@ -384,15 +353,11 @@ public class StateFunctionCacheTests
         int correlationCount = 0,
         int completedCorrelationCount = 0,
         DateTime? lastCorrelationCompletedAt = null,
-        DateTime? lastSubFlowStateChangedAt = null,
-        int activeScheduledTransitionJobCount = 0,
-        DateTime? lastScheduledTransitionJobCreatedAt = null) =>
+        DateTime? lastSubFlowStateChangedAt = null) =>
         new(Guid.Parse("11111111-1111-1111-1111-111111111111"), "test-key", "review",
             InstanceStatus.Active, "1.0.0", HasActiveSubFlow: false,
             CorrelationCount: correlationCount,
             CompletedCorrelationCount: completedCorrelationCount,
             LastCorrelationCompletedAt: lastCorrelationCompletedAt,
-            LastSubFlowStateChangedAt: lastSubFlowStateChangedAt,
-            ActiveScheduledTransitionJobCount: activeScheduledTransitionJobCount,
-            LastScheduledTransitionJobCreatedAt: lastScheduledTransitionJobCreatedAt);
+            LastSubFlowStateChangedAt: lastSubFlowStateChangedAt);
 }

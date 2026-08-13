@@ -1230,8 +1230,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(new InstanceStateFingerprint(instance.Id, "test-key", TestState, InstanceStatus.Busy,
                 TestVersion, HasActiveSubFlow: true,
                 CorrelationCount: 1, CompletedCorrelationCount: 0,
-                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null,
-                ActiveScheduledTransitionJobCount: 0, LastScheduledTransitionJobCreatedAt: null));
+                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 
         // Act
         var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
@@ -1291,8 +1290,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
                 TestVersion, HasActiveSubFlow: false,
                 CorrelationCount: 0, CompletedCorrelationCount: 0,
-                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null,
-                ActiveScheduledTransitionJobCount: 0, LastScheduledTransitionJobCreatedAt: null));
+                LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 
     private void SetupCachedEntry(out Caching.StateFunctionCacheEntry entry, string etag = "etag-current")
     {

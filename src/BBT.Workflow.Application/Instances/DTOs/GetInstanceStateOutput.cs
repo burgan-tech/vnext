@@ -63,8 +63,9 @@ public sealed class GetInstanceStateOutput
     /// execution time ascending. Read from the persisted job state, so clients can render
     /// countdowns and upcoming-action information without any scheduler access. Always describes
     /// the polled instance itself — during an active-subflow window it is not merged with the
-    /// subflow's own list. Changes to this set participate in the state fingerprint ETag; see
-    /// <c>StateFunctionCache.ResponseShapeVersion</c>.
+    /// subflow's own list. Changes to this set deliberately do NOT participate in the fingerprint
+    /// ETag (team decision, issue #864) — a same-state re-arm can leave this list stale behind a
+    /// 304; accepted as a known gap, see <c>InstanceStateFingerprint</c>.
     /// </summary>
     public List<ScheduledTransitionItem> ScheduledTransitions { get; set; } = [];
 

@@ -957,17 +957,8 @@ public sealed class InstanceQueryAppService(
                         .OrderBy(c => c.CreatedAt)
                         .ToList();
 
-                    // Active scheduled-transition jobs, read once: the same list feeds the response
-                    // body's scheduledTransitions and the fingerprint's job members, so the ETag can
-                    // never disagree with the body about the set.
-                    var activeScheduledTransitionJobs = (await instanceJobRepository
-                            .GetListActiveAsync(data.instance.Id, cancellationToken))
-                        .Where(j => j.JobType == JobType.ScheduledTransition)
-                        .ToList();
-
                     var buildResult = await BuildInstanceStateOutputAsync(
-                        data.instance, data.workflow, input, allCorrelations,
-                        activeScheduledTransitionJobs, cancellationToken);
+                        data.instance, data.workflow, input, allCorrelations, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetInstanceStateOutput>.Fail(buildResult.Error);
 
@@ -980,8 +971,7 @@ public sealed class InstanceQueryAppService(
                     // paths hash the same set — see InstanceStateFingerprint.FromInstance.
                     // Active-subflow responses fold the live displayed state/status into the hash:
                     // the parent row alone cannot see subflow-internal Busy/Active flips.
-                    var fingerprint = InstanceStateFingerprint.FromInstance(
-                        data.instance, allCorrelations, activeScheduledTransitionJobs);
+                    var fingerprint = InstanceStateFingerprint.FromInstance(data.instance, allCorrelations);
                     var etag = data.instance.HasActiveSubFlow
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
@@ -1069,18 +1059,22 @@ public sealed class InstanceQueryAppService(
     /// <param name="allCorrelations">Full child correlation set (active + completed), CreatedAt ascending.
     /// Feeds the <c>correlations</c> response list only — the active-subflow detection below deliberately
     /// keeps using the aggregate, whose active set drives Busy/settlement semantics.</param>
-    /// <param name="activeScheduledTransitionJobs">The instance's active scheduled-transition jobs,
-    /// pre-filtered by the caller. Feeds the <c>scheduledTransitions</c> response list; the caller hashes
-    /// the same list into the fingerprint ETag.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
         IReadOnlyCollection<InstanceCorrelation> allCorrelations,
-        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
         CancellationToken cancellationToken)
     {
+        // Active scheduled-transition jobs feed the scheduledTransitions response list only —
+        // deliberately NOT the fingerprint ETag (team decision, issue #864; known staleness gap,
+        // see InstanceStateFingerprint). Loaded here so the fast 304 path never pays for it.
+        var activeScheduledTransitionJobs = (await instanceJobRepository
+                .GetListActiveAsync(instance.Id, cancellationToken))
+            .Where(j => j.JobType == JobType.ScheduledTransition)
+            .ToList();
+
         // Build instance transition information using shared logic (no DB call - uses instance.ActiveCorrelations)
         var transitionInfo = BuildInstanceTransitionInfo(instance);
 
