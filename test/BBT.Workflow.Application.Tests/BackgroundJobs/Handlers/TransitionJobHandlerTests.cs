@@ -104,6 +104,30 @@ public class TransitionJobHandlerTests
     }
 
     /// <summary>
+    /// The payload's business correlation id must be seeded into the rebuilt execution context so
+    /// the job continues the originating chain's correlation.id instead of minting a new one.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithPayloadCorrelationId_SeedsExecutionContext()
+    {
+        var payload = CreatePayload();
+        payload.CorrelationId = "abc123def456abc123def456abc12345";
+        var handler = CreateHandler();
+
+        WorkflowExecutionContext? capturedContext = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => capturedContext = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(capturedContext);
+        Assert.Equal("abc123def456abc123def456abc12345", capturedContext!.CorrelationId);
+    }
+
+    /// <summary>
     /// Without an x-request-id header the provider must not be touched (no Change(null) noise).
     /// </summary>
     [Fact]

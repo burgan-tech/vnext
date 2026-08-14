@@ -53,7 +53,8 @@ public sealed class TransitionJobHandler(
                        [TelemetryConstants.TagNames.InstanceKey] = args.InstanceKey ?? "N/A",
                        [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey,
                        [TelemetryConstants.TagNames.JobName] = args.JobName,
-                       [TelemetryConstants.TagNames.RequestId] = requestId ?? "N/A"
+                       [TelemetryConstants.TagNames.RequestId] = requestId ?? "N/A",
+                       [TelemetryConstants.TagNames.CorrelationId] = args.CorrelationId ?? "N/A"
                    }))
             {
                 var timeoutSeconds = executionOptions.Value.TransitionJobTimeoutSeconds;
@@ -90,7 +91,10 @@ public sealed class TransitionJobHandler(
                             sync: true) // Force sync=true to avoid infinite loop
                         {
                             Headers = args.Headers,
-                            RouteValues = args.RouteValues
+                            RouteValues = args.RouteValues,
+                            // Continue the originating chain's business correlation instead of
+                            // minting a new one per job hop.
+                            CorrelationId = args.CorrelationId
                         };
 
                     var context =

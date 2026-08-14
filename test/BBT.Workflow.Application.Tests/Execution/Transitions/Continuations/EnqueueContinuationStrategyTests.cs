@@ -167,6 +167,33 @@ public class EnqueueContinuationStrategyTests
     }
 
     [Fact]
+    public async Task ChainedContinuation_CarriesBusinessCorrelationOnBothPaths()
+    {
+        // The business correlation id must survive the async hop on BOTH the direct payload and
+        // the outbox event, so every leg of an auto-chain keeps one correlation.id.
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        TransitionJobPayload? capturedPayload = null;
+        TransitionContinuationRequested? capturedEvent = null;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
+                (payload, evt, _) => { capturedPayload = payload; capturedEvent = evt; })
+            .Returns(Task.CompletedTask);
+
+        await strategy.DispatchAsync(context, CancellationToken.None);
+
+        capturedPayload.ShouldNotBeNull();
+        capturedEvent.ShouldNotBeNull();
+        capturedPayload!.CorrelationId.ShouldBe(context.CorrelationId);
+        capturedEvent!.CorrelationId.ShouldBe(context.CorrelationId);
+    }
+
+    [Fact]
     public async Task WhenNoNextTransition_ReturnsNullWithoutSideEffects()
     {
         var strategy = CreateStrategy();

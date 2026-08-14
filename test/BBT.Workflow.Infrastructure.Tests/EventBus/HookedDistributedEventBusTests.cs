@@ -44,7 +44,7 @@ public sealed class HookedDistributedEventBusTests
 
         evt.TraceParent.ShouldBe(activity.Id);
         evt.TraceState.ShouldBe("vendor=state");
-        evt.CorrelationId.ShouldBe("req-123");
+        evt.RequestId.ShouldBe("req-123");
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public sealed class HookedDistributedEventBusTests
         {
             TraceParent = "00-11111111111111111111111111111111-2222222222222222-01",
             TraceState = "preset=1",
-            CorrelationId = "preset-req"
+            RequestId = "preset-req"
         };
 
         var activity = new Activity("publisher");
@@ -77,7 +77,7 @@ public sealed class HookedDistributedEventBusTests
 
         evt.TraceParent.ShouldBe("00-11111111111111111111111111111111-2222222222222222-01");
         evt.TraceState.ShouldBe("preset=1");
-        evt.CorrelationId.ShouldBe("preset-req");
+        evt.RequestId.ShouldBe("preset-req");
     }
 
     [Fact]
@@ -261,6 +261,6 @@ public sealed class HookedDistributedEventBusTests
     {
         public string? TraceParent { get; set; }
         public string? TraceState { get; set; }
-        public string? CorrelationId { get; set; }
+        public string? RequestId { get; set; }
     }
 }

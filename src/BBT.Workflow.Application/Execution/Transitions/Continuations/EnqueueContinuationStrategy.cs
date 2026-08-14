@@ -85,7 +85,8 @@ public sealed class EnqueueContinuationStrategy(
             ExecutionActor = ExecutionActor.System,
             CallerSync = false,
             TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString
+            TraceState = activity?.TraceStateString,
+            CorrelationId = current.CorrelationId
         };
 
         var outboxEvent = new TransitionContinuationRequested
@@ -103,7 +104,8 @@ public sealed class EnqueueContinuationStrategy(
             ExecutionActor = ExecutionActor.System.ToString(),
             ChainDepth = current.ChainDepth + 1,
             TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString
+            TraceState = activity?.TraceStateString,
+            CorrelationId = current.CorrelationId
         };
 
         await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);

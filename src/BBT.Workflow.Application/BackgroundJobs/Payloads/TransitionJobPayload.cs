@@ -101,4 +101,10 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// </summary>
     public string? TraceState { get; set; }
 
+    /// <summary>
+    /// Business correlation id of the originating execution chain. Restored into the rebuilt
+    /// <c>TransitionInput</c> by the job handler so the async hop keeps the SAME correlation.id
+    /// instead of minting a new one per job.
+    /// </summary>
+    public string? CorrelationId { get; set; }
 }

@@ -17,5 +17,5 @@ public interface ITraceableDistributedEvent
     string? TraceState { get; set; }
 
     /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
-    string? CorrelationId { get; set; }
+    string? RequestId { get; set; }
 }

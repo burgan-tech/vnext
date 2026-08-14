@@ -73,8 +73,8 @@ public sealed class ExecutionController(
         activity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
         activity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
-        if (!string.IsNullOrEmpty(traceContext?.CorrelationId))
-            activity?.SetTag(TelemetryConstants.TagNames.RequestId, traceContext.CorrelationId);
+        if (!string.IsNullOrEmpty(traceContext?.RequestId))
+            activity?.SetTag(TelemetryConstants.TagNames.RequestId, traceContext.RequestId);
 
         if (traceContext?.InstanceId is { } instanceId && instanceId != Guid.Empty)
         {
@@ -105,9 +105,9 @@ public sealed class ExecutionController(
             [TelemetryConstants.TagNames.InstanceId] = traceContext?.InstanceId ?? Guid.Empty,
             [TelemetryConstants.TagNames.WorkflowInstanceId] = traceContext?.InstanceId.ToString("D").ToLowerInvariant() ?? Guid.Empty.ToString("D"),
             [TelemetryConstants.TagNames.CorrelationId] = traceContext?.CorrelationId ?? "unknown",
-            [TelemetryConstants.TagNames.TaskKey] = envelope.TaskKey,AD
+            [TelemetryConstants.TagNames.TaskKey] = envelope.TaskKey,
             [TelemetryConstants.TagNames.TaskType] = envelope.TaskType,
-            [TelemetryConstants.TagNames.RequestId] = traceContext?.CorrelationId ?? "N/A"
+            [TelemetryConstants.TagNames.RequestId] = traceContext?.RequestId ?? "N/A"
         };
 
         if (subject is not null)

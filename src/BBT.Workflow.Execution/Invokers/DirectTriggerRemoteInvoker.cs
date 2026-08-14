@@ -319,6 +319,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
             "application/json");
 
         AddHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
         return request;
     }
 
@@ -348,6 +349,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         };
 
         AddHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
         return request;
     }
 

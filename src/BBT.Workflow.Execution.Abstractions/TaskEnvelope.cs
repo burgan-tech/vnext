@@ -57,7 +57,9 @@ public sealed class TaskTraceContext
     public string? WorkflowVersion { get; init; }
 
     /// <summary>
-    /// Safe correlation ID propagated from orchestration for cross-service log correlation.
+    /// Business-operation correlation identifier (chain-stable execution correlation id)
+    /// propagated from orchestration. Intentionally separate from the per-request
+    /// <see cref="RequestId"/> and the W3C trace identifier.
     /// </summary>
     public string? CorrelationId { get; init; }
 
@@ -86,7 +88,7 @@ public sealed class TaskTraceContext
     /// <summary>
     /// Originating request id (X-Request-Id value) for cross-service log correlation.
     /// </summary>
-    public string? CorrelationId { get; init; }
+    public string? RequestId { get; init; }
 
     /// <summary>
     /// W3C traceparent captured at invoke time on the orchestration side.

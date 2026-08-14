@@ -34,8 +34,8 @@ internal sealed class EventTraceScope : IDisposable
     /// Falls back to the ambient parent when the event carries no or invalid trace context.
     /// </summary>
     /// <param name="activityName">Span name, e.g. "InstanceSubCompleted.Handle".</param>
-    /// <param name="evt">The traceable event carrying TraceParent/TraceState/CorrelationId.</param>
-    /// <param name="correlationIdProvider">Optional provider to scope the event's correlation id into.</param>
+    /// <param name="evt">The traceable event carrying TraceParent/TraceState/RequestId.</param>
+    /// <param name="correlationIdProvider">Optional provider to scope the event's request id into.</param>
     public static EventTraceScope Start(
         string activityName,
         ITraceableDistributedEvent evt,
@@ -68,9 +68,9 @@ internal sealed class EventTraceScope : IDisposable
         }
 
         IDisposable? correlationChange = null;
-        if (correlationIdProvider is not null && !string.IsNullOrEmpty(evt.CorrelationId))
+        if (correlationIdProvider is not null && !string.IsNullOrEmpty(evt.RequestId))
         {
-            correlationChange = correlationIdProvider.Change(evt.CorrelationId);
+            correlationChange = correlationIdProvider.Change(evt.RequestId);
         }
 
         return new EventTraceScope(activity, correlationChange);

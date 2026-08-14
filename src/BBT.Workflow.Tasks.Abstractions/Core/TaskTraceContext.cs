@@ -10,27 +10,34 @@ public sealed record TaskTraceContext
     /// Instance ID being processed.
     /// </summary>
     public Guid InstanceId { get; init; }
-    
+
     /// <summary>
     /// Domain of the workflow.
     /// </summary>
     public string Domain { get; init; } = string.Empty;
-    
+
     /// <summary>
     /// Key of the workflow.
     /// </summary>
     public string WorkflowKey { get; init; } = string.Empty;
-    
+
     /// <summary>
     /// Version of the workflow.
     /// </summary>
     public string WorkflowVersion { get; init; } = string.Empty;
-    
+
     /// <summary>
-    /// Optional correlation ID for cross-service tracing.
-    /// Carries the originating request id (X-Request-Id) end to end.
+    /// Business-operation correlation identifier: the chain-stable execution correlation id
+    /// (<c>WorkflowExecutionContext.CorrelationId</c>), constant across an execution chain
+    /// including async job hops and auto-chained transitions. Intentionally separate from the
+    /// per-request <see cref="RequestId"/> and the W3C trace identifier.
     /// </summary>
     public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// Originating request id (X-Request-Id value) for cross-service log correlation.
+    /// </summary>
+    public string? RequestId { get; init; }
 
     /// <summary>
     /// W3C traceparent captured at invoke time on the orchestration side.
@@ -43,6 +50,7 @@ public sealed record TaskTraceContext
     /// </summary>
     public string? TraceState { get; init; }
 
+    /// <summary>
     /// Gateway-authenticated primary subject propagated for dependency log correlation.
     /// </summary>
     public string? Sub { get; init; }
@@ -61,7 +69,7 @@ public sealed record TaskTraceContext
     /// Serialized instance latest data JSON for placeholder resolution.
     /// </summary>
     public string? InstanceDataJson { get; init; }
-    
+
     /// <summary>
     /// Creates a trace context from workflow and instance information.
     /// </summary>
@@ -76,13 +84,15 @@ public sealed record TaskTraceContext
         string? traceParent = null,
         string? traceState = null,
         string? sub = null,
-        string? actSub = null) => new()
+        string? actSub = null,
+        string? requestId = null) => new()
     {
         InstanceId = instanceId,
         Domain = domain,
         WorkflowKey = workflowKey,
         WorkflowVersion = workflowVersion,
         CorrelationId = correlationId,
+        RequestId = requestId,
         Sub = sub,
         ActSub = actSub,
         RequestHeaders = headers,

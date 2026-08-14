@@ -67,5 +67,5 @@ public class InstanceCanceledEvent : IDistributedEvent, ITraceableDistributedEve
     public string? TraceState { get; set; }
 
     /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
-    public string? CorrelationId { get; set; }
+    public string? RequestId { get; set; }
 }

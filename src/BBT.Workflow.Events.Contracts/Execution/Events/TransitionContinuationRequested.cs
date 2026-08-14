@@ -74,7 +74,14 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ITracea
     public string? TraceState { get; set; }
 
     /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
-    public string? CorrelationId { get; set; }
+    public string? RequestId { get; set; }
+
+    /// <summary>
+    /// Business correlation id of the originating execution chain (chain-stable, distinct from
+    /// <see cref="RequestId"/>). Copied into the downstream job payload so auto-chain hops keep
+    /// one correlation.id.
+    /// </summary>
+    public string? CorrelationId { get; init; }
 
     /// <summary>The chain depth of the continuation (for the chain-depth guard).</summary>
     public int ChainDepth { get; init; }

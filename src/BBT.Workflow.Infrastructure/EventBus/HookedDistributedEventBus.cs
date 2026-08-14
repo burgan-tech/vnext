@@ -87,7 +87,7 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
             traceable.TraceState = Activity.Current?.TraceStateString;
         }
 
-        traceable.CorrelationId ??= _correlationIdProvider?.Get();
+        traceable.RequestId ??= _correlationIdProvider?.Get();
     }
 
     /// <summary>

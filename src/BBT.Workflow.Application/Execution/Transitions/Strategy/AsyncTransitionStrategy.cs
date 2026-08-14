@@ -273,6 +273,7 @@ public sealed class AsyncTransitionStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            CorrelationId = transContext.CorrelationId,
             Stage = context.Data?.Stage
         };
     }
@@ -305,6 +306,7 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth
         };
     }

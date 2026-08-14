@@ -85,7 +85,7 @@ public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistrib
     public string? TraceState { get; set; }
 
     /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
-    public string? CorrelationId { get; set; }
+    public string? RequestId { get; set; }
 
     public override string ToString()
     {

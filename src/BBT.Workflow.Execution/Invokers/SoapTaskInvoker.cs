@@ -93,6 +93,8 @@ public sealed class SoapTaskInvoker(
                 }
             }
 
+            InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+
             var response = await httpClient.SendAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);

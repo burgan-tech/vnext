@@ -128,8 +128,10 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 
             // Forward the originating request id so Execution's correlation middleware and
             // log enrichers pick it up — this is what joins Execution logs to the client request.
-            if (!string.IsNullOrEmpty(traceContext.CorrelationId))
-                httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, traceContext.CorrelationId);
+            // Distinct from CorrelationId above: RequestId is per client request, CorrelationId
+            // is the chain-stable business correlation.
+            if (!string.IsNullOrEmpty(traceContext.RequestId))
+                httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, traceContext.RequestId);
 
             var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
                 httpRequest, invocationCts.Token);
@@ -208,21 +210,26 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         var subject = GetIdentityClaim(headers, TelemetryConstants.HeaderNames.Sub);
         var actSub = GetIdentityClaim(headers, TelemetryConstants.HeaderNames.ActSub);
 
+        // Business correlation: the chain-stable execution correlation id, published as baggage
+        // by TransitionExecutor.EnrichTelemetry for every pipeline run (sync and async alike).
+        // Fallback to the current trace id (32 hex, Guid "N"-compatible) so a correlation is
+        // always available even when no pipeline baggage exists.
+        var correlationId = activity?.GetBaggageItem(TelemetryConstants.TagNames.CorrelationId)
+                            ?? activity?.TraceId.ToString();
 
         return TaskTraceContext.Create(
             instanceId: instance?.Id ?? Guid.Empty,
             domain: domain,
             workflowKey: workflow?.Key ?? string.Empty,
             workflowVersion: workflow?.Version ?? string.Empty,
-
-            correlationId: requestId,
+            correlationId: correlationId,
             headers: headers,
             instanceDataJson: instance?.LatestData?.Data?.Json,
             traceParent: activity?.Id,
             traceState: activity?.TraceStateString,
             sub: subject,
-            actSub: actSub
-            );
+            actSub: actSub,
+            requestId: requestId);
     }
 
     private static string? GetIdentityClaim(
