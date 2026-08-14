@@ -23,6 +23,13 @@ namespace BBT.Workflow.HttpApi.Shared.Telemetry;
 /// job payload / event contract. OpenTelemetry invokes <see cref="OnEnd"/> synchronously inside
 /// <c>ILogger.Log</c>, so the ambient value is the one in effect where the log was written.
 /// </para>
+/// <para>
+/// The emitted key (<c>x_request_id</c>) is deliberately identical to what the header enricher
+/// would produce for <c>X-Request-Id</c>. That makes the "never list X-Request-Id in
+/// Telemetry:Logging:Enrichers:Headers" rule load-bearing: the enricher runs first, so its
+/// (possibly fabricated) value would win the deduplication check below and suppress the correct
+/// one. Keep the header out of that list.
+/// </para>
 /// </summary>
 public sealed class RequestIdLogProcessor(ICorrelationIdProvider correlationIdProvider)
     : BaseProcessor<LogRecord>

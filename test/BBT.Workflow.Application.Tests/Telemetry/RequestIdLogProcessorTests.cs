@@ -48,6 +48,15 @@ public sealed class RequestIdLogProcessorTests
     }
 
     [Fact]
+    public void FieldName_IsTheNormalizedHeaderName()
+    {
+        // Pinned: dashboards and saved queries filter on this literal. It must stay dot-free so
+        // backends that flatten dotted keys do not rewrite it, and it must match the normalized
+        // X-Request-Id header name. Renaming this is a breaking change for every saved query.
+        TelemetryConstants.TagNames.RequestId.ShouldBe("x_request_id");
+    }
+
+    [Fact]
     public void WhenProviderHasRequestId_StampsItOnTheRecord()
     {
         var (captured, factory) = CreateHarness("req-abc-123");

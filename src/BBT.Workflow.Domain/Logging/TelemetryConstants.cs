@@ -60,8 +60,23 @@ public static class TelemetryConstants
         /// <summary>
         /// Originating request id (X-Request-Id value) — joins spans/logs across the async
         /// job, Execution and worker hops back to the client request that started them.
+        /// <para>
+        /// The value is the normalized form of the <c>X-Request-Id</c> header (lowercase, '-'
+        /// replaced by '_') so log backends surface it under exactly the name the platform uses
+        /// for the header. It carries no dot on purpose: backends that flatten dotted keys
+        /// (OpenObserve, Elasticsearch) leave this one untouched, so the queried field is
+        /// <c>x_request_id</c> everywhere.
+        /// </para>
+        /// <para>
+        /// Because this key is identical to what Aether's header enricher would produce for
+        /// <c>X-Request-Id</c>, that header must NEVER be listed in
+        /// <c>Telemetry:Logging:Enrichers:Headers</c> — the enricher writes first and reports a
+        /// value fabricated from <c>HttpContext.TraceIdentifier</c> on platform-originated
+        /// requests (Dapr job callbacks, pub/sub deliveries), which would then suppress the
+        /// correct value stamped from the correlation provider.
+        /// </para>
         /// </summary>
-        public const string RequestId = "vnext.request.id";
+        public const string RequestId = "x_request_id";
         public const string SubItemType = "vnext.subitem.type";
         public const string SubItemOutcome = "vnext.subitem.outcome";
         public const string TerminationOrigin = "vnext.termination.origin";
