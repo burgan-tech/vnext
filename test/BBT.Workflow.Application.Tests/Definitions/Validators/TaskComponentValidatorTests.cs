@@ -53,7 +53,7 @@ public class TaskComponentValidatorTests
         {
             "type": "21",
             "config": {
-                "url": "http://google.com",
+                "url": "https://google.com",
                 "method": "GET"
             }
         }

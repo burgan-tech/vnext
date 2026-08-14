@@ -18,7 +18,7 @@ public class ExternalHttpTaskTests
         {
             "type": "21",
             "config": {
-                "url": "http://google.com",
+                "url": "https://google.com",
                 "method": "GET",
                 "timeoutSeconds": 12,
                 "validateSsl": false,
@@ -31,7 +31,7 @@ public class ExternalHttpTaskTests
 
         var localHttp = Assert.IsType<ExternalHttpTask>(task);
         Assert.Equal(TaskType.ExternalHttp, localHttp.GetTaskType());
-        Assert.Equal("http://google.com", localHttp.Url);
+        Assert.Equal("https://google.com", localHttp.Url);
         Assert.Equal("GET", localHttp.Method);
         Assert.Equal(12, localHttp.TimeoutSeconds);
         Assert.False(localHttp.ValidateSSL);

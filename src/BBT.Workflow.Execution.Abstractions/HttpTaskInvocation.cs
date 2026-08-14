@@ -20,7 +20,9 @@ namespace BBT.Workflow.Execution;
 /// <c>Func&lt;string, HttpClient&gt;</c> — hosts pass <c>IHttpClientFactory.CreateClient</c> — and no
 /// logging or metrics happen here: every outcome, including cancellation and transport failure, is
 /// returned as a <see cref="TaskInvocationResult"/> whose metadata carries what the hosts need to
-/// log (<c>Cancelled</c>, <c>ExceptionType</c>, <c>StackTrace</c>).
+/// log (<c>Cancelled</c>, <c>ExceptionType</c>). Stack traces are deliberately NOT placed in
+/// metadata: it travels into task results, the execution journal and output mappings, so it
+/// could be persisted or surface to API clients.
 /// </para>
 /// </summary>
 public static class HttpTaskInvocation
@@ -161,8 +163,7 @@ public static class HttpTaskInvocation
                 {
                     ["Url"] = binding.Url,
                     ["Method"] = binding.Method,
-                    ["ExceptionType"] = ex.GetType().Name,
-                    ["StackTrace"] = ex.StackTrace ?? string.Empty
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
     }

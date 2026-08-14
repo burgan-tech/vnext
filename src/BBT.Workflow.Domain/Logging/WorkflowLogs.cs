@@ -788,7 +788,7 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
-    /// Logs when a external (orchestrator-executed) HTTP task request is cancelled.
+    /// Logs when an external (orchestrator-executed) HTTP task request is cancelled.
     /// </summary>
     [LoggerMessage(
         EventId = 10099,
@@ -800,12 +800,12 @@ public static partial class WorkflowLogs
         string url);
 
     /// <summary>
-    /// Logs when a external (orchestrator-executed) HTTP task disables SSL certificate validation.
+    /// Logs when an external (orchestrator-executed) HTTP task disables SSL certificate validation.
     /// </summary>
     [LoggerMessage(
-        EventId = 10100,
+        EventId = 10108,
         Level = LogLevel.Debug,
-        Message = "SSL certificate validation is disabled for local HTTP task {TaskKey} - URL: {Url}")]
+        Message = "SSL certificate validation is disabled for external HTTP task {TaskKey} - URL: {Url}")]
     public static partial void ExternalHttpTaskSslValidationDisabled(
         this ILogger logger,
         string? taskKey,

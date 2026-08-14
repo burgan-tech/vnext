@@ -97,10 +97,11 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<SoapTaskExecutor>();
 
         // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
-        // in-process — no /execution/invoke hop. Needs the workflow HTTP clients below.
+        // in-process — no /execution/invoke hop. The named HTTP clients it sends through are
+        // concrete transport and are registered by the Infrastructure module
+        // (AddExternalHttpTaskClients), which every composition root pairs with this one.
         services.TryAddScoped<IExternalHttpTaskInvoker, ExternalHttpTaskInvoker>();
         services.AddTaskExecutor<ExternalHttpTaskExecutor>();
-        services.AddExternalHttpTaskClients();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
@@ -300,47 +301,6 @@ public static class TaskServiceCollectionExtensions
         var configuration = sp.GetService<IConfiguration>();
         configuration?.GetSection(sectionName)?.Bind(options);
         return options;
-    }
-
-    /// <summary>
-    /// Registers the named HTTP clients the local HTTP task executor sends through. Mirrors the
-    /// Execution host's <c>AddWorkflowHttpClient</c> (same client names, decompression, connection
-    /// cap, cookie policy and SSL-bypass variant) so a task behaves identically whichever host
-    /// performs the call. The 30s base timeout is overridden per request from the task's
-    /// <c>timeoutSeconds</c> by <see cref="BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker"/>.
-    /// </summary>
-    private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
-    {
-        // Default HTTP client with SSL validation enabled
-        services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(30);
-                client.MaxResponseContentBufferSize = int.MaxValue;
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
-                UseCookies = false
-            });
-
-        // HTTP client with SSL validation disabled (validateSsl: false tasks)
-        services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.NoSslValidation, client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(30);
-                client.MaxResponseContentBufferSize = int.MaxValue;
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-            })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
-                UseCookies = false,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            });
-
-        return services;
     }
 
     /// <summary>
