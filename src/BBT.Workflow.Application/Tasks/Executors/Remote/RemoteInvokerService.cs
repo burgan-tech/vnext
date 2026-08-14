@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Aether.Tracing;
@@ -76,15 +77,49 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         try
         {
             var httpRequest = _daprClient.CreateInvokeMethodRequest(
+                HttpMethod.Post,
                 _executionServiceAppId,
-                $"/api/v1/execution/invoke/{taskType}/{taskKey}",
-                request);
+                $"/api/v1/execution/invoke/{taskType}/{taskKey}");
+            httpRequest.Content = JsonContent.Create(request);
 
             httpRequest.Headers.Add(WorkflowInfo.Name, WorkflowInfo.Generate(
                 traceContext.Domain ?? "unknown",
                 traceContext.WorkflowKey ?? "unknown",
                 traceContext.WorkflowVersion ?? "latest",
                 traceContext.InstanceId));
+
+            if (traceContext.InstanceId != Guid.Empty)
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.WorkflowInstanceId);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.WorkflowInstanceId,
+                    traceContext.InstanceId.ToString("D").ToLowerInvariant());
+            }
+
+            if (Guid.TryParseExact(traceContext.CorrelationId, "N", out var correlationId)
+                && correlationId != Guid.Empty)
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.CorrelationId);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.CorrelationId,
+                    correlationId.ToString("N"));
+            }
+
+            if (TelemetryConstants.TryNormalizeIdentityClaim(traceContext.Sub, out var subject))
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.Sub);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.Sub,
+                    subject);
+            }
+
+            if (TelemetryConstants.TryNormalizeIdentityClaim(traceContext.ActSub, out var actSub))
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.ActSub);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.ActSub,
+                    actSub);
+            }
 
             // Forward root instance ID from Activity baggage (set by TransitionExecutor for subflow instances)
             var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
@@ -170,15 +205,38 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 
         var activity = Activity.Current;
 
+        var subject = GetIdentityClaim(headers, TelemetryConstants.HeaderNames.Sub);
+        var actSub = GetIdentityClaim(headers, TelemetryConstants.HeaderNames.ActSub);
+
+
         return TaskTraceContext.Create(
             instanceId: instance?.Id ?? Guid.Empty,
             domain: domain,
             workflowKey: workflow?.Key ?? string.Empty,
             workflowVersion: workflow?.Version ?? string.Empty,
+
             correlationId: requestId,
             headers: headers,
             instanceDataJson: instance?.LatestData?.Data?.Json,
             traceParent: activity?.Id,
-            traceState: activity?.TraceStateString);
+            traceState: activity?.TraceStateString,
+            sub: subject,
+            actSub: actSub
+            );
+    }
+
+    private static string? GetIdentityClaim(
+        IReadOnlyDictionary<string, string>? headers,
+        string headerName)
+    {
+        var rawValue = headers?
+            .FirstOrDefault(header => string.Equals(
+                header.Key,
+                headerName,
+                StringComparison.OrdinalIgnoreCase))
+            .Value;
+        return TelemetryConstants.TryNormalizeIdentityClaim(rawValue, out var normalized)
+            ? normalized
+            : null;
     }
 }
