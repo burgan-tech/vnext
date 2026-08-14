@@ -2953,6 +2953,58 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Instance Query Filtering
+
+    /// <summary>
+    /// Logs when an instance-query parameter was rejected by the boundary validator and the query
+    /// was never executed. One entry per validation error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20440,
+        Level = LogLevel.Warning,
+        Message = "Instance query rejected. Domain: {Domain}, Workflow: {Workflow}, Parameter: {Parameter}, Code: {ErrorCode}, Reason: {Reason}")]
+    public static partial void InstanceQueryParameterRejected(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string parameter,
+        string errorCode,
+        string reason);
+
+    /// <summary>
+    /// Logs when a filter that passed boundary validation still failed while being compiled into
+    /// SQL. This means the validator's whitelist and the SQL builder's whitelist have drifted —
+    /// the caller sees an error either way, but the drift is a defect worth investigating.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20441,
+        Level = LogLevel.Error,
+        Message = "Instance filter compilation failed after passing validation. Domain: {Domain}, Workflow: {Workflow}")]
+    public static partial void InstanceFilterCompilationFailed(
+        this ILogger logger,
+        Exception exception,
+        string domain,
+        string workflow);
+
+    /// <summary>
+    /// Logs when a workflow task's authored filter was rejected. Unlike a client-supplied filter,
+    /// this is a definition defect: the task fails so the error boundary can act on it, rather than
+    /// loading every instance of the target workflow into instance data.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20442,
+        Level = LogLevel.Warning,
+        Message = "Task filter rejected. TaskKey: {TaskKey}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Code: {ErrorCode}, Reason: {Reason}")]
+    public static partial void InstanceTaskFilterRejected(
+        this ILogger logger,
+        string taskKey,
+        string targetDomain,
+        string targetFlow,
+        string errorCode,
+        string reason);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>

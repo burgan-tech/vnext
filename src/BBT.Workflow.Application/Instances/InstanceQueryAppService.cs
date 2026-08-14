@@ -17,12 +17,14 @@ using BBT.Workflow.Shared;
 using System.Text.Json;
 using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.ExceptionHandling;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -60,6 +62,25 @@ public sealed class InstanceQueryAppService(
         InstanceStatus.Faulted,
         InstanceStatus.Passive
     ];
+
+    /// <summary>
+    /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
+    /// rejection reason so the caller can fix them all in one round trip.
+    /// </summary>
+    private static Error ToValidationError(FilterValidationResult validation)
+    {
+        var validationErrors = validation.Errors
+            .Select(error => new System.ComponentModel.DataAnnotations.ValidationResult(
+                error.Message,
+                [error.Target ?? "filter"]))
+            .ToList();
+
+        return Error.Validation(
+            validation.PrimaryErrorCode,
+            validation.ToMessage(),
+            validationErrors,
+            validation.Errors[0].Target ?? "filter");
+    }
 
     private IDisposable? BeginRootIdScopeIfSubflow(Instance instance)
     {
@@ -126,10 +147,32 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Validate before any query is built. A filter the runtime cannot honor must be rejected,
+        // never silently ignored — ignoring it widens the result set instead of narrowing it.
+        var validation = InstanceQueryValidator.Validate(new InstanceQueryValidationRequest
+        {
+            Filter = input.Filter,
+            Sort = input.Sort,
+            GroupBy = input.GroupBy,
+            Aggregations = input.Aggregations
+        });
+
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors)
+            {
+                logger.InstanceQueryParameterRejected(
+                    input.Domain, input.Workflow, error.Target ?? "filter", error.Code, error.Message);
+            }
+
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(
+                ToValidationError(validation));
+        }
+
         return await ResultExtensions.TryAsync(
             async ct =>
             {
- 
+
                 // Resolve schema-driven filter/sort metadata from workflow's master schema
                 SchemaFilterContext? schemaContext = null;
                 var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
@@ -185,30 +228,58 @@ public sealed class InstanceQueryAppService(
                 // Use optimized path if we have a parsed request (avoids parse-serialize-parse cycle)
                 HateoasPagedList<Instance> pagedList;
                 List<GroupSummary>? groups;
-                if (parsedRequest != null)
+                try
                 {
-                   parsedRequest.SchemaContext = schemaContext;
-                    var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
-                        input.Page,
-                        input.PageSize,
-                        parsedRequest,
-                        ct);
-                    pagedList = result.PagedList;
-                    groups = result.Groups;
+                    if (parsedRequest != null)
+                    {
+                        parsedRequest.SchemaContext = schemaContext;
+                        var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                            input.Page,
+                            input.PageSize,
+                            parsedRequest,
+                            ct);
+                        pagedList = result.PagedList;
+                        groups = result.Groups;
+                    }
+                    else
+                    {
+                        var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                            input.Page,
+                            input.PageSize,
+                            input.Filter,
+                            groupBy,
+                            aggregations,
+                            input.Sort,
+                            schemaContext,
+                            ct);
+                        pagedList = result.PagedList;
+                        groups = result.Groups;
+                    }
                 }
-                else
+                catch (Exception ex) when (ex is ArgumentException or FormatException or FilterCompilationException)
                 {
-                   var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
-                        input.Page,
-                        input.PageSize,
-                        input.Filter,
-                        groupBy,
-                        aggregations,
-                        input.Sort,
-                        schemaContext,
-                        ct);
-                    pagedList = result.PagedList;
-                    groups = result.Groups;
+                    // The filter passed boundary validation but still could not be compiled into
+                    // SQL — either a value the operator cannot accept for that column (such as
+                    // `createdAt eq "notadate"`, surfacing as ArgumentException/FormatException) or
+                    // a fail-closed guard in the builders (FilterCompilationException). Both mean
+                    // the validator's rules and the SQL builder's rules have drifted, which is why
+                    // this logs at Error; the caller still gets a 400, not a 500, because the
+                    // request is unservable either way.
+                    //
+                    // SchemaFilterValidationException is deliberately NOT caught here: it is a
+                    // master-schema policy decision (field not filterable, operator not in
+                    // x-filterOperators) that the boundary validator intentionally does not
+                    // duplicate. Treating it as drift would fire this alarm on every routine
+                    // policy rejection. It already carries its own 400-mapping code and passes
+                    // through untouched.
+                    logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
+
+                    if (ex is FilterCompilationException)
+                        throw; // Already a UserFriendlyException with InstanceFilterInvalid.
+
+                    throw new UserFriendlyException(
+                        WorkflowErrorCodes.InstanceFilterInvalid,
+                        $"Filter could not be applied: {ex.Message}");
                 }
 
                 var route = urlTemplateBuilder.BuildInstanceListUrl(input.Domain, input.Workflow);

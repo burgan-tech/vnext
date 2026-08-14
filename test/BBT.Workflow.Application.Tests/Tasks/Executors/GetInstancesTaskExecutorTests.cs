@@ -48,10 +48,13 @@ public sealed class GetInstancesTaskExecutorTests
     [Fact]
     public async Task ExecuteAsync_WhenListReturnsGroups_ReturnsGroupedMetadata_AndPassesThroughResponse()
     {
+        // groupBy takes an object, not a bare array. The array form used to be silently dropped by
+        // the parser, so the task ran unfiltered and ungrouped while this test still passed off a
+        // stubbed gateway; it is now rejected up front.
         var task = WorkflowTaskFactory.CreateGetInstancesTask(
             domain: "test-domain",
             flow: "test-flow",
-            filter: """{"groupBy":["status"]}""");
+            filter: """{"groupBy":{"fields":["status"]}}""");
 
         var gateway = Substitute.For<IInstanceQueryGateway>();
         var groups = new List<GroupSummary>
@@ -165,5 +168,83 @@ public sealed class GetInstancesTaskExecutorTests
             .GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>());
         result.Value!.Metadata!.ContainsKey("Grouped").ShouldBeFalse();
         result.Value!.Metadata!["ItemCount"].ShouldBe(1);
+    }
+
+    [Theory]
+    // Unsupported operator using the schema-side spelling.
+    [InlineData("""{"attributes":{"amount":{"gte":100}}}""")]
+    // Entirely unknown operator.
+    [InlineData("""{"attributes":{"amount":{"zzz":100}}}""")]
+    // Truncated so it no longer ends with a brace.
+    [InlineData("""{"attributes":{"amount":{"eq":100""")]
+    public async Task ExecuteAsync_ShouldFail_WhenTaskFilterCannotBeExecuted(string filter)
+    {
+        // A task filter is authored in a versioned workflow definition, so an unexecutable one is a
+        // definition defect. It must fail rather than degrade into an unfiltered read that loads
+        // every instance of the target workflow into instance data.
+        var task = WorkflowTaskFactory.CreateGetInstancesTask(
+            domain: "test-domain", flow: "test-flow", filter: filter);
+
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns("test-domain");
+
+        var result = await CreateExecutor(gateway, runtime)
+            .ExecuteAsync(CreateContext(task), CancellationToken.None);
+
+        // InvokeAsync returns Result.Fail, which the base routes through CreateErrorResponse. That
+        // path bypasses the task's acceptedStatusCodes, so a definition defect cannot be
+        // whitelisted into looking successful.
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.ErrorMessage.ShouldContain("invalid query");
+
+        await gateway.DidNotReceive()
+            .GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFail_WhenTaskSortCannotBeExecuted()
+    {
+        var task = WorkflowTaskFactory.CreateGetInstancesTask(
+            domain: "test-domain", flow: "test-flow", sort: """{"field":"nope"}""");
+
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns("test-domain");
+
+        var result = await CreateExecutor(gateway, runtime)
+            .ExecuteAsync(CreateContext(task), CancellationToken.None);
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+
+        await gateway.DidNotReceive()
+            .GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldValidateBeforeChoosingTheRemotePath()
+    {
+        // Cross-domain: the bad filter must never leave the box.
+        var task = WorkflowTaskFactory.CreateGetInstancesTask(
+            domain: "other-domain", flow: "test-flow",
+            filter: """{"attributes":{"amount":{"gte":100}}}""");
+
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns("test-domain");
+
+        var remoteInvoker = Substitute.For<IRemoteInvokerService>();
+        var executor = new GetInstancesTaskExecutor(
+            Substitute.For<IScriptEngine>(),
+            runtime,
+            remoteInvoker,
+            Substitute.For<IInstanceQueryGateway>(),
+            Substitute.For<IDomainDiscoveryResolver>(),
+            NullLogger<GetInstancesTaskExecutor>.Instance);
+
+        var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        await remoteInvoker.DidNotReceiveWithAnyArgs()
+            .InvokeAsync(default!, default!, default!, default!, default);
     }
 }

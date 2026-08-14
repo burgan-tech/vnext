@@ -4,6 +4,7 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitor.Stats.DTOs;
 using BBT.Workflow.Runtime;
@@ -27,6 +28,19 @@ public sealed class MonitorStatsService(
         MonitorGetInstanceCountersInput input,
         CancellationToken cancellationToken = default)
     {
+        // Counters are as sensitive to a dropped filter as a list is: an ignored filter turns
+        // "how many match X" into "how many exist", answered with HTTP 200.
+        var validation = InstanceQueryValidator.Validate(new InstanceQueryValidationRequest
+        {
+            Filter = input.Filter
+        });
+
+        if (!validation.IsValid)
+        {
+            return Result<MonitorInstanceCountersResponse>.Fail(Error.Validation(
+                validation.PrimaryErrorCode, validation.ToMessage(), validation.Errors[0].Target ?? "filter"));
+        }
+
         return await ResultExtensions.TryAsync(async ct =>
         {
             if (string.IsNullOrWhiteSpace(input.Workflow))

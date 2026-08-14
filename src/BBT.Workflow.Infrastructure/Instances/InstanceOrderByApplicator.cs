@@ -13,9 +13,13 @@ namespace BBT.Workflow.Instances;
 public static class InstanceOrderByApplicator
 {
     /// <summary>
-    /// Applies ordering to the instance query. Instance columns are applied via EF;
-    /// attributes.* sort keys are skipped (JSON ordering not yet implemented).
+    /// Applies ordering to the instance query. Instance columns are applied via EF; <c>attributes.*</c>
+    /// sort keys are routed to the raw-SQL path by the caller and skipped here.
     /// </summary>
+    /// <exception cref="ArgumentException">
+    /// A sort key is neither an <c>attributes.*</c> path nor a known instance column. Skipping it
+    /// would return results in an order the caller never asked for, with an HTTP 200.
+    /// </exception>
     public static IQueryable<Instance> Apply(IQueryable<Instance> query, OrderByRequest? orderBy)
     {
         if (orderBy == null)
@@ -25,59 +29,30 @@ public static class InstanceOrderByApplicator
         if (entries.Count == 0)
             return query;
 
-        var index = 0;
+        // Count what actually landed rather than the loop position: keying off the position meant a
+        // sort key that failed to apply shifted the next one into the ThenBy branch, which needs an
+        // IOrderedQueryable that does not exist yet, so that key was silently dropped too.
+        var applied = 0;
         foreach (var (field, direction) in entries)
         {
-            var isDesc = direction.Equals("desc", StringComparison.OrdinalIgnoreCase);
-            bool applied;
-            if (index == 0)
-            {
-                applied = ApplyFirstOrderBy(query, field, isDesc, out var ordered);
-                if (applied && ordered != null)
-                    query = ordered;
-            }
-            else if (query is IOrderedQueryable<Instance> orderedQuery)
-            {
-                applied = ApplyThenBy(orderedQuery, field, isDesc, out var nextOrdered);
-                if (applied && nextOrdered != null)
-                    query = nextOrdered;
-            }
+            if (IsAttributesPath(field))
+                continue;
 
-            index++;
+            var isDesc = direction.Equals("desc", StringComparison.OrdinalIgnoreCase);
+            var lambda = GetTypedSelector(field);
+
+            var ordered = CallOrderBy(query, lambda, isDesc, isThenBy: applied > 0)
+                ?? throw new ArgumentException($"Could not apply ordering by '{field}'.", nameof(orderBy));
+
+            query = ordered;
+            applied++;
         }
 
         return query;
     }
 
-    private static bool ApplyFirstOrderBy(IQueryable<Instance> query, string field, bool descending, out IQueryable<Instance>? result)
-    {
-        result = null;
-        var lambda = GetTypedSelector(field);
-        if (lambda == null)
-            return false;
-
-        var ordered = CallOrderBy(query, lambda, descending, isThenBy: false);
-        if (ordered == null)
-            return false;
-
-        result = ordered;
-        return true;
-    }
-
-    private static bool ApplyThenBy(IOrderedQueryable<Instance> query, string field, bool descending, out IQueryable<Instance>? result)
-    {
-        result = null;
-        var lambda = GetTypedSelector(field);
-        if (lambda == null)
-            return false;
-
-        var ordered = CallOrderBy(query, lambda, descending, isThenBy: true);
-        if (ordered == null)
-            return false;
-
-        result = ordered;
-        return true;
-    }
+    private static bool IsAttributesPath(string field) =>
+        field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase);
 
     private static IQueryable<Instance>? CallOrderBy(IQueryable<Instance> query, LambdaExpression keySelector, bool descending, bool isThenBy)
     {
@@ -98,29 +73,22 @@ public static class InstanceOrderByApplicator
     }
 
     /// <summary>
-    /// Returns a typed LambdaExpression for the given instance column, or null if not supported.
+    /// Returns a typed LambdaExpression for the given instance column.
     /// </summary>
-    private static LambdaExpression? GetTypedSelector(string fieldName)
+    /// <exception cref="ArgumentException">
+    /// The field is blank or is not a known instance column. Callers must route
+    /// <c>attributes.*</c> paths elsewhere before reaching here.
+    /// </exception>
+    private static LambdaExpression GetTypedSelector(string fieldName)
     {
         if (string.IsNullOrWhiteSpace(fieldName))
-            return null;
+            throw new ArgumentException("Sort field cannot be empty.", nameof(fieldName));
 
         var trimmed = fieldName.Trim();
-        if (trimmed.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase))
-            return null;
 
-        if (!InstanceFieldDiscriminator.IsInstanceColumn(trimmed))
-            return null;
-
-        string columnName;
-        try
-        {
-            columnName = InstanceFieldDiscriminator.GetInstanceColumnName(trimmed);
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
+        // Resolving the column name is the validation: GetInstanceColumnName throws for anything
+        // outside the known set, which is exactly the signal we want to propagate.
+        var columnName = InstanceFieldDiscriminator.GetInstanceColumnName(trimmed);
 
         var parameter = Expression.Parameter(typeof(Instance), "i");
         var property = Expression.Property(parameter, columnName);
