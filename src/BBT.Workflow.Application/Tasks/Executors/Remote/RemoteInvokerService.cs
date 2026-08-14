@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Tracing;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -33,17 +34,20 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
     private readonly string _executionServiceAppId;
     private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<RemoteInvokerService> _logger;
+    private readonly ICorrelationIdProvider _correlationIdProvider;
 
     public RemoteInvokerService(
         DaprClient daprClient,
         IConfiguration configuration,
-        ILogger<RemoteInvokerService> logger)
+        ILogger<RemoteInvokerService> logger,
+        ICorrelationIdProvider correlationIdProvider)
     {
         _daprClient = daprClient;
         _executionServiceAppId = configuration["ExecutionApi:AppId"] ?? "vnext-execution";
         _invocationTimeoutSeconds = int.TryParse(
             configuration["ExecutionApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
         _logger = logger;
+        _correlationIdProvider = correlationIdProvider;
     }
 
     /// <inheritdoc />
@@ -122,6 +126,13 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             if (!string.IsNullOrEmpty(rootIdBaggage))
                 httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RootInstanceId, rootIdBaggage);
 
+            // Forward the originating request id so Execution's correlation middleware and
+            // log enrichers pick it up — this is what joins Execution logs to the client request.
+            // Distinct from CorrelationId above: RequestId is per client request, CorrelationId
+            // is the chain-stable business correlation.
+            if (!string.IsNullOrEmpty(traceContext.RequestId))
+                httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, traceContext.RequestId);
+
             var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
                 httpRequest, invocationCts.Token);
 
@@ -186,27 +197,25 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             ? workflow!.Domain
             : scriptContext.Runtime.Domain;
 
-        var correlationId = Activity.Current?.GetBaggageItem(
-            TelemetryConstants.TagNames.CorrelationId);
-
-        // Some interception activities preserve the W3C parent context but do not copy
-        // baggage. Keep the outbound correlation contract deterministic and opaque by
-        // falling back to the current trace ID instead of dropping the header entirely.
-        if (!Guid.TryParseExact(correlationId, "N", out var parsedCorrelationId)
-            || parsedCorrelationId == Guid.Empty)
-        {
-            var traceId = Activity.Current?.TraceId.ToString();
-            correlationId = Guid.TryParseExact(traceId, "N", out var parsedTraceId)
-                && parsedTraceId != Guid.Empty
-                    ? parsedTraceId.ToString("N")
-                    : Guid.NewGuid().ToString("N");
-        }
-
-        var requestHeaders = scriptContext.Headers != null
+        var headers = scriptContext.Headers != null
             ? scriptContext.GetHeadersAsDictionary()
             : null;
-        var subject = GetIdentityClaim(requestHeaders, TelemetryConstants.HeaderNames.Sub);
-        var actSub = GetIdentityClaim(requestHeaders, TelemetryConstants.HeaderNames.ActSub);
+
+        string? requestId = _correlationIdProvider.Get();
+        if (string.IsNullOrEmpty(requestId) && headers is not null)
+            headers.TryGetValue("x-request-id", out requestId);
+
+        var activity = Activity.Current;
+
+        var subject = GetIdentityClaim(headers, TelemetryConstants.HeaderNames.Sub);
+        var actSub = GetIdentityClaim(headers, TelemetryConstants.HeaderNames.ActSub);
+
+        // Business correlation: the chain-stable execution correlation id, published as baggage
+        // by TransitionExecutor.EnrichTelemetry for every pipeline run (sync and async alike).
+        // Fallback to the current trace id (32 hex, Guid "N"-compatible) so a correlation is
+        // always available even when no pipeline baggage exists.
+        var correlationId = activity?.GetBaggageItem(TelemetryConstants.TagNames.CorrelationId)
+                            ?? activity?.TraceId.ToString();
 
         return TaskTraceContext.Create(
             instanceId: instance?.Id ?? Guid.Empty,
@@ -214,10 +223,13 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             workflowKey: workflow?.Key ?? string.Empty,
             workflowVersion: workflow?.Version ?? string.Empty,
             correlationId: correlationId,
+            headers: headers,
+            instanceDataJson: instance?.LatestData?.Data?.Json,
+            traceParent: activity?.Id,
+            traceState: activity?.TraceStateString,
             sub: subject,
             actSub: actSub,
-            headers: requestHeaders,
-            instanceDataJson: instance?.LatestData?.Data?.Json);
+            requestId: requestId);
     }
 
     private static string? GetIdentityClaim(

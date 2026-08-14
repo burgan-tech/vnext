@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -20,12 +18,9 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
     public int Order => LifecycleOrder.ClearBusyOnResumeStep;
 
     /// <inheritdoc />
-    [Trace]
     public Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ClearBusyOnResumeStep)}");
-
         // Only process this step on an internal resume (SubFlow completion or long-poll acknowledge)
         if (!context.Directives.IsInternalResume)
         {

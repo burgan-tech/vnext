@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
@@ -37,12 +36,9 @@ public sealed class HandleLongPollTerminationStep(
     public int Order => LifecycleOrder.LongPollTermination;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(HandleLongPollTerminationStep)}");
-
         if (!IsApplicable(context))
         {
             return Result<StepOutcome>.Ok(StepOutcome.Continue());

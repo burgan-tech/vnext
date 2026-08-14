@@ -55,6 +55,7 @@ public static class WorkflowEventIds
 
     // Information (20001-20039)
     public static readonly EventId EventReceived = new(20007, nameof(EventReceived));
+    public static readonly EventId InstanceStarted = new(20008, nameof(InstanceStarted));
 
     // Warning (20040-20069)
     public static readonly EventId InstanceNotFound = new(20040, nameof(InstanceNotFound));

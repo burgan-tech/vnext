@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -18,11 +16,8 @@ public sealed class HandleCancelPreflightStep(
     public int Order => LifecycleOrder.Preflight;
 
     /// <inheritdoc />
-    [Trace]
     public Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(HandleCancelPreflightStep)}");
-
         var isCancelTransition = context.IsCancelTransition();
         var isExitTransition = context.IsExitTransition();
 

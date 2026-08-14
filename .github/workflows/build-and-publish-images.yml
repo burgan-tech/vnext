@@ -698,6 +698,9 @@ jobs:
     needs: prepare
     permissions:
       contents: read
+      # NuGet trusted publishing: the job's OIDC token is exchanged for a
+      # short-lived API key, so no long-lived secret is involved.
+      id-token: write
 
     env:
       NUGET_VERSION: ${{ needs.prepare.outputs.version }}
@@ -768,10 +771,29 @@ jobs:
             -p:Version=${{ env.NUGET_VERSION }} \
             --output ./nuget-artifacts
 
+      # An undefined repository variable is silently the empty string, which would
+      # surface as an opaque token-exchange failure below.
+      - name: Verify NuGet trusted publishing is configured
+        run: |
+          if [ -z "${{ vars.NUGET_USER }}" ]; then
+            echo "::error::Repository variable NUGET_USER is not set. It must hold the nuget.org username that owns the trusted publishing policy for burgan-tech/vnext."
+            exit 1
+          fi
+
+      # Trusted publishing: exchange this workflow's OIDC token for a NuGet API key
+      # valid for one hour. Kept directly before the push — the pack steps above are
+      # slow (PostSharp), and nuget.org matches the policy on repository owner,
+      # repository and this workflow's file name, not on a branch or a stored secret.
+      - name: Log in to NuGet.org (OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
       - name: Push all packages to NuGet.org
         run: |
           dotnet nuget push ./nuget-artifacts/*.nupkg \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 

@@ -4,6 +4,8 @@ using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Workers.Inbox.Forwarding;
+using BBT.Aether.Tracing;
+using BBT.Workflow.Workers.Inbox.Tracing;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -14,6 +16,7 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 internal sealed class InstanceCompletedCleanupEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOrchestrationForwarder forwarder,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<InstanceCompletedCleanupEventHandler> logger) : IEventHandler<InstanceCompletedCleanupEvent>
 {
     public async Task HandleAsync(CloudEventEnvelope<InstanceCompletedCleanupEvent> envelope,
@@ -30,6 +33,8 @@ internal sealed class InstanceCompletedCleanupEventHandler(
                 eventData.Flow);
             return;
         }
+
+        using var traceScope = EventTraceScope.Start("InstanceCompletedCleanup.Handle", eventData, correlationIdProvider);
 
         var scopeProps = new Dictionary<string, object>
         {

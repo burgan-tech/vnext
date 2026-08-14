@@ -4,6 +4,8 @@ using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Workers.Inbox.Forwarding;
+using BBT.Aether.Tracing;
+using BBT.Workflow.Workers.Inbox.Tracing;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -15,6 +17,7 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 internal sealed class ChildSubflowCancelRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOrchestrationForwarder forwarder,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<ChildSubflowCancelRequestedEventHandler> logger) : IEventHandler<ChildSubflowCancelRequestedEvent>
 {
     public async Task HandleAsync(CloudEventEnvelope<ChildSubflowCancelRequestedEvent> envelope,
@@ -31,6 +34,8 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
                 eventData.Flow);
             return;
         }
+
+        using var traceScope = EventTraceScope.Start("ChildSubflowCancelRequested.Handle", eventData, correlationIdProvider);
 
         var scopeProps = new Dictionary<string, object>
         {

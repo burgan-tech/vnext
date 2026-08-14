@@ -75,6 +75,43 @@ public sealed class InstanceQueryAppService(
         });
     }
 
+    /// <summary>
+    /// Opens the per-request instance log scope for the read/function path (state, view, schema,
+    /// data, get, history), mirroring the keys <c>TransitionExecutor.BuildLogScope</c> uses on the
+    /// write path — so every poll log line is queryable by the REAL instance id even when the
+    /// client addressed the instance by business key. Also stamps the matching Activity tags and
+    /// composes the subflow root-id scope so callers make a single call.
+    /// </summary>
+    private IDisposable BeginInstanceScope(Instance instance)
+    {
+        var activity = Activity.Current;
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instance.Id.ToString());
+        if (instance.HasKey)
+            activity?.SetTag(TelemetryConstants.TagNames.InstanceKey, instance.Key);
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, instance.Flow);
+        activity?.SetTag(TelemetryConstants.TagNames.Domain, runtimeInfoProvider.Domain);
+
+        var scope = logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.Domain] = runtimeInfoProvider.Domain,
+            [TelemetryConstants.TagNames.Flow] = instance.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = instance.FlowVersion,
+            [TelemetryConstants.TagNames.InstanceId] = instance.Id,
+            [TelemetryConstants.TagNames.InstanceKey] = instance.Key ?? "N/A"
+        });
+        var rootScope = BeginRootIdScopeIfSubflow(instance);
+        return new CompositeScope(scope, rootScope);
+    }
+
+    private sealed class CompositeScope(IDisposable? first, IDisposable? second) : IDisposable
+    {
+        public void Dispose()
+        {
+            second?.Dispose();
+            first?.Dispose();
+        }
+    }
+
     public async Task<ConditionalResult<GetInstanceOutput>> GetInstanceAsync(
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
@@ -85,6 +122,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async instance =>
                 {
+                    using var instanceScope = BeginInstanceScope(instance);
                     var instanceData = instance.FindData(input.Version);
                     
                     var result = await BuildInstanceOutputAsync(
@@ -275,6 +313,7 @@ public sealed class InstanceQueryAppService(
         return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
             {
+                using var instanceScope = BeginInstanceScope(instance);
                 var transitions = await instanceTransitionRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
 
                 var dtoList = transitions
@@ -704,6 +743,7 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     var (flow, instance) = data;
+                    using var instanceScope = BeginInstanceScope(instance);
 
                     if (!await IsInstanceQueryAllowedAsync(flow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
                         return ConditionalResult<GetInstanceDataOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
@@ -942,7 +982,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var rootScope = BeginRootIdScopeIfSubflow(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance);
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
@@ -1518,8 +1558,11 @@ public sealed class InstanceQueryAppService(
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data =>
-                ResolveViewAsync(data.instance, data.workflow, input, transitionKey, cancellationToken));
+            .ThenAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+                return await ResolveViewAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
+            });
     }
 
     /// <summary>
@@ -1557,6 +1600,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    using var instanceScope = BeginInstanceScope(data.instance);
                     var buildResult = await BuildSchemaOutputAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
@@ -1680,8 +1724,11 @@ public sealed class InstanceQueryAppService(
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data =>
-                BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken));
+            .ThenAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+                return await BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken);
+            });
     }
 
     /// <summary>
@@ -1715,6 +1762,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    using var instanceScope = BeginInstanceScope(data.instance);
                     var buildResult = await BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);

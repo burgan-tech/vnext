@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -20,13 +18,10 @@ public sealed class SetBusyStep(
     public int Order => LifecycleOrder.SetBusy;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(SetBusyStep)}");
-
         // updateData never touches the instance status: it runs without ownership and must not
         // flip an Active instance to Busy (nothing would ever settle it back — a non-owner is
         // barred from ResolveAvailable/settlement). Ownership for a satisfied auto transition

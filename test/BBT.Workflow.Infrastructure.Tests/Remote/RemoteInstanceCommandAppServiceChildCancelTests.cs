@@ -18,6 +18,8 @@ using NSubstitute;
 using Shouldly;
 using Xunit;
 
+using BBT.Aether.Tracing;
+
 namespace BBT.Workflow.Infrastructure.Tests.Remote;
 
 public sealed class RemoteInstanceCommandAppServiceChildCancelTests
@@ -66,7 +68,8 @@ public sealed class RemoteInstanceCommandAppServiceChildCancelTests
             new HttpClient(handler),
             Options.Create(new RemoteOptions()),
             resolver,
-            Substitute.For<ICurrentUser>());
+            Substitute.For<ICurrentUser>(),
+            Substitute.For<ICorrelationIdProvider>());
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -23,11 +21,9 @@ public sealed class HandleFinishStep(
     public int Order => LifecycleOrder.Finish;
     
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(HandleFinishStep)}");
         
         // Check applicability - skip if not finish scenario
         if (!IsFinishScenario(context))

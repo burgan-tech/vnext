@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
@@ -24,12 +22,9 @@ public sealed class HandleSubFlowStep(
     public int Order => LifecycleOrder.SubFlow;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(HandleSubFlowStep)}");
-
         // Early return if not applicable
         if (!IsApplicable(context))
         {
