@@ -14,6 +14,30 @@ public sealed class PipelineProfileResolver : IPipelineProfileResolver
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        return ResolveBase(context);
+    }
+
+    /// <inheritdoc />
+    public PipelineExecutionProfile Resolve(
+        WorkflowExecutionContext context,
+        TransitionExecutionContext transitionContext)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(transitionContext);
+
+        var baseProfile = ResolveBase(context);
+
+        return transitionContext.IsSelfTargetTransition()
+            ? PipelineExecutionProfile.ForSelfTarget(baseProfile)
+            : baseProfile;
+    }
+
+    /// <summary>
+    /// Maps trigger metadata to the base profile. Kept as the single source of the base mapping so
+    /// both overloads stay in step — the self-target composition only ever layers on top of this.
+    /// </summary>
+    private static PipelineExecutionProfile ResolveBase(WorkflowExecutionContext context)
+    {
         if (context.IsErrorBoundaryTransition)
             return PipelineExecutionProfile.ForErrorBoundary();
 

@@ -45,6 +45,55 @@ public static class TransitionExecutionContextExtensions
     }
 
     /// <summary>
+    /// Determines whether the current transition's target resolves to the state the instance is
+    /// already in — either the reserved <c>$self</c> key or a literal target equal to the current
+    /// state. Such a transition performs no state change, so the state lifecycle (OnExit, OnEntry,
+    /// scheduled-job teardown and re-arm) must not run for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Only the authored <c>$self</c> keyword counts — NOT a literal target that happens to
+    /// equal the current state.</b> Those are not the same claim. <c>$self</c> is a declaration of
+    /// intent that cannot arise by accident; <c>target == currentState</c> is a coincidence
+    /// produced by at least three unrelated mechanisms, and only one of them means "no state
+    /// change":
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>Start.</b> <c>InstanceCommandAppService</c> pre-positions a new instance into the
+    /// initial state at creation (<c>instance.ChangeState(initialState)</c>) BEFORE dispatching the
+    /// start transition. The state has not been entered yet — entering it is this transition's job
+    /// — yet the comparison already holds.</item>
+    /// <item><b>Retry after a partial commit.</b> <c>ChangeStateStep</c> persists with
+    /// <c>saveChanges</c>, so a transition that faults in OnEntry leaves the instance committed in
+    /// the target state. The retry re-runs the same transition to redo exactly the step that
+    /// failed (with already-succeeded tasks bypassed per transition record), and the comparison
+    /// holds there too.</item>
+    /// <item><b>A genuine self-loop</b> (<c>from: A, target: A</c>) — the only case where the
+    /// comparison does mean the state is unchanged. Authors who want the no-state-change semantics
+    /// have <c>$self</c> for it; naming a state reads as "enter that state".</item>
+    /// </list>
+    /// <para>
+    /// Guarding each incidental case one at a time was tried and is unsound — the comparison simply
+    /// carries no information outside a fresh forward execution. Do not reintroduce it.
+    /// </para>
+    /// <para>
+    /// Timeout and subflow-resume executions are excluded even for <c>$self</c>: their target comes
+    /// from <c>ApplyTimeoutStateStep</c> / <c>ClearBusyOnResumeStep</c> rather than from
+    /// <c>Transition.Target</c>, so the declared target does not describe where they land.
+    /// </para>
+    /// </remarks>
+    public static bool IsSelfTargetTransition(this TransitionExecutionContext ctx)
+    {
+        var target = ctx.Transition?.Target;
+        if (target is null) return false;
+
+        if (ctx.Directives.IsTimeoutTransition || ctx.Directives.IsSubFlowResume)
+            return false;
+
+        return Definitions.WellKnownStateKeys.ReservedTargetKeys.Contains(target);
+    }
+
+    /// <summary>
     /// Determines whether the current transition is a shared transition.
     /// Shared transitions are triggered against the parent (main) flow — e.g. from an
     /// active subflow — and are reserved relative to instance locking so they can proceed

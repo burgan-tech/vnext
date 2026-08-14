@@ -52,6 +52,21 @@ public sealed class PipelineExecutionProfile
         LifecycleOrder.ForwardToActiveSubflow,
         LifecycleOrder.ResourceLock);
 
+    // Composed on top of the trigger's base profile when the transition's target resolves to the
+    // state the instance is already in ($self, or a literal target equal to the current state).
+    // No state is left and none is entered, so the state's lifecycle must not fire: OnExit/OnEntry
+    // would re-run hooks for a state the instance never left, and CancelScheduledJobs+Schedule
+    // would tear down and re-arm the state's timers, silently restarting every timeout.
+    // ChangeState (50) deliberately stays IN: it is the only step that sets context.Target, which
+    // RunAutomaticTransitionsStep (90) needs to evaluate the state's auto transitions against the
+    // freshly written data. OnExecute (30) also stays — that is the transition's own work, not the
+    // state's lifecycle.
+    private static readonly ImmutableHashSet<int> SelfTargetExcluded = ImmutableHashSet.Create(
+        LifecycleOrder.CancelScheduledJobs,
+        LifecycleOrder.OnExit,
+        LifecycleOrder.OnEntry,
+        LifecycleOrder.Schedule);
+
     private static readonly PipelineExecutionProfile ManualInstance = new()
     {
         Name = "Manual",
@@ -92,6 +107,18 @@ public sealed class PipelineExecutionProfile
         AllowSubFlow = false,
     };
 
+    // Pre-composed self-target variants of every base profile, keyed by the base profile's name.
+    // Declared after the base instances so their initializers have already run.
+    private static readonly Dictionary<string, PipelineExecutionProfile> SelfVariantsByBaseName =
+        new(StringComparer.Ordinal)
+        {
+            [ManualInstance.Name] = ComposeSelfTarget(ManualInstance),
+            [AutoChainInstance.Name] = ComposeSelfTarget(AutoChainInstance),
+            [ScheduledInstance.Name] = ComposeSelfTarget(ScheduledInstance),
+            [EventInstance.Name] = ComposeSelfTarget(EventInstance),
+            [ErrorBoundaryInstance.Name] = ComposeSelfTarget(ErrorBoundaryInstance),
+        };
+
     /// <summary>
     /// Creates the profile used for manual transitions: full pipeline, no exclusions; auto-chain and subflow enabled.
     /// </summary>
@@ -119,4 +146,29 @@ public sealed class PipelineExecutionProfile
     /// auto-chain and subflow are disabled.
     /// </summary>
     public static PipelineExecutionProfile ForErrorBoundary() => ErrorBoundaryInstance;
+
+    /// <summary>
+    /// Composes <paramref name="baseProfile"/> with the self-target exclusions, for a transition
+    /// whose target resolves to the state the instance is already in. The base profile's own
+    /// exclusions and its <see cref="AllowAutoChain"/> / <see cref="AllowSubFlow"/> settings are
+    /// preserved; only the state-lifecycle steps are additionally skipped.
+    /// </summary>
+    /// <param name="baseProfile">The trigger's profile to compose on top of.</param>
+    /// <returns>The self-target variant of <paramref name="baseProfile"/>.</returns>
+    public static PipelineExecutionProfile ForSelfTarget(PipelineExecutionProfile baseProfile)
+    {
+        ArgumentNullException.ThrowIfNull(baseProfile);
+
+        return SelfVariantsByBaseName.TryGetValue(baseProfile.Name, out var variant)
+            ? variant
+            : ComposeSelfTarget(baseProfile);
+    }
+
+    private static PipelineExecutionProfile ComposeSelfTarget(PipelineExecutionProfile baseProfile) => new()
+    {
+        Name = $"{baseProfile.Name}+Self",
+        ExcludedStepOrders = SelfTargetExcluded.Union(baseProfile.ExcludedStepOrders),
+        AllowAutoChain = baseProfile.AllowAutoChain,
+        AllowSubFlow = baseProfile.AllowSubFlow,
+    };
 }

@@ -46,7 +46,38 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 | Event | Event (3) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
 | ErrorBoundary | Error boundary | Preflight, UpdateDataCheck, ForwardSubflow, ResourceLock, Auto, Schedule; `AllowAutoChain=false`, `AllowSubFlow=false` |
 
-Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryTransition` → ErrorBoundary; else by `TriggerType`.
+Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
+`IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
+the transition definition's — the two can disagree and the inbound trigger is authoritative).
+
+### Self-target composition
+
+A sixth profile is **composed on top of** the base, never selected instead of it. When
+`TransitionExecutionContext.IsSelfTargetTransition()` is true — `Transition.Target` is the authored
+`$self` keyword and the execution is neither a timeout nor a subflow resume —
+`PipelineExecutionProfile.ForSelfTarget(base)` adds `CancelScheduledJobs (39)`, `OnExit (40)`,
+`OnEntry (60)`, `Schedule (80)` to the base's exclusions (`Manual+Self`, …).
+
+- **Only `$self` counts — never a literal target that happens to equal the current state.** That
+  comparison is a coincidence produced by three unrelated mechanisms and means "no state change" in
+  only one of them: **start** pre-positions the instance into the initial state at creation
+  (`InstanceCommandAppService`, `instance.ChangeState(initialState)`) before dispatching the start
+  transition; a **retry** after `ChangeStateStep` already committed re-runs the transition to redo
+  the step that faulted; and a genuine **self-loop** (`from: A, target: A`). Reading it as self
+  killed the initial state's OnEntry entirely and turned retry into a no-op. Guarding the incidental
+  cases one at a time was tried and is unsound — do not reintroduce the comparison.
+
+- **No state is left or entered, so the state's lifecycle must not fire.** OnEntry would re-run hooks
+  for a state the instance never re-entered; Schedule would re-arm its timers from zero.
+- **`ChangeState (50)` still runs and must keep running** — it is the only step that sets
+  `context.Target`, which `RunAutomaticTransitionsStep (90)` reads. Excluding it makes the auto step
+  return at its first guard and the transition advances nothing.
+- **`OnExecute (30)` still runs** — the transition's own work, not the state's lifecycle.
+- `ChangeStateStep` suppresses its state-change metric/log/span event on this path, and
+  `Instance.ChangeState` suppresses `sub:state-changed` when previous == new.
+- Applies to every `$self` transition: `updateData`, `$self` shared transitions. **Not** literal self-loops.
+  A parent with an open SubFlow correlation still short-circuits earlier, at
+  `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
 
 ## Instance Repository Include Strategy
 

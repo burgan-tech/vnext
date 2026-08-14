@@ -9,7 +9,13 @@ transitions:
 |-------|--------------------------|-------------------|
 | `cancel` | `cancel` | `HandleCancelPreflightStep` (5) short-circuits to `CreateTransition`; `HandleFinishStep` (100) calls `Instance.Cancel(...)`. |
 | `exit` | `exit` | Same preflight path as cancel; `HandleFinishStep` calls `Instance.Complete(...)`. |
-| `updateData` | `update-parent-data` | `HandleUpdateDataPreflightStep` (9) writes the transition record and merges data, then skips to `Finalize` — **only while the instance's current state is a `SubFlow` state**. Target is fixed to `$self`. |
+| `updateData` | `update-parent-data` | Target is fixed to `$self`, so it runs under the **self-target profile**: the data is written, `onExecute` runs, and the state's auto transitions are evaluated against the fresh data — but `OnExit`/`OnEntry` and the scheduled-job teardown/re-arm are skipped, because no state is left or entered. Against a parent with an **open SubFlow correlation**, `HandleUpdateDataDataOnlyStep` (21) short-circuits to `Finalize` instead: data only, no tasks, no auto evaluation, no forwarding to the subflow. |
+
+Because `updateData.target` must be `$self`, it never re-runs the current state's entry hooks — the
+instance was already in that state. The same holds for any other `$self` transition, notably
+a shared transition fired with `target: $self` while a subflow is running (which
+`SharedTransitionTargetSelfWhenInSubFlowSpecification` in fact *requires*). See
+`docs/architecture/workflow-execution-pipeline.md` § Profiles.
 
 They are declared once on the workflow rather than per state, and `WellKnownTransitionSpecification`
 exempts them from `StateTransitionListSpecification`, so they are callable from any state without

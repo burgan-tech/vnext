@@ -42,14 +42,19 @@ public sealed class ChangeStateStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // A $self (or same-state) target changes nothing: the step still runs — it is the only
+        // place context.Target is set, and RunAutomaticTransitionsStep needs it — but reporting
+        // a state change from X to X would be a false signal in metrics, logs and traces.
+        var isSelfTarget = context.IsSelfTargetTransition();
+
         // Railway Oriented Programming: Fluent chain
         return await Result.Ok(BuildStateTransitionInfo(context))
-            .Tap(info => RecordTransitionMetric(context, info))
-            .BindAsync(info => PerformStateChangeAsync(context, info, cancellationToken)) 
+            .Tap(info => { if (!isSelfTarget) RecordTransitionMetric(context, info); })
+            .BindAsync(info => PerformStateChangeAsync(context, info, cancellationToken))
             .ThenAsync(_ => UpdateTargetStateInContext(context))
-            .OnSuccess(_ => RecordStateEntryMetric(context))
-            .OnSuccess(_ => LogStateChange(context))
-            .OnSuccess(_ => AddTelemetryEvent(context))
+            .OnSuccess(_ => { if (!isSelfTarget) RecordStateEntryMetric(context); })
+            .OnSuccess(_ => { if (!isSelfTarget) LogStateChange(context); })
+            .OnSuccess(_ => { if (!isSelfTarget) AddTelemetryEvent(context); })
             .MapAsync(_ => StepOutcome.Continue());
     }
 

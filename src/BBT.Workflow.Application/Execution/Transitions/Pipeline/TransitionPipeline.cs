@@ -104,7 +104,7 @@ public class TransitionPipeline
             return Result<TransitionExecutionContext>.Fail(contextResult.Error);
 
         var context = contextResult.Value!;
-        context.Profile = _profileResolver.Resolve(workflowContext);
+        context.Profile = _profileResolver.Resolve(workflowContext, context);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
 
@@ -383,7 +383,7 @@ public class TransitionPipeline
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 
-        context.Profile = _profileResolver.Resolve(workflowContext);
+        context.Profile = _profileResolver.Resolve(workflowContext, context);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
         context.OwnsStatus = workflowContext.OwnsStatus;

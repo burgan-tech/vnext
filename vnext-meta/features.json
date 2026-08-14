@@ -120,6 +120,15 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorization-matrix",
         "POST {domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}"
       ]
+    },
+    "selfTargetPipelineProfile": {
+      "since": "0.0.80",
+      "status": "stable",
+      "description": "A transition whose target is the reserved $self key now runs under a self-target pipeline profile composed on top of the trigger's profile (Manual+Self, AutoChain+Self, ...). Because no state is left and none is entered, the state's lifecycle steps are skipped: CancelScheduledJobs (39), OnExit (40), OnEntry (60) and Schedule (80). ChangeState (50) still runs — it is the only step that sets the target the auto step reads — and OnExecute (30) still runs, since that is the transition's own work rather than the state's lifecycle. The practical effect is that updateData writes its data and evaluates the state's auto transitions against it without re-running the state's entry hooks or restarting its timers; the same applies to $self shared transitions. Only the authored $self keyword qualifies: a literal target that happens to equal the current state does NOT, because the start transition (instance pre-positioned into the initial state at creation) and a retry after the state change already committed both present that same shape while genuinely needing the state entered. A parent with an open SubFlow correlation continues to short-circuit earlier, at HandleUpdateDataDataOnlyStep (21), to a data-only update. Timeout and subflow-resume executions are excluded from the detection, since their target does not come from transition.target.",
+      "schemaPath": "workflow.attributes.updateData.target",
+      "apiEndpoints": [
+        "POST {domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}"
+      ]
     }
   }
 }

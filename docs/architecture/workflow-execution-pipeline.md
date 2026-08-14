@@ -54,6 +54,39 @@ Profiles remove irrelevant steps:
 | Event | Event | Skips preflight and forward-to-active-subflow. |
 | ErrorBoundary | Error boundary | Minimal recovery path; lock and subflow prelude are excluded. |
 
+A sixth profile is **composed on top of** the trigger's profile rather than selected instead of it.
+When the transition's target is the reserved `$self` key, `PipelineExecutionProfile.ForSelfTarget`
+layers the self-target exclusions onto the base profile (`Manual+Self`, `AutoChain+Self`, …):
+
+| Excluded on a self target | Why |
+| --- | --- |
+| CancelScheduledJobs (39) | The state is not left; tearing its timers down would lose them. |
+| OnExit (40) | No state is left. |
+| OnEntry (60) | No state is entered; the hooks already ran when the instance first arrived. |
+| Schedule (80) | Re-arming the state's timers would silently restart every timeout. |
+
+`ChangeState (50)` deliberately still runs — it is the only step that sets `context.Target`, which
+`RunAutomaticTransitionsStep (90)` needs in order to evaluate the state's auto transitions against
+the freshly written data. `OnExecute (30)` also still runs: that is the transition's own work, not
+the state's lifecycle. `ChangeStateStep` suppresses its state-change metric, log and span event on
+this path, since reporting a change from a state to itself is a false signal.
+
+This is what makes `updateData` behave as intended: write the data, evaluate the auto transitions,
+and chain on if one is satisfied — without re-running the current state's entry hooks. It applies
+to every `$self` transition, `updateData` and `$self` shared transitions alike.
+
+**Only the authored `$self` keyword qualifies.** A literal target that happens to equal the current
+state does not, because that comparison is a coincidence produced by three unrelated mechanisms and
+means "no state change" in only one of them:
+
+- **Start** — `InstanceCommandAppService` pre-positions a new instance into the initial state at
+  creation, before dispatching the start transition. The state still needs entering.
+- **Retry after a partial commit** — `ChangeStateStep` persists with `saveChanges`, so a transition
+  faulting in OnEntry leaves the instance committed in the target state; the retry exists to redo
+  exactly that step.
+- **A genuine self-loop** (`from: A, target: A`) — the one case where it does mean unchanged. Authors
+  wanting the no-state-change semantics use `$self`; naming a state reads as "enter that state".
+
 ## Contracts
 
 | Input | Output | Invariants |
