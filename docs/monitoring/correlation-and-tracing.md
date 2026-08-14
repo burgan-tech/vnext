@@ -104,6 +104,12 @@ there is no claim or baggage fallback, and code paths without an `HttpContext` (
 the Outbox worker) never produce these fields. Instance-scoped log scopes remain the way to
 correlate those.
 
+Because the fields are now unprefixed they share a namespace with log-scope keys, so each identity
+claim must have exactly one emitter. `sub` / `act_sub` come from the enricher alone: `ExecutionController`
+deliberately keeps them out of its log scope (its `act.sub` key would flatten onto the enricher's
+`act_sub` and put the same value on the record twice) while still setting them as span tags and
+baggage. Do not re-add them to a log scope.
+
 ## Telemetry configuration
 
 - **OTLP endpoint**: `Telemetry:Otlp:Endpoint` is intentionally NOT set in `appsettings.json` —

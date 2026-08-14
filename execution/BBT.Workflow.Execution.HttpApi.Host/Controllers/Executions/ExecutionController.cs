@@ -110,15 +110,12 @@ public sealed class ExecutionController(
             [TelemetryConstants.TagNames.RequestId] = traceContext?.RequestId ?? "N/A"
         };
 
-        if (subject is not null)
-        {
-            scope[TelemetryConstants.TagNames.Sub] = subject;
-        }
-        if (actSub is not null)
-        {
-            scope[TelemetryConstants.TagNames.ActSub] = actSub;
-        }
-
+        // sub / act_sub are deliberately NOT in this scope: RemoteInvokerService forwards them as
+        // request headers and the log enricher (Telemetry:Logging:Enrichers:Headers, emitted
+        // without a prefix) already attaches them to EVERY log record of this request — a wider
+        // reach than this block. Adding them here too would put the same value on the record
+        // twice, since the scope key act.sub flattens to act_sub in the log backend. They remain
+        // span tags and baggage above.
         using (logger.BeginScope(scope))
         {
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
