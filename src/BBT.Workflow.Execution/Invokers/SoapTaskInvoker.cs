@@ -88,7 +88,7 @@ public sealed class SoapTaskInvoker(
                 var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
                 if (headers != null)
                 {
-                    foreach (var header in headers)
+                    foreach (var header in headers.Where(h => !InvokerHelpers.IsReservedTraceHeader(h.Key)))
                         request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                 }
             }

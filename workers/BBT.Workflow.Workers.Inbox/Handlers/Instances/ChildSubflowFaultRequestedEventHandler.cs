@@ -4,6 +4,8 @@ using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Workers.Inbox.Forwarding;
+using BBT.Aether.Tracing;
+using BBT.Workflow.Workers.Inbox.Tracing;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -15,6 +17,7 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 internal sealed class ChildSubflowFaultRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOrchestrationForwarder forwarder,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<ChildSubflowFaultRequestedEventHandler> logger) : IEventHandler<ChildSubflowFaultRequestedEvent>
 {
     public async Task HandleAsync(CloudEventEnvelope<ChildSubflowFaultRequestedEvent> envelope,
@@ -32,8 +35,11 @@ internal sealed class ChildSubflowFaultRequestedEventHandler(
             return;
         }
 
+        using var traceScope = EventTraceScope.Start("ChildSubflowFaultRequested.Handle", eventData, correlationIdProvider);
+
         var scopeProps = new Dictionary<string, object>
         {
+            [TelemetryConstants.TagNames.RequestId] = eventData.CorrelationId ?? "N/A",
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",

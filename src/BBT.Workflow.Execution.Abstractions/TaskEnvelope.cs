@@ -67,6 +67,22 @@ public sealed class TaskTraceContext
     /// Used for <c>{INSTANCE.*}</c> placeholder resolution.
     /// </summary>
     public string? InstanceDataJson { get; init; }
+
+    /// <summary>
+    /// Originating request id (X-Request-Id value) for cross-service log correlation.
+    /// </summary>
+    public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// W3C traceparent captured at invoke time on the orchestration side.
+    /// Fallback for restoring the trace tree when transport-level propagation is unavailable.
+    /// </summary>
+    public string? TraceParent { get; init; }
+
+    /// <summary>
+    /// W3C tracestate accompanying <see cref="TraceParent"/>.
+    /// </summary>
+    public string? TraceState { get; init; }
 }
 
 /// <summary>

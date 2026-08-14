@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Tracing;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -26,6 +27,7 @@ public class TransitionJobHandlerTests
     private readonly Mock<ICurrentSchema> _currentSchema = new();
     private readonly Mock<IJobTimeoutRecoveryService> _recoveryService = new();
     private readonly Mock<IHostApplicationLifetime> _hostLifetime = new();
+    private readonly Mock<ICorrelationIdProvider> _correlationIdProvider = new();
     private readonly Mock<ILogger<TransitionJobHandler>> _logger = new();
     private readonly CancellationTokenSource _appStoppingCts = new();
 
@@ -64,7 +66,7 @@ public class TransitionJobHandlerTests
         });
         return new TransitionJobHandler(
             _jobRepo.Object, _executionService.Object, _currentSchema.Object,
-            _recoveryService.Object, options, _hostLifetime.Object, _logger.Object);
+            _recoveryService.Object, options, _hostLifetime.Object, _correlationIdProvider.Object, _logger.Object);
     }
 
     private static Result<TransitionOutput> LockConflictResult()
@@ -79,6 +81,46 @@ public class TransitionJobHandlerTests
         Workflow = "test-flow",
         Version = "1.0.0"
     };
+
+    /// <summary>
+    /// The captured x-request-id must be restored into the correlation provider for the duration
+    /// of the job so downstream calls (Execution invoke, cross-domain) keep the client's request id.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithRequestIdHeader_RestoresCorrelationId()
+    {
+        var payload = CreatePayload();
+        payload.Headers["x-request-id"] = "req-abc-123";
+        var handler = CreateHandler();
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        _correlationIdProvider.Verify(p => p.Change("req-abc-123"), Times.Once);
+    }
+
+    /// <summary>
+    /// Without an x-request-id header the provider must not be touched (no Change(null) noise).
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithoutRequestIdHeader_DoesNotChangeCorrelationId()
+    {
+        var payload = CreatePayload();
+        var handler = CreateHandler();
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        _correlationIdProvider.Verify(p => p.Change(It.IsAny<string?>()), Times.Never);
+    }
 
     /// <summary>
     /// Own 300s budget expires (executionCts fires) → recovery must run.

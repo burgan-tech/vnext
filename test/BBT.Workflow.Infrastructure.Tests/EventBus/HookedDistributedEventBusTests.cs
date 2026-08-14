@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Events;
+using BBT.Aether.Tracing;
 using BBT.Aether.Uow;
+using BBT.Workflow.Events;
 using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Infrastructure.EventBus;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +19,67 @@ namespace BBT.Workflow.Infrastructure.Tests.EventBus;
 
 public sealed class HookedDistributedEventBusTests
 {
+    [Fact]
+    public async Task Publish_TraceableEventWithEmptyFields_StampsAmbientTraceAndCorrelation()
+    {
+        var calls = new List<string>();
+        var correlationProvider = Substitute.For<ICorrelationIdProvider>();
+        correlationProvider.Get().Returns("req-123");
+        var (sut, _, _, _) = CreateSut(calls, EventHookResult.Ok(), hasAmbientUow: false, correlationProvider);
+
+        var evt = new TraceableEvent();
+        var activity = new Activity("publisher");
+        activity.SetIdFormat(ActivityIdFormat.W3C);
+        activity.TraceStateString = "vendor=state";
+        activity.Start();
+        try
+        {
+            await sut.PublishAsync(evt, useOutbox: true);
+        }
+        finally
+        {
+            activity.Stop();
+            Activity.Current = null;
+        }
+
+        evt.TraceParent.ShouldBe(activity.Id);
+        evt.TraceState.ShouldBe("vendor=state");
+        evt.CorrelationId.ShouldBe("req-123");
+    }
+
+    [Fact]
+    public async Task Publish_TraceableEventWithPresetFields_DoesNotOverwrite()
+    {
+        var calls = new List<string>();
+        var correlationProvider = Substitute.For<ICorrelationIdProvider>();
+        correlationProvider.Get().Returns("req-123");
+        var (sut, _, _, _) = CreateSut(calls, EventHookResult.Ok(), hasAmbientUow: false, correlationProvider);
+
+        var evt = new TraceableEvent
+        {
+            TraceParent = "00-11111111111111111111111111111111-2222222222222222-01",
+            TraceState = "preset=1",
+            CorrelationId = "preset-req"
+        };
+
+        var activity = new Activity("publisher");
+        activity.SetIdFormat(ActivityIdFormat.W3C);
+        activity.Start();
+        try
+        {
+            await sut.PublishAsync(evt, useOutbox: true);
+        }
+        finally
+        {
+            activity.Stop();
+            Activity.Current = null;
+        }
+
+        evt.TraceParent.ShouldBe("00-11111111111111111111111111111111-2222222222222222-01");
+        evt.TraceState.ShouldBe("preset=1");
+        evt.CorrelationId.ShouldBe("preset-req");
+    }
+
     [Fact]
     public async Task DurablePostCommit_WithAmbientUow_PublishesBeforeCommitAndHooksAfterCommit()
     {
@@ -118,7 +182,8 @@ public sealed class HookedDistributedEventBusTests
         IUnitOfWork Uow) CreateSut(
         List<string> calls,
         EventHookResult hookResult,
-        bool hasAmbientUow)
+        bool hasAmbientUow,
+        ICorrelationIdProvider? correlationIdProvider = null)
     {
         var inner = Substitute.For<IDistributedEventBus>();
         inner.PublishAsync(
@@ -180,7 +245,8 @@ public sealed class HookedDistributedEventBusTests
             inner,
             provider,
             uowManager,
-            Substitute.For<ILogger<HookedDistributedEventBus>>());
+            Substitute.For<ILogger<HookedDistributedEventBus>>(),
+            correlationIdProvider);
 
         return (sut, inner, durableInvoker, uow);
     }
@@ -190,4 +256,11 @@ public sealed class HookedDistributedEventBusTests
 
     [EventHook]
     private sealed class DefaultEvent;
+
+    private sealed class TraceableEvent : ITraceableDistributedEvent
+    {
+        public string? TraceParent { get; set; }
+        public string? TraceState { get; set; }
+        public string? CorrelationId { get; set; }
+    }
 }

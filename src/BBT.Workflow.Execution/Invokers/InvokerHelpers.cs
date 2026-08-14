@@ -19,6 +19,22 @@ internal static class InvokerHelpers
     };
 
     /// <summary>
+    /// Header names owned by the tracing/correlation infrastructure. Task binding definitions
+    /// must never overwrite these on outbound calls: a stale traceparent copied into a binding
+    /// would detach the downstream service from the live trace, and a forged x-request-id would
+    /// break log correlation. The live values are injected by HttpClient's DiagnosticsHandler
+    /// (traceparent/tracestate) and by the invoker itself.
+    /// </summary>
+    private static readonly string[] ReservedTraceHeaders = ["traceparent", "tracestate", "baggage", "x-request-id"];
+
+    /// <summary>
+    /// Returns true when the header name is reserved for trace/correlation propagation and must
+    /// not be copied from a task binding's header definition onto an outbound request.
+    /// </summary>
+    public static bool IsReservedTraceHeader(string headerName) =>
+        ReservedTraceHeaders.Contains(headerName, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Attempts to parse JSON content. Returns the original content if parsing fails.
     /// Used for TriggerTask (e.g. GetInstances / GetInstanceData) response body parsing.
     /// </summary>

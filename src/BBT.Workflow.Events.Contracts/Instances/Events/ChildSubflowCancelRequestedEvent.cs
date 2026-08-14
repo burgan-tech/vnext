@@ -1,4 +1,5 @@
 using BBT.Aether.Events;
+using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
 
@@ -7,7 +8,7 @@ namespace BBT.Workflow.Instances.Events;
 /// Contains all necessary information about the canceled instance.
 /// </summary>
 [EventName("instance.canceled.child")]
-public class ChildSubflowCancelRequestedEvent: IDistributedEvent
+public class ChildSubflowCancelRequestedEvent: IDistributedEvent, ITraceableDistributedEvent
 {
     /// <summary>
     /// The ID of the child instance
@@ -50,4 +51,13 @@ public class ChildSubflowCancelRequestedEvent: IDistributedEvent
     /// Typed context identifying the terminal cascade that requested this cancellation.
     /// </summary>
     public TerminationContext Termination { get; init; } = default!;
+
+    /// <summary>W3C traceparent captured at publish time (stamped centrally by the event bus).</summary>
+    public string? TraceParent { get; set; }
+
+    /// <summary>W3C tracestate accompanying <see cref="TraceParent"/>.</summary>
+    public string? TraceState { get; set; }
+
+    /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
+    public string? CorrelationId { get; set; }
 }

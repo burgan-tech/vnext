@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Tracing;
 using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
@@ -22,7 +23,8 @@ public sealed class RemoteInstanceCommandAppService(
     HttpClient httpClient,
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver,
-    ICurrentUser currentUser)
+    ICurrentUser currentUser,
+    ICorrelationIdProvider correlationIdProvider)
     : IRemoteInstanceCommandAppService
 {
     private readonly RemoteOptions _options = options.Value;
@@ -87,7 +89,7 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -164,7 +166,7 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -231,7 +233,7 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -279,7 +281,8 @@ public sealed class RemoteInstanceCommandAppService(
                 requestMessage,
                 forwardHeaders,
                 null,
-                RemoteHttpResponseHelper.IsRestrictedHeader);
+                RemoteHttpResponseHelper.IsRestrictedHeader,
+                correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             return await HandleResponseAsync(response, cancellationToken);
@@ -324,7 +327,7 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -375,7 +378,7 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -425,7 +428,7 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -472,7 +475,8 @@ public sealed class RemoteInstanceCommandAppService(
                 requestMessage,
                 forwardHeaders,
                 null,
-                RemoteHttpResponseHelper.IsRestrictedHeader);
+                RemoteHttpResponseHelper.IsRestrictedHeader,
+                correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
             return await HandleResponseAsync(response, cancellationToken);
@@ -514,7 +518,7 @@ public sealed class RemoteInstanceCommandAppService(
             var requestMessage = new HttpRequestMessage(HttpMethod.Put, requestUri);
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 
@@ -562,7 +566,7 @@ public sealed class RemoteInstanceCommandAppService(
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri);
 
             var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader);
+            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
 
             var response = await httpClient.SendAsync(requestMessage, cancellationToken);
 

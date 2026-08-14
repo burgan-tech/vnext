@@ -103,7 +103,13 @@ public sealed class InstanceCommandAppService(
                         data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
                     return Result<StartInstanceOutput>.Ok(output);
                 }))
-            .OnSuccess(output => AddWorkflowHeader(output, input));
+            .OnSuccess(output =>
+            {
+                // Emitted while the start HTTP request is live: the log-record enrichers attach
+                // the request id, closing the X-Request-Id ↔ instance-id join for the client.
+                logger.InstanceStarted(output.Id, output.Key, input.Domain, input.Workflow, workflow.Version);
+                AddWorkflowHeader(output, input);
+            });
     }
 
     /// <summary>

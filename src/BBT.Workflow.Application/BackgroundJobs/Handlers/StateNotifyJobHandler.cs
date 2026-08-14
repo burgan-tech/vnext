@@ -36,7 +36,8 @@ public sealed class StateNotifyJobHandler(
 
     public async Task HandleAsync(StateNotifyPayload args, CancellationToken cancellationToken)
     {
-        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("StateNotify.Execute", args);
+        using var activity = BackgroundJobActivityHelper.StartActivityContinuingTrace("StateNotify.Execute", args);
+        var requestId = args.Headers?.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
         using (currentSchema.Change(args.FlowName))
         {
             using (logger.BeginScope(new Dictionary<string, object>
@@ -45,7 +46,8 @@ public sealed class StateNotifyJobHandler(
                        [TelemetryConstants.TagNames.Flow] = args.FlowName,
                        [TelemetryConstants.TagNames.Domain] = args.Domain,
                        [TelemetryConstants.TagNames.FlowVersion] = args.Version,
-                       [TelemetryConstants.TagNames.JobName] = args.JobName
+                       [TelemetryConstants.TagNames.JobName] = args.JobName,
+                       [TelemetryConstants.TagNames.RequestId] = requestId ?? "N/A"
                    }))
             {
                 try

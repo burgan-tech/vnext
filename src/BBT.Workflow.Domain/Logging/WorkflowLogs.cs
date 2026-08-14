@@ -1395,6 +1395,23 @@ public static partial class WorkflowLogs
     #region Instance Management
 
     /// <summary>
+    /// Logs the successful start of a workflow instance. Emitted while the start HTTP request is
+    /// still live so the log-record enrichers attach the request id — this record is the join
+    /// between the client's request (X-Request-Id) and the newly generated instance id.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20008,
+        Level = LogLevel.Information,
+        Message = "Instance {InstanceId} (key: {InstanceKey}) started for {Domain}/{Flow} v{FlowVersion}")]
+    public static partial void InstanceStarted(
+        this ILogger logger,
+        Guid instanceId,
+        string? instanceKey,
+        string domain,
+        string flow,
+        string? flowVersion);
+
+    /// <summary>
     /// Logs when an instance is not found.
     /// </summary>
     [LoggerMessage(

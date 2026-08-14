@@ -127,6 +127,46 @@ public class EnqueueContinuationStrategyTests
     }
 
     [Fact]
+    public async Task WhenActivityIsAmbient_OutboxEventCarriesSameTraceContextAsDirectPayload()
+    {
+        // Regression: the direct payload got TraceParent/TraceState but the outbox event did not,
+        // so continuations routed through the outbox fallback lost the trace entirely.
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        TransitionJobPayload? capturedPayload = null;
+        TransitionContinuationRequested? capturedEvent = null;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
+                (payload, evt, _) => { capturedPayload = payload; capturedEvent = evt; })
+            .Returns(Task.CompletedTask);
+
+        var activity = new System.Diagnostics.Activity("pipeline");
+        activity.SetIdFormat(System.Diagnostics.ActivityIdFormat.W3C);
+        activity.TraceStateString = "vendor=state";
+        activity.Start();
+        try
+        {
+            await strategy.DispatchAsync(context, CancellationToken.None);
+        }
+        finally
+        {
+            activity.Stop();
+            System.Diagnostics.Activity.Current = null;
+        }
+
+        capturedPayload.ShouldNotBeNull();
+        capturedEvent.ShouldNotBeNull();
+        capturedPayload!.TraceParent.ShouldNotBeNullOrEmpty();
+        capturedEvent!.TraceParent.ShouldBe(capturedPayload.TraceParent);
+        capturedEvent.TraceState.ShouldBe(capturedPayload.TraceState);
+    }
+
+    [Fact]
     public async Task WhenNoNextTransition_ReturnsNullWithoutSideEffects()
     {
         var strategy = CreateStrategy();

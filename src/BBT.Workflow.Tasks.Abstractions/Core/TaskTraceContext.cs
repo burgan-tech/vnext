@@ -28,8 +28,20 @@ public sealed record TaskTraceContext
     
     /// <summary>
     /// Optional correlation ID for cross-service tracing.
+    /// Carries the originating request id (X-Request-Id) end to end.
     /// </summary>
     public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// W3C traceparent captured at invoke time on the orchestration side.
+    /// Fallback for restoring the trace tree when transport-level propagation is unavailable.
+    /// </summary>
+    public string? TraceParent { get; init; }
+
+    /// <summary>
+    /// W3C tracestate accompanying <see cref="TraceParent"/>.
+    /// </summary>
+    public string? TraceState { get; init; }
 
     /// <summary>
     /// Original HTTP request headers forwarded from orchestration.
@@ -51,7 +63,9 @@ public sealed record TaskTraceContext
         string workflowVersion,
         string? correlationId = null,
         IReadOnlyDictionary<string, string>? headers = null,
-        string? instanceDataJson = null) => new()
+        string? instanceDataJson = null,
+        string? traceParent = null,
+        string? traceState = null) => new()
     {
         InstanceId = instanceId,
         Domain = domain,
@@ -59,7 +73,9 @@ public sealed record TaskTraceContext
         WorkflowVersion = workflowVersion,
         CorrelationId = correlationId,
         RequestHeaders = headers,
-        InstanceDataJson = instanceDataJson
+        InstanceDataJson = instanceDataJson,
+        TraceParent = traceParent,
+        TraceState = traceState
     };
 }
 

@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Events;
+using BBT.Aether.Tracing;
 using BBT.Aether.Uow;
+using BBT.Workflow.Events;
 using BBT.Workflow.Events.Hooks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -41,6 +44,7 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     private readonly IServiceProvider _serviceProvider;
     private readonly IUnitOfWorkManager _unitOfWorkManager;
     private readonly ILogger<HookedDistributedEventBus> _logger;
+    private readonly ICorrelationIdProvider? _correlationIdProvider;
 
     /// <summary>
     /// Cache for event hook modes declared by EventHookAttribute.
@@ -54,12 +58,36 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         IDistributedEventBus inner,
         IServiceProvider serviceProvider,
         IUnitOfWorkManager unitOfWorkManager,
-        ILogger<HookedDistributedEventBus> logger)
+        ILogger<HookedDistributedEventBus> logger,
+        ICorrelationIdProvider? correlationIdProvider = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _unitOfWorkManager = unitOfWorkManager ?? throw new ArgumentNullException(nameof(unitOfWorkManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _correlationIdProvider = correlationIdProvider;
+    }
+
+    /// <summary>
+    /// Stamps W3C trace context and the originating request id onto traceable events at publish
+    /// time — while the publisher's Activity is still ambient — so consumers on the other side of
+    /// the outbox/pub-sub hop can continue the trace. Never overwrites values already set by the
+    /// publisher.
+    /// </summary>
+    private void StampTraceContext(object payload)
+    {
+        if (payload is not ITraceableDistributedEvent traceable)
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(traceable.TraceParent))
+        {
+            traceable.TraceParent = Activity.Current?.Id;
+            traceable.TraceState = Activity.Current?.TraceStateString;
+        }
+
+        traceable.CorrelationId ??= _correlationIdProvider?.Get();
     }
 
     /// <summary>
@@ -98,6 +126,8 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         {
             throw new ArgumentNullException(nameof(payload));
         }
+
+        StampTraceContext(payload);
 
         if (GetEventHookMode(payload.GetType()) == EventHookMode.DurablePostCommit)
         {
@@ -148,6 +178,8 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         {
             throw new ArgumentNullException(nameof(@event));
         }
+
+        StampTraceContext(@event);
 
         if (GetEventHookMode(@event.GetType()) == EventHookMode.DurablePostCommit)
         {

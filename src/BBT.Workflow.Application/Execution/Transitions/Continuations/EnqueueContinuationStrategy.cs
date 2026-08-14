@@ -101,7 +101,9 @@ public sealed class EnqueueContinuationStrategy(
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             ExecutionActor = ExecutionActor.System.ToString(),
-            ChainDepth = current.ChainDepth + 1
+            ChainDepth = current.ChainDepth + 1,
+            TraceParent = activity?.Id,
+            TraceState = activity?.TraceStateString
         };
 
         await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);

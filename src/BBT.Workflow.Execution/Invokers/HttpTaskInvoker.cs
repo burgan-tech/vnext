@@ -76,6 +76,9 @@ public sealed class HttpTaskInvoker(
                             continue;
                         }
 
+                        if (InvokerHelpers.IsReservedTraceHeader(header.Key))
+                            continue;
+
                         request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }
                 }

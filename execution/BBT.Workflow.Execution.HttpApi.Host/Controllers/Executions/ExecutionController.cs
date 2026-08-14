@@ -20,6 +20,12 @@ public sealed class ExecutionController(
     : AetherControllerBase
 {
     /// <summary>
+    /// ActivitySource for spans restored from the request body's trace context when
+    /// transport-level (traceparent header) propagation did not produce an ambient activity.
+    /// </summary>
+    private static readonly ActivitySource ActivitySource = new("BBT.Workflow.Execution");
+
+    /// <summary>
     /// Invokes a task using the envelope-based routing pattern.
     /// The envelope contains TaskType, Version, TaskKey and strongly-typed Binding.
     /// The registry routes the invocation to the appropriate invoker based on TaskType.
@@ -45,6 +51,7 @@ public sealed class ExecutionController(
         var envelope = request.Envelope;
         var traceContext = request.TraceContext;
 
+        using var restoredActivity = RestoreActivityFromBodyIfDetached(traceContext);
         var activity = Activity.Current;
         activity?.SetTag(TelemetryConstants.TagNames.Domain, traceContext?.Domain ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, traceContext?.WorkflowKey ?? "unknown");
@@ -54,6 +61,8 @@ public sealed class ExecutionController(
         activity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
         activity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        if (!string.IsNullOrEmpty(traceContext?.CorrelationId))
+            activity?.SetTag(TelemetryConstants.TagNames.RequestId, traceContext.CorrelationId);
 
         using (logger.BeginScope(new Dictionary<string, object>
         {
@@ -61,7 +70,8 @@ public sealed class ExecutionController(
             [TelemetryConstants.TagNames.Flow] = traceContext?.WorkflowKey ?? "unknown",
             [TelemetryConstants.TagNames.InstanceId] = traceContext?.InstanceId ?? Guid.Empty,
             [TelemetryConstants.TagNames.TaskKey] = envelope.TaskKey,
-            [TelemetryConstants.TagNames.TaskType] = envelope.TaskType
+            [TelemetryConstants.TagNames.TaskType] = envelope.TaskType,
+            [TelemetryConstants.TagNames.RequestId] = traceContext?.CorrelationId ?? "N/A"
         }))
         {
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
@@ -73,5 +83,38 @@ public sealed class ExecutionController(
                 ExecutionDurationMs = result.ExecutionDurationMs
             });
         }
+    }
+
+    /// <summary>
+    /// Restores the caller's trace from the body's <see cref="TaskTraceContext"/> when transport
+    /// propagation left no ambient activity — the fallback keeps the trace tree whole if the
+    /// implicit traceparent header is ever lost. When an ambient activity exists but belongs to a
+    /// DIFFERENT trace than the body claims, the body is NOT trusted over the transport: the
+    /// mismatch is only surfaced via an ActivityLink + tag for diagnostics.
+    /// </summary>
+    private static Activity? RestoreActivityFromBodyIfDetached(TaskTraceContext? traceContext)
+    {
+        if (string.IsNullOrEmpty(traceContext?.TraceParent) ||
+            !ActivityContext.TryParse(traceContext.TraceParent, traceContext.TraceState, isRemote: true, out var bodyContext))
+        {
+            return null;
+        }
+
+        var ambient = Activity.Current;
+        if (ambient is null)
+        {
+            return ActivitySource.StartActivity(
+                "Execution.InvokeTask",
+                ActivityKind.Server,
+                parentContext: bodyContext);
+        }
+
+        if (ambient.Context.TraceId != bodyContext.TraceId)
+        {
+            ambient.AddLink(new ActivityLink(bodyContext));
+            ambient.SetTag("vnext.trace.mismatch", true);
+        }
+
+        return null;
     }
 }

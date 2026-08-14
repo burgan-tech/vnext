@@ -38,6 +38,11 @@ public static class TelemetryConstants
         /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
         /// </summary>
         public const string RootInstanceId = "vnext.root.instance.id";
+        /// <summary>
+        /// Originating request id (X-Request-Id value) — joins spans/logs across the async
+        /// job, Execution and worker hops back to the client request that started them.
+        /// </summary>
+        public const string RequestId = "vnext.request.id";
         public const string SubItemType = "vnext.subitem.type";
         public const string SubItemOutcome = "vnext.subitem.outcome";
         public const string TerminationOrigin = "vnext.termination.origin";
@@ -75,5 +80,10 @@ public static class TelemetryConstants
         /// Remains constant at A's ID regardless of nesting depth.
         /// </summary>
         public const string RootInstanceId = "X-Root-Instance-Id";
+        /// <summary>
+        /// Request header carrying the originating request id. Read/generated at the edge by
+        /// the gateway and by Aether's correlation middleware; forwarded on every internal hop.
+        /// </summary>
+        public const string RequestId = "X-Request-Id";
     }
 }

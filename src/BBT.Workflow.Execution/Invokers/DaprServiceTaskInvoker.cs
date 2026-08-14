@@ -83,7 +83,8 @@ public sealed class DaprServiceTaskInvoker(
                 var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
                 if (headers != null)
                 {
-                    foreach (var header in headers.Where(h => h.Value != null))
+                    foreach (var header in headers.Where(h =>
+                                 h.Value != null && !InvokerHelpers.IsReservedTraceHeader(h.Key)))
                     {
                         request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }

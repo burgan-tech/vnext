@@ -5,6 +5,8 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Workers.Inbox.Forwarding;
+using BBT.Aether.Tracing;
+using BBT.Workflow.Workers.Inbox.Tracing;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -16,6 +18,7 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 internal sealed class InstanceSubFaultedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOrchestrationForwarder forwarder,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<InstanceSubFaultedEventHandler> logger) : IEventHandler<InstanceSubFaultedEvent>
 {
     public async Task HandleAsync(CloudEventEnvelope<InstanceSubFaultedEvent> envelope,
@@ -33,8 +36,11 @@ internal sealed class InstanceSubFaultedEventHandler(
             return;
         }
 
+        using var traceScope = EventTraceScope.Start("InstanceSubFaulted.Handle", eventData, correlationIdProvider);
+
         var scopeProps = new Dictionary<string, object>
         {
+            [TelemetryConstants.TagNames.RequestId] = eventData.CorrelationId ?? "N/A",
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",

@@ -359,7 +359,8 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson);
         if (headers != null)
         {
-            foreach (var header in headers.Where(h => h.Value != null))
+            foreach (var header in headers.Where(h =>
+                         h.Value != null && !InvokerHelpers.IsReservedTraceHeader(h.Key)))
             {
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }

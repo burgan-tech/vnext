@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Tracing;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -32,17 +33,20 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
     private readonly string _executionServiceAppId;
     private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<RemoteInvokerService> _logger;
+    private readonly ICorrelationIdProvider _correlationIdProvider;
 
     public RemoteInvokerService(
         DaprClient daprClient,
         IConfiguration configuration,
-        ILogger<RemoteInvokerService> logger)
+        ILogger<RemoteInvokerService> logger,
+        ICorrelationIdProvider correlationIdProvider)
     {
         _daprClient = daprClient;
         _executionServiceAppId = configuration["ExecutionApi:AppId"] ?? "vnext-execution";
         _invocationTimeoutSeconds = int.TryParse(
             configuration["ExecutionApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
         _logger = logger;
+        _correlationIdProvider = correlationIdProvider;
     }
 
     /// <inheritdoc />
@@ -86,6 +90,11 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
             if (!string.IsNullOrEmpty(rootIdBaggage))
                 httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RootInstanceId, rootIdBaggage);
+
+            // Forward the originating request id so Execution's correlation middleware and
+            // log enrichers pick it up — this is what joins Execution logs to the client request.
+            if (!string.IsNullOrEmpty(traceContext.CorrelationId))
+                httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, traceContext.CorrelationId);
 
             var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
                 httpRequest, invocationCts.Token);
@@ -151,14 +160,25 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             ? workflow!.Domain
             : scriptContext.Runtime.Domain;
 
+        var headers = scriptContext.Headers != null
+            ? scriptContext.GetHeadersAsDictionary()
+            : null;
+
+        string? requestId = _correlationIdProvider.Get();
+        if (string.IsNullOrEmpty(requestId) && headers is not null)
+            headers.TryGetValue("x-request-id", out requestId);
+
+        var activity = Activity.Current;
+
         return TaskTraceContext.Create(
             instanceId: instance?.Id ?? Guid.Empty,
             domain: domain,
             workflowKey: workflow?.Key ?? string.Empty,
             workflowVersion: workflow?.Version ?? string.Empty,
-            headers: scriptContext.Headers != null
-                ? scriptContext.GetHeadersAsDictionary()
-                : null,
-            instanceDataJson: instance?.LatestData?.Data?.Json);
+            correlationId: requestId,
+            headers: headers,
+            instanceDataJson: instance?.LatestData?.Data?.Json,
+            traceParent: activity?.Id,
+            traceState: activity?.TraceStateString);
     }
 }
