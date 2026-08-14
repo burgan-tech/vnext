@@ -124,6 +124,30 @@ public sealed class ExternalHttpTaskInvokerTests
         handler.LastRequest.Headers.NonValidated.Contains("Content-Type").ShouldBeFalse();
     }
 
+    /// <summary>
+    /// The trusted correlation/identity header enforcement lives in the shared send core, so the
+    /// orchestrator-executed type gets the same protection as type 6: mapping-provided values for
+    /// the workflow context headers are stripped and only trusted Activity-baggage values (absent
+    /// here) may replace them.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_StripsSpoofedWorkflowCorrelationHeaders()
+    {
+        var handler = new StubHttpMessageHandler(Ok());
+        var invoker = CreateInvoker(new CapturingHttpClientFactory(handler));
+
+        await invoker.InvokeAsync("local-call", CreateBinding(
+            method: "POST",
+            body: "{}",
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"spoofed.value","act_sub":"spoofed.value","X-Custom":"kept"}"""));
+
+        handler.LastRequest!.Headers.NonValidated.Contains("X-Workflow-Instance-Id").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("X-Correlation-Id").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("sub").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("act_sub").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("X-Custom").ShouldBeTrue();
+    }
+
     [Fact]
     public async Task InvokeAsync_TransportFailure_ReturnsFailureResultInsteadOfThrowing()
     {

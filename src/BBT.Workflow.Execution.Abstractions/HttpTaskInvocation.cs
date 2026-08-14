@@ -27,6 +27,17 @@ namespace BBT.Workflow.Execution;
 /// </summary>
 public static class HttpTaskInvocation
 {
+    // Kept local so this contracts package does not acquire a Domain dependency.
+    // These names are the public HTTP contract defined by TelemetryConstants in vNext Domain.
+    private const string WorkflowInstanceHeader = "X-Workflow-Instance-Id";
+    private const string CorrelationHeader = "X-Correlation-Id";
+    private const string SubHeader = "sub";
+    private const string ActSubHeader = "act_sub";
+    private const string WorkflowInstanceBaggage = "workflow.instance.id";
+    private const string CorrelationBaggage = "correlation.id";
+    private const string SubBaggage = "sub";
+    private const string ActSubBaggage = "act.sub";
+
     /// <summary>
     /// Response-body parse options: deep payloads are tolerated and cycles ignored rather than
     /// failing the task.
@@ -87,6 +98,8 @@ public static class HttpTaskInvocation
                     }
                 }
             }
+
+            ApplyTrustedCorrelationHeaders(request);
 
             // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
             if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
@@ -171,6 +184,66 @@ public static class HttpTaskInvocation
     /// <summary>Whether a failed result represents a cancellation, for host-side logging/metrics.</summary>
     public static bool WasCancelled(TaskInvocationResult result) =>
         result.Metadata?.TryGetValue("Cancelled", out var flag) == true && flag is true;
+
+    /// <summary>
+    /// Replaces the workflow correlation/identity headers with trusted values from Activity
+    /// baggage. Mapping-provided values are untrusted and must never be allowed to spoof the
+    /// workflow context established by vNext. Shared here so both HTTP task types (6 remote,
+    /// 21 orchestrator-executed) enforce the same rule.
+    /// </summary>
+    private static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request)
+    {
+        request.Headers.Remove(WorkflowInstanceHeader);
+        request.Headers.Remove(CorrelationHeader);
+        request.Headers.Remove(SubHeader);
+        request.Headers.Remove(ActSubHeader);
+
+        var workflowInstance = Activity.Current?.GetBaggageItem(WorkflowInstanceBaggage);
+        if (Guid.TryParse(workflowInstance, out var workflowInstanceId)
+            && workflowInstanceId != Guid.Empty)
+        {
+            request.Headers.TryAddWithoutValidation(
+                WorkflowInstanceHeader,
+                workflowInstanceId.ToString("D").ToLowerInvariant());
+        }
+
+        var correlation = Activity.Current?.GetBaggageItem(CorrelationBaggage);
+        if (Guid.TryParseExact(correlation, "N", out var correlationId)
+            && correlationId != Guid.Empty)
+        {
+            request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId.ToString("N"));
+        }
+
+        var subject = Activity.Current?.GetBaggageItem(SubBaggage);
+        if (IsSafeIdentityClaim(subject))
+        {
+            request.Headers.TryAddWithoutValidation(SubHeader, subject);
+        }
+
+        var actSub = Activity.Current?.GetBaggageItem(ActSubBaggage);
+        if (IsSafeIdentityClaim(actSub))
+        {
+            request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
+        }
+    }
+
+    private static bool IsSafeIdentityClaim(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 128)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Attempts to parse JSON content. Returns the original content if parsing fails.
