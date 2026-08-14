@@ -883,6 +883,14 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     private const string UpdateDataTransitionKind = "updateData";
 
+    /// <summary>
+    /// <see cref="TransitionItem.Kind"/> value for runtime-armed scheduled transitions listed in
+    /// <c>transitions</c>. Never produced by <see cref="ResolveTransitionKind"/> — scheduled
+    /// transitions are excluded from the caller-triggerable candidates — so the two vocabularies
+    /// cannot collide on an entry.
+    /// </summary>
+    private const string ScheduledTransitionKind = "scheduled";
+
     private static string ResolveTransitionKind(
         Definitions.Workflow workflow,
         State currentState,
@@ -1067,9 +1075,9 @@ public sealed class InstanceQueryAppService(
         IReadOnlyCollection<InstanceCorrelation> allCorrelations,
         CancellationToken cancellationToken)
     {
-        // Active scheduled-transition jobs feed the scheduledTransitions response list only —
-        // deliberately NOT the fingerprint ETag (team decision, issue #864; known staleness gap,
-        // see InstanceStateFingerprint). Loaded here so the fast 304 path never pays for it.
+        // Active scheduled-transition jobs feed the kind:"scheduled" entries of the transitions
+        // response list only — deliberately NOT the fingerprint ETag (team decision, issue #864;
+        // known staleness gap, see the ETag doc). Loaded here so the fast 304 path never pays for it.
         var activeScheduledTransitionJobs = (await instanceJobRepository
                 .GetListActiveAsync(instance.Id, cancellationToken))
             .Where(j => j.JobType == JobType.ScheduledTransition)
@@ -1369,6 +1377,10 @@ public sealed class InstanceQueryAppService(
                 input.Domain, input.Workflow, instance.Id.ToString())
         };
 
+        // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
+        // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present, no href).
+        transitionItems.AddRange(BuildScheduledTransitionEntries(activeScheduledTransitionJobs));
+
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
             Data = dataHref,
@@ -1382,32 +1394,31 @@ public sealed class InstanceQueryAppService(
             ActiveCorrelations = allActiveCorrelations,
             Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
-            ScheduledTransitions = BuildScheduledTransitionItems(activeScheduledTransitionJobs),
             Functions = functionsHref,
             Interaction = interaction
         });
     }
 
     /// <summary>
-    /// Maps the instance's active scheduled-transition jobs to the response's
-    /// <c>scheduledTransitions</c> list, ordered by execution time ascending. Rows without an
+    /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the
+    /// response's <c>transitions</c> list, ordered by execution time ascending. No href/view/schema —
+    /// callers cannot trigger a scheduled transition. Rows without an
     /// <see cref="InstanceJob.ExecuteAt"/> (persisted before the column existed) are omitted rather
-    /// than emitted without a time — every exposed entry carries an execution instant, and such rows
+    /// than emitted without a time — every scheduled entry carries an execution instant, and such rows
     /// age out as their jobs fire or are cancelled. Not role-filtered: a scheduled transition fires
-    /// regardless of the caller, so the list is a fact about the instance, not a caller capability.
+    /// regardless of the caller, so the entries are facts about the instance, not caller capabilities.
     /// </summary>
-    private static List<ScheduledTransitionItem> BuildScheduledTransitionItems(
+    private static IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
         IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs) =>
         activeScheduledTransitionJobs
             .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
             .OrderBy(j => j.ExecuteAt!.Value)
-            .Select(j => new ScheduledTransitionItem
+            .Select(j => new TransitionItem
             {
                 Name = j.TransitionKey!,
-                Kind = ScheduledTransitionItem.ScheduledKind,
+                Kind = ScheduledTransitionKind,
                 ExecuteAtUtc = j.ExecuteAt!.Value
-            })
-            .ToList();
+            });
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none

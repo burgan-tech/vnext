@@ -512,15 +512,24 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
-    /// The scheduledTransitions list is built from the persisted job state: active
-    /// scheduled-transition rows with an execution time, ordered by that time ascending, each entry
-    /// carrying the transition key, the "scheduled" kind and the UTC execution instant.
+    /// Scheduled transitions ride inside the <c>transitions</c> list as <c>kind: "scheduled"</c>
+    /// entries built from the persisted job state: appended after the caller-triggerable entries,
+    /// ordered by execution time ascending, each carrying the transition key and the UTC execution
+    /// instant — and no href, since callers cannot trigger them. Caller-triggerable entries carry
+    /// no <c>executeAtUtc</c>.
     /// </summary>
     [Fact]
-    public async Task GetInstanceStateAsync_ExposesActiveScheduledTransitionJobs_OrderedByExecuteAt()
+    public async Task GetInstanceStateAsync_ListsScheduledEntriesInTransitions_OrderedByExecuteAt()
     {
-        // Arrange
-        var (instance, workflow) = CreateSimpleActiveInstance();
+        // Arrange — one manual transition plus two armed scheduled jobs
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddTransition(Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
 
         var laterAt = new DateTimeOffset(2026, 8, 3, 14, 30, 0, TimeSpan.Zero);
@@ -537,16 +546,25 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var result = await _service.GetInstanceStateAsync(
             CreateInput(instance.Id.ToString()), CancellationToken.None);
 
-        // Assert — ordered by execution time, not by insertion order
+        // Assert
         result.Result.IsSuccess.ShouldBeTrue();
-        var scheduled = result.Result.Value!.ScheduledTransitions;
-        scheduled.Count.ShouldBe(2);
-        scheduled[0].Name.ShouldBe("send-reminder");
-        scheduled[0].Kind.ShouldBe(ScheduledTransitionItem.ScheduledKind);
-        scheduled[0].ExecuteAtUtc.ShouldBe(soonerAt.UtcDateTime);
-        scheduled[0].ExecuteAtUtc.Kind.ShouldBe(DateTimeKind.Utc);
-        scheduled[1].Name.ShouldBe("payment-timeout");
-        scheduled[1].ExecuteAtUtc.ShouldBe(laterAt.UtcDateTime);
+        var transitions = result.Result.Value!.Transitions;
+        transitions.Count.ShouldBe(3);
+
+        // The caller-triggerable entry keeps its shape and gains no execution time.
+        transitions[0].Name.ShouldBe("approve");
+        transitions[0].Kind.ShouldBe("stateTransition");
+        transitions[0].ExecuteAtUtc.ShouldBeNull();
+
+        // Scheduled entries follow, ordered by execution time, without an href.
+        transitions[1].Name.ShouldBe("send-reminder");
+        transitions[1].Kind.ShouldBe("scheduled");
+        transitions[1].ExecuteAtUtc.ShouldBe(soonerAt.UtcDateTime);
+        transitions[1].ExecuteAtUtc!.Value.Kind.ShouldBe(DateTimeKind.Utc);
+        transitions[1].Href.ShouldBeNull();
+        transitions[2].Name.ShouldBe("payment-timeout");
+        transitions[2].Kind.ShouldBe("scheduled");
+        transitions[2].ExecuteAtUtc.ShouldBe(laterAt.UtcDateTime);
     }
 
     /// <summary>
@@ -581,7 +599,39 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         // Assert
         result.Result.IsSuccess.ShouldBeTrue();
-        result.Result.Value!.ScheduledTransitions.ShouldBeEmpty();
+        result.Result.Value!.Transitions.ShouldNotContain(t => t.Kind == "scheduled");
+    }
+
+    /// <summary>
+    /// Wire-shape contract: a scheduled entry serializes as exactly { name, kind, executeAtUtc }
+    /// (UTC with the Z designator), while a caller-triggerable entry carries an href and no
+    /// executeAtUtc — the discrimination rule clients rely on.
+    /// </summary>
+    [Fact]
+    public void TransitionItem_SerializesScheduledAndTriggerableEntries_Distinctly()
+    {
+        var scheduled = new Shared.TransitionItem
+        {
+            Name = "payment-timeout",
+            Kind = "scheduled",
+            ExecuteAtUtc = new DateTime(2026, 8, 3, 14, 30, 0, DateTimeKind.Utc)
+        };
+        var triggerable = new Shared.TransitionItem
+        {
+            Name = "pay",
+            Kind = "stateTransition",
+            Href = "/api/v1/d/workflows/w/instances/i/transitions/pay"
+        };
+
+        var scheduledJson = System.Text.Json.JsonSerializer.Serialize(scheduled, JsonSerializerConstants.JsonOptions);
+        var triggerableJson = System.Text.Json.JsonSerializer.Serialize(triggerable, JsonSerializerConstants.JsonOptions);
+
+        scheduledJson.ShouldContain("\"executeAtUtc\":\"2026-08-03T14:30:00Z\"");
+        scheduledJson.ShouldNotContain("href");
+        scheduledJson.ShouldNotContain("view");
+        scheduledJson.ShouldNotContain("schema");
+        triggerableJson.ShouldContain("\"href\"");
+        triggerableJson.ShouldNotContain("executeAtUtc");
     }
 
     private InstanceJob CreateScheduledTransitionJob(

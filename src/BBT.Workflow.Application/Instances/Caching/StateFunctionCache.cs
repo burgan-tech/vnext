@@ -32,7 +32,8 @@ public sealed class StateFunctionCache(
     /// example v2, which started listing the workflow-level <c>updateData</c> and <c>exit</c>
     /// transitions; v3, which added the workflow's <c>functions</c> discovery links; v4, which
     /// replaced that inline list with a <c>hasFunctions</c> flag plus a link to the <c>catalog</c>
-    /// function; or v6, which added the <c>scheduledTransitions</c> list), this constant
+    /// function; or v6, which started listing the runtime-armed scheduled transitions inside
+    /// <c>transitions</c> as <c>kind: "scheduled"</c> entries carrying <c>executeAtUtc</c>), this constant
     /// must be bumped: it invalidates every previously issued ETag and every cached body, and without
     /// it a client long-polling an instance whose state never changes would keep receiving
     /// <c>304 Not Modified</c> and never observe the new shape.
@@ -78,8 +79,8 @@ public sealed class StateFunctionCache(
         // set: a sub item starting, terminating or advancing its state changes the body without
         // touching the instance's own state or status, and must still invalidate the caller's ETag.
         // Scheduled-job changes deliberately do NOT participate (team decision, issue #864): a
-        // same-state re-arm can leave the scheduledTransitions list stale behind a 304 — accepted
-        // as a known gap; see the note on InstanceStateFingerprint.
+        // same-state re-arm can leave the kind:"scheduled" transition entries stale behind a 304 —
+        // accepted as a known gap; see the ETag doc.
         var material = string.Join('|',
             ResponseShapeVersion,
             fingerprint.Id,

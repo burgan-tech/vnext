@@ -131,33 +131,37 @@ concurrent completion its active subset can be a moment fresher than `activeCorr
 Changes to the correlation set participate in the state ETag — see
 [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
-### State response: scheduled transitions
+### State response: scheduled transitions inside `transitions`
 
-The state response lists the transitions the runtime has already armed to fire automatically, so a
-client can render countdowns and upcoming-action information without polling anything else:
+The transitions the runtime has already armed to fire automatically ride in the **same
+`transitions` list** as the caller-triggerable entries, discriminated by `kind`, so a client can
+render countdowns and upcoming-action information without polling anything else:
 
 ```jsonc
-"scheduledTransitions": [
+"transitions": [
+  { "name": "pay", "kind": "stateTransition", "href": "...", "view": { ... }, "schema": { ... } },
   { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z" }
 ]
 ```
 
+- `kind: "scheduled"` ⇒ the entry carries `executeAtUtc` and **no `href`/`view`/`schema`** —
+  callers cannot trigger a scheduled transition (the actor gate rejects it). Every other kind
+  carries an `href` and never an `executeAtUtc`.
 - Built from the **persisted job state**: active `InstanceJob` rows of type `ScheduledTransition`
   whose `ExecuteAt` was captured at scheduling time — the exact instant the scheduler was armed
-  with, never a re-evaluation of the transition's timer script. Ordered by `executeAtUtc`
-  ascending; empty array when nothing is scheduled.
-- `name` is the transition key; `kind` is currently always `scheduled` (a job-kind vocabulary —
-  the workflow-level timeout is a candidate future kind). `executeAtUtc` is always UTC with the
-  `Z` designator.
-- **Not role-filtered**, unlike `availableTransitions`: a scheduled transition fires regardless of
-  the caller, so the list is a fact about the instance, not a caller capability.
-- Always describes the **polled instance itself** — during an active-subflow window it is not
-  merged with the subflow's own list (poll the subflow instance for its schedule).
+  with, never a re-evaluation of the transition's timer script. Scheduled entries are appended
+  after the caller-triggerable entries, ordered by `executeAtUtc` ascending.
+- `name` is the transition key; `executeAtUtc` is always UTC with the `Z` designator.
+- Scheduled entries are **not role-filtered**, unlike the caller-triggerable ones: a scheduled
+  transition fires regardless of the caller, so the entry is a fact about the instance, not a
+  caller capability.
+- Scheduled entries always describe the **polled instance itself** — during an active-subflow
+  window they are not merged with the subflow's own schedule (poll the subflow instance for it).
 - Rows persisted before the `ExecuteAt` column existed are omitted rather than emitted without a
   time; they age out as their jobs fire or are cancelled.
-- An entry may briefly remain visible with a past `executeAtUtc` while the fired transition's
-  pipeline is still settling — the list reflects the persisted job rows, and the row is marked
-  processed when the handler completes.
+- A scheduled entry may briefly remain visible with a past `executeAtUtc` while the fired
+  transition's pipeline is still settling — the entries reflect the persisted job rows, and the
+  row is marked processed when the handler completes.
 - **Known freshness gap (accepted, issue #864)**: changes to the scheduled-job set deliberately do
   **not** participate in the state ETag. When the job set changes without a state/status delta —
   a same-state re-arm via `updateData`/`$self`, an inline A→B→A chain, or a fired job rejected

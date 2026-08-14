@@ -59,8 +59,8 @@ public class InstanceJob : Entity<Guid>, IHasCreatedAt, IHasModifyTime
 
     /// <summary>
     /// The UTC instant the scheduler was armed to fire this job at, captured at scheduling time so
-    /// read paths (the state function's <c>scheduledTransitions</c>) never have to reach into the
-    /// scheduler's own store. Accepted as <see cref="DateTimeOffset"/> and stored as its UTC instant,
+    /// read paths (the state function's <c>kind: "scheduled"</c> transition entries) never have to
+    /// reach into the scheduler's own store. Accepted as <see cref="DateTimeOffset"/> and stored as its UTC instant,
     /// so the value is unambiguous by construction. <c>null</c> for job kinds without a resolvable
     /// single instant and for rows persisted before the column existed.
     /// </summary>

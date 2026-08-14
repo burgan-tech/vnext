@@ -67,7 +67,7 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   revert-then-recomplete that restores both counts moves `LastCorrelationCompletedAt`, and a sub
   item advancing its own state moves `LastSubFlowStateChangedAt`.
 - **Scheduled-job rows are deliberately not projected** (team decision, issue #864). The body's
-  `scheduledTransitions` list is therefore *not* covered by cache validation — see the known-gap
+  `kind: "scheduled"` transition entries are therefore *not* covered by cache validation — see the known-gap
   note under the ETag section below.
 
 > **Invariant — the two build paths must agree.** The fast path fingerprints via this projection;
@@ -97,8 +97,8 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
   the `catalog` function; v5 began narrowing `availableTransitions` by per-state `availableIn` role
-  grants, which can *remove* an entry a caller previously saw; v6 added the `scheduledTransitions`
-  list), every previously issued ETag must be
+  grants, which can *remove* an entry a caller previously saw; v6 started listing scheduled
+  transitions inside `transitions` as `kind: "scheduled"` entries with `executeAtUtc`), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -121,7 +121,7 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   instance's own state or status, and a long-polling client would otherwise keep getting 304 and
   never observe it.
 - **Scheduled-job changes are deliberately NOT in the hash** (team decision, issue #864). The
-  body's `scheduledTransitions` list is built from the active scheduled-transition job rows, but
+  body's `kind: "scheduled"` transition entries are built from the active scheduled-transition job rows, but
   the job set has no fingerprint member, so a job-set change with no state/status delta does not
   invalidate the ETag. **Known gaps, accepted**: a same-state re-arm (`updateData`/`$self` — the
   reserved path never commits an observable Busy flip), an inline A→B→A chain (one transaction,

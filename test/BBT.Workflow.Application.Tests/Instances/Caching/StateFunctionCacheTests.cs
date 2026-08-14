@@ -68,7 +68,8 @@ public class StateFunctionCacheTests
         // The response-shape version segment is part of the key so that a runtime change to the
         // state body (v2 added the workflow-level updateData/exit transitions; v3 the workflow's
         // `functions` discovery links; v4 replaced that list with a hasFunctions flag plus a catalog
-        // link; v6 added the scheduledTransitions list) cannot be served from entries written by an
+        // link; v6 started listing scheduled transitions inside transitions as kind:"scheduled"
+        // entries with executeAtUtc) cannot be served from entries written by an
         // earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.

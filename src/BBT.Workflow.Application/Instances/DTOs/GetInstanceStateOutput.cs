@@ -54,20 +54,12 @@ public sealed class GetInstanceStateOutput
     public List<ActiveCorrelationHref> Correlations { get; set; } = [];
 
     /// <summary>
-    /// Available transition items with href links
+    /// Available transition items with href links, followed by the transitions the runtime has armed
+    /// to fire automatically (<c>kind: "scheduled"</c>, carrying <c>executeAtUtc</c>, no href — they
+    /// cannot be triggered by callers). Scheduled entries are read from the persisted job state,
+    /// always describe the polled instance itself, and are not role-filtered.
     /// </summary>
     public List<TransitionItem> Transitions { get; set; } = [];
-
-    /// <summary>
-    /// Transitions the runtime has armed to fire automatically for this instance, ordered by
-    /// execution time ascending. Read from the persisted job state, so clients can render
-    /// countdowns and upcoming-action information without any scheduler access. Always describes
-    /// the polled instance itself — during an active-subflow window it is not merged with the
-    /// subflow's own list. Changes to this set deliberately do NOT participate in the fingerprint
-    /// ETag (team decision, issue #864) — a same-state re-arm can leave this list stale behind a
-    /// 304; accepted as a known gap, see <c>InstanceStateFingerprint</c>.
-    /// </summary>
-    public List<ScheduledTransitionItem> ScheduledTransitions { get; set; } = [];
 
     /// <summary>
     /// Pointer to the workflow's function catalog: whether the flow declares any functions, and where
