@@ -98,7 +98,8 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
   the `catalog` function; v5 began narrowing `availableTransitions` by per-state `availableIn` role
   grants, which can *remove* an entry a caller previously saw; v6 started listing scheduled
-  transitions inside `transitions` as `kind: "scheduled"` entries with `executeAtUtc`), every previously issued ETag must be
+  transitions inside `transitions` as `kind: "scheduled"` entries with `executeAtUtc`, and renamed
+  the `stateTransition` kind to `manual`), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by

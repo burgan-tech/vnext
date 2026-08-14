@@ -25,7 +25,7 @@ public sealed class TransitionItem : HrefBase
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// Transition category for client behavior, e.g. stateTransition, sharedTransition, cancel, exit,
+    /// Transition category for client behavior, e.g. manual, sharedTransition, cancel, exit,
     /// updateData, timeout, scheduled.
     /// </summary>
     public string Kind { get; set; } = string.Empty;

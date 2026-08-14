@@ -69,7 +69,8 @@ public class StateFunctionCacheTests
         // state body (v2 added the workflow-level updateData/exit transitions; v3 the workflow's
         // `functions` discovery links; v4 replaced that list with a hasFunctions flag plus a catalog
         // link; v6 started listing scheduled transitions inside transitions as kind:"scheduled"
-        // entries with executeAtUtc) cannot be served from entries written by an
+        // entries with executeAtUtc and renamed the stateTransition kind to manual) cannot be
+        // served from entries written by an
         // earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
