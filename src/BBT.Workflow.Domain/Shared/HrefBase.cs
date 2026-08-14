@@ -25,9 +25,18 @@ public sealed class TransitionItem : HrefBase
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// Transition category for client behavior, e.g. stateTransition, sharedTransition, cancel, exit, updateData, timeout.
+    /// Transition category for client behavior, e.g. stateTransition, sharedTransition, cancel, exit,
+    /// updateData, timeout, scheduled.
     /// </summary>
     public string Kind { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The UTC instant the runtime is armed to execute this transition at. Present only on
+    /// <c>kind: "scheduled"</c> entries (read from the persisted job state); null — and omitted from
+    /// the JSON — for every caller-triggerable kind. Always <see cref="DateTimeKind.Utc"/>, so it
+    /// serializes with the <c>Z</c> designator.
+    /// </summary>
+    public DateTime? ExecuteAtUtc { get; set; }
 
     /// <summary>
     /// View href for this transition. When HasView is true, the view endpoint returns meaningful content when called with this transition key.

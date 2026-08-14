@@ -5,6 +5,7 @@ using System.Text.Json;
 using BBT.Workflow.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -13,13 +14,15 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace BBT.Workflow.Migrations
 {
     [DbContext(typeof(WorkflowDbContext))]
-    partial class WorkflowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260812085933_AddInstanceJobExecuteAt")]
+    partial class AddInstanceJobExecuteAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.4")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -163,6 +166,12 @@ namespace BBT.Workflow.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("ChainHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ChainToken")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -248,6 +257,9 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("character varying(36)")
                         .HasColumnName("ModifiedByBehalfOf");
 
+                    b.Property<int?>("ResumePointStepOrder")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Stage")
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
@@ -262,6 +274,14 @@ namespace BBT.Workflow.Migrations
                         .HasColumnType("text[]");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ChainHeartbeatAt")
+                        .HasDatabaseName("IX_Instances_ChainHeartbeatAt")
+                        .HasFilter("\"ChainHeartbeatAt\" IS NOT NULL");
+
+                    b.HasIndex("ChainToken")
+                        .HasDatabaseName("IX_Instances_ChainToken")
+                        .HasFilter("\"ChainToken\" IS NOT NULL");
 
                     b.HasIndex("EffectiveState")
                         .HasDatabaseName("IX_Instances_EffectiveState");
@@ -446,6 +466,11 @@ namespace BBT.Workflow.Migrations
                     b.Property<DateTime>("EnteredAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("HistorySequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<Guid>("InstanceId")
                         .HasColumnType("uuid");
 
@@ -471,11 +496,11 @@ namespace BBT.Workflow.Migrations
                         .HasDatabaseName("UX_InstancesData_Instance_IsLatest")
                         .HasFilter("\"IsLatest\" = true");
 
-                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("InstanceId"), new[] { "Version", "VersionNo", "ETag", "DataHash", "EnteredAt" });
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("InstanceId"), new[] { "Version", "VersionNo", "HistorySequence", "ETag", "DataHash", "EnteredAt" });
 
-                    b.HasIndex("InstanceId", "Version", "VersionNo")
+                    b.HasIndex("InstanceId", "VersionNo")
                         .IsUnique()
-                        .HasDatabaseName("UX_InstancesData_Instance_Version_VersionNo");
+                        .HasDatabaseName("UX_InstancesData_Instance_VersionNo");
 
                     b.ToTable("InstancesData", "public");
                 });
