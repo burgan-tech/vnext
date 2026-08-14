@@ -15,7 +15,7 @@ public class InstanceJobTests
 
         var job = InstanceJob.Create(
             Guid.NewGuid(),
-            JobName.ForScheduledTransition(instanceId, "review", "payment-timeout"),
+            JobName.ForScheduledTransition(instanceId, "review", "payment-timeout", Guid.NewGuid()),
             Guid.NewGuid(), "test-domain", "test-flow", instanceId, executeAt);
 
         Assert.Equal(new DateTime(2026, 8, 3, 14, 30, 0, DateTimeKind.Utc), job.ExecuteAt);
