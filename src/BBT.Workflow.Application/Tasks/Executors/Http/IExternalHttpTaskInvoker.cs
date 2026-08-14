@@ -10,7 +10,7 @@ namespace BBT.Workflow.Tasks.Executors;
 /// per-request timeout, SSL-validation client selection, accepted-status-code matching, response
 /// parsing), so output mapping scripts observe identical shapes for both task types.
 /// </summary>
-public interface ILocalHttpTaskInvoker
+public interface IExternalHttpTaskInvoker
 {
     /// <summary>
     /// Executes the HTTP request described by the binding.

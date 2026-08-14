@@ -17,19 +17,19 @@ namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// End-to-end executor tests for the local HTTP task type (issue #399): a
-/// <see cref="LocalHttpTask"/> runs the full <see cref="TaskExecutorBase{TTask}"/> lifecycle
+/// <see cref="ExternalHttpTask"/> runs the full <see cref="TaskExecutorBase{TTask}"/> lifecycle
 /// inside the orchestrator, performing the HTTP call in-process — no remote invoker involved.
 /// </summary>
-public sealed class LocalHttpTaskExecutorTests
+public sealed class ExternalHttpTaskExecutorTests
 {
     private const string TestDomain = "test-domain";
     private const string TestWorkflow = "test-flow";
     private const string TestVersion = "1.0.0";
 
     [Fact]
-    public void TaskType_IsLocalHttp()
+    public void TaskType_IsExternalHttp()
     {
-        CreateExecutor(new StubHttpMessageHandler(Ok())).TaskType.ShouldBe(TaskType.LocalHttp);
+        CreateExecutor(new StubHttpMessageHandler(Ok())).TaskType.ShouldBe(TaskType.ExternalHttp);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public sealed class LocalHttpTaskExecutorTests
         var response = result.Value!;
         response.IsSuccess.ShouldBeTrue();
         response.StatusCode.ShouldBe(200);
-        response.TaskType.ShouldBe("LocalHttp");
+        response.TaskType.ShouldBe("ExternalHttp");
         // The request was flattened through the shared TaskBindingMapper and sent in-process.
         handler.LastRequest!.RequestUri!.ToString().ShouldBe("https://api.example.com/orders");
         handler.LastRequest.Method.ShouldBe(HttpMethod.Post);
@@ -107,27 +107,27 @@ public sealed class LocalHttpTaskExecutorTests
     private static HttpResponseMessage Ok() =>
         new(HttpStatusCode.OK) { Content = new StringContent("{}") };
 
-    private static LocalHttpTask CreateTask(string config)
+    private static ExternalHttpTask CreateTask(string config)
     {
-        var task = LocalHttpTask.Create(JsonDocument.Parse(config).RootElement);
+        var task = ExternalHttpTask.Create(JsonDocument.Parse(config).RootElement);
         task.SetReference(new Reference("local-call", TestDomain, "sys-tasks", TestVersion));
         return task;
     }
 
-    private static LocalHttpTaskExecutor CreateExecutor(HttpMessageHandler handler)
+    private static ExternalHttpTaskExecutor CreateExecutor(HttpMessageHandler handler)
     {
-        var invoker = new LocalHttpTaskInvoker(
+        var invoker = new ExternalHttpTaskInvoker(
             new SingleClientFactory(handler),
-            NullLogger<LocalHttpTaskInvoker>.Instance);
+            NullLogger<ExternalHttpTaskInvoker>.Instance);
 
         // No mapping code is attached in these tests, so the script engine is never invoked.
-        return new LocalHttpTaskExecutor(
+        return new ExternalHttpTaskExecutor(
             invoker,
             Substitute.For<IScriptEngine>(),
-            NullLogger<LocalHttpTaskExecutor>.Instance);
+            NullLogger<ExternalHttpTaskExecutor>.Instance);
     }
 
-    private static TaskExecutorContext CreateContext(LocalHttpTask task)
+    private static TaskExecutorContext CreateContext(ExternalHttpTask task)
     {
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
         var instance = Instances.Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "ctx-key");

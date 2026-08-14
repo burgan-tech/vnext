@@ -42,11 +42,11 @@ public class TaskComponentValidatorTests
     }
 
     /// <summary>
-    /// Issue #399: the local (orchestrator-executed) HTTP task type publishes like any other —
+    /// Issue #399: the external (orchestrator-executed) HTTP task type publishes like any other —
     /// discriminator "21" is a known TaskType and the shared HTTP config shape deserializes.
     /// </summary>
     [Fact]
-    public void Validate_ShouldReturnSuccess_ForLocalHttpTask()
+    public void Validate_ShouldReturnSuccess_ForExternalHttpTask()
     {
         // Arrange
         var taskJson = """

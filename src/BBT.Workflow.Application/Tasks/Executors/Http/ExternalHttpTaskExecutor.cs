@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
-/// Executor for local HTTP tasks (<see cref="TaskType.LocalHttp"/>, discriminator "21"):
+/// Executor for local HTTP tasks (<see cref="TaskType.ExternalHttp"/>, discriminator "21"):
 /// the user-defined URL is invoked directly by the Orchestrator process instead of being
 /// routed through the Execution service's <c>/execution/invoke/{type}/{key}</c> hop.
 /// <para>
@@ -18,26 +18,26 @@ namespace BBT.Workflow.Tasks.Executors;
 /// the task is flattened through the same <see cref="TaskBindingMapper"/> into the same
 /// <see cref="HttpTaskBinding"/> the remote path would put on the wire, and output mapping runs
 /// locally against the same result shape. Only the transport differs: the binding is handed to
-/// <see cref="ILocalHttpTaskInvoker"/> in-process, so no Dapr sidecar, circuit breaker or
+/// <see cref="IExternalHttpTaskInvoker"/> in-process, so no Dapr sidecar, circuit breaker or
 /// remote-invocation timeout participates — the task's own <c>timeoutSeconds</c> (default 30)
 /// is the only bound below the job budget.
 /// </para>
-/// <typeparamref name="TTask"/> is <see cref="HttpTask"/> because <see cref="LocalHttpTask"/>
+/// <typeparamref name="TTask"/> is <see cref="HttpTask"/> because <see cref="ExternalHttpTask"/>
 /// derives from it; the registry routes by <see cref="WorkflowTask.GetTaskType"/>, so plain
 /// type-6 HTTP tasks never reach this executor.
 /// </summary>
-public sealed class LocalHttpTaskExecutor : TaskExecutorBase<HttpTask>
+public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
 {
-    private readonly ILocalHttpTaskInvoker _localInvoker;
+    private readonly IExternalHttpTaskInvoker _localInvoker;
     private readonly IScriptEngine _scriptEngine;
 
     /// <summary>
-    /// Initializes a new instance of LocalHttpTaskExecutor.
+    /// Initializes a new instance of ExternalHttpTaskExecutor.
     /// </summary>
-    public LocalHttpTaskExecutor(
-        ILocalHttpTaskInvoker localInvoker,
+    public ExternalHttpTaskExecutor(
+        IExternalHttpTaskInvoker localInvoker,
         IScriptEngine scriptEngine,
-        ILogger<LocalHttpTaskExecutor> logger)
+        ILogger<ExternalHttpTaskExecutor> logger)
         : base(logger)
     {
         _localInvoker = localInvoker;
@@ -45,7 +45,7 @@ public sealed class LocalHttpTaskExecutor : TaskExecutorBase<HttpTask>
     }
 
     /// <inheritdoc />
-    public override TaskType TaskType => TaskType.LocalHttp;
+    public override TaskType TaskType => TaskType.ExternalHttp;
 
     /// <inheritdoc />
     protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
@@ -69,7 +69,7 @@ public sealed class LocalHttpTaskExecutor : TaskExecutorBase<HttpTask>
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"Local HTTP task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+            $"External HTTP task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {
@@ -107,7 +107,7 @@ public sealed class LocalHttpTaskExecutor : TaskExecutorBase<HttpTask>
         {
             return Result<TaskInvocationResult>.Fail(Error.Failure(
                 WorkflowErrorCodes.TaskExecution,
-                $"Local HTTP task {task.Key} produced an empty HTTP binding."));
+                $"External HTTP task {task.Key} produced an empty HTTP binding."));
         }
 
         var result = await _localInvoker.InvokeAsync(task.Key, binding, cancellationToken);
@@ -152,7 +152,7 @@ public sealed class LocalHttpTaskExecutor : TaskExecutorBase<HttpTask>
             return outputResponse.Data;
         }, cancellationToken, ex => Error.Failure(
             WorkflowErrorCodes.TaskExecution,
-            $"Local HTTP task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+            $"External HTTP task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
 
         if (!result.IsSuccess)
         {

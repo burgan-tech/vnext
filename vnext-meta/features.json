@@ -112,10 +112,10 @@
         "POST {domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}"
       ]
     },
-    "localHttpTask": {
+    "externalHttpTask": {
       "since": "0.0.80",
       "status": "stable",
-      "description": "New workflow task type 21 (LocalHttp): a user-defined URL call executed directly by the Orchestrator process instead of being routed through the Execution service's /execution/invoke/{type}/{key} hop. The task definition shape is identical to the type-6 HTTP task (config.url, method, headers, body, contentType, rawBody, timeoutSeconds, validateSsl, acceptedStatusCodes), and LocalHttpTask derives from HttpTask so mapping scripts (task as HttpTask, SetUrl/SetHeaders/SetBody) work unchanged. The orchestrator flattens the task through the same TaskBindingMapper as the remote path and performs the call in-process with the same named HTTP clients, header/Content-Type semantics, response parsing and accepted-status-code matching, so output mappings observe identical result shapes for both types. Note: no Dapr sidecar circuit breaker or remote-invocation timeout participates; the task's own timeoutSeconds (default 30) is the only bound below the job budget.",
+      "description": "New workflow task type 21 (ExternalHttp): a user-defined URL call executed directly by the Orchestrator process instead of being routed through the Execution service's /execution/invoke/{type}/{key} hop. The task definition shape is identical to the type-6 HTTP task (config.url, method, headers, body, contentType, rawBody, timeoutSeconds, validateSsl, acceptedStatusCodes), and ExternalHttpTask derives from HttpTask so mapping scripts (task as HttpTask, SetUrl/SetHeaders/SetBody) work unchanged. The orchestrator flattens the task through the same TaskBindingMapper as the remote path and performs the call in-process with the same named HTTP clients, header/Content-Type semantics, response parsing and accepted-status-code matching, so output mappings observe identical result shapes for both types. Note: no Dapr sidecar circuit breaker or remote-invocation timeout participates; the task's own timeoutSeconds (default 30) is the only bound below the job budget.",
       "schemaPath": "task.type=21"
     }
   }

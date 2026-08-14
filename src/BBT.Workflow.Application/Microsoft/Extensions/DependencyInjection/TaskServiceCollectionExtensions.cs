@@ -96,11 +96,11 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<SoapTaskExecutor>();
 
-        // Local HTTP executor (issue #399): the orchestrator performs the user-defined URL call
+        // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
         // in-process — no /execution/invoke hop. Needs the workflow HTTP clients below.
-        services.TryAddScoped<ILocalHttpTaskInvoker, LocalHttpTaskInvoker>();
-        services.AddTaskExecutor<LocalHttpTaskExecutor>();
-        services.AddLocalWorkflowHttpClients();
+        services.TryAddScoped<IExternalHttpTaskInvoker, ExternalHttpTaskInvoker>();
+        services.AddTaskExecutor<ExternalHttpTaskExecutor>();
+        services.AddExternalHttpTaskClients();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
@@ -307,9 +307,9 @@ public static class TaskServiceCollectionExtensions
     /// Execution host's <c>AddWorkflowHttpClient</c> (same client names, decompression, connection
     /// cap, cookie policy and SSL-bypass variant) so a task behaves identically whichever host
     /// performs the call. The 30s base timeout is overridden per request from the task's
-    /// <c>timeoutSeconds</c> by <see cref="BBT.Workflow.Tasks.Executors.LocalHttpTaskInvoker"/>.
+    /// <c>timeoutSeconds</c> by <see cref="BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker"/>.
     /// </summary>
-    private static IServiceCollection AddLocalWorkflowHttpClients(this IServiceCollection services)
+    private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
     {
         // Default HTTP client with SSL validation enabled
         services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>

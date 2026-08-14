@@ -14,44 +14,44 @@ namespace BBT.Workflow.Definitions;
 /// <c>validateSsl</c>, <c>acceptedStatusCodes</c>) and the scripting surface are identical —
 /// mapping scripts that cast <c>task as HttpTask</c> and call <c>SetUrl</c>/<c>SetHeaders</c>/
 /// <c>SetBody</c> work unchanged. Only the execution location differs; see
-/// <c>LocalHttpTaskExecutor</c>.
+/// <c>ExternalHttpTaskExecutor</c>.
 /// </remarks>
-public sealed class LocalHttpTask : HttpTask
+public sealed class ExternalHttpTask : HttpTask
 {
-    private LocalHttpTask()
+    private ExternalHttpTask()
     {
     }
 
     [JsonConstructor]
-    private LocalHttpTask(
+    private ExternalHttpTask(
         JsonElement config) : base(config)
     {
-        Type = ((int)TaskType.LocalHttp).ToString();
+        Type = ((int)TaskType.ExternalHttp).ToString();
     }
 
-    public static LocalHttpTask Create(
+    public static ExternalHttpTask Create(
         JsonElement config)
     {
-        return new LocalHttpTask(config);
+        return new ExternalHttpTask(config);
     }
 
     /// <summary>
     /// Creates a new instance for object pooling - internal use only
     /// </summary>
-    public static new LocalHttpTask CreateEmpty()
+    public static new ExternalHttpTask CreateEmpty()
     {
-        return new LocalHttpTask();
+        return new ExternalHttpTask();
     }
 
     /// <summary>
-    /// Creates a deep copy of the current LocalHttpTask instance. The base
+    /// Creates a deep copy of the current ExternalHttpTask instance. The base
     /// <see cref="HttpTask.CloneTyped"/> would materialize a plain <see cref="HttpTask"/>,
-    /// losing the runtime type, so the override copies into a fresh LocalHttpTask
+    /// losing the runtime type, so the override copies into a fresh ExternalHttpTask
     /// (<see cref="HttpTask.CopyFromInternal"/> carries <c>Type</c> and every HTTP property).
     /// </summary>
     public override WorkflowTask Clone()
     {
-        var cloned = new LocalHttpTask();
+        var cloned = new ExternalHttpTask();
         cloned.CopyFromInternal(this);
         return cloned;
     }

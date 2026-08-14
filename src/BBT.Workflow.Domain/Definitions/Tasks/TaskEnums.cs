@@ -28,7 +28,7 @@ public enum TaskType
     CacheAside = 18,
     GetInstance = 19,
     DaprConversation = 20,
-    LocalHttp = 21
+    ExternalHttp = 21
 }
 
 /// <summary>

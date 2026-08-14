@@ -7,7 +7,7 @@ namespace BBT.Workflow.Definitions;
 /// Http Task Definition
 /// </summary>
 /// <remarks>
-/// Not sealed: <see cref="LocalHttpTask"/> derives from it so the orchestrator-executed
+/// Not sealed: <see cref="ExternalHttpTask"/> derives from it so the orchestrator-executed
 /// variant shares the whole configuration and scripting surface — mapping scripts that cast
 /// <c>task as HttpTask</c> keep working for both types.
 /// </remarks>

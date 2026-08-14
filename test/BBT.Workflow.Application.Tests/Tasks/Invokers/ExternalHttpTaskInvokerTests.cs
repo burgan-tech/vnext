@@ -20,7 +20,7 @@ namespace BBT.Workflow.Tasks.Invokers;
 /// accepted-status-code matching, so output mappings observe identical shapes whichever
 /// host performs the call.
 /// </summary>
-public sealed class LocalHttpTaskInvokerTests
+public sealed class ExternalHttpTaskInvokerTests
 {
     [Fact]
     public async Task InvokeAsync_SuccessfulJsonResponse_ReturnsParsedResult()
@@ -41,7 +41,7 @@ public sealed class LocalHttpTaskInvokerTests
         var data = (JsonElement)result.Data!;
         data.GetProperty("orderId").GetInt32().ShouldBe(42);
         result.Headers!.ShouldContainKey("X-Correlation");
-        result.TaskType.ShouldBe("LocalHttp");
+        result.TaskType.ShouldBe("ExternalHttp");
         result.Metadata!["Url"].ShouldBe("https://workflow.local/endpoint");
     }
 
@@ -157,8 +157,8 @@ public sealed class LocalHttpTaskInvokerTests
 
     // ── harness ──────────────────────────────────────────────────────────────
 
-    private static LocalHttpTaskInvoker CreateInvoker(IHttpClientFactory factory) =>
-        new(factory, NullLogger<LocalHttpTaskInvoker>.Instance);
+    private static ExternalHttpTaskInvoker CreateInvoker(IHttpClientFactory factory) =>
+        new(factory, NullLogger<ExternalHttpTaskInvoker>.Instance);
 
     private static HttpResponseMessage Ok() =>
         new(HttpStatusCode.OK) { Content = new StringContent("{}") };

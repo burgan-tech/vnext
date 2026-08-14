@@ -3,29 +3,31 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using BBT.Workflow.Definitions;
-using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
-using BBT.Workflow.Logging;
-using Microsoft.Extensions.Logging;
 
-namespace BBT.Workflow.Tasks.Executors;
+namespace BBT.Workflow.Execution;
 
 /// <summary>
-/// In-process implementation of <see cref="ILocalHttpTaskInvoker"/> for the Orchestration host.
-/// A faithful port of the Execution service's <c>HttpTaskInvoker</c> (execution stays untouched):
-/// any behavioral change here must be mirrored there, or the two HTTP task types drift apart.
-/// Differences are deliberate and minimal — it returns the orchestrator-side
-/// <see cref="TaskInvocationResult"/> directly (no wire DTO), and logs through
-/// <c>WorkflowLogs</c> instead of the Execution metrics channel.
+/// The single implementation of an HTTP task call, shared by both hosts: the Execution service's
+/// <c>HttpTaskInvoker</c> (type 6, reached through <c>/execution/invoke</c>) and the Orchestrator's
+/// <c>ExternalHttpTaskInvoker</c> (type 21, in-process) delegate here, so the two task types cannot
+/// drift behaviorally — header/Content-Type splitting, body resolution, named-client selection by
+/// <c>validateSsl</c>, per-request timeout, response parsing and accepted-status-code matching are
+/// defined exactly once.
+/// <para>
+/// Lives in the abstractions assembly because it is the only project both hosts reference. To keep
+/// this assembly package-free ("contracts only"), the named-client resolution is taken as a
+/// <c>Func&lt;string, HttpClient&gt;</c> — hosts pass <c>IHttpClientFactory.CreateClient</c> — and no
+/// logging or metrics happen here: every outcome, including cancellation and transport failure, is
+/// returned as a <see cref="TaskInvocationResult"/> whose metadata carries what the hosts need to
+/// log (<c>Cancelled</c>, <c>ExceptionType</c>, <c>StackTrace</c>).
+/// </para>
 /// </summary>
-public sealed class LocalHttpTaskInvoker(
-    IHttpClientFactory httpClientFactory,
-    ILogger<LocalHttpTaskInvoker> logger) : ILocalHttpTaskInvoker
+public static class HttpTaskInvocation
 {
     /// <summary>
-    /// Response-body parse options, matching the Execution invoker helpers: deep payloads are
-    /// tolerated and cycles ignored rather than failing the task.
+    /// Response-body parse options: deep payloads are tolerated and cycles ignored rather than
+    /// failing the task.
     /// </summary>
     private static readonly JsonSerializerOptions ResponseJsonOptions = new()
     {
@@ -33,17 +35,32 @@ public sealed class LocalHttpTaskInvoker(
         ReferenceHandler = ReferenceHandler.IgnoreCycles
     };
 
-    /// <inheritdoc />
-    public async Task<TaskInvocationResult> InvokeAsync(
-        string? taskKey,
+    /// <summary>
+    /// Executes the HTTP request described by the binding. Never throws: transport failures and
+    /// cancellation become failed results so the caller's error boundary decides.
+    /// </summary>
+    /// <param name="createClient">Named-client resolver, normally <c>IHttpClientFactory.CreateClient</c>.
+    /// The name is chosen from <see cref="WorkflowHttpClientNames"/> by the binding's <c>ValidateSSL</c>.</param>
+    /// <param name="binding">The prepared HTTP binding (URL, method, headers, body, options).</param>
+    /// <param name="taskType">Task-type label stamped on the result (each host stamps its own).</param>
+    /// <param name="cancellationToken">Caller cancellation; a fire during the request yields a
+    /// failed result with <c>Cancelled = true</c> metadata.</param>
+    public static async Task<TaskInvocationResult> SendAsync(
+        Func<string, HttpClient> createClient,
         HttpTaskBinding binding,
+        string taskType,
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
 
         try
         {
-            var httpClient = CreateHttpClient(binding, taskKey);
+            var clientName = binding.ValidateSSL
+                ? WorkflowHttpClientNames.Default
+                : WorkflowHttpClientNames.NoSslValidation;
+            var httpClient = createClient(clientName);
+            httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+
             var request = new HttpRequestMessage(
                 new HttpMethod(binding.Method),
                 binding.Url);
@@ -95,47 +112,51 @@ public sealed class LocalHttpTaskInvoker(
             var isSuccess = response.IsSuccessStatusCode
                 || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
-            // Always return full response details (2xx, 4xx, 5xx alike) — the output mapping and the
-            // error boundary decide what an error response means, exactly like the remote path.
-            return new TaskInvocationResult
-            {
-                IsSuccess = isSuccess,
-                StatusCode = (int)response.StatusCode,
-                Body = content,
-                Data = responseData,
-                Headers = responseHeaders,
-                Metadata = metadata,
-                TaskType = TaskType.LocalHttp.ToString(),
-                ExecutionDurationMs = stopwatch.ElapsedMilliseconds,
-                ErrorMessage = isSuccess ? null : $"HTTP {response.StatusCode}: {response.ReasonPhrase}"
-            };
+            // Always return result with full response details - let output mapping handle error scenarios
+            // All HTTP responses (2xx, 4xx, 5xx) include headers, body, and parsed data
+            return isSuccess
+                ? TaskInvocationResult.Success(
+                    data: responseData,
+                    body: content,
+                    statusCode: (int)response.StatusCode,
+                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    taskType: taskType,
+                    headers: responseHeaders,
+                    metadata: metadata)
+                : TaskInvocationResult.Failure(
+                    error: $"HTTP {response.StatusCode}: {response.ReasonPhrase}",
+                    statusCode: (int)response.StatusCode,
+                    body: content,
+                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    taskType: taskType,
+                    headers: responseHeaders,
+                    data: responseData,
+                    metadata: metadata);
         }
-        catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
-            logger.LocalHttpTaskRequestCancelled(taskKey, binding.Url);
 
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
-                taskType: TaskType.LocalHttp.ToString(),
+                taskType: taskType,
                 metadata: new Dictionary<string, object>
                 {
                     ["Url"] = binding.Url,
                     ["Method"] = binding.Method,
                     ["Cancelled"] = true,
-                    ["ExceptionType"] = nameof(TaskCanceledException)
+                    ["ExceptionType"] = ex.GetType().Name
                 });
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            logger.LocalHttpTaskRequestFailed(ex, taskKey, binding.Url, ex.Message);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: stopwatch.ElapsedMilliseconds,
-                taskType: TaskType.LocalHttp.ToString(),
+                taskType: taskType,
                 metadata: new Dictionary<string, object>
                 {
                     ["Url"] = binding.Url,
@@ -146,25 +167,12 @@ public sealed class LocalHttpTaskInvoker(
         }
     }
 
-    private HttpClient CreateHttpClient(HttpTaskBinding binding, string? taskKey)
-    {
-        var clientName = binding.ValidateSSL
-            ? WorkflowHttpClientNames.Default
-            : WorkflowHttpClientNames.NoSslValidation;
-
-        if (!binding.ValidateSSL)
-        {
-            logger.LocalHttpTaskSslValidationDisabled(taskKey, binding.Url);
-        }
-
-        var client = httpClientFactory.CreateClient(clientName);
-        client.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
-        return client;
-    }
+    /// <summary>Whether a failed result represents a cancellation, for host-side logging/metrics.</summary>
+    public static bool WasCancelled(TaskInvocationResult result) =>
+        result.Metadata?.TryGetValue("Cancelled", out var flag) == true && flag is true;
 
     /// <summary>
-    /// Attempts to parse the response body as JSON, returning the raw string when it is not JSON —
-    /// same tolerance as the Execution invoker helpers.
+    /// Attempts to parse JSON content. Returns the original content if parsing fails.
     /// </summary>
     private static object? TryParseJson(string? content)
     {
@@ -182,8 +190,8 @@ public sealed class LocalHttpTaskInvoker(
     }
 
     /// <summary>
-    /// Merges response and content headers case-insensitively, concatenating duplicate values —
-    /// same shape the remote path returns.
+    /// Merges response headers and content headers into a single dictionary.
+    /// Uses case-insensitive key comparison and concatenates duplicate header values.
     /// </summary>
     private static Dictionary<string, string> MergeHeaders(
         HttpResponseHeaders responseHeaders,
