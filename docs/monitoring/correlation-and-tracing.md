@@ -87,13 +87,50 @@ a binding MAY set them and that value wins; when absent they are filled from the
 trace context into the operation metadata (`traceparent` / `cloudevent.traceparent`); the
 correlation/identity headers are not applied there.
 
+## Querying one request across all services
+
+Every log record in every service carries `vnext.request.id` (queried as `vnext_request_id`),
+stamped by `RequestIdLogProcessor` from Aether's `ICorrelationIdProvider`. One query returns the
+whole flow:
+
+```
+vnext_request_id = '<the X-Request-Id you sent>'
+```
+
+Where the value comes from, per entry point:
+
+| Service / path | Source of the provider value |
+|---|---|
+| Orchestration, client HTTP request (start / transition / functions) | Aether's correlation middleware, from the client's `X-Request-Id` header |
+| Orchestration, async transition job (`flow.transition`) | `TransitionJobHandler` restores it from `TransitionJobPayload.Headers["x-request-id"]` |
+| Orchestration, state-notify job | `StateNotifyJobHandler`, same mechanism |
+| Execution | `RemoteInvokerService` forwards `X-Request-Id`; the middleware picks it up |
+| Inbox worker | `EventTraceScope` restores it from the event contract's `RequestId` |
+
+Two deliberate exceptions:
+
+- **System-triggered jobs** (timer transitions, workflow timeout, long-poll ack timeout) have no
+  originating client request — their payloads carry no headers — so their logs get the id Aether's
+  middleware generates for the Dapr callback. Correlate those by `vnext.instance.id` or
+  `correlation.id` instead.
+- **The Outbox worker's publish loop** runs in a `BackgroundService` with no request context and
+  Aether exposes no per-message seam in `OutboxProcessor`, so its own publish log lines carry no
+  request id. The id still travels inside the published event (`RequestId`) and reappears on the
+  Inbox side.
+
+Do not put `X-Request-Id` in `Telemetry:Logging:Enrichers:Headers`: the header enricher reads only
+the current inbound request, and on platform-originated requests (Dapr job callbacks, pub/sub
+deliveries) Aether's middleware generates an id from `HttpContext.TraceIdentifier` and writes it
+back into the request headers — the enricher would then report a fabricated value that is
+indistinguishable from a real client request id. The processor is the single source for this field.
+
 ## Log enricher field names
 
-`Telemetry:Logging:Enrichers:Headers` lists the request headers Aether attaches to **every** log
-record. The key is the normalized header name (lowercased, `-` → `_`) behind a configurable
-prefix: vNext sets `"RequestHeaderKeyPrefix": ""` in every host, so the fields land as
-`sub`, `act_sub`, `jti`, `role`, `x_parent_instance_id`, `user_agent`, `x_request_id` — not
-`RequestHeader.*`. This matters because backends that cannot store dots in flat field names
+`Telemetry:Logging:Enrichers:Headers` lists the request headers Aether attaches to every log
+record **of an inbound HTTP request**. The key is the normalized header name (lowercased,
+`-` → `_`) behind a configurable prefix: vNext sets `"RequestHeaderKeyPrefix": ""` in every host,
+so the fields land as `sub`, `act_sub`, `jti`, `role`, `x_parent_instance_id`, `user_agent` — not
+`RequestHeader.*`. (`X-Request-Id` is deliberately absent from that list — see above.) This matters because backends that cannot store dots in flat field names
 (OpenObserve, Elasticsearch) lowercase the key and turn `.` into `_` on ingest, which would
 otherwise surface the default `RequestHeader.act_sub` as `requestheader_act_sub`. The response
 prefix is deliberately left at its `ResponseHeader.` default so request and response values for

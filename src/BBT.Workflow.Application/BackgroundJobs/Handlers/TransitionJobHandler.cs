@@ -53,7 +53,6 @@ public sealed class TransitionJobHandler(
                        [TelemetryConstants.TagNames.InstanceKey] = args.InstanceKey ?? "N/A",
                        [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey,
                        [TelemetryConstants.TagNames.JobName] = args.JobName,
-                       [TelemetryConstants.TagNames.RequestId] = requestId ?? "N/A",
                        [TelemetryConstants.TagNames.CorrelationId] = args.CorrelationId ?? "N/A"
                    }))
             {

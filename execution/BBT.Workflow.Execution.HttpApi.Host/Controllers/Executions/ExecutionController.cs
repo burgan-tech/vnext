@@ -106,8 +106,8 @@ public sealed class ExecutionController(
             [TelemetryConstants.TagNames.WorkflowInstanceId] = traceContext?.InstanceId.ToString("D").ToLowerInvariant() ?? Guid.Empty.ToString("D"),
             [TelemetryConstants.TagNames.CorrelationId] = traceContext?.CorrelationId ?? "unknown",
             [TelemetryConstants.TagNames.TaskKey] = envelope.TaskKey,
-            [TelemetryConstants.TagNames.TaskType] = envelope.TaskType,
-            [TelemetryConstants.TagNames.RequestId] = traceContext?.RequestId ?? "N/A"
+            [TelemetryConstants.TagNames.TaskType] = envelope.TaskType
+
         };
 
         // sub / act_sub are deliberately NOT in this scope: RemoteInvokerService forwards them as

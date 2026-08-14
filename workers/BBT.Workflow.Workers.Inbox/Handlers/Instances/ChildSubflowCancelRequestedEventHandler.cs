@@ -39,7 +39,6 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
 
         var scopeProps = new Dictionary<string, object>
         {
-            [TelemetryConstants.TagNames.RequestId] = eventData.RequestId ?? "N/A",
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
             [TelemetryConstants.TagNames.Flow] = eventData.Flow,
             [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
