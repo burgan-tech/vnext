@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
@@ -72,15 +73,49 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         try
         {
             var httpRequest = _daprClient.CreateInvokeMethodRequest(
+                HttpMethod.Post,
                 _executionServiceAppId,
-                $"/api/v1/execution/invoke/{taskType}/{taskKey}",
-                request);
+                $"/api/v1/execution/invoke/{taskType}/{taskKey}");
+            httpRequest.Content = JsonContent.Create(request);
 
             httpRequest.Headers.Add(WorkflowInfo.Name, WorkflowInfo.Generate(
                 traceContext.Domain ?? "unknown",
                 traceContext.WorkflowKey ?? "unknown",
                 traceContext.WorkflowVersion ?? "latest",
                 traceContext.InstanceId));
+
+            if (traceContext.InstanceId != Guid.Empty)
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.WorkflowInstanceId);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.WorkflowInstanceId,
+                    traceContext.InstanceId.ToString("D").ToLowerInvariant());
+            }
+
+            if (Guid.TryParseExact(traceContext.CorrelationId, "N", out var correlationId)
+                && correlationId != Guid.Empty)
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.CorrelationId);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.CorrelationId,
+                    correlationId.ToString("N"));
+            }
+
+            if (TelemetryConstants.TryNormalizeIdentityClaim(traceContext.Sub, out var subject))
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.Sub);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.Sub,
+                    subject);
+            }
+
+            if (TelemetryConstants.TryNormalizeIdentityClaim(traceContext.ActSub, out var actSub))
+            {
+                httpRequest.Headers.Remove(TelemetryConstants.HeaderNames.ActSub);
+                httpRequest.Headers.TryAddWithoutValidation(
+                    TelemetryConstants.HeaderNames.ActSub,
+                    actSub);
+            }
 
             // Forward root instance ID from Activity baggage (set by TransitionExecutor for subflow instances)
             var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
@@ -151,14 +186,52 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             ? workflow!.Domain
             : scriptContext.Runtime.Domain;
 
+        var correlationId = Activity.Current?.GetBaggageItem(
+            TelemetryConstants.TagNames.CorrelationId);
+
+        // Some interception activities preserve the W3C parent context but do not copy
+        // baggage. Keep the outbound correlation contract deterministic and opaque by
+        // falling back to the current trace ID instead of dropping the header entirely.
+        if (!Guid.TryParseExact(correlationId, "N", out var parsedCorrelationId)
+            || parsedCorrelationId == Guid.Empty)
+        {
+            var traceId = Activity.Current?.TraceId.ToString();
+            correlationId = Guid.TryParseExact(traceId, "N", out var parsedTraceId)
+                && parsedTraceId != Guid.Empty
+                    ? parsedTraceId.ToString("N")
+                    : Guid.NewGuid().ToString("N");
+        }
+
+        var requestHeaders = scriptContext.Headers != null
+            ? scriptContext.GetHeadersAsDictionary()
+            : null;
+        var subject = GetIdentityClaim(requestHeaders, TelemetryConstants.HeaderNames.Sub);
+        var actSub = GetIdentityClaim(requestHeaders, TelemetryConstants.HeaderNames.ActSub);
+
         return TaskTraceContext.Create(
             instanceId: instance?.Id ?? Guid.Empty,
             domain: domain,
             workflowKey: workflow?.Key ?? string.Empty,
             workflowVersion: workflow?.Version ?? string.Empty,
-            headers: scriptContext.Headers != null
-                ? scriptContext.GetHeadersAsDictionary()
-                : null,
+            correlationId: correlationId,
+            sub: subject,
+            actSub: actSub,
+            headers: requestHeaders,
             instanceDataJson: instance?.LatestData?.Data?.Json);
+    }
+
+    private static string? GetIdentityClaim(
+        IReadOnlyDictionary<string, string>? headers,
+        string headerName)
+    {
+        var rawValue = headers?
+            .FirstOrDefault(header => string.Equals(
+                header.Key,
+                headerName,
+                StringComparison.OrdinalIgnoreCase))
+            .Value;
+        return TelemetryConstants.TryNormalizeIdentityClaim(rawValue, out var normalized)
+            ? normalized
+            : null;
     }
 }

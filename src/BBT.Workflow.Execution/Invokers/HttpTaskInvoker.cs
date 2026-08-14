@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
@@ -18,6 +21,17 @@ public sealed class HttpTaskInvoker(
     ITaskMetrics? metrics = null)
     : ITaskInvoker<HttpTaskBinding>
 {
+    // Kept local so the stateless Execution package does not acquire a Domain dependency.
+    // These names are the public HTTP contract defined by TelemetryConstants in vNext Domain.
+    private const string WorkflowInstanceHeader = "X-Workflow-Instance-Id";
+    private const string CorrelationHeader = "X-Correlation-Id";
+    private const string SubHeader = "sub";
+    private const string ActSubHeader = "act_sub";
+    private const string WorkflowInstanceBaggage = "workflow.instance.id";
+    private const string CorrelationBaggage = "correlation.id";
+    private const string SubBaggage = "sub";
+    private const string ActSubBaggage = "act.sub";
+
     private readonly ITaskMetrics _metrics = metrics ?? NullTaskMetrics.Instance;
 
     /// <inheritdoc />
@@ -60,6 +74,8 @@ public sealed class HttpTaskInvoker(
         var result = await HttpTaskInvocation.SendAsync(
             httpClientFactory.CreateClient, binding, TaskType, cancellationToken);
 
+        ApplyTrustedCorrelationHeaders(request);
+
         // The shared core never throws or logs; classify the failed results here so this host's
         // metrics and log lines stay exactly as they were before the core was extracted.
         if (!result.IsSuccess && HttpTaskInvocation.WasCancelled(result))
@@ -76,4 +92,61 @@ public sealed class HttpTaskInvoker(
 
         return result;
     }
+
+    private static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request)
+    {
+        // Mapping-provided values are untrusted and must never be allowed to spoof
+        // the workflow context established by vNext.
+        request.Headers.Remove(WorkflowInstanceHeader);
+        request.Headers.Remove(CorrelationHeader);
+        request.Headers.Remove(SubHeader);
+        request.Headers.Remove(ActSubHeader);
+
+        var workflowInstance = Activity.Current?.GetBaggageItem(WorkflowInstanceBaggage);
+        if (Guid.TryParse(workflowInstance, out var workflowInstanceId)
+            && workflowInstanceId != Guid.Empty)
+        {
+            request.Headers.TryAddWithoutValidation(
+                WorkflowInstanceHeader,
+                workflowInstanceId.ToString("D").ToLowerInvariant());
+        }
+
+        var correlation = Activity.Current?.GetBaggageItem(CorrelationBaggage);
+        if (Guid.TryParseExact(correlation, "N", out var correlationId)
+            && correlationId != Guid.Empty)
+        {
+            request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId.ToString("N"));
+        }
+
+        var subject = Activity.Current?.GetBaggageItem(SubBaggage);
+        if (IsSafeIdentityClaim(subject))
+        {
+            request.Headers.TryAddWithoutValidation(SubHeader, subject);
+        }
+
+        var actSub = Activity.Current?.GetBaggageItem(ActSubBaggage);
+        if (IsSafeIdentityClaim(actSub))
+        {
+            request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
+        }
+    }
+
+    private static bool IsSafeIdentityClaim(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 128)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
 }
