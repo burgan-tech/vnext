@@ -44,25 +44,71 @@ public sealed class ExecutionController(
     {
         var envelope = request.Envelope;
         var traceContext = request.TraceContext;
+        var subject = TelemetryConstants.TryNormalizeIdentityClaim(traceContext?.Sub, out var normalizedSubject)
+            ? normalizedSubject
+            : null;
+        var actSub = TelemetryConstants.TryNormalizeIdentityClaim(traceContext?.ActSub, out var normalizedActSub)
+            ? normalizedActSub
+            : null;
 
         var activity = Activity.Current;
         activity?.SetTag(TelemetryConstants.TagNames.Domain, traceContext?.Domain ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, traceContext?.WorkflowKey ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, traceContext?.WorkflowVersion ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.InstanceId, traceContext?.InstanceId.ToString() ?? Guid.Empty.ToString());
+        activity?.SetTag(
+            TelemetryConstants.TagNames.WorkflowInstanceId,
+            traceContext?.InstanceId.ToString("D").ToLowerInvariant() ?? Guid.Empty.ToString("D"));
+        activity?.SetTag(TelemetryConstants.TagNames.CorrelationId, traceContext?.CorrelationId);
+        activity?.SetTag(TelemetryConstants.TagNames.Sub, subject);
+        activity?.SetTag(TelemetryConstants.TagNames.ActSub, actSub);
         activity?.SetTag(TelemetryConstants.TagNames.TaskKey, envelope.TaskKey);
         activity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
         activity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
 
-        using (logger.BeginScope(new Dictionary<string, object>
+        if (traceContext?.InstanceId is { } instanceId && instanceId != Guid.Empty)
+        {
+            activity?.SetBaggage(TelemetryConstants.TagNames.InstanceId, instanceId.ToString("D").ToLowerInvariant());
+            activity?.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId, instanceId.ToString("D").ToLowerInvariant());
+        }
+
+        if (Guid.TryParseExact(traceContext?.CorrelationId, "N", out var correlationId)
+            && correlationId != Guid.Empty)
+        {
+            activity?.SetBaggage(TelemetryConstants.TagNames.CorrelationId, correlationId.ToString("N"));
+        }
+
+        if (subject is not null)
+        {
+            activity?.SetBaggage(TelemetryConstants.TagNames.Sub, subject);
+        }
+
+        if (actSub is not null)
+        {
+            activity?.SetBaggage(TelemetryConstants.TagNames.ActSub, actSub);
+        }
+
+        var scope = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = traceContext?.Domain ?? "unknown",
             [TelemetryConstants.TagNames.Flow] = traceContext?.WorkflowKey ?? "unknown",
             [TelemetryConstants.TagNames.InstanceId] = traceContext?.InstanceId ?? Guid.Empty,
+            [TelemetryConstants.TagNames.WorkflowInstanceId] = traceContext?.InstanceId.ToString("D").ToLowerInvariant() ?? Guid.Empty.ToString("D"),
+            [TelemetryConstants.TagNames.CorrelationId] = traceContext?.CorrelationId ?? "unknown",
             [TelemetryConstants.TagNames.TaskKey] = envelope.TaskKey,
             [TelemetryConstants.TagNames.TaskType] = envelope.TaskType
-        }))
+        };
+        if (subject is not null)
+        {
+            scope[TelemetryConstants.TagNames.Sub] = subject;
+        }
+        if (actSub is not null)
+        {
+            scope[TelemetryConstants.TagNames.ActSub] = actSub;
+        }
+
+        using (logger.BeginScope(scope))
         {
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
             return Ok(new TaskInvokeResponse
