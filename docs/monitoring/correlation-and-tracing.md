@@ -97,6 +97,19 @@ invokers stamp the live trace context into the operation metadata
   task-phase spans (`BBT.Workflow.Tasks`), cache spans (`BBT.Workflow.Cache`), EF Core and Dapr
   state-store spans. Read once at startup — changing it requires a restart.
 
+## Diagnostic spans and the Business filter — the creation rule
+
+Aether's Business profile filters `[`-prefixed spans at **export time** (`OnEnd`). A span that is
+created but filtered still becomes `Activity.Current` for its whole body — every child started
+inside it then references a parent span id that never reaches the collector, and trace UIs
+re-root the entire subtree. The vNext rule is therefore: **a span that Business mode would drop
+must never be CREATED in Business mode.** Pipeline-step spans follow this rule via
+`PipelineStepActivityHelper` (source `BBT.Workflow.Pipeline`): created only in Verbose mode,
+named `[{Order}] {StepName}`; in Business mode no step Activity exists, so task, subflow and
+background-job spans attach directly to `transition/{key}`. Never rename an always-created span
+to a `[`-prefixed name. Post-commit jobs get an always-exported `PostCommit.{JobType}` span so
+subflow/subprocess starts have a visible parent.
+
 ## What to check when a trace looks broken
 
 1. Spans missing entirely → is the OTLP endpoint reachable? Remember: config overrides env for
@@ -110,3 +123,6 @@ invokers stamp the live trace context into the operation metadata
 4. Logs missing the request id on the async path → the originating request never carried/received
    an `X-Request-Id` (gateway plugin disabled?); the middleware generates one per request, so
    at minimum the start request's own logs always have one.
+5. Spans re-rooted to the top of the trace (e.g. `TaskCoordinator.Execute` not under
+   `transition/{key}`) → their parent was created but filtered at export. See "Diagnostic spans
+   and the Business filter" above — some span in the chain violates the creation rule.

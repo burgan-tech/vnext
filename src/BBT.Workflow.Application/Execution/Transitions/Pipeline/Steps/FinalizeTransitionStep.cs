@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -20,11 +18,9 @@ public sealed class FinalizeTransitionStep(
     public int Order => LifecycleOrder.Finalize;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(FinalizeTransitionStep)}");
         
         var recordId = GetTransitionRecordId(context);
         

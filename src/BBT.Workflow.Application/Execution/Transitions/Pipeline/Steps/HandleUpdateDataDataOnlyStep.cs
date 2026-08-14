@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 
@@ -20,13 +18,10 @@ public sealed class HandleUpdateDataDataOnlyStep : ITransitionStep
     public int Order => LifecycleOrder.UpdateDataDataOnly;
 
     /// <inheritdoc />
-    [Trace]
     public Task<Result<StepOutcome>> ExecuteAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(HandleUpdateDataDataOnlyStep)}");
-
         if (context.IsUpdateDataTransition() && context.Instance.HasActiveSubFlow)
         {
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.SkipToFinalize()));

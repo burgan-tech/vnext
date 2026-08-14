@@ -1,10 +1,8 @@
-using System.Diagnostics;
 using BBT.Aether.Guids;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using System.Text.Json;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -28,12 +26,9 @@ public sealed class CreateTransitionRecordStep(
     public int Order => LifecycleOrder.CreateTransition;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(CreateTransitionRecordStep)}");
-
         // Skip for SubFlow resume - transition record already exists
         if (context.Directives.IsSubFlowResume)
         {

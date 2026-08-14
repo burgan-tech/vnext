@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Handlers;
@@ -33,12 +32,9 @@ public sealed class ScheduleTransitionsStep(
     public int Order => LifecycleOrder.Schedule;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ScheduleTransitionsStep)}");
-
         // Skip if no scheduled transitions
         if (!HasScheduledTransitions(context))
         {
