@@ -28,8 +28,6 @@ public sealed class HttpTaskInvokerReservedHeadersTests
     [InlineData("X-Request-Id")]
     [InlineData("X-Correlation-Id")]
     [InlineData("X-Workflow-Instance-Id")]
-    [InlineData("sub")]
-    [InlineData("act_sub")]
     public async Task InvokeAsync_ReservedTraceHeaderInBinding_IsNotCopiedToRequest(string headerName)
     {
         var handler = new CapturingHttpMessageHandler();
@@ -53,8 +51,9 @@ public sealed class HttpTaskInvokerReservedHeadersTests
         InvokerHelpers.IsReservedTraceHeader("X-REQUEST-ID").ShouldBeTrue();
         InvokerHelpers.IsReservedTraceHeader("X-CORRELATION-ID").ShouldBeTrue();
         InvokerHelpers.IsReservedTraceHeader("X-Workflow-Instance-Id").ShouldBeTrue();
-        InvokerHelpers.IsReservedTraceHeader("SUB").ShouldBeTrue();
-        InvokerHelpers.IsReservedTraceHeader("Act_Sub").ShouldBeTrue();
+        // Identity claims are NOT reserved: a developer may set them in the binding (fill-if-absent).
+        InvokerHelpers.IsReservedTraceHeader("SUB").ShouldBeFalse();
+        InvokerHelpers.IsReservedTraceHeader("Act_Sub").ShouldBeFalse();
         InvokerHelpers.IsReservedTraceHeader("Authorization").ShouldBeFalse();
         InvokerHelpers.IsReservedTraceHeader("X-Custom").ShouldBeFalse();
     }

@@ -65,7 +65,7 @@ public sealed class HttpTaskInvokerContentTypeTests
     }
 
     [Fact]
-    public async Task InvokeAsync_WithWorkflowBaggage_OverridesMappingCorrelationHeaders()
+    public async Task InvokeAsync_WithWorkflowBaggage_OverridesWorkflowContextButKeepsMappingIdentityClaims()
     {
         var handler = new CapturingHttpMessageHandler();
         var invoker = CreateInvoker(handler);
@@ -80,30 +80,48 @@ public sealed class HttpTaskInvokerContentTypeTests
 
         await invoker.InvokeAsync(CreateDescriptor(
             body: "{}",
-            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"spoofed.value","act_sub":"spoofed.value"}"""));
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"binding.value","act_sub":"binding.value"}"""));
 
+        // Workflow context is authoritative: binding values are replaced from baggage.
         handler.GetRequestHeader("X-Workflow-Instance-Id")
             .ShouldBe(instanceId.ToString("D").ToLowerInvariant());
         handler.GetRequestHeader("X-Correlation-Id")
             .ShouldBe(correlationId.ToString("N"));
+        // Identity claims are fill-if-absent: developer-set binding values win over the token.
+        handler.GetRequestHeader("sub").ShouldBe("binding.value");
+        handler.GetRequestHeader("act_sub").ShouldBe("binding.value");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutBindingIdentityClaims_FillsThemFromBaggage()
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+
+        using var activity = new Activity("http-task-test").Start();
+        activity.SetBaggage("sub", "12345678901");
+        activity.SetBaggage("act.sub", "U0B006");
+
+        await invoker.InvokeAsync(CreateDescriptor(body: "{}"));
+
         handler.GetRequestHeader("sub").ShouldBe("12345678901");
         handler.GetRequestHeader("act_sub").ShouldBe("U0B006");
     }
 
     [Fact]
-    public async Task InvokeAsync_WithoutValidWorkflowBaggage_RemovesMappingCorrelationHeaders()
+    public async Task InvokeAsync_WithoutValidWorkflowBaggage_RemovesWorkflowContextButKeepsIdentityClaims()
     {
         var handler = new CapturingHttpMessageHandler();
         var invoker = CreateInvoker(handler);
 
         await invoker.InvokeAsync(CreateDescriptor(
             body: "{}",
-            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"spoofed.value","act_sub":"spoofed.value"}"""));
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"binding.value","act_sub":"binding.value"}"""));
 
         handler.RequestHeaderContains("X-Workflow-Instance-Id").ShouldBeFalse();
         handler.RequestHeaderContains("X-Correlation-Id").ShouldBeFalse();
-        handler.RequestHeaderContains("sub").ShouldBeFalse();
-        handler.RequestHeaderContains("act_sub").ShouldBeFalse();
+        handler.GetRequestHeader("sub").ShouldBe("binding.value");
+        handler.GetRequestHeader("act_sub").ShouldBe("binding.value");
     }
 
     private static HttpTaskInvoker CreateInvoker(CapturingHttpMessageHandler handler) =>

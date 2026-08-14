@@ -17,8 +17,10 @@ field or header for another meaning:
 | `X-Workflow-Instance-Id` / `workflow.instance.id` | **Vendor-neutral instance identity** for dependencies that are not part of vNext (the vNext-internal axis is `vnext.instance.id`) | Baggage + outbound header via `ApplyTrustedCorrelationHeaders`; `X-Workflow` response header carries the same id for clients |
 
 Gateway identity claims `sub` / `act_sub` ride along as correlation metadata only: validated by
-`TelemetryConstants.TryNormalizeIdentityClaim`, carried in `TaskTraceContext.Sub/ActSub`, stamped
-to trusted dependencies from baggage.
+`TelemetryConstants.TryNormalizeIdentityClaim`, carried in `TaskTraceContext.Sub/ActSub`. On
+outbound task calls they are **fill-if-absent**: filled from the gateway token (baggage) only
+when the task binding did not set them — a developer-set binding value is respected and never
+overwritten.
 
 The instance id (`vnext.instance.id`) remains the business-level axis on every span and log scope,
 on both the write path (`TransitionExecutor.BuildLogScope`) and the read/function path
@@ -72,16 +74,18 @@ is the correct default for consistent traces.
 ## Reserved headers in task bindings
 
 Task binding header definitions (`binding.Headers` on http/soap/daprservice/trigger tasks) must
-not carry `traceparent`, `tracestate`, `baggage`, `x-request-id`, `X-Correlation-Id`,
-`X-Workflow-Instance-Id`, `sub`, or `act_sub` — the invokers skip these keys
+not carry `traceparent`, `tracestate`, `baggage`, `x-request-id`, `X-Correlation-Id`, or
+`X-Workflow-Instance-Id` — the invokers skip these keys
 (`InvokerHelpers.IsReservedTraceHeader`). The live values are injected automatically:
-`traceparent`/`tracestate` by .NET's HttpClient instrumentation; the correlation/identity set by
+`traceparent`/`tracestate` by .NET's HttpClient instrumentation; the workflow-context pair by
 `InvokerHelpers.ApplyTrustedCorrelationHeaders` from Activity baggage (applied by every
 HTTP-shaped invoker: http, soap, daprservice, daprhttpendpoint, trigger). A stale traceparent or
 forged correlation copied into a task definition would detach or spoof the workflow context;
-that's why the guard exists. For Dapr binding/pub-sub tasks (no HTTP header semantics) the
-invokers stamp the live trace context into the operation metadata
-(`traceparent` / `cloudevent.traceparent`); the correlation/identity headers are not applied there.
+that's why the guard exists. The identity claims `sub`/`act_sub` are deliberately NOT reserved:
+a binding MAY set them and that value wins; when absent they are filled from the gateway token
+(baggage). For Dapr binding/pub-sub tasks (no HTTP header semantics) the invokers stamp the live
+trace context into the operation metadata (`traceparent` / `cloudevent.traceparent`); the
+correlation/identity headers are not applied there.
 
 ## Telemetry configuration
 
