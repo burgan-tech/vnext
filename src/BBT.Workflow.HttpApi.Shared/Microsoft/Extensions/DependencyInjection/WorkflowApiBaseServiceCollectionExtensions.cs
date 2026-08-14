@@ -16,6 +16,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
 using Dapr.Jobs.Extensions;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -234,9 +235,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         // paths with no HttpContext, where the enricher is silent. See the processor's remarks
         // for why the header enricher cannot be the source of this field.
         services.AddAetherTelemetry(configuration, configure: builder =>
-            builder.ConfigureLogging((_, logging) =>
-                logging.AddProcessor(serviceProvider =>
-                    new RequestIdLogProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
+            builder
+                .ConfigureLogging((_, logging) =>
+                    logging.AddProcessor(serviceProvider =>
+                        new RequestIdLogProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>())))
+                // Span counterpart, so a trace filters on the same x_request_id value as the logs.
+                .ConfigureTracing((_, tracing) =>
+                    tracing.AddProcessor(serviceProvider =>
+                        new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
         return services;
     }
 

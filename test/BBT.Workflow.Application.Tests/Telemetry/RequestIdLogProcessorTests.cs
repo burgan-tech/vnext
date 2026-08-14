@@ -13,7 +13,7 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Telemetry;
 
 /// <summary>
-/// Pins the global request-id stamping: every log record must carry vnext.request.id from
+/// Pins the global request-id stamping: every log record must carry x_request_id from
 /// ICorrelationIdProvider — including where no HttpContext exists — without ever duplicating a
 /// value a scope or log parameter already supplied.
 /// </summary>

@@ -127,6 +127,41 @@ indistinguishable from a real client request id. The processor is the single sou
 This rule is load-bearing rather than cosmetic: the enricher would emit that fabricated value under
 the very same `x_request_id` key, run first, and thereby suppress the correct one.
 
+### The same query in traces
+
+Spans carry the field under the same name, so the APM search bar takes the identical expression:
+
+```
+x_request_id = '<the X-Request-Id you sent>'
+```
+
+Two components produce it, and between them they cover every span:
+
+- `RequestIdSpanProcessor` (registered on the tracer provider in every host) stamps the tag in
+  `OnStart` for every span opened inside a correlation scope — pipeline steps, task and subflow
+  spans, HttpClient/Dapr client spans, and the job/event spans under `TransitionJobHandler` and
+  `EventTraceScope`.
+- `ParentInstanceIdEnrichmentMiddleware` stamps the ASP.NET Core **server** span. That span is
+  opened by the instrumentation before `UseCorrelationId()` runs, so it is already started when
+  the processor's `OnStart` fires and the provider is still empty at that moment; the middleware
+  runs immediately after and closes the gap.
+
+Both read `ICorrelationIdProvider`, never the raw header, so the field has one source. Neither
+overwrites an existing tag — `ExecutionController` sets it explicitly on the Execution invoke span
+before the pipeline starts, and that value stands.
+
+`X-Request-Id` is deliberately absent from `Telemetry:Tracing:Headers` as well. Aether's tracing
+enrichment keeps dashes (`http.request.header.x-request-id`), so listing it would give one concept
+two names in the same trace. Note that the log-side trap does not apply here — that enrichment runs
+in `OnStartActivity`, before the middleware, so it can never observe a fabricated id; the reason is
+purely that a single name is worth more than a duplicate.
+
+The system-triggered jobs called out above are separate traces by design, so a request-id query
+will not return them. Follow the `ActivityLink` on the job span, or query `vnext.instance.id`.
+
+The log → trace pivot still works and is often faster when you start from an error: filter the logs
+by `x_request_id`, take `trace_id` off any record, and open that trace directly.
+
 ## Log enricher field names
 
 `Telemetry:Logging:Enrichers:Headers` lists the request headers Aether attaches to every log
