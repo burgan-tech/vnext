@@ -506,7 +506,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Assert
         result.Result.IsSuccess.ShouldBeTrue();
         var transitions = result.Result.Value!.Transitions.ToDictionary(t => t.Name);
-        transitions["approve"].Kind.ShouldBe("manual");
+        transitions["approve"].Kind.ShouldBe("stateTransition");
         transitions["add-note"].Kind.ShouldBe("sharedTransition");
         transitions["cancel-request"].Kind.ShouldBe("cancel");
     }
@@ -553,7 +553,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         // The caller-triggerable entry keeps its shape and gains no execution time.
         transitions[0].Name.ShouldBe("approve");
-        transitions[0].Kind.ShouldBe("manual");
+        transitions[0].Kind.ShouldBe("stateTransition");
         transitions[0].ExecuteAtUtc.ShouldBeNull();
 
         // Scheduled entries follow, ordered by execution time, without an href.
@@ -619,7 +619,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var triggerable = new Shared.TransitionItem
         {
             Name = "pay",
-            Kind = "manual",
+            Kind = "stateTransition",
             Href = "/api/v1/d/workflows/w/instances/i/transitions/pay"
         };
 
@@ -1609,7 +1609,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         transitions.Select(t => t.Name).ShouldBe(
             ["submit", "cancel", "update-data", "exit"], ignoreOrder: true);
-        transitions.Single(t => t.Name == "submit").Kind.ShouldBe("manual");
+        transitions.Single(t => t.Name == "submit").Kind.ShouldBe("stateTransition");
         transitions.Single(t => t.Name == "cancel").Kind.ShouldBe("cancel");
         transitions.Single(t => t.Name == "exit").Kind.ShouldBe("exit");
         // Deliberately "updateData" (the workflow-definition field name), not the

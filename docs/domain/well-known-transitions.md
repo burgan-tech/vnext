@@ -58,7 +58,7 @@ field names:
 
 | `kind` | Source |
 |--------|--------|
-| `manual` | current state's `transitions[]` |
+| `stateTransition` | current state's `transitions[]` |
 | `sharedTransition` | workflow `sharedTransitions[]` |
 | `cancel` / `exit` / `updateData` | workflow-level well-known transitions |
 | `timeout` | workflow `timeout` |

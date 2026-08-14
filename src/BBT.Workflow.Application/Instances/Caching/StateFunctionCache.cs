@@ -33,8 +33,7 @@ public sealed class StateFunctionCache(
     /// transitions; v3, which added the workflow's <c>functions</c> discovery links; v4, which
     /// replaced that inline list with a <c>hasFunctions</c> flag plus a link to the <c>catalog</c>
     /// function; or v6, which started listing the runtime-armed scheduled transitions inside
-    /// <c>transitions</c> as <c>kind: "scheduled"</c> entries carrying <c>executeAtUtc</c> and renamed
-    /// the <c>stateTransition</c> kind to <c>manual</c>), this constant
+    /// <c>transitions</c> as <c>kind: "scheduled"</c> entries carrying <c>executeAtUtc</c>), this constant
     /// must be bumped: it invalidates every previously issued ETag and every cached body, and without
     /// it a client long-polling an instance whose state never changes would keep receiving
     /// <c>304 Not Modified</c> and never observe the new shape.

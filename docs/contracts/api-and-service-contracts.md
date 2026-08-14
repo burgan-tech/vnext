@@ -139,7 +139,7 @@ render countdowns and upcoming-action information without polling anything else:
 
 ```jsonc
 "transitions": [
-  { "name": "pay", "kind": "manual", "href": "...", "view": { ... }, "schema": { ... } },
+  { "name": "pay", "kind": "stateTransition", "href": "...", "view": { ... }, "schema": { ... } },
   { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z" }
 ]
 ```

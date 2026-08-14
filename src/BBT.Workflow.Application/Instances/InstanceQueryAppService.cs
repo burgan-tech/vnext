@@ -891,13 +891,6 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     private const string ScheduledTransitionKind = "scheduled";
 
-    /// <summary>
-    /// <see cref="TransitionItem.Kind"/> value for a state-owned caller-triggerable transition
-    /// (previously <c>stateTransition</c>; renamed with the v6 shape). Also the fallback kind when a
-    /// key resolves to no other category.
-    /// </summary>
-    private const string ManualTransitionKind = "manual";
-
     private static string ResolveTransitionKind(
         Definitions.Workflow workflow,
         State currentState,
@@ -920,12 +913,12 @@ public sealed class InstanceQueryAppService(
             return WellKnownTransitionKeys.Timeout;
 
         if (currentState.FindTransition(transitionKey) != null)
-            return ManualTransitionKind;
+            return "stateTransition";
 
         if (workflow.FindSharedTransition(transitionKey) != null)
             return "sharedTransition";
 
-        return ManualTransitionKind;
+        return "stateTransition";
     }
 
     private static bool IsTransitionKey(Transition? transition, string transitionKey) =>
