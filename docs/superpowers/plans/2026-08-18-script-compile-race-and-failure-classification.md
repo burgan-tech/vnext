@@ -414,6 +414,24 @@ git commit -m "fix(scripting): reuse an already-loaded script assembly instead o
 
 ## Task 3: Make the cache key distinguish load contexts
 
+> **SUPERSEDED DURING IMPLEMENTATION — read this before the steps below.**
+> Steps 3–7 as written thread an explicit `cacheScope` string alongside `loadContext` through
+> `IEvaluator`, `ScriptEngine`, and a new `HelperSet.Key`. That was implemented, reviewed, and
+> **withdrawn**: the scope and the context must always agree, and passing them separately made
+> disagreement representable — review found an existing test already doing it. The shipped design
+> derives the scope from the `AssemblyLoadContext` itself inside `CSharpEvaluator`, via a
+> `ConditionalWeakTable`, adding no parameter to any public contract and removing the need for the
+> `HelperSet.Key` invariant entirely.
+>
+> **Spec §5.3 is authoritative; the steps below are kept as the record of what was tried.**
+> The goal, the failing-test-first discipline, and the test list still stand — but the two
+> evaluator-level tests assert on load contexts rather than scope strings, and the decisive test is
+> `ScriptEngine_Compiles_Same_Mapping_Against_Different_Helper_Sets_Without_Cross_Contamination` in
+> `SandboxedScriptingTests.cs`, added after review found the original test would pass even with the
+> wiring broken.
+>
+> Landed as `838b4f0f` → `6735c5c8` → `dd8ea966` → `326d8b36`.
+
 **Why:** `MetadataReference.CreateFromImage(image).Display` is null, so the helper assembly contributes nothing to the cache key. Two helper sets exporting the same namespaces share one cache entry for identical mapping source, and the second flow silently executes the first flow's helper implementations. Spec §5.3.
 
 **Files:**
