@@ -244,6 +244,95 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Relays a transition from a parent instance to an active SubFlow in this domain.
+    /// Internal-only counterpart of the public transition endpoint: the chain-reserve claim
+    /// travels in the request body, because the public endpoint copies caller headers unfiltered
+    /// and a header-borne claim would let any client bypass the Busy 409. Protected by network
+    /// isolation, like the related-data endpoints.
+    /// </summary>
+    /// <param name="domain">Target workflow domain.</param>
+    /// <param name="workflow">Target workflow definition key.</param>
+    /// <param name="instance">Target SubFlow instance identifier (GUID).</param>
+    /// <param name="transitionKey">Transition key to relay.</param>
+    /// <param name="input">Forwarded transition payload and the chain-reserve claim.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Relay executed (sync) or accepted (async).</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/internal/subflow-forward")]
+    public async Task<IActionResult> SubflowForwardAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string transitionKey,
+        [FromBody] SubflowForwardInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var transitionInput = new TransitionInput(
+            domain,
+            workflow,
+            new TransitionDataInput(input.Attributes)
+            {
+                Key = input.Key,
+                Tags = input.Tags,
+                Stage = input.Stage
+            },
+            input.Sync)
+        {
+            RouteValues = input.RouteValues,
+            CorrelationId = input.CorrelationId,
+            ChainReserved = input.ChainReserved
+        };
+
+        var httpContext = httpContextAccessor.HttpContext;
+        if (httpContext is not null)
+        {
+            transitionInput.Headers = httpContext.Request.Headers
+                .ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());
+        }
+
+        var result = await commandAppService.TransitionAsync(
+            instance.ToString(),
+            transitionKey,
+            transitionInput,
+            cancellationToken);
+
+        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !input.Sync);
+    }
+
+    /// <summary>
+    /// Releases an accept-time SubFlow chain reserve, recursively propagating to nested SubFlows.
+    /// Internal-only compensation endpoint — the mirror of <see cref="MarkBusyAsync"/>. Levels
+    /// holding an open SubFlow correlation are Busy by design and are recursed past, not released.
+    /// </summary>
+    /// <param name="domain">Target workflow domain.</param>
+    /// <param name="workflow">Target workflow definition key.</param>
+    /// <param name="instance">Instance identifier (GUID).</param>
+    /// <param name="version">Optional workflow version for schema resolution.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">Operation completed successfully or instance was absent (no-op).</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPut("{domain}/workflows/{workflow}/instances/{instance}/internal/busy-release")]
+    public async Task<IActionResult> ReleaseBusyAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] Guid instance,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await instanceCommandGateway.ReleaseBusyAsync(
+            new MarkBusyInput
+            {
+                Domain = domain,
+                Workflow = workflow,
+                InstanceId = instance,
+                Version = version
+            },
+            cancellationToken);
+
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Cancels scheduled jobs when an instance is canceled/completed/faulted.
     /// Internal endpoint the Inbox forwards canceled/completed-cleanup/faulted-cleanup events to.
     /// </summary>

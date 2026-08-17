@@ -23,6 +23,17 @@ public interface IRemoteInstanceCommandAppService
         TransitionInput input,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Relays a transition to an active SubFlow instance in another domain through the
+    /// internal-only endpoint, which carries the chain-reserve claim in the request body.
+    /// POST {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/internal/subflow-forward
+    /// </summary>
+    Task<Result<TransitionOutput>> ForwardTransitionAsync(
+        Guid instanceId,
+        string transitionKey,
+        TransitionInput input,
+        CancellationToken cancellationToken = default);
+
     Task<Result> CancelChildAsync(
         Guid instanceId,
         string domain,
@@ -58,6 +69,14 @@ public interface IRemoteInstanceCommandAppService
     /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
     /// </summary>
     Task<Result> MarkBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Releases a chain reserve on a remote instance, propagating recursively to nested SubFlows.
+    /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/internal/busy-release
+    /// </summary>
+    Task<Result> ReleaseBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default);
 

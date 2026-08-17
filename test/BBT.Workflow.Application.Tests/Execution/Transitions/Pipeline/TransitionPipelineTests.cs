@@ -71,6 +71,7 @@ public class TransitionPipelineTests
 
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnExecute));
+        _mockSteps.Add(CreateMockStep(LifecycleOrder.CancelScheduledJobs));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnExit));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.ChangeState));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnEntry));
@@ -78,10 +79,10 @@ public class TransitionPipelineTests
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Auto));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Finalize));
 
-        // Default: busy marker succeeds silently
+        // Default: busy marker flips the instance
         _mockBusyMarker
             .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(true);
 
         // Default: validation succeeds
         _mockValidationService.ValidateAsync(
@@ -160,6 +161,202 @@ public class TransitionPipelineTests
         // Admission reserve happens exactly once for the entire request
         await _mockAdmissionService.Received(1)
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// <c>updateData</c> writes data without moving the instance, so the state's lifecycle must not
+    /// fire: OnEntry would re-run hooks for a state that was never re-entered and Schedule would
+    /// re-arm the state's timers from zero. The transition's own work (OnExecute), the state sync
+    /// (ChangeState) and the auto evaluation must still run — the whole point is to advance on the
+    /// freshly written data.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenUpdateDataTargetsSelf_ShouldSkipStateLifecycleButStillEvaluateAutoTransitions()
+    {
+        // Arrange
+        var context = CreateSelfTargetExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionOrder = new List<int>();
+
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            var order = step.Order;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionOrder.Add(order);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+
+        executionOrder.ShouldNotContain(LifecycleOrder.CancelScheduledJobs);
+        executionOrder.ShouldNotContain(LifecycleOrder.OnExit);
+        executionOrder.ShouldNotContain(LifecycleOrder.OnEntry);
+        executionOrder.ShouldNotContain(LifecycleOrder.Schedule);
+
+        executionOrder.ShouldContain(LifecycleOrder.CreateTransition);
+        executionOrder.ShouldContain(LifecycleOrder.OnExecute);
+        executionOrder.ShouldContain(LifecycleOrder.ChangeState);
+        executionOrder.ShouldContain(LifecycleOrder.Auto);
+        executionOrder.ShouldContain(LifecycleOrder.Finalize);
+    }
+
+    /// <summary>
+    /// The lifecycle skip is scoped to <c>updateData</c>, not to every <c>$self</c> target. A shared
+    /// transition declaring <c>target: $self</c> is saying "do not move the instance", which is not
+    /// the same instruction as "skip the state's hooks" — its state's OnExit/OnEntry must run and its
+    /// scheduled transitions must be torn down and re-armed, exactly as before the self profile
+    /// existed.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenASharedTransitionTargetsSelf_ShouldStillRunTheFullStateLifecycle()
+    {
+        // Arrange: $self target, but NOT updateData.
+        var context = CreateSelfTargetExecutionContext(transitionKey: "share-mark");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionOrder = new List<int>();
+
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            var order = step.Order;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionOrder.Add(order);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        executionOrder.ShouldContain(LifecycleOrder.CancelScheduledJobs);
+        executionOrder.ShouldContain(LifecycleOrder.OnExit);
+        executionOrder.ShouldContain(LifecycleOrder.OnEntry);
+        executionOrder.ShouldContain(LifecycleOrder.Schedule);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTransitionTargetsAnotherState_ShouldStillRunTheFullStateLifecycle()
+    {
+        // Arrange: the fixture's default transition targets state1 while the instance has not
+        // entered it yet — a real state change, so nothing may be skipped.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionOrder = new List<int>();
+
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            var order = step.Order;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionOrder.Add(order);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        executionOrder.ShouldContain(LifecycleOrder.OnExit);
+        executionOrder.ShouldContain(LifecycleOrder.OnEntry);
+        executionOrder.ShouldContain(LifecycleOrder.Schedule);
+    }
+
+    /// <summary>
+    /// Regression: the start transition is NOT a self transition, even though its target equals the
+    /// instance's current state. InstanceCommandAppService pre-positions the instance into the
+    /// initial state at creation (instance.ChangeState(initialState)) before dispatching the start
+    /// transition, so target == currentState holds — but the state has not actually been entered
+    /// yet, and entering it is precisely this transition's job. Treating it as a self target skips
+    /// OnEntry (60) and the initial state's entry tasks never run at all.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ForTheStartTransition_ShouldRunOnEntryEvenThoughTargetEqualsCurrentState()
+    {
+        // Arrange
+        var context = CreateStartTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionOrder = new List<int>();
+
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            var order = step.Order;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionOrder.Add(order);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert: the initial state must be entered like any other state.
+        result.IsSuccess.ShouldBeTrue();
+        executionOrder.ShouldContain(LifecycleOrder.OnEntry);
+        executionOrder.ShouldContain(LifecycleOrder.Schedule);
+    }
+
+    /// <summary>
+    /// Regression: retrying a transition that faulted AFTER the state change committed must still
+    /// re-run OnEntry. ChangeStateStep persists with saveChanges, and MarkInstanceFaultedAsync
+    /// reloads in a RequiresNew UoW — so a fault in OnEntry (60) leaves the instance committed in
+    /// the target state. The retry then re-runs the same transition with target == currentState;
+    /// treating that as a self target skips the very step that failed, and retry — whose whole
+    /// purpose is re-running it, with already-succeeded tasks bypassed per record — becomes a no-op.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenRetryingAfterStateAlreadyCommitted_ShouldStillRunOnEntry()
+    {
+        // Arrange: instance already in the target state, same transition being retried.
+        var context = CreateSelfTargetExecutionContext(
+            transitionKey: "advance",
+            target: "state1");
+        context.RetryOfTransitionRecordId = Guid.NewGuid();
+
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionOrder = new List<int>();
+
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            var order = step.Order;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionOrder.Add(order);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        executionOrder.ShouldContain(LifecycleOrder.OnEntry);
     }
 
     [Fact]
@@ -378,6 +575,28 @@ public class TransitionPipelineTests
             .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_BypassKindPreReserved_ShouldNotTakeOverAgain()
+    {
+        // The async accept already flipped Busy under its own status lock and the job re-enters
+        // pre-reserved; taking the lock again here would put cancel back on two locks per request.
+        var context = CreateTransitionExecutionContext("cancel");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -996,6 +1215,90 @@ public class TransitionPipelineTests
             Workflow = workflow,
             Current = state,
             Transition = transition,
+            Instance = instance,
+            Data = null,
+            TraceId = Guid.NewGuid().ToString("N"),
+            SpanId = Guid.NewGuid().ToString("N")[..16]
+        };
+    }
+
+    /// <summary>
+    /// Builds a context whose instance is already in state1 and whose transition targets $self.
+    /// <para>
+    /// The default key is the reserved updateData alias ON PURPOSE: the self variant is composed for
+    /// updateData alone, so a plain key here would silently resolve the base profile and any test
+    /// asserting "the lifecycle was skipped" would pass while proving nothing.
+    /// </para>
+    /// </summary>
+    private TransitionExecutionContext CreateSelfTargetExecutionContext(
+        string transitionKey = WellKnownTransitionKeys.UpdateData,
+        string? target = null)
+    {
+        var instanceId = Guid.NewGuid();
+        var workflowKey = "test-workflow";
+        var domain = "test-domain";
+
+        var workflow = CreateMockWorkflow(workflowKey, domain);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
+        var state = workflow.GetState("state1").Value!;
+        instance.ChangeState(state);
+
+        return new TransitionExecutionContext
+        {
+            InstanceId = instanceId,
+            Domain = domain,
+            WorkflowKey = workflowKey,
+            TransitionKey = transitionKey,
+            Trigger = TriggerType.Manual,
+            Actor = ExecutionActor.User,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ExecutionChainId = Guid.NewGuid().ToString("N"),
+            RequestedAt = DateTimeOffset.UtcNow,
+            Workflow = workflow,
+            Current = state,
+            Transition = Transition.Create(
+                transitionKey,
+                "state1",
+                target ?? WellKnownStateKeys.Self,
+                TriggerType.Manual,
+                "Patch"),
+            Instance = instance,
+            Data = null,
+            TraceId = Guid.NewGuid().ToString("N"),
+            SpanId = Guid.NewGuid().ToString("N")[..16]
+        };
+    }
+
+    /// <summary>
+    /// Reproduces the start path: the instance has already been stamped into the initial state by
+    /// InstanceCommandAppService, and the start transition targets that same state by its literal
+    /// key. Mirrors the fixture workflow's startTransition (key "start", target "state1").
+    /// </summary>
+    private TransitionExecutionContext CreateStartTransitionExecutionContext()
+    {
+        var instanceId = Guid.NewGuid();
+        var workflowKey = "test-workflow";
+        var domain = "test-domain";
+
+        var workflow = CreateMockWorkflow(workflowKey, domain);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0");
+        var initialState = workflow.GetState("state1").Value!;
+        instance.ChangeState(initialState);
+
+        return new TransitionExecutionContext
+        {
+            InstanceId = instanceId,
+            Domain = domain,
+            WorkflowKey = workflowKey,
+            TransitionKey = workflow.StartTransition.Key,
+            Trigger = TriggerType.Manual,
+            Actor = ExecutionActor.User,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ExecutionChainId = Guid.NewGuid().ToString("N"),
+            RequestedAt = DateTimeOffset.UtcNow,
+            Workflow = workflow,
+            Current = initialState,
+            Transition = workflow.StartTransition,
             Instance = instance,
             Data = null,
             TraceId = Guid.NewGuid().ToString("N"),

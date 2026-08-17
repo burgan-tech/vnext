@@ -43,7 +43,7 @@ public class SubflowForwardingServiceTests
         };
 
         _mockGateway
-            .TransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
             .Returns(Result<TransitionOutput>.Ok(expectedOutput));
 
         // Act
@@ -66,7 +66,7 @@ public class SubflowForwardingServiceTests
         var validationError = Error.Validation("Transition:100020", "Transition not available in current state");
 
         _mockGateway
-            .TransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
             .Returns(Result<TransitionOutput>.Fail(validationError));
 
         // Act
@@ -88,7 +88,7 @@ public class SubflowForwardingServiceTests
         var systemError = Error.Dependency("remote_service_error", "Remote API service error");
 
         _mockGateway
-            .TransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
             .Returns(Result<TransitionOutput>.Fail(systemError));
 
         // Act
@@ -113,7 +113,7 @@ public class SubflowForwardingServiceTests
         };
 
         _mockGateway
-            .TransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
+            .ForwardTransitionAsync(instanceId, transitionKey, input, Arg.Any<CancellationToken>())
             .Returns(Result<TransitionOutput>.Ok(expectedOutput));
 
         // Act

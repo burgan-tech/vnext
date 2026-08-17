@@ -582,7 +582,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         var legacyRow = InstanceJob.Create(
             Guid.NewGuid(),
-            JobName.ForScheduledTransition(instance.Id, TestState, "pre-upgrade"),
+            JobName.ForScheduledTransition(instance.Id, TestState, "pre-upgrade", Guid.NewGuid()),
             Guid.NewGuid(), TestDomain, TestWorkflow, instance.Id);
         var timeoutJob = InstanceJob.Create(
             Guid.NewGuid(),
@@ -640,7 +640,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var jobId = Guid.NewGuid();
         return InstanceJob.Create(
             jobId,
-            JobName.ForScheduledTransition(instanceId, TestState, transitionKey),
+            JobName.ForScheduledTransition(instanceId, TestState, transitionKey, jobId),
             jobId, TestDomain, TestWorkflow, instanceId, executeAt);
     }
 

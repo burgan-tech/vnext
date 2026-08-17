@@ -589,7 +589,11 @@ public sealed class InstanceCommandAppService(
 
             workflowDefinition = snapshotWorkflow.Value!;
 
+            // input.ChainReserved exempts the relay: the accept that admitted the request already
+            // reserved this instance's Busy flag as part of its SubFlow chain reserve, so the Busy
+            // it finds here is its own. Server-internal — see TransitionInput.ChainReserved.
             if (snapshot is { IsBusy: true, HasActiveSubFlow: false }
+                && !input.ChainReserved
                 && transitionAdmissionService.ClassifyKey(workflowDefinition, transitionKey)
                     == AdmissionKind.Normal)
             {
@@ -706,7 +710,14 @@ public sealed class InstanceCommandAppService(
                 Stage = input.Data?.Stage,
                 Tags = input.Data?.Tags,
             },
-            IsReentry = false
+            IsReentry = false,
+
+            // A relayed subflow transition whose chain the accept already reserved re-enters as
+            // the owner: admission classifies it OwnerReentry, so it neither 409s on the Busy the
+            // accept pre-set nor reserves a second time — and it still settles the status at the
+            // end, because OwnerReentry sets OwnsStatus.
+            IsPreReserved = input.ChainReserved,
+            SubflowChainReserved = input.ChainReserved
         };
     }
 

@@ -38,8 +38,11 @@ public sealed class SubflowForwardingService(
             using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.Forward/{input.Domain}/{input.Workflow}/{transitionKey}");
             SubFlowActivityHelper.EnrichWithForward(activity, instanceId, transitionKey, parentInstanceId);
 
+            // ForwardTransitionAsync, not TransitionAsync: a cross-domain hop must carry the
+            // chain-reserve claim in the body of the internal-only relay endpoint rather than on
+            // the public transition endpoint, whose caller headers are copied unfiltered.
             var result = await instanceCommandGateway
-                .TransitionAsync(
+                .ForwardTransitionAsync(
                     instanceId,
                     transitionKey,
                     input,

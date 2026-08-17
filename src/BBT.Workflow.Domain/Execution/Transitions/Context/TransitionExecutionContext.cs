@@ -124,6 +124,15 @@ public sealed class TransitionExecutionContext
     public bool IsPreReserved { get; set; }
 
     /// <summary>
+    /// Gets or sets whether the accept that produced this execution reserved the instance's whole
+    /// active SubFlow chain down to the leaf. <c>ForwardToActiveSubflowStep</c> stamps it onto the
+    /// forward so the leaf admits the relay as an owner re-entry instead of rejecting the Busy the
+    /// accept pre-set. Narrower than <see cref="IsPreReserved"/> on purpose: every job re-entry is
+    /// pre-reserved, but only a genuine chain reserve may be claimed downstream.
+    /// </summary>
+    public bool SubflowChainReserved { get; set; }
+
+    /// <summary>
     /// Gets or sets whether this execution owns the instance's Busy lifecycle. Assigned by the
     /// pipeline admission: reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
     /// updateData ⇒ true only when its opportunistic reserve succeeded or the parent rests in a

@@ -848,8 +848,10 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             Status = InstanceStatus.Busy;
         }
 
-        // Domain Logic: Publish state change event if this is a SubFlow
-        if (IsSubFlow)
+        // Domain Logic: Publish state change event if this is a SubFlow.
+        // A same-state change ($self target) is not a state change — publishing it would emit a
+        // sub:state-changed with previous == new on every self transition.
+        if (IsSubFlow && !string.Equals(previousState, state.Key, StringComparison.Ordinal))
         {
             PublishSubStateChangedEvent(previousState, state.Key);
         }
