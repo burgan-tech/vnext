@@ -118,4 +118,33 @@ public sealed class CSharpEvaluatorConcurrencyTests
         result.ShouldNotBeNull();
         second.CachedTypeCount.ShouldBe(1);
     }
+
+    /// <summary>
+    /// A target the sample script does not implement, so the matchedType lookup in CompileAndLoad
+    /// fails on purpose.
+    /// </summary>
+    private interface INotImplementedByScript
+    {
+    }
+
+    [Fact]
+    public async Task CompileToInstanceAsync_WhenRetryingAfterATypeMatchFailure_ShouldSurfaceTheRealDiagnostic()
+    {
+        // Reproduces the real production trigger: a single evaluator (it's a process-wide singleton,
+        // per TaskServiceCollectionExtensions.cs:270) sharing one AssemblyLoadContext. The first call
+        // loads the assembly successfully but finds no matching type, throws InvalidOperationException,
+        // and evicts its own faulted Lazy. A shared context cannot unload a single assembly, so the
+        // assembly stays loaded under that name. Without reuse, the retry's LoadFromStream throws
+        // FileLoadException and masks the real diagnostic for the rest of the process lifetime.
+        var context = new TestLoadContext();
+        var evaluator = new CSharpEvaluator();
+
+        var first = await Should.ThrowAsync<InvalidOperationException>(
+            () => evaluator.CompileToInstanceAsync<INotImplementedByScript>(SampleScript, loadContext: context));
+        first.Message.ShouldContain("No type implementing");
+
+        var retry = await Should.ThrowAsync<InvalidOperationException>(
+            () => evaluator.CompileToInstanceAsync<INotImplementedByScript>(SampleScript, loadContext: context));
+        retry.Message.ShouldContain("No type implementing");
+    }
 }
