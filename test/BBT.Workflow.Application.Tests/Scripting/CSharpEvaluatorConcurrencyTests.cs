@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Evaluators;
 using Shouldly;
@@ -39,12 +40,32 @@ public sealed class CSharpEvaluatorConcurrencyTests
     [Fact]
     public async Task CompileToInstanceAsync_WhenManyCallersShareOneLoadContext_ShouldCompileOnceAndNotThrow()
     {
+        const int callerCount = 8;
+
+        // Task.Run alone is not a guarantee all 8 run concurrently: on a starved/small pool the thread
+        // pool can dispatch them one at a time, letting later callers land on an already-warm cache and
+        // never race at all — a false-green in the one test guarding this fix. Force the floor up so 8
+        // threads are available immediately, and hold every caller at a rendezvous before any of them
+        // calls the evaluator so all 8 genuinely call CompileToInstanceAsync at (as near as possible)
+        // the same instant.
+        ThreadPool.SetMinThreads(16, 16);
+
         var evaluator = new CSharpEvaluator();
         var context = new TestLoadContext();
+        using var barrier = new Barrier(callerCount);
 
-        var results = await Task.WhenAll(Enumerable.Range(0, 8)
+        var tasks = Enumerable.Range(0, callerCount)
             .Select(_ => Task.Run(() =>
-                evaluator.CompileToInstanceAsync<object>(SampleScript, loadContext: context))));
+            {
+                // A timeout keeps a stuck rendezvous from hanging the test/suite instead of failing it.
+                var rendezvoused = barrier.SignalAndWait(TimeSpan.FromSeconds(10));
+                rendezvoused.ShouldBeTrue("Rendezvous timed out before all callers arrived.");
+
+                return evaluator.CompileToInstanceAsync<object>(SampleScript, loadContext: context);
+            }))
+            .ToArray();
+
+        var results = await Task.WhenAll(tasks);
 
         results.ShouldAllBe(r => r != null);
         results.Select(r => r.GetType()).Distinct().Count().ShouldBe(1);

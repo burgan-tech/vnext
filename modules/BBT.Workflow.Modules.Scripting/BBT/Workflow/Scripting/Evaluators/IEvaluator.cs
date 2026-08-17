@@ -30,7 +30,11 @@ public interface IEvaluator
     /// <param name="services">Optional script services to inject into ScriptBase instances</param>
     /// <param name="extraReferences">Optional additional metadata references for compilation</param>
     /// <param name="usingDirectives">Optional additional using directives to include</param>
-    /// <param name="cancellationToken">Token to cancel the operation</param>
+    /// <param name="cancellationToken">
+    /// Gates entry only: checked before a compile is looked up/started, but not honoured once one is
+    /// under way. A compile for a given cache key is shared by every caller waiting on it, so one
+    /// caller's token cannot cancel work the others are still waiting on.
+    /// </param>
     /// <param name="loadContext">
     /// Optional shared collectible <see cref="AssemblyLoadContext"/> to load the compiled assembly into.
     /// Used so a mapping resolves the helper types compiled into the same context. When <c>null</c> a

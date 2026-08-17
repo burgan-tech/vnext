@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
@@ -50,9 +49,6 @@ public class CSharpEvaluator : IEvaluator
     /// </summary>
     private readonly ConcurrentDictionary<string, Lazy<CompiledScript>> _typeCache = new();
 
-    /// <summary>A compiled script type and the context its assembly was loaded into.</summary>
-    private readonly record struct CompiledScript(AssemblyLoadContext Context, Type CompiledType);
-
     /// <summary>
     /// Cached metadata references - created once and reused for all compilations.
     /// </summary>
@@ -89,6 +85,15 @@ public class CSharpEvaluator : IEvaluator
         cancellationToken.ThrowIfCancellationRequested();
 
         var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives, sandboxGrant);
+
+        // Fast path: an already-materialised entry is the overwhelmingly common case (every script in
+        // every transition after the first). Check it before GetOrAdd so the closure below — which
+        // captures code/cacheKey/extraReferences/usingDirectives/sandboxGrant/loadContext — is not
+        // allocated on every cache hit. Mirrors ScriptHelperRegistry.GetOrBuildHelpers.
+        if (_typeCache.TryGetValue(cacheKey, out var existing) && existing.IsValueCreated)
+        {
+            return Task.FromResult(CreateAndInjectServices<T>(existing.Value.CompiledType, services));
+        }
 
         var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<CompiledScript>(
             () => CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext),
@@ -429,4 +434,7 @@ public class CSharpEvaluator : IEvaluator
 
         return false;
     }
+
+    /// <summary>A compiled script type and the context its assembly was loaded into.</summary>
+    private readonly record struct CompiledScript(AssemblyLoadContext Context, Type CompiledType);
 }
