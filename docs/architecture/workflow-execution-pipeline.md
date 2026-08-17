@@ -55,10 +55,10 @@ Profiles remove irrelevant steps:
 | ErrorBoundary | Error boundary | Minimal recovery path; lock and subflow prelude are excluded. |
 
 A sixth profile is **composed on top of** the trigger's profile rather than selected instead of it.
-When the transition's target is the reserved `$self` key, `PipelineExecutionProfile.ForSelfTarget`
-layers the self-target exclusions onto the base profile (`Manual+Self`, `AutoChain+Self`, …):
+For an `updateData` transition, `PipelineExecutionProfile.ForSelfTarget` layers the state-lifecycle
+exclusions onto the base profile (`Manual+Self`, `AutoChain+Self`, …):
 
-| Excluded on a self target | Why |
+| Excluded for updateData | Why |
 | --- | --- |
 | CancelScheduledJobs (39) | The state is not left; tearing its timers down would lose them. |
 | OnExit (40) | No state is left. |
@@ -69,13 +69,23 @@ layers the self-target exclusions onto the base profile (`Manual+Self`, `AutoCha
 `RunAutomaticTransitionsStep (90)` needs in order to evaluate the state's auto transitions against
 the freshly written data. `OnExecute (30)` also still runs: that is the transition's own work, not
 the state's lifecycle. `ChangeStateStep` suppresses its state-change metric, log and span event on
-this path, since reporting a change from a state to itself is a false signal.
+this path, since reporting a change from a state to itself is a false signal there.
 
 This is what makes `updateData` behave as intended: write the data, evaluate the auto transitions,
-and chain on if one is satisfied — without re-running the current state's entry hooks. It applies
-to every `$self` transition, `updateData` and `$self` shared transitions alike.
+and chain on if one is satisfied — without re-running the current state's entry hooks.
 
-**Only the authored `$self` keyword qualifies.** A literal target that happens to equal the current
+**`updateData` is the only transition that gets it.** The variant's name says "self" because
+`updateData`'s target *is* `$self`, but the selection is a policy in `PipelineProfileResolver`
+(`TransitionExecutionContextExtensions.SkipsStateLifecycle`), not a property of the target. Any
+other transition declaring `target: $self` — a **shared transition** being the real case — keeps the
+trigger's base profile and runs the state's **full** lifecycle: OnExit and OnEntry fire, and the
+state's scheduled transitions are cancelled and re-armed. Declaring `$self` says "do not move the
+instance"; it does not say "skip the state's hooks". Note the consequence for timers: a frequently
+invoked `$self` shared transition on a state with a short timeout pushes that timeout out on every
+call.
+
+**Only the authored `$self` keyword qualifies** for the target check itself. A literal target that
+happens to equal the current
 state does not, because that comparison is a coincidence produced by three unrelated mechanisms and
 means "no state change" in only one of them:
 

@@ -89,12 +89,13 @@ public sealed class PipelineProfileResolverTests
     [InlineData(TriggerType.Automatic, "AutoChain+Self")]
     [InlineData(TriggerType.Scheduled, "Scheduled+Self")]
     [InlineData(TriggerType.Event, "Event+Self")]
-    public void Resolve_WhenTransitionTargetsSelf_ShouldComposeSelfVariantOfTheTriggerProfile(
+    public void Resolve_WhenUpdateDataTargetsSelf_ShouldComposeSelfVariantOfTheTriggerProfile(
         TriggerType triggerType,
         string expectedName)
     {
         var context = CreateContext(triggerType, isErrorBoundary: false);
-        var transitionContext = CreateTransitionContext(triggerType, WellKnownStateKeys.Self);
+        var transitionContext = CreateTransitionContext(
+            triggerType, WellKnownStateKeys.Self, WellKnownTransitionKeys.UpdateData);
 
         var profile = _resolver.Resolve(context, transitionContext);
 
@@ -134,11 +135,37 @@ public sealed class PipelineProfileResolverTests
         profile.ShouldBeSameAs(PipelineExecutionProfile.ForManual());
     }
 
+    /// <summary>
+    /// The self variant belongs to <c>updateData</c> alone. Any OTHER transition declaring
+    /// <c>target: $self</c> — a shared transition being the real case — keeps the trigger's base
+    /// profile and therefore runs the state's full lifecycle. "Do not move the instance" is not the
+    /// same instruction as "skip the state's hooks".
+    /// </summary>
+    [Theory]
+    [InlineData("share-mark")]
+    [InlineData("cancel")]
+    public void Resolve_WhenANonUpdateDataTransitionTargetsSelf_ShouldReturnTheBaseProfileUnchanged(
+        string transitionKey)
+    {
+        var context = CreateContext(TriggerType.Manual, isErrorBoundary: false);
+        var transitionContext = CreateTransitionContext(
+            TriggerType.Manual, WellKnownStateKeys.Self, transitionKey);
+
+        var profile = _resolver.Resolve(context, transitionContext);
+
+        profile.ShouldBeSameAs(PipelineExecutionProfile.ForManual());
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.OnEntry);
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.OnExit);
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.Schedule);
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.CancelScheduledJobs);
+    }
+
     [Fact]
-    public void Resolve_WhenErrorBoundaryAndSelfTarget_ShouldComposeOnTopOfErrorBoundary()
+    public void Resolve_WhenErrorBoundaryAndUpdateDataSelfTarget_ShouldComposeOnTopOfErrorBoundary()
     {
         var context = CreateContext(TriggerType.Manual, isErrorBoundary: true);
-        var transitionContext = CreateTransitionContext(TriggerType.Manual, WellKnownStateKeys.Self);
+        var transitionContext = CreateTransitionContext(
+            TriggerType.Manual, WellKnownStateKeys.Self, WellKnownTransitionKeys.UpdateData);
 
         var profile = _resolver.Resolve(context, transitionContext);
 
@@ -171,7 +198,16 @@ public sealed class PipelineProfileResolverTests
         Should.Throw<ArgumentNullException>(() => _resolver.Resolve(context, null!));
     }
 
-    private static TransitionExecutionContext CreateTransitionContext(TriggerType triggerType, string target)
+    /// <summary>
+    /// Builds a transition context whose instance already sits in <see cref="CurrentStateKey"/>.
+    /// <paramref name="transitionKey"/> defaults to a plain key; pass
+    /// <see cref="WellKnownTransitionKeys.UpdateData"/> for the updateData cases — that is the only
+    /// key the self variant is composed for.
+    /// </summary>
+    private static TransitionExecutionContext CreateTransitionContext(
+        TriggerType triggerType,
+        string target,
+        string transitionKey = "transition")
     {
         var instance = Instance.Create(Guid.NewGuid(), "workflow", "1.0.0");
         instance.ChangeState(State.Create(CurrentStateKey, StateType.Intermediate, StateSubType.None, "Patch"));
@@ -181,11 +217,41 @@ public sealed class PipelineProfileResolverTests
             Domain = "test-domain",
             InstanceId = instance.Id,
             WorkflowKey = "workflow",
-            TransitionKey = "transition",
+            TransitionKey = transitionKey,
             Trigger = triggerType,
             Instance = instance,
-            Transition = Transition.Create("transition", CurrentStateKey, target, triggerType, "Patch"),
+            // Required: the updateData check reads Workflow.UpdateData for the configured-key case.
+            Workflow = CreateWorkflow(),
+            Transition = Transition.Create(transitionKey, CurrentStateKey, target, triggerType, "Patch"),
         };
+    }
+
+    /// <summary>A workflow with no updateData configured, so only the reserved alias matches.</summary>
+    private static Definitions.Workflow CreateWorkflow()
+    {
+        var json = """
+                   {
+                       "type": "F",
+                       "timeout": null,
+                       "labels": [],
+                       "functions": [],
+                       "features": [],
+                       "states": [
+                           { "key": "initial-contract", "stateType": "Intermediate", "transitions": [] }
+                       ],
+                       "sharedTransitions": [],
+                       "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "initial-contract", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+                   }
+                   """;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+
+        return System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
     }
 
     private const string CurrentStateKey = "initial-contract";

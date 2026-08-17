@@ -45,10 +45,13 @@ public static class TransitionExecutionContextExtensions
     }
 
     /// <summary>
-    /// Determines whether the current transition's target resolves to the state the instance is
-    /// already in — either the reserved <c>$self</c> key or a literal target equal to the current
-    /// state. Such a transition performs no state change, so the state lifecycle (OnExit, OnEntry,
-    /// scheduled-job teardown and re-arm) must not run for it.
+    /// Determines whether the current transition's target is the authored <c>$self</c> keyword, so
+    /// the transition performs no state change.
+    /// <para>
+    /// This is a statement of FACT about the target, not a policy. It does not by itself mean the
+    /// state's lifecycle is skipped — only <c>updateData</c> gets that treatment. See
+    /// <see cref="SkipsStateLifecycle"/>, which composes this predicate with the updateData check.
+    /// </para>
     /// </summary>
     /// <remarks>
     /// <para>
@@ -92,6 +95,30 @@ public static class TransitionExecutionContextExtensions
 
         return Definitions.WellKnownStateKeys.ReservedTargetKeys.Contains(target);
     }
+
+    /// <summary>
+    /// Determines whether this execution skips the state's lifecycle — the steps that only make
+    /// sense when a state is actually left and another entered: <c>CancelScheduledJobs (39)</c>,
+    /// <c>OnExit (40)</c>, <c>OnEntry (60)</c> and <c>Schedule (80)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Only <c>updateData</c> qualifies</b> — the one transition whose target is fixed to
+    /// <c>$self</c> by definition (<c>WorkflowValidator</c> enforces it), and whose whole purpose is
+    /// to write data without moving the instance. Every OTHER <c>$self</c> transition — a
+    /// <c>$self</c> shared transition in particular — runs the FULL lifecycle: its state's OnExit
+    /// and OnEntry hooks fire and its scheduled transitions are torn down and re-armed. Authors who
+    /// declare <c>target: $self</c> on a shared transition are saying "do not move the instance",
+    /// not "skip the state's hooks".
+    /// </para>
+    /// <para>
+    /// The <see cref="IsSelfTargetTransition"/> half of the conjunction looks redundant given the
+    /// validator, but it carries the timeout / subflow-resume exclusions documented on that method,
+    /// and those apply here too. Keep it.
+    /// </para>
+    /// </remarks>
+    public static bool SkipsStateLifecycle(this TransitionExecutionContext ctx) =>
+        ctx.IsSelfTargetTransition() && ctx.IsUpdateDataTransition();
 
     /// <summary>
     /// Determines whether the current transition is a shared transition.

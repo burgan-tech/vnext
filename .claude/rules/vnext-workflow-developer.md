@@ -50,13 +50,24 @@ Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext
 `IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
 the transition definition's — the two can disagree and the inbound trigger is authoritative).
 
-### Self-target composition
+### Self-target composition — `updateData` ONLY
 
 A sixth profile is **composed on top of** the base, never selected instead of it. When
-`TransitionExecutionContext.IsSelfTargetTransition()` is true — `Transition.Target` is the authored
-`$self` keyword and the execution is neither a timeout nor a subflow resume —
+`TransitionExecutionContext.SkipsStateLifecycle()` is true,
 `PipelineExecutionProfile.ForSelfTarget(base)` adds `CancelScheduledJobs (39)`, `OnExit (40)`,
 `OnEntry (60)`, `Schedule (80)` to the base's exclusions (`Manual+Self`, …).
+
+- **`SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()`.** Two separate
+  claims, deliberately: the first is a fact about the target, the second is the policy. Only
+  `updateData` skips the lifecycle.
+- **Every OTHER `$self` transition runs the FULL lifecycle** — a `$self` **shared transition** above
+  all. Its state's OnExit/OnEntry fire and its scheduled transitions are cancelled and re-armed.
+  `target: $self` means "do not move the instance", *not* "skip the state's hooks". Consequence worth
+  knowing: a frequently invoked `$self` shared transition on a short-timeout state defers that
+  timeout every call.
+- **The `+Self` profile name is about the target, not the policy.** Reading `Manual+Self` as "every
+  `$self` transition gets this" is the wrong conclusion and has cost real work twice — the selection
+  lives in `PipelineProfileResolver`. `ForSelfTarget` is the mechanism; the resolver owns who gets it.
 
 - **Only `$self` counts — never a literal target that happens to equal the current state.** That
   comparison is a coincidence produced by three unrelated mechanisms and means "no state change" in
@@ -67,16 +78,18 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   killed the initial state's OnEntry entirely and turned retry into a no-op. Guarding the incidental
   cases one at a time was tried and is unsound — do not reintroduce the comparison.
 
-- **No state is left or entered, so the state's lifecycle must not fire.** OnEntry would re-run hooks
-  for a state the instance never re-entered; Schedule would re-arm its timers from zero.
+- **`updateData` leaves and enters no state, so the state's lifecycle must not fire.** OnEntry would
+  re-run hooks for a state the instance never re-entered; Schedule would re-arm its timers from zero.
 - **`ChangeState (50)` still runs and must keep running** — it is the only step that sets
   `context.Target`, which `RunAutomaticTransitionsStep (90)` reads. Excluding it makes the auto step
   return at its first guard and the transition advances nothing.
 - **`OnExecute (30)` still runs** — the transition's own work, not the state's lifecycle.
-- `ChangeStateStep` suppresses its state-change metric/log/span event on this path, and
-  `Instance.ChangeState` suppresses `sub:state-changed` when previous == new.
-- Applies to every `$self` transition: `updateData`, `$self` shared transitions. **Not** literal self-loops.
-  A parent with an open SubFlow correlation still short-circuits earlier, at
+- `ChangeStateStep` suppresses its state-change metric/log/span event on this path **only** (it is
+  scoped to `SkipsStateLifecycle`, so a `$self` shared transition — which really does re-enter the
+  state — still reports its state change). `Instance.ChangeState` separately suppresses
+  `sub:state-changed` whenever previous == new, keyed on the states themselves rather than on
+  the transition.
+- A parent with an open SubFlow correlation short-circuits earlier, at
   `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
 
 ## Instance Repository Include Strategy

@@ -1,5 +1,4 @@
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Execution;
 
 namespace BBT.Workflow.Execution.Pipeline;
 
@@ -27,7 +26,10 @@ public sealed class PipelineProfileResolver : IPipelineProfileResolver
 
         var baseProfile = ResolveBase(context);
 
-        return transitionContext.IsSelfTargetTransition()
+        // The self-target variant is a POLICY applied to updateData alone, not to every $self
+        // target. A $self shared transition runs the full state lifecycle — see
+        // TransitionExecutionContextExtensions.SkipsStateLifecycle.
+        return transitionContext.SkipsStateLifecycle()
             ? PipelineExecutionProfile.ForSelfTarget(baseProfile)
             : baseProfile;
     }

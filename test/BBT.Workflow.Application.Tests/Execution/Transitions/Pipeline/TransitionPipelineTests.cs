@@ -71,6 +71,7 @@ public class TransitionPipelineTests
 
         _mockSteps.Add(CreateMockStep(LifecycleOrder.CreateTransition));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnExecute));
+        _mockSteps.Add(CreateMockStep(LifecycleOrder.CancelScheduledJobs));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnExit));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.ChangeState));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.OnEntry));
@@ -163,15 +164,14 @@ public class TransitionPipelineTests
     }
 
     /// <summary>
-    /// A transition whose target resolves to the state the instance is already in (updateData,
-    /// a $self shared transition, a self-loop) leaves and enters no state, so the state's
-    /// lifecycle must not fire: OnEntry would re-run hooks for a state that was never re-entered
-    /// and Schedule would re-arm the state's timers from zero. The transition's own work
-    /// (OnExecute), the state sync (ChangeState) and the auto evaluation must still run — the
-    /// whole point is to advance on the freshly written data.
+    /// <c>updateData</c> writes data without moving the instance, so the state's lifecycle must not
+    /// fire: OnEntry would re-run hooks for a state that was never re-entered and Schedule would
+    /// re-arm the state's timers from zero. The transition's own work (OnExecute), the state sync
+    /// (ChangeState) and the auto evaluation must still run — the whole point is to advance on the
+    /// freshly written data.
     /// </summary>
     [Fact]
-    public async Task RunAsync_WhenTransitionTargetsSelf_ShouldSkipStateLifecycleButStillEvaluateAutoTransitions()
+    public async Task RunAsync_WhenUpdateDataTargetsSelf_ShouldSkipStateLifecycleButStillEvaluateAutoTransitions()
     {
         // Arrange
         var context = CreateSelfTargetExecutionContext();
@@ -197,6 +197,7 @@ public class TransitionPipelineTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
 
+        executionOrder.ShouldNotContain(LifecycleOrder.CancelScheduledJobs);
         executionOrder.ShouldNotContain(LifecycleOrder.OnExit);
         executionOrder.ShouldNotContain(LifecycleOrder.OnEntry);
         executionOrder.ShouldNotContain(LifecycleOrder.Schedule);
@@ -206,6 +207,45 @@ public class TransitionPipelineTests
         executionOrder.ShouldContain(LifecycleOrder.ChangeState);
         executionOrder.ShouldContain(LifecycleOrder.Auto);
         executionOrder.ShouldContain(LifecycleOrder.Finalize);
+    }
+
+    /// <summary>
+    /// The lifecycle skip is scoped to <c>updateData</c>, not to every <c>$self</c> target. A shared
+    /// transition declaring <c>target: $self</c> is saying "do not move the instance", which is not
+    /// the same instruction as "skip the state's hooks" — its state's OnExit/OnEntry must run and its
+    /// scheduled transitions must be torn down and re-armed, exactly as before the self profile
+    /// existed.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenASharedTransitionTargetsSelf_ShouldStillRunTheFullStateLifecycle()
+    {
+        // Arrange: $self target, but NOT updateData.
+        var context = CreateSelfTargetExecutionContext(transitionKey: "share-mark");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var executionOrder = new List<int>();
+
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            var order = step.Order;
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    executionOrder.Add(order);
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                });
+        }
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        executionOrder.ShouldContain(LifecycleOrder.CancelScheduledJobs);
+        executionOrder.ShouldContain(LifecycleOrder.OnExit);
+        executionOrder.ShouldContain(LifecycleOrder.OnEntry);
+        executionOrder.ShouldContain(LifecycleOrder.Schedule);
     }
 
     [Fact]
@@ -1183,12 +1223,15 @@ public class TransitionPipelineTests
     }
 
     /// <summary>
-    /// Builds a context whose instance is already in state1 and whose transition targets $self —
-    /// the shape shared by updateData and by a shared transition fired while the parent must not
-    /// move.
+    /// Builds a context whose instance is already in state1 and whose transition targets $self.
+    /// <para>
+    /// The default key is the reserved updateData alias ON PURPOSE: the self variant is composed for
+    /// updateData alone, so a plain key here would silently resolve the base profile and any test
+    /// asserting "the lifecycle was skipped" would pass while proving nothing.
+    /// </para>
     /// </summary>
     private TransitionExecutionContext CreateSelfTargetExecutionContext(
-        string transitionKey = "update-data",
+        string transitionKey = WellKnownTransitionKeys.UpdateData,
         string? target = null)
     {
         var instanceId = Guid.NewGuid();
