@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Admission;
@@ -338,6 +339,244 @@ public class TransitionAdmissionServiceTests
         => instance.AddCorrelation(InstanceCorrelation.Create(
             Guid.NewGuid(), instance.Id, "child-flow", Guid.NewGuid(),
             SubFlowType.SubFlow.Code, "child-domain", "child-flow", "1.0.0"));
+
+    #region Subflow chain reserve
+
+    [Fact]
+    public async Task ReserveSubflowChainAsync_ShouldMarkWithPropagation_NotTheTryVariant()
+    {
+        // The relay levels are already Busy for their subflow's lifetime, so the Try- variant
+        // would short-circuit on AlreadyBusy and never reach the leaf — the one level a
+        // long-polling client actually observes.
+        SetupAcquiredLock();
+        var context = CreateContext();
+
+        var result = await CreateService().ReserveSubflowChainAsync(context);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _busyManager.Received(1).MarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ReserveSubflowChainAsync_WhenLockNotAcquired_ShouldFailAndNotMark()
+    {
+        SetupFailedLock();
+        var context = CreateContext();
+
+        var result = await CreateService().ReserveSubflowChainAsync(context);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
+        await _busyManager.DidNotReceive().MarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ReleaseSubflowChainAsync_ShouldReleaseWithPropagationUnderTheLock()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+
+        await CreateService().ReleaseSubflowChainAsync(context);
+
+        await _busyManager.Received(1).ReleaseWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ReleaseSubflowChainAsync_WhenLockNotAcquired_ShouldNoOpWithoutThrowing()
+    {
+        SetupFailedLock();
+        var context = CreateContext();
+
+        await CreateService().ReleaseSubflowChainAsync(context);
+
+        await _busyManager.DidNotReceive().ReleaseWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ReleaseSubflowChainAsync_WhenReleaseThrows_ShouldSwallow()
+    {
+        // Compensation must never mask the original failure.
+        SetupAcquiredLock();
+        var context = CreateContext();
+        _busyManager
+            .ReleaseWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("boom")));
+
+        await Should.NotThrowAsync(() => CreateService().ReleaseSubflowChainAsync(context));
+    }
+
+    #endregion
+
+    #region AcceptAsync — the accept path's single lock
+
+    [Fact]
+    public async Task AcceptAsync_WhenLockNotAcquired_ShouldFailAndNotRunTheCallback()
+    {
+        SetupFailedLock();
+        var context = CreateContext();
+        var ran = false;
+
+        var result = await CreateService().AcceptAsync(
+            context, (_, _) => { ran = true; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
+        ran.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AcceptAsync_NormalTransition_ShouldReserveAndReportReserved()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        _busyManager
+            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .Returns(BusyMarkOutcome.Marked);
+
+        var seen = AcceptFlip.None;
+        var result = await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        seen.ShouldBe(AcceptFlip.Reserved);
+    }
+
+    [Fact]
+    public async Task AcceptAsync_NormalTransitionOnBusyInstance_ShouldFailWithoutRunningTheCallback()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        context.Instance.Busy();
+        var ran = false;
+
+        var result = await CreateService().AcceptAsync(
+            context, (_, _) => { ran = true; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+        ran.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("exit")]
+    public async Task AcceptAsync_CancelAndExit_ShouldFlipBusyUnderTheSameLock(string transitionKey)
+    {
+        // Exempt from the Busy 409, but they DO set the status — so they take the same lock as
+        // everything else and do their work under it, instead of flipping later in the pipeline.
+        SetupAcquiredLock();
+        var context = CreateContext(transitionKey);
+        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>()).Returns(true);
+
+        var seen = AcceptFlip.None;
+        var result = await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        seen.ShouldBe(AcceptFlip.TakenOver);
+        await _busyManager.Received(1).MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_CancelOnAnInstanceSomeoneElseHoldsBusy_ShouldReportNoFlip()
+    {
+        // The flip was a no-op, so there is nothing this accept may release — compensating would
+        // free another owner's instance.
+        SetupAcquiredLock();
+        var context = CreateContext("cancel");
+        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>()).Returns(false);
+
+        var seen = AcceptFlip.Reserved;
+        await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        seen.ShouldBe(AcceptFlip.None);
+    }
+
+    [Fact]
+    public async Task AcceptAsync_UpdateData_ShouldNotTouchTheStatus()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext("update-parent-data");
+
+        var seen = AcceptFlip.Reserved;
+        var result = await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        seen.ShouldBe(AcceptFlip.None);
+        await _busyManager.DidNotReceive().MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_OwnerReentry_ShouldNotFlipAgain()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        context.IsPreReserved = true;
+
+        var seen = AcceptFlip.Reserved;
+        await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        seen.ShouldBe(AcceptFlip.None);
+        await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_WhenCallbackFails_ShouldCompensateTheReserve()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        _busyManager
+            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .Returns(BusyMarkOutcome.Marked);
+
+        var result = await CreateService().AcceptAsync(
+            context, (_, _) => Task.FromResult(Result.Fail(Error.Validation("x", "boom"))));
+
+        result.IsSuccess.ShouldBeFalse();
+        await _busyManager.Received(1).TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_WhenCallbackThrows_ShouldCompensateAndRethrow()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        _busyManager
+            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .Returns(BusyMarkOutcome.Marked);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => CreateService().AcceptAsync(
+            context, (_, _) => throw new InvalidOperationException("boom")));
+
+        await _busyManager.Received(1).TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_WhenCallbackFailsWithoutAFlip_ShouldNotRelease()
+    {
+        // updateData never flipped anything; releasing here would settle someone else's Busy.
+        SetupAcquiredLock();
+        var context = CreateContext("update-parent-data");
+
+        await CreateService().AcceptAsync(
+            context, (_, _) => Task.FromResult(Result.Fail(Error.Validation("x", "boom"))));
+
+        await _busyManager.DidNotReceive().TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().ReleaseWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    #endregion
 
     private static TransitionExecutionContext CreateContext(string transitionKey = "regular-transition")
     {

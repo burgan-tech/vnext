@@ -78,10 +78,10 @@ public class TransitionPipelineTests
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Auto));
         _mockSteps.Add(CreateMockStep(LifecycleOrder.Finalize));
 
-        // Default: busy marker succeeds silently
+        // Default: busy marker flips the instance
         _mockBusyMarker
             .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(true);
 
         // Default: validation succeeds
         _mockValidationService.ValidateAsync(
@@ -535,6 +535,28 @@ public class TransitionPipelineTests
             .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_BypassKindPreReserved_ShouldNotTakeOverAgain()
+    {
+        // The async accept already flipped Busy under its own status lock and the job re-enters
+        // pre-reserved; taking the lock again here would put cancel back on two locks per request.
+        var context = CreateTransitionExecutionContext("cancel");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

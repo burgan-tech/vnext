@@ -107,6 +107,7 @@ public class TransitionPipeline
         context.Profile = _profileResolver.Resolve(workflowContext, context);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
+        context.SubflowChainReserved = workflowContext.SubflowChainReserved;
 
         // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip).
         var admission = _admissionService.CheckAdmission(context);
@@ -143,9 +144,17 @@ public class TransitionPipeline
             {
                 // cancel / exit / timeout: exempt from the Busy 409, but the status flip still
                 // goes through the same short distributed lock — admission marks Busy under it.
-                var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
-                if (!takeover.IsSuccess)
-                    return Result<TransitionExecutionContext>.Fail(takeover.Error);
+                //
+                // Unless the accept already did it: an async accept flips Busy under its own
+                // status lock before answering the caller, and the job re-enters pre-reserved.
+                // Taking the lock again here would only re-acquire it to re-confirm a flag we
+                // already own, putting this path back on two locks per request.
+                if (!context.IsPreReserved)
+                {
+                    var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                    if (!takeover.IsSuccess)
+                        return Result<TransitionExecutionContext>.Fail(takeover.Error);
+                }
 
                 context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);
@@ -168,6 +177,11 @@ public class TransitionPipeline
                 // ForwardToActiveSubflowStep (order 10) relays the request to the subflow,
                 // which runs the same admission logic in its own context. It does NOT own the
                 // parent's status.
+                //
+                // Deliberately NO chain reserve here, unlike the async accept: a sync caller
+                // blocks until the relay has actually reached the leaf, so there is no window in
+                // which it could observe a stale Active. Reserving the chain here would only
+                // widen the stranded-Busy surface.
                 if (_admissionService.IsSubflowForward(context))
                     return await RunChainAsync(context, cancellationToken);
 
@@ -233,8 +247,10 @@ public class TransitionPipeline
             // they will fire and re-evaluate). Only that case is dropped: the owner is already
             // advancing, and every later updateData re-evaluates against fresher data. Parked
             // Busy is taken over instead (idempotent flip under the same short lock). An
-            // in-process sync chain leaves no job row and is invisible to this probe — the
-            // duplicate transition-record guard and per-hop policy checks stop the loser.
+            // in-process sync chain leaves no job row and is invisible to this probe, and there is
+            // NO duplicate transition-record guard downstream to catch the loser — only the
+            // per-hop policy checks do. Duplicate REQUESTS are stopped one layer up, by the
+            // accept-time active-job guard inside the admission lock.
             var reservedForHandoff = false;
             if (context.Directives.NextTransition is { } handoff
                 && !context.OwnsStatus
@@ -386,6 +402,7 @@ public class TransitionPipeline
         context.Profile = _profileResolver.Resolve(workflowContext, context);
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
+        context.SubflowChainReserved = workflowContext.SubflowChainReserved;
         context.OwnsStatus = workflowContext.OwnsStatus;
         return Result<TransitionExecutionContext>.Ok(context);
     }

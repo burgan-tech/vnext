@@ -176,6 +176,52 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             .ClassifyKey(Arg.Any<Definitions.Workflow>(), Arg.Any<string>());
     }
 
+    [Fact]
+    public async Task TransitionAsync_BusyLeafWithChainReservedClaim_FallsThroughToFullPath()
+    {
+        // Relay to the leaf: the accept already flipped this instance Busy as part of its SubFlow
+        // chain reserve, so the Busy the fast-fail sees is the relay's own. Without the exemption
+        // the forward 409s and the flow deadlocks at the leaf.
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: false);
+        _admissionService
+            .ClassifyKey(Arg.Any<Definitions.Workflow>(), "regular-transition")
+            .Returns(AdmissionKind.Normal);
+        _instanceRepository.GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString())));
+
+        var input = CreateInput();
+        input.ChainReserved = true;
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", input, CancellationToken.None);
+
+        result.Error.Code.ShouldNotBe(WorkflowErrorCodes.InstanceBusy);
+        await _instanceRepository.Received(1)
+            .GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_BusyLeafWithoutClaim_StillReturns409()
+    {
+        // The claim is the only thing that opens this door — a leaf Busy for its own reasons must
+        // still reject, or the Busy-as-mutex guarantee is gone.
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: false);
+        _admissionService
+            .ClassifyKey(Arg.Any<Definitions.Workflow>(), "regular-transition")
+            .Returns(AdmissionKind.Normal);
+
+        var input = CreateInput();
+        input.ChainReserved = false;
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+    }
+
     private void SetupSnapshot(Guid instanceId, InstanceStatus status, bool hasActiveSubFlow)
         => _instanceRepository
             .GetExecutionSnapshotAsync(instanceId.ToString(), Arg.Any<CancellationToken>())

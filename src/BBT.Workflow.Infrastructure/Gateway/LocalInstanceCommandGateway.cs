@@ -214,6 +214,32 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Same-domain relay: the input object — chain-reserve claim included — is handed to the app
+    /// service in process, so nothing crosses a wire and there is nothing for a client to forge.
+    /// </remarks>
+    public Task<Result<TransitionOutput>> ForwardTransitionAsync(
+        Guid instanceId,
+        string transitionKey,
+        TransitionInput input,
+        CancellationToken cancellationToken = default)
+        => TransitionAsync(instanceId, transitionKey, input, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<Result> ReleaseBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version ?? string.Empty,
+            async (sp, ct) =>
+            {
+                var busyManager = sp.GetRequiredService<IInstanceBusyManager>();
+                await busyManager.ReleaseWithPropagationAsync(input.InstanceId, ct);
+                return Result.Ok();
+            }, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> AcknowledgeLongPollAsync(
         AcknowledgeLongPollInput input,
         CancellationToken cancellationToken = default)

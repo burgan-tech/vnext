@@ -55,7 +55,13 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             context.Tags,
             context.DataElement,
             context.Headers.ToDictionary(),
-            context.RouteValues.ToDictionary()));
+            context.RouteValues.ToDictionary(),
+            // Claim the accept-time chain reserve, and ONLY that: without it the leaf — which the
+            // accept already flipped to Busy so a long-polling client sees work in progress —
+            // would reject this relay with a 409 for being Busy. Never claim a reserve that was
+            // not taken (sync origin, cancel/exit/timeout accepts), or the relay would barge past
+            // a leaf that is Busy for its own reasons.
+            context.SubflowChainReserved));
 
         // Set initial client response (will be updated by handler if forward succeeds)
         context.ClientResponse = new ClientResponse

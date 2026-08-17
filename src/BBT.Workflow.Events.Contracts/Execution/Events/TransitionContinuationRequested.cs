@@ -86,6 +86,12 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ITracea
     /// <summary>The chain depth of the continuation (for the chain-depth guard).</summary>
     public int ChainDepth { get; init; }
 
+    /// <summary>
+    /// True when the accept that requested this continuation reserved the instance's whole active
+    /// SubFlow chain down to the leaf, so the relay may claim that reserve when forwarding.
+    /// </summary>
+    public bool SubflowChainReserved { get; init; }
+
     public override string ToString() =>
         $"{nameof(TransitionContinuationRequested)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} TransitionKey={TransitionKey} JobName={JobName} ChainDepth={ChainDepth}";
 }

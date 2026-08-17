@@ -235,7 +235,37 @@ public class ForwardToSubflowJobHandlerTests
         capturedInput!.Sync.ShouldBeFalse();
     }
 
-    private static ForwardToSubflowJob CreateForwardToSubflowJob()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HandleAsync_ShouldCarryChainReservedClaimOntoTheForwardedInput(bool chainReserved)
+    {
+        // The claim is what stops the leaf — which the accept already flipped Busy — from
+        // rejecting this relay with a 409.
+        var job = CreateForwardToSubflowJob(chainReserved);
+        var context = CreateContext();
+
+        TransitionInput? capturedInput = null;
+        _mockForwardingService
+            .ForwardTransitionAsync(
+                job.SubflowInstanceId,
+                job.TransitionKey,
+                Arg.Do<TransitionInput>(input => capturedInput = input),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<Guid?>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = job.SubflowInstanceId,
+                Status = InstanceStatus.Active
+            }));
+
+        await _handler.HandleAsync(job, context, CancellationToken.None);
+
+        capturedInput.ShouldNotBeNull();
+        capturedInput!.ChainReserved.ShouldBe(chainReserved);
+    }
+
+    private static ForwardToSubflowJob CreateForwardToSubflowJob(bool chainReserved = false)
     {
         return new ForwardToSubflowJob(
             SubflowInstanceId: Guid.NewGuid(),
@@ -249,7 +279,8 @@ public class ForwardToSubflowJobHandlerTests
             Tags: null,
             DataElement: JsonDocument.Parse("{}").RootElement,
             Headers: new Dictionary<string, string?>(),
-            RouteValues: new Dictionary<string, string?>()
+            RouteValues: new Dictionary<string, string?>(),
+            ChainReserved: chainReserved
         );
     }
 
