@@ -1,6 +1,7 @@
 # Script Compile Race and Output-Mapping Failure Classification — Design
 
-**Date:** 2026-08-17 (revised 2026-08-18 — corrected §1c, added §5.4)
+**Date:** 2026-08-17 (revised 2026-08-18 — corrected §1c, added §5.4, closed three gaps in
+§5.2/§5.3/§5.4)
 **Status:** Approved (design)
 **Scope:** Runtime (`BBT.Workflow.Modules.Scripting`, `BBT.Workflow.Application` — scripting
 evaluator and SubFlow terminal services)
@@ -155,6 +156,14 @@ var assembly = existing ?? context.LoadFromStream(new MemoryStream(image));
 loaded in that context under that name is by construction the same compilation; reusing it is
 correct, not a workaround.
 
+That argument only holds if the name carries the whole hash. Today it is truncated to
+`cacheKey[..16]` — 64 bits — which makes reuse *probably* correct rather than correct: two distinct
+cache keys sharing a 16-character prefix would cause the second compilation to silently receive the
+first one's assembly, where today it would throw. The collision probability is negligible for any
+realistic script corpus, but the weakening is free to avoid, so **the assembly name uses the full
+cache key**: `Script_{cacheKey}`. Assembly simple names have no practical length limit, the cost is
+a longer name in stack traces, and in exchange the reuse rule becomes exact.
+
 This also repairs the sticky-failure path. Today the `matchedType == null` branch unloads only when
 `loadContext is null` (`CSharpEvaluator.cs:199-203`); with a shared context the assembly stays loaded
 while nothing is cached, so every later attempt throws for the process lifetime. The same applies if
@@ -180,6 +189,18 @@ also produce distinct assembly names, so they cannot collide even within one con
 
 `cacheScope` is added as an optional trailing parameter on `IEvaluator.CompileToInstanceAsync`, which
 keeps existing call sites source-compatible.
+
+**Invariant this depends on.** `cacheScope` is a *content* hash, so it is stable across rebuilds of
+the same helper sources. That is safe only because `ScriptHelperRegistry` never replaces a healthy
+entry: `Evict` is called solely from the `catch` around `lazy.Value` (`ScriptHelperRegistry.cs:77`),
+and `Dispose` runs only at process shutdown. A healthy `HelperSet` therefore keeps one load context
+for the process lifetime, and a cached `Type` can never outlive its context.
+
+If anyone later adds TTL expiry, hot reload, or capacity eviction to the registry, this breaks
+silently: `_typeCache` would keep serving `Type` objects from an unloaded context. Any such change
+must either invalidate the matching `_typeCache` entries or move `cacheScope` from the content hash
+to a per-context identity. This is recorded as a comment on both `HelperSet.Key` and the registry's
+`Evict`.
 
 ### 5.4 Output-mapping failure classification
 
@@ -209,6 +230,15 @@ self-healing condition is converted into a permanent business outcome.
   transient data-access failures. These are **rethrown rather than converted to a failed `Result`**,
   so `correlationUow` never commits.
 
+**Transient is an allowlist; anything unrecognised is permanent.** An exception type not on the list
+keeps today's behaviour — incident, fault, commit. The alternative (treat the unknown as transient)
+protects instances but turns a genuine mapping bug into a poison message the broker redelivers
+indefinitely, and it changes the blast radius of every future exception type by default. The
+allowlist accepts a narrower failure mode instead: a transient type nobody has classified yet still
+faults the parent, exactly as it does today, until it is added to the list. Adding an entry is a
+one-line change; the list is the intended maintenance point, and each new entry belongs in this
+document's decisions log.
+
 Rolling the transaction back also rolls back the correlation completion, so the delivery is
 redelivered against unchanged state and the retry finds a warm cache. Atomicity works in our favour
 here: there is no half-applied state to reconcile.
@@ -225,7 +255,8 @@ rethrows for redelivery instead of silently dropping the child's data.
 |---|---|
 | Concurrent callers, same cache key | One compiles; the others block and receive the same `Type`. No exception. |
 | Compilation fails (Roslyn / sandbox analyzer) | All waiting callers observe the same exception; the entry is evicted so the next caller recompiles. |
-| Assembly already present in the context under that name | Reused; no `FileLoadException`. |
+| Assembly already present in the context under that name | Reused; no `FileLoadException`. The name carries the full cache key, so the reuse is exact rather than probabilistic. |
+| Unclassified exception during output mapping | Treated as permanent (today's behaviour): incident, fault, commit. |
 | No implementing type found | Throws as today; unloads only when the context is owned. The next attempt reuses the loaded assembly rather than failing to load it again. |
 | Caller cancels during a shared compile | The compile continues for the other callers; the cancelling caller's token is observed on entry only. |
 | Output mapping fails permanently | Unchanged: incident, parent faulted, committed. |
@@ -253,8 +284,9 @@ In `test/BBT.Workflow.Application.Tests/SubFlow/`:
 
 5. **Failure classification** — a transient failure (a stubbed `FileLoadException`) propagates out of
    `CompletionAsync`, leaves the correlation open and the parent un-faulted; a permanent failure (a
-   compilation error) still faults the parent and commits. The fault-path variant asserts the same
-   split in `SubflowFaultService`.
+   compilation error) still faults the parent and commits. A third case pins the allowlist default:
+   an exception type that is on neither list faults the parent. The fault-path variant asserts the
+   same split in `SubflowFaultService`.
 
 Regression guard: the existing sandbox and helper tests must stay green. Note the known master
 baseline of pre-existing failures unrelated to scripting.
@@ -265,8 +297,8 @@ baseline of pre-existing failures unrelated to scripting.
 |---|---|
 | `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/CSharpEvaluator.cs` | `Lazy` cache, eviction, detached token, idempotent load, `cacheScope` in key |
 | `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/IEvaluator.cs` | Optional `cacheScope` parameter + docs |
-| `modules/BBT.Workflow.Modules.Scripting/.../Helpers/IScriptHelperRegistry.cs` | `HelperSet.Key` |
-| `modules/BBT.Workflow.Modules.Scripting/.../Helpers/ScriptHelperRegistry.cs` | Populate `Key` |
+| `modules/BBT.Workflow.Modules.Scripting/.../Helpers/IScriptHelperRegistry.cs` | `HelperSet.Key` + the §5.3 invariant on it |
+| `modules/BBT.Workflow.Modules.Scripting/.../Helpers/ScriptHelperRegistry.cs` | Populate `Key`; invariant comment on `Evict` |
 | `src/BBT.Workflow.Application/Scripting/ScriptEngine.cs` | Pass `helperSet.Key` as `cacheScope` |
 | `src/BBT.Workflow.Application/SubFlow/Services/SubflowOutputMappingService.cs` | Classify transient vs permanent; rethrow transient |
 | `src/BBT.Workflow.Application/SubFlow/Services/SubflowCompletionService.cs` | Comment update only — the failed-`Result` branch already means "permanent" |
@@ -300,3 +332,13 @@ baseline of pre-existing failures unrelated to scripting.
   "transient" result would require every caller to remember not to commit. Throwing makes the
   transaction roll back by default and reuses the redelivery path
   `SubflowTerminalLockNotAcquiredException` already relies on.
+- **Transient is an allowlist, not a blocklist.** Chosen so an unrecognised exception cannot become
+  an indefinitely redelivered poison message, and so no future exception type silently changes
+  behaviour. The accepted cost is that an unclassified transient type still faults the parent until
+  it is added.
+- **The assembly name carries the full cache key rather than a 16-character prefix.** §5.2's reuse
+  rule is only sound if the name identifies the compilation uniquely; truncation to 64 bits made
+  that probabilistic, and widening it costs nothing but stack-trace length.
+- **`cacheScope` is a content hash, which couples §5.3 to a registry invariant.** Safe today because
+  a healthy `HelperSet` is never evicted. Documented at both ends so a future eviction policy cannot
+  break it silently.
