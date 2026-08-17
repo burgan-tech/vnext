@@ -250,8 +250,12 @@ public sealed class SubflowCompletionService(
 
                     if (!mappingResult.IsSuccess)
                     {
-                        // Output mapping failed — fault the parent instead of resuming the pipeline.
-                        // Retrying would never succeed; faulting propagates the error to A via InstanceSubFaultedEvent.
+                        // A failed Result means PERMANENT: OutputMappingFailureClassifier rethrows
+                        // transient infrastructure faults, so they never reach this branch — they
+                        // abort the delivery before any commit and it is redelivered. Faulting here
+                        // is therefore correct: a mapping that cannot succeed as written would only
+                        // replay the same failure, and the fault propagates to the grandparent via
+                        // InstanceSubFaultedEvent.
                         var incident = InstanceIncidentFactory.Create(
                             state: parentInstance.GetCurrentState,
                             transition: string.Empty,

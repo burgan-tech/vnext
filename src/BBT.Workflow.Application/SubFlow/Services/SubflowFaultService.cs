@@ -246,9 +246,12 @@ public sealed class SubflowFaultService(
                         input.InstanceData,
                         cancellationToken);
 
-                    // Output mapping failure is non-blocking here: the instance is already
-                    // marked Faulted/transitioned above. Just log and proceed so the fault
-                    // is committed and propagated upward via InstanceSubFaultedEvent.
+                    // A failed Result means PERMANENT here too — transient faults are rethrown by
+                    // OutputMappingFailureClassifier and abort this delivery before the commit
+                    // below, reaching the outer handler which rethrows for redelivery.
+                    // Permanent failure is non-blocking here: the instance is already marked
+                    // Faulted/transitioned above, so re-faulting would be wrong. Log and proceed so
+                    // the fault is committed and propagated upward via InstanceSubFaultedEvent.
                     if (!mappingResult.IsSuccess)
                     {
                         logger.SubFlowOutputMappingFailed(
