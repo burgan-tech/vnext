@@ -60,6 +60,7 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
             IsReentry = true,
             EnqueueContinuations = currentContext.EnqueueContinuations,
             IsPreReserved = currentContext.IsPreReserved,
+            SubflowChainReserved = currentContext.SubflowChainReserved,
             OwnsStatus = currentContext.OwnsStatus,
             Termination = currentContext.Termination,
             IsErrorBoundaryTransition = string.Equals(nextTransition.Reason, TransitionRequestReasons.ErrorBoundary, StringComparison.OrdinalIgnoreCase)

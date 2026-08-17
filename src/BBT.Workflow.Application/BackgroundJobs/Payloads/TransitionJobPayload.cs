@@ -101,4 +101,20 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     /// </summary>
     public string? TraceState { get; set; }
 
+    /// <summary>
+    /// Business correlation id of the originating execution chain. Restored into the rebuilt
+    /// <c>TransitionInput</c> by the job handler so the async hop keeps the SAME correlation.id
+    /// instead of minting a new one per job.
+    /// </summary>
+    public string? CorrelationId { get; set; }
+
+    /// <summary>
+    /// True when the accept that created this job reserved the instance's whole active SubFlow
+    /// chain down to the leaf (see <c>AsyncTransitionStrategy</c>). The relay step reads it to
+    /// stamp the claim onto the forward, so the leaf admits the request as an owner re-entry
+    /// instead of rejecting the Busy it was pre-set to. False for every other accept — a forward
+    /// must never claim a reserve that was not taken, or it would barge past a leaf that is Busy
+    /// for its own reasons.
+    /// </summary>
+    public bool SubflowChainReserved { get; set; }
 }

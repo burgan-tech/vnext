@@ -27,6 +27,7 @@ using BBT.Workflow.Extentions;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Definitions.Timer;
+using Dapr.Jobs.Models;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.AspNetCore.Http;
@@ -103,7 +104,13 @@ public sealed class InstanceCommandAppService(
                         data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
                     return Result<StartInstanceOutput>.Ok(output);
                 }))
-            .OnSuccess(output => AddWorkflowHeader(output, input));
+            .OnSuccess(output =>
+            {
+                // Emitted while the start HTTP request is live: the log-record enrichers attach
+                // the request id, closing the X-Request-Id ↔ instance-id join for the client.
+                logger.InstanceStarted(output.Id, output.Key, input.Domain, input.Workflow, workflow.Version);
+                AddWorkflowHeader(output, input);
+            });
     }
 
     /// <summary>
@@ -458,20 +465,17 @@ public sealed class InstanceCommandAppService(
             var resolvedSchedule = await ResolveTimeoutScheduleAsync(
                 effectiveTimeout, workflow, instance, cancellationToken);
 
-            var schedule = resolvedSchedule.ToDaprJobSchedule().ExpressionValue;
-
-            var timeoutAt = resolvedSchedule.ScheduleType == TimerScheduleType.DateTime
-                ? resolvedSchedule.ScheduledDateTime!.Value
-                : resolvedSchedule.Duration.HasValue
-                    ? DateTime.UtcNow.Add(resolvedSchedule.Duration.Value)
-                    : DateTime.UtcNow;
+            // One instant feeds the scheduler arming, the timeoutAt metadata and the persisted
+            // ExecuteAt — separate clock reads would make the three disagree for Duration schedules.
+            var timeoutAt = resolvedSchedule.ResolveExecuteAt(DateTimeOffset.UtcNow);
+            var schedule = DaprJobSchedule.FromDateTime(timeoutAt).ExpressionValue;
 
             var metadata = new Dictionary<string, object>
             {
                 ["domain"] = workflow.Domain,
                 ["flowName"] = workflow.Key,
                 ["instanceId"] = instance.Id.ToString(),
-                ["timeoutAt"] = timeoutAt.ToString("O")
+                ["timeoutAt"] = timeoutAt.UtcDateTime.ToString("O")
             };
 
             // Enqueue the timeout job
@@ -491,12 +495,13 @@ public sealed class InstanceCommandAppService(
                     jobId,
                     workflow.Domain,
                     workflow.Key,
-                    instance.Id
+                    instance.Id,
+                    timeoutAt
                 ),
                 true,
                 cancellationToken);
 
-            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutAt);
+            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutAt.UtcDateTime);
         }
         catch (Exception ex)
         {
@@ -584,7 +589,11 @@ public sealed class InstanceCommandAppService(
 
             workflowDefinition = snapshotWorkflow.Value!;
 
+            // input.ChainReserved exempts the relay: the accept that admitted the request already
+            // reserved this instance's Busy flag as part of its SubFlow chain reserve, so the Busy
+            // it finds here is its own. Server-internal — see TransitionInput.ChainReserved.
             if (snapshot is { IsBusy: true, HasActiveSubFlow: false }
+                && !input.ChainReserved
                 && transitionAdmissionService.ClassifyKey(workflowDefinition, transitionKey)
                     == AdmissionKind.Normal)
             {
@@ -701,7 +710,14 @@ public sealed class InstanceCommandAppService(
                 Stage = input.Data?.Stage,
                 Tags = input.Data?.Tags,
             },
-            IsReentry = false
+            IsReentry = false,
+
+            // A relayed subflow transition whose chain the accept already reserved re-enters as
+            // the owner: admission classifies it OwnerReentry, so it neither 409s on the Busy the
+            // accept pre-set nor reserves a second time — and it still settles the status at the
+            // end, because OwnerReentry sets OwnsStatus.
+            IsPreReserved = input.ChainReserved,
+            SubflowChainReserved = input.ChainReserved
         };
     }
 

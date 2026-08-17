@@ -5,6 +5,8 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Workers.Inbox.Forwarding;
+using BBT.Aether.Tracing;
+using BBT.Workflow.Workers.Inbox.Tracing;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -14,6 +16,7 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 internal sealed class InstanceSubCanceledEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOrchestrationForwarder forwarder,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<InstanceSubCanceledEventHandler> logger) : IEventHandler<InstanceSubCanceledEvent>
 {
     public async Task HandleAsync(
@@ -29,6 +32,8 @@ internal sealed class InstanceSubCanceledEventHandler(
                 runtimeInfoProvider.Domain);
             return;
         }
+
+        using var traceScope = EventTraceScope.Start("InstanceSubCanceled.Handle", eventData, correlationIdProvider);
 
         var scopeProps = new Dictionary<string, object>
         {

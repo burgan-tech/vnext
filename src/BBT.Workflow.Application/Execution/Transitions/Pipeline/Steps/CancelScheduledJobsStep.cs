@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -21,13 +19,10 @@ public sealed class CancelScheduledJobsStep(
     public int Order => LifecycleOrder.CancelScheduledJobs;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(CancelScheduledJobsStep)}");
-
         // Only cancel if current state has scheduled transitions
         if (context.Current == null || !HasScheduledTransitions(context.Current))
         {

@@ -41,6 +41,26 @@ public enum AdmissionKind
 }
 
 /// <summary>
+/// What an accept did to the instance status under the admission lock. Tells the accept path
+/// whether the chain reserve was taken here (so the relay may claim it) and what to compensate
+/// when the work that follows the flip fails.
+/// </summary>
+public enum AcceptFlip
+{
+    /// <summary>No status flip: updateData, an owner re-entry, or an internal resume.</summary>
+    None = 0,
+
+    /// <summary>Active→Busy reserve; this accept owns the Busy flag.</summary>
+    Reserved = 1,
+
+    /// <summary>Unconditional Busy flip for cancel/exit/timeout, and it actually changed the status.</summary>
+    TakenOver = 2,
+
+    /// <summary>The whole active SubFlow chain was marked Busy down to the leaf.</summary>
+    ChainReserved = 3
+}
+
+/// <summary>
 /// Admission gate for the Busy-as-mutex execution model: classifies transition requests,
 /// rejects Busy instances up front, and performs the short-lock status check-and-set that
 /// replaces a chain-spanning distributed lock. Only the first request-handling hop is gated;
@@ -100,4 +120,52 @@ public interface ITransitionAdmissionService
     /// recovery remains the safety net.
     /// </summary>
     Task ReleaseReservationAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reserves the whole active SubFlow chain for a request that <see cref="IsSubflowForward"/>
+    /// classifies as a relay: under the short status lock, marks this instance Busy and propagates
+    /// down every active SubFlow correlation to the leaf.
+    /// <para>
+    /// The relay levels are already Busy for their subflow's lifetime by design, so in practice
+    /// this flips only the leaf — and the leaf is the instance a long-polling client actually
+    /// observes, because the state function reports the deepest active subflow's status. Without
+    /// it an accepted async request answers the caller while the leaf still reads Active, and the
+    /// client concludes nothing is in progress.
+    /// </para>
+    /// <para>
+    /// Only the first hop runs under this context's status lock; each nested level flips under its
+    /// own lock, the same guarantee the existing Busy propagation provides.
+    /// </para>
+    /// </summary>
+    Task<Result> ReserveSubflowChainAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compensates a successful <see cref="ReserveSubflowChainAsync"/> whose follow-up work never
+    /// ran. Releases only what the chain reserve actually flipped — levels holding an open SubFlow
+    /// correlation are recursed past, not settled. Never throws.
+    /// </summary>
+    Task ReleaseSubflowChainAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admits an asynchronous accept under a SINGLE status lock: acquires
+    /// <see cref="TransitionExecutionContext.LockKey"/> once, performs the status flip the
+    /// request's <see cref="AdmissionKind"/> calls for, then runs <paramref name="underLock"/>
+    /// (the duplicate-job guard and the durable enqueue) while still holding it. A failure or
+    /// throw from <paramref name="underLock"/> compensates the flip before the lock is released.
+    /// <para>
+    /// This is the accept path's only distributed lock. It exists because the duplicate-active-job
+    /// check-and-insert has no database constraint behind it, so it has to be serialized with the
+    /// same critical section as the status flip rather than with a second lock of its own.
+    /// </para>
+    /// <para>
+    /// The callbacks run with the lock HELD: never call <see cref="ReserveAsync"/>,
+    /// <see cref="TakeOverAsync"/>, <see cref="ReserveSubflowChainAsync"/> or either Release method
+    /// from inside <paramref name="underLock"/> — they acquire the same key and the status lock is
+    /// a single-attempt, non-reentrant TryAcquire, so the nested call would fail to acquire.
+    /// </para>
+    /// </summary>
+    Task<Result> AcceptAsync(
+        TransitionExecutionContext context,
+        Func<AcceptFlip, CancellationToken, Task<Result>> underLock,
+        CancellationToken cancellationToken = default);
 }

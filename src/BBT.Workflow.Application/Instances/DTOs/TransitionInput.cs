@@ -42,6 +42,28 @@ public sealed class TransitionInput(
     public string[]? Extensions { get; set; }
 
     /// <summary>
+    /// Business correlation id carried over from the originating execution (e.g. restored from a
+    /// background-job payload) so an async hop continues the SAME correlation instead of minting
+    /// a new one. Null on fresh client requests — a new id is minted in ToExecutionContext.
+    /// </summary>
+    public string? CorrelationId { get; set; }
+
+    /// <summary>
+    /// Claim proving an ancestor already reserved this instance's Busy flag as part of an
+    /// accept-time subflow-chain reserve, so the admission layer must treat the request as an
+    /// owner re-entry instead of rejecting the Busy instance with a 409.
+    /// <para>
+    /// SERVER-ONLY. Never bound from a client request: the public transition endpoint constructs
+    /// <see cref="TransitionInput"/> itself and binds the request body to
+    /// <see cref="TransitionDataInput"/> only, and this flag is deliberately NOT carried on any
+    /// header (headers are copied from the caller unfiltered, so a header-borne claim would be
+    /// forgeable and would defeat the Busy-as-mutex guarantee). Cross-domain forwards carry it in
+    /// the body of the internal-only subflow-forward endpoint instead.
+    /// </para>
+    /// </summary>
+    public bool ChainReserved { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>
@@ -60,7 +82,7 @@ public sealed class TransitionInput(
             TriggerType = TriggerType.Manual, // TransitionInput always represents manual triggers
             Mode = Sync ? ExecMode.Sync : ExecMode.Async,
             CallerMode = Sync ? ExecMode.Sync : ExecMode.Async,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            CorrelationId = CorrelationId ?? Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = Headers,
             RouteValues = RouteValues,
@@ -70,7 +92,8 @@ public sealed class TransitionInput(
                 Tags = Data?.Tags,
                 Stage = Data?.Stage,
             },
-            IsReentry = false // Manual transitions are never re-entry
+            IsReentry = false, // Manual transitions are never re-entry
+            IsPreReserved = ChainReserved
         };
     }
 }

@@ -66,6 +66,9 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   `CorrelationCount`, terminating (or a revert) moves `CompletedCorrelationCount`, a
   revert-then-recomplete that restores both counts moves `LastCorrelationCompletedAt`, and a sub
   item advancing its own state moves `LastSubFlowStateChangedAt`.
+- **Scheduled-job rows are deliberately not projected** (team decision, issue #864). The body's
+  `kind: "scheduled"` transition entries are therefore *not* covered by cache validation — see the known-gap
+  note under the ETag section below.
 
 > **Invariant — the two build paths must agree.** The fast path fingerprints via this projection;
 > the full-build path uses `InstanceStateFingerprint.FromInstance(instance, allCorrelations)`.
@@ -89,12 +92,13 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v5`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v6`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
   the `catalog` function; v5 began narrowing `availableTransitions` by per-state `availableIn` role
-  grants, which can *remove* an entry a caller previously saw), every previously issued ETag must be
+  grants, which can *remove* an entry a caller previously saw; v6 started listing scheduled
+  transitions inside `transitions` as `kind: "scheduled"` entries with `executeAtUtc`), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -116,6 +120,16 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   a sub item starting, terminating or advancing its state changes the body without touching the
   instance's own state or status, and a long-polling client would otherwise keep getting 304 and
   never observe it.
+- **Scheduled-job changes are deliberately NOT in the hash** (team decision, issue #864). The
+  body's `kind: "scheduled"` transition entries are built from the active scheduled-transition job rows, but
+  the job set has no fingerprint member, so a job-set change with no state/status delta does not
+  invalidate the ETag. **Known gaps, accepted**: a same-state re-arm (`updateData`/`$self` — the
+  reserved path never commits an observable Busy flip), an inline A→B→A chain (one transaction,
+  the intermediate state never commits), and a fired job rejected under a lock conflict (row
+  deactivated, instance untouched) can each leave a parked client on a `304` with a stale
+  `executeAtUtc` until the next fingerprint-visible change. The accepted mitigation is the
+  transient Busy flip on the non-reserved paths plus natural state changes; conditional-GET usage
+  is currently low and the team wants to observe the gap frequency before revisiting.
 - The ETag intentionally does **not** track instance-data-only changes: the state function
   signals state/status transitions, not data versions. `X-Entity-ETag` served from cache may
   lag data-only updates until the next state/status change (accepted by design — the data

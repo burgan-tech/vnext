@@ -78,6 +78,15 @@ public sealed class WorkflowExecutionContext
     public bool IsPreReserved { get; set; }
 
     /// <summary>
+    /// Gets or sets whether the accept that produced this execution reserved the instance's whole
+    /// active SubFlow chain down to the leaf. Read by <c>ForwardToActiveSubflowStep</c> to stamp
+    /// the claim onto the forward so the leaf admits it as an owner re-entry rather than 409-ing
+    /// on the Busy the accept pre-set. Distinct from <see cref="IsPreReserved"/>, which every job
+    /// re-entry sets: only a genuine chain reserve may be claimed.
+    /// </summary>
+    public bool SubflowChainReserved { get; set; }
+
+    /// <summary>
     /// Gets or sets whether this execution owns the instance's Busy lifecycle. Set by the
     /// pipeline admission (reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
     /// updateData ⇒ opportunistic). Only status owners may resolve/settle the instance status —

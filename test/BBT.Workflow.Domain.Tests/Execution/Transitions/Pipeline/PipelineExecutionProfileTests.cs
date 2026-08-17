@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using BBT.Workflow;
 using BBT.Workflow.Execution.Pipeline;
@@ -120,4 +121,76 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         profile.AllowAutoChain.ShouldBeTrue();
         profile.AllowSubFlow.ShouldBeFalse();
     }
+
+    [Fact]
+    public void ForSelfTarget_OnManual_ShouldExcludeOnlyTheStateLifecycleOrders()
+    {
+        var profile = PipelineExecutionProfile.ForSelfTarget(PipelineExecutionProfile.ForManual());
+
+        var expected = new[]
+        {
+            LifecycleOrder.CancelScheduledJobs,
+            LifecycleOrder.OnExit,
+            LifecycleOrder.OnEntry,
+            LifecycleOrder.Schedule,
+        };
+        profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected.OrderBy(x => x).ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(AllBaseProfiles))]
+    public void ForSelfTarget_ShouldPreserveBaseExclusionsAndFlags(PipelineExecutionProfile baseProfile)
+    {
+        var profile = PipelineExecutionProfile.ForSelfTarget(baseProfile);
+
+        foreach (var order in baseProfile.ExcludedStepOrders)
+            profile.ExcludedStepOrders.ShouldContain(order);
+
+        profile.Name.ShouldBe($"{baseProfile.Name}+Self");
+        profile.AllowAutoChain.ShouldBe(baseProfile.AllowAutoChain);
+        profile.AllowSubFlow.ShouldBe(baseProfile.AllowSubFlow);
+    }
+
+    /// <summary>
+    /// ChangeState is the only step that sets <c>context.Target</c>, which the auto step needs;
+    /// OnExecute is the transition's own work. Excluding either would silently stop a $self
+    /// transition from doing anything useful.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(AllBaseProfiles))]
+    public void ForSelfTarget_ShouldNeverExcludeChangeStateOnExecuteOrAuto(PipelineExecutionProfile baseProfile)
+    {
+        var profile = PipelineExecutionProfile.ForSelfTarget(baseProfile);
+
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.ChangeState);
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.OnExecute);
+        profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.CreateTransition);
+
+        // The error-boundary profile excludes Auto by design; every other base must keep it.
+        if (!baseProfile.ExcludedStepOrders.Contains(LifecycleOrder.Auto))
+            profile.ExcludedStepOrders.ShouldNotContain(LifecycleOrder.Auto);
+    }
+
+    [Theory]
+    [MemberData(nameof(AllBaseProfiles))]
+    public void ForSelfTarget_ShouldReturnTheCachedVariant_ForKnownBaseProfiles(PipelineExecutionProfile baseProfile)
+    {
+        PipelineExecutionProfile.ForSelfTarget(baseProfile)
+            .ShouldBeSameAs(PipelineExecutionProfile.ForSelfTarget(baseProfile));
+    }
+
+    [Fact]
+    public void ForSelfTarget_WhenBaseProfileNull_ShouldThrowArgumentNullException()
+    {
+        Should.Throw<ArgumentNullException>(() => PipelineExecutionProfile.ForSelfTarget(null!));
+    }
+
+    public static TheoryData<PipelineExecutionProfile> AllBaseProfiles() =>
+    [
+        PipelineExecutionProfile.ForManual(),
+        PipelineExecutionProfile.ForAutoChain(),
+        PipelineExecutionProfile.ForScheduled(),
+        PipelineExecutionProfile.ForEvent(),
+        PipelineExecutionProfile.ForErrorBoundary(),
+    ];
 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using BBT.Aether.Tracing;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Dapr.Client;
@@ -29,11 +30,14 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
     private readonly string _orchestrationAppId;
     private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<DaprOrchestrationForwarder> _logger;
+    private readonly ICorrelationIdProvider? _correlationIdProvider;
 
     public DaprOrchestrationForwarder(
         IConfiguration configuration,
-        ILogger<DaprOrchestrationForwarder> logger)
+        ILogger<DaprOrchestrationForwarder> logger,
+        ICorrelationIdProvider? correlationIdProvider = null)
     {
+        _correlationIdProvider = correlationIdProvider;
         _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
         _invocationTimeoutSeconds = int.TryParse(
             configuration["OrchestrationApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
@@ -68,6 +72,12 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
         if (!string.IsNullOrEmpty(rootIdBaggage))
             request.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RootInstanceId, rootIdBaggage);
+
+        // Forward the originating request id (scoped by EventTraceScope in the handler) so the
+        // orchestration side keeps log correlation with the client request that started the flow.
+        var correlationId = _correlationIdProvider?.Get();
+        if (!string.IsNullOrEmpty(correlationId))
+            request.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, correlationId);
 
         HttpResponseMessage response;
         try

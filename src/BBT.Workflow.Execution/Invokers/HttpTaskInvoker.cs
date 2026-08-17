@@ -76,10 +76,15 @@ public sealed class HttpTaskInvoker(
                             continue;
                         }
 
+                        if (InvokerHelpers.IsReservedTraceHeader(header.Key))
+                            continue;
+
                         request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }
                 }
             }
+
+            InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
             // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
             if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))

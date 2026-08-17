@@ -1,3 +1,6 @@
+using System;
+using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -61,6 +64,66 @@ public sealed class HttpTaskInvokerContentTypeTests
         handler.CapturedContentType.ShouldBe("application/x-www-form-urlencoded");
     }
 
+    [Fact]
+    public async Task InvokeAsync_WithWorkflowBaggage_OverridesWorkflowContextButKeepsMappingIdentityClaims()
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+        var instanceId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+
+        using var activity = new Activity("http-task-test").Start();
+        activity.SetBaggage("workflow.instance.id", instanceId.ToString("D"));
+        activity.SetBaggage("correlation.id", correlationId.ToString("N"));
+        activity.SetBaggage("sub", "12345678901");
+        activity.SetBaggage("act.sub", "U0B006");
+
+        await invoker.InvokeAsync(CreateDescriptor(
+            body: "{}",
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"binding.value","act_sub":"binding.value"}"""));
+
+        // Workflow context is authoritative: binding values are replaced from baggage.
+        handler.GetRequestHeader("X-Workflow-Instance-Id")
+            .ShouldBe(instanceId.ToString("D").ToLowerInvariant());
+        handler.GetRequestHeader("X-Correlation-Id")
+            .ShouldBe(correlationId.ToString("N"));
+        // Identity claims are fill-if-absent: developer-set binding values win over the token.
+        handler.GetRequestHeader("sub").ShouldBe("binding.value");
+        handler.GetRequestHeader("act_sub").ShouldBe("binding.value");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutBindingIdentityClaims_FillsThemFromBaggage()
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+
+        using var activity = new Activity("http-task-test").Start();
+        activity.SetBaggage("sub", "12345678901");
+        activity.SetBaggage("act.sub", "U0B006");
+
+        await invoker.InvokeAsync(CreateDescriptor(body: "{}"));
+
+        handler.GetRequestHeader("sub").ShouldBe("12345678901");
+        handler.GetRequestHeader("act_sub").ShouldBe("U0B006");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutValidWorkflowBaggage_RemovesWorkflowContextButKeepsIdentityClaims()
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+
+        await invoker.InvokeAsync(CreateDescriptor(
+            body: "{}",
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"binding.value","act_sub":"binding.value"}"""));
+
+        handler.RequestHeaderContains("X-Workflow-Instance-Id").ShouldBeFalse();
+        handler.RequestHeaderContains("X-Correlation-Id").ShouldBeFalse();
+        handler.GetRequestHeader("sub").ShouldBe("binding.value");
+        handler.GetRequestHeader("act_sub").ShouldBe("binding.value");
+    }
+
     private static HttpTaskInvoker CreateInvoker(CapturingHttpMessageHandler handler) =>
         new(new FakeHttpClientFactory(handler), NullLogger<HttpTaskInvoker>.Instance);
 
@@ -97,6 +160,11 @@ public sealed class HttpTaskInvokerContentTypeTests
         // NonValidated allows querying any header name (including content-header names) without throwing.
         public bool RequestHeaderContains(string name) =>
             _requestHeaders?.NonValidated.Contains(name) ?? false;
+
+        public string? GetRequestHeader(string name) =>
+            _requestHeaders?.NonValidated.TryGetValues(name, out var values) == true
+                ? values.ToString()
+                : null;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,

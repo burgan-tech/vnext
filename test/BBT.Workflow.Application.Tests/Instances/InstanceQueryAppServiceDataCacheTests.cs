@@ -113,6 +113,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             instanceRepository: _instanceRepository,
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
+            instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

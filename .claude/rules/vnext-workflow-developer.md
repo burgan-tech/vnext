@@ -46,7 +46,51 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 | Event | Event (3) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
 | ErrorBoundary | Error boundary | Preflight, UpdateDataCheck, ForwardSubflow, ResourceLock, Auto, Schedule; `AllowAutoChain=false`, `AllowSubFlow=false` |
 
-Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryTransition` → ErrorBoundary; else by `TriggerType`.
+Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
+`IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
+the transition definition's — the two can disagree and the inbound trigger is authoritative).
+
+### Self-target composition — `updateData` ONLY
+
+A sixth profile is **composed on top of** the base, never selected instead of it. When
+`TransitionExecutionContext.SkipsStateLifecycle()` is true,
+`PipelineExecutionProfile.ForSelfTarget(base)` adds `CancelScheduledJobs (39)`, `OnExit (40)`,
+`OnEntry (60)`, `Schedule (80)` to the base's exclusions (`Manual+Self`, …).
+
+- **`SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()`.** Two separate
+  claims, deliberately: the first is a fact about the target, the second is the policy. Only
+  `updateData` skips the lifecycle.
+- **Every OTHER `$self` transition runs the FULL lifecycle** — a `$self` **shared transition** above
+  all. Its state's OnExit/OnEntry fire and its scheduled transitions are cancelled and re-armed.
+  `target: $self` means "do not move the instance", *not* "skip the state's hooks". Consequence worth
+  knowing: a frequently invoked `$self` shared transition on a short-timeout state defers that
+  timeout every call.
+- **The `+Self` profile name is about the target, not the policy.** Reading `Manual+Self` as "every
+  `$self` transition gets this" is the wrong conclusion and has cost real work twice — the selection
+  lives in `PipelineProfileResolver`. `ForSelfTarget` is the mechanism; the resolver owns who gets it.
+
+- **Only `$self` counts — never a literal target that happens to equal the current state.** That
+  comparison is a coincidence produced by three unrelated mechanisms and means "no state change" in
+  only one of them: **start** pre-positions the instance into the initial state at creation
+  (`InstanceCommandAppService`, `instance.ChangeState(initialState)`) before dispatching the start
+  transition; a **retry** after `ChangeStateStep` already committed re-runs the transition to redo
+  the step that faulted; and a genuine **self-loop** (`from: A, target: A`). Reading it as self
+  killed the initial state's OnEntry entirely and turned retry into a no-op. Guarding the incidental
+  cases one at a time was tried and is unsound — do not reintroduce the comparison.
+
+- **`updateData` leaves and enters no state, so the state's lifecycle must not fire.** OnEntry would
+  re-run hooks for a state the instance never re-entered; Schedule would re-arm its timers from zero.
+- **`ChangeState (50)` still runs and must keep running** — it is the only step that sets
+  `context.Target`, which `RunAutomaticTransitionsStep (90)` reads. Excluding it makes the auto step
+  return at its first guard and the transition advances nothing.
+- **`OnExecute (30)` still runs** — the transition's own work, not the state's lifecycle.
+- `ChangeStateStep` suppresses its state-change metric/log/span event on this path **only** (it is
+  scoped to `SkipsStateLifecycle`, so a `$self` shared transition — which really does re-enter the
+  state — still reports its state change). `Instance.ChangeState` separately suppresses
+  `sub:state-changed` whenever previous == new, keyed on the states themselves rather than on
+  the transition.
+- A parent with an open SubFlow correlation short-circuits earlier, at
+  `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
 
 ## Instance Repository Include Strategy
 
@@ -64,6 +108,7 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
 - **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc }` entries (no href — not caller-triggerable), appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
 
@@ -166,6 +211,32 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 - `sync=true`: blocks until pipeline completes; full instance returned.
 - `sync=false` (default): immediate `{ id, status }`; client polls via State function.
 
+## Locking — one lock, at the status change
+
+- **The Busy flag is the mutex.** A distributed lock is taken *only* for the status check-and-set,
+  for the milliseconds it takes. The pipeline body and its auto-chain run with no lease held.
+- **Exactly one lock per request-handling hop, on `ctx.LockKey`** (`vnext:{domain}:{flow}:{id}`):
+  - sync → `TransitionPipeline` admission (`ReserveAsync` / `TakeOverAsync`);
+  - async accept → `ITransitionAdmissionService.AcceptAsync`, which acquires the lock once,
+    performs the kind's flip and runs the duplicate-job guard + durable enqueue under it.
+- Ordering on both paths: **fast-fail Busy check → validation → lock → flip → work → release.**
+  Never hold a lock across context creation or schema/policy validation.
+- The accept's `{LockKey}:enqueue` lock and `IReservedTransitionResolver`'s per-kind lock keys are
+  **gone**. They came from the old whole-chain lock model; with a millisecond-scale status lock a
+  reserved transition no longer needs its own key to get past a Busy main flow.
+- **`AcceptAsync`'s callback runs with the lock HELD** — never call `ReserveAsync`/`TakeOverAsync`/
+  `ReserveSubflowChainAsync`/`Release*` from inside it. `InstanceStatusLock` is a single-attempt,
+  non-reentrant `TryAcquire`; the nested call would simply fail to acquire.
+- The duplicate-active-job guard shares that critical section because its check-then-insert has
+  **no DB constraint** behind it. A partial unique index cannot replace it: a `$self` auto loop and
+  a re-armed scheduled transition both legitimately hold two active rows for the same
+  `(InstanceId, JobType, SourceState, TransitionKey)` tuple.
+- **cancel/exit/timeout flip Busy at the accept**, not in the pipeline. They stay exempt from the
+  Busy 409, but they do change the status, so they take the same lock as everything else. The job
+  re-enters `IsPreReserved` and `TransitionPipeline` skips the second `TakeOverAsync`.
+- There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
+  only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
+
 ## Status / State / Type Semantics
 
 **Instance Status**: `Busy (B)`, `Active (A)`, `Passive (P)`, `Completed (C)`, `Faulted (F)`.
@@ -191,6 +262,36 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 - **SubProcess (P)**: completion → correlation complete + persist → no parent resume (fire-and-forget).
 - On resume failure, correlation reverted in a new UoW.
 - Start: `CreateInstanceInput` with parent metadata in `ExtraProperties`, `StrictIdempotency: true`.
+
+### Accept-time chain reserve (async transitions on a parent with an active SubFlow)
+
+- **The client only ever observes the leaf.** The state function walks the active-correlation chain
+  and reports the **deepest** active subflow's status (`InstanceQueryAppService`,
+  `Status = subFlowStateInfo.Status`). A parent holding an open SubFlow correlation is `Busy` for that
+  subflow's entire lifetime by design (`Instance.AddCorrelation` → `Busy()`; `CompleteCorrelation`
+  deliberately does not clear it), so an ancestor's Busy carries **no** information about in-flight work.
+- Therefore `AsyncTransitionStrategy` calls `ITransitionAdmissionService.ReserveSubflowChainAsync`
+  on the `IsSubflowForward` branch — marking the chain down to the leaf **before** the 202 commits.
+  Without it the accept answers while the leaf still reads `Active`, and a client long polling on the
+  parent concludes nothing is in progress and stalls the flow.
+- It uses `MarkBusyWithPropagationAsync`, **not** the `Try…` variant: the latter short-circuits on
+  `AlreadyBusy` (its 409 contract, pinned by tests) and would never reach the leaf. Do not "unify" them.
+- **The relay must then claim that reserve**, or the leaf rejects it with `Instance:100031` for being
+  Busy — the Busy the accept just set. The claim is `TransitionInput.ChainReserved` →
+  `WorkflowExecutionContext.IsPreReserved` → `AdmissionKind.OwnerReentry`, threaded
+  accept → `TransitionJobPayload.SubflowChainReserved` → `ForwardToActiveSubflowStep` →
+  `ForwardToSubflowJob.ChainReserved` → `ForwardToSubflowJobHandler`.
+- **Never claim a reserve that was not taken.** The flag is narrower than `IsPreReserved` (which every
+  job re-entry sets) precisely so a sync-origin or cancel/exit/timeout relay cannot barge past a leaf
+  that is Busy for its own reasons.
+- Cross-domain hops go through the internal-only `POST .../internal/subflow-forward`, whose body
+  carries the claim. Not the public transition endpoint: it copies caller headers unfiltered, so a
+  claim routed through it would be forgeable.
+- **The sync path deliberately does not chain-reserve** (`TransitionPipeline`, `IsSubflowForward`
+  branch): a blocking caller cannot observe a stale `Active`, so it would only widen stranded-Busy.
+- Compensation: `ReleaseSubflowChainAsync` → `ReleaseWithPropagationAsync` (and internal
+  `PUT .../internal/busy-release` cross-domain) releases **only what the reserve flipped** — levels
+  with an open SubFlow correlation are recursed past, not settled, so effectively just the leaf.
 
 ### SubFlow Completion Window
 If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.

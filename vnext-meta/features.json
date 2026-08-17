@@ -32,6 +32,15 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state"
       ]
     },
+    "stateScheduledTransitions": {
+      "since": "0.0.80",
+      "status": "stable",
+      "description": "The State (long-poll) function exposes the transitions the runtime has armed to fire automatically inside the existing transitions array, as kind:'scheduled' entries of { name, kind, executeAtUtc } appended after the caller-triggerable entries and ordered by execution time ascending. Clients discriminate on kind: scheduled entries carry executeAtUtc and no href/view/schema (they cannot be triggered by callers); every other kind carries an href and never an executeAtUtc. Entries are built from the persisted job state: active InstanceJob rows of type ScheduledTransition whose ExecuteAt was captured at scheduling time from the same instant the Dapr scheduler was armed with, never a timer-script re-evaluation. executeAtUtc is an ISO 8601 UTC instant with the Z designator. Scheduled entries are not role-filtered and always describe the polled instance itself, without merging an active subflow's schedule. Scheduled-job set changes deliberately do NOT participate in the state fingerprint ETag (team decision): a same-state re-arm, an inline chain returning to the same state, or a fired job rejected under a lock conflict can leave the entries stale behind a 304 until the next state/status change - documented as a known, accepted gap. Rows persisted by runtimes before the ExecuteAt column existed are omitted until they age out. The workflow-level timeout job also records its ExecuteAt but is not listed yet.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state"
+      ],
+      "schemaPath": "transitions[kind=scheduled]"
+    },
     "stateNotification": {
       "since": "0.0.63",
       "status": "stable",
@@ -109,6 +118,15 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorize",
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorization-matrix",
+        "POST {domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}"
+      ]
+    },
+    "selfTargetPipelineProfile": {
+      "since": "0.0.80",
+      "status": "stable",
+      "description": "An updateData transition runs under a self-target pipeline profile composed on top of the trigger's profile (Manual+Self, AutoChain+Self, ...). Because updateData writes data without moving the instance - its target is fixed to the reserved $self key by the validator - the state's lifecycle steps are skipped: CancelScheduledJobs (39), OnExit (40), OnEntry (60) and Schedule (80). ChangeState (50) still runs, since it is the only step that sets the target the auto step reads, and OnExecute (30) still runs, being the transition's own work rather than the state's lifecycle. The practical effect is that updateData writes its data and evaluates the state's auto transitions against it without re-running the state's entry hooks or restarting its timers. updateData is the ONLY transition this applies to. The variant is named for the target, but the selection is a policy (PipelineProfileResolver, TransitionExecutionContextExtensions.SkipsStateLifecycle): any other transition declaring target $self - a shared transition being the real case - keeps the trigger's base profile and runs the state's FULL lifecycle, so its OnExit/OnEntry fire and its scheduled transitions are cancelled and re-armed. Declaring $self states that the instance must not move, not that the state's hooks should be skipped; a frequently invoked $self shared transition on a short-timeout state therefore defers that timeout on every call. ChangeStateStep's suppression of the state-change metric, log and span event is scoped the same way, so a $self shared transition still reports its state change. For the target check itself only the authored $self keyword qualifies: a literal target that happens to equal the current state does NOT, because the start transition (instance pre-positioned into the initial state at creation) and a retry after the state change already committed both present that same shape while genuinely needing the state entered. A parent with an open SubFlow correlation continues to short-circuit earlier, at HandleUpdateDataDataOnlyStep (21), to a data-only update. Timeout and subflow-resume executions are excluded from the detection, since their target does not come from transition.target.",
+      "schemaPath": "workflow.attributes.updateData.target",
+      "apiEndpoints": [
         "POST {domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}"
       ]
     }

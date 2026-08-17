@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Results;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -106,7 +108,16 @@ public sealed class PostCommitExecutor(
                         }
                     }
 
-                    // 2) Execute handler
+                    // 2) Execute handler — under its own business span so everything the job
+                    // spawns (subflow start, forwarded transition, HTTP calls) has a visible,
+                    // always-exported parent in the trace.
+                    using var jobActivity = PipelineStepActivityHelper.ActivitySource.StartActivity(
+                        $"PostCommit.{job.GetType().Name}",
+                        ActivityKind.Internal,
+                        Activity.Current?.Context ?? default);
+                    jobActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+                    jobActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+
                     var execResult = await DispatchAsync(job, serviceProvider, context, cancellationToken);
 
                     if (execResult.IsSuccess)

@@ -66,6 +66,17 @@ public sealed class DaprBindingTaskInvoker(
                 .Where(kvp => kvp.Key != "method" && kvp.Key != "ForwardingHeaders")
                 .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
+            // Bindings bypass HttpClient's DiagnosticsHandler, so propagate the live W3C trace
+            // context explicitly. Always the LIVE context — a traceparent copied into the task
+            // definition would detach the downstream component from the current trace.
+            var currentActivity = Activity.Current;
+            if (currentActivity is not null)
+            {
+                cleanMetadata["traceparent"] = currentActivity.Id!;
+                if (!string.IsNullOrEmpty(currentActivity.TraceStateString))
+                    cleanMetadata["tracestate"] = currentActivity.TraceStateString;
+            }
+
             // Parse body data
             object? data = string.IsNullOrEmpty(binding.Body)
                 ? null

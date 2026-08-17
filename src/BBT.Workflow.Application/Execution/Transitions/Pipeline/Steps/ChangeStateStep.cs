@@ -3,7 +3,6 @@ using BBT.Workflow.Monitoring;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -21,12 +20,9 @@ public sealed class ChangeStateStep(
     public int Order => LifecycleOrder.ChangeState;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
      {
-                      Activity.Current?.SetDisplayName($"[{Order}] {nameof(ChangeStateStep)}");
-
         // Skip for SubFlow resume - state cleared/managed by ClearBusyOnResumeStep
         if (context.Directives.IsSubFlowResume)
         {
@@ -46,14 +42,23 @@ public sealed class ChangeStateStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // updateData writes data without moving the instance: the step still runs — it is the only
+        // place context.Target is set, and RunAutomaticTransitionsStep needs it — but reporting a
+        // state change from X to X would be a false signal in metrics, logs and traces.
+        //
+        // Scoped to updateData deliberately, matching the pipeline profile. Another $self
+        // transition (a $self shared transition) DOES run the state's OnExit/OnEntry, so it really
+        // does re-enter the state and its state-change signal is not false.
+        var skipsStateLifecycle = context.SkipsStateLifecycle();
+
         // Railway Oriented Programming: Fluent chain
         return await Result.Ok(BuildStateTransitionInfo(context))
-            .Tap(info => RecordTransitionMetric(context, info))
-            .BindAsync(info => PerformStateChangeAsync(context, info, cancellationToken)) 
+            .Tap(info => { if (!skipsStateLifecycle) RecordTransitionMetric(context, info); })
+            .BindAsync(info => PerformStateChangeAsync(context, info, cancellationToken))
             .ThenAsync(_ => UpdateTargetStateInContext(context))
-            .OnSuccess(_ => RecordStateEntryMetric(context))
-            .OnSuccess(_ => LogStateChange(context))
-            .OnSuccess(_ => AddTelemetryEvent(context))
+            .OnSuccess(_ => { if (!skipsStateLifecycle) RecordStateEntryMetric(context); })
+            .OnSuccess(_ => { if (!skipsStateLifecycle) LogStateChange(context); })
+            .OnSuccess(_ => { if (!skipsStateLifecycle) AddTelemetryEvent(context); })
             .MapAsync(_ => StepOutcome.Continue());
     }
 

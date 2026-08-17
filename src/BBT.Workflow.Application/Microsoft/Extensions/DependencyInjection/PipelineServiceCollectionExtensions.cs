@@ -53,7 +53,6 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionAdmissionService, TransitionAdmissionService>();
 
         services.AddSingleton<IPipelineProfileResolver, PipelineProfileResolver>();
-        services.AddSingleton<IReservedTransitionResolver, ReservedTransitionResolver>();
 
         // State Machine Validation - Specification Pattern
         services.AddScoped<ITransitionSpecification, ResumeModeSpecification>();

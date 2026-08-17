@@ -1,9 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.Aspects;
-using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
-using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -12,25 +10,32 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
 /// <summary>
 /// Asynchronous transition execution strategy.
 /// Executes transitions as background jobs for better scalability and fault tolerance.
-/// Acquires a distributed lock before processing to prevent concurrent enqueuing for
-/// the same instance. The enqueue lock uses an <see cref="EnqueueLockSuffix"/>-scoped key
-/// (accept scope) that is distinct from the execution lock key the job consumer acquires
-/// in <see cref="Pipeline.TransitionPipeline"/> — the Dapr job fires ~5ms after scheduling,
-/// while this lock is still held, so sharing the key would make the consumer's non-blocking
-/// acquire fail (race condition). Reserved transitions (cancel, exit, updateData, timeout,
-/// subflow resume, shared) scope the suffix onto their own type-specific key so they are
-/// accepted and enqueued even while the main flow is Busy, mirroring the sync pipeline.
-/// Under the lock, checks if an active job already exists (409) and rejects non-reserved
-/// requests when the instance is already Busy (409) — the explicit replacement for the
-/// implicit rejection the previously shared lock key provided. Sets the instance to Busy
-/// before enqueueing so callers immediately see the correct in-progress status.
+/// <para>
+/// The accept takes exactly ONE distributed lock, and it is the same short status lock the sync
+/// pipeline uses: <see cref="ITransitionAdmissionService.AcceptAsync"/> acquires
+/// <c>ctx.LockKey</c>, performs the kind's status flip (reserve / take-over / chain reserve /
+/// nothing), and runs the duplicate-job guard and the durable enqueue while still holding it.
+/// The guard shares that critical section because its check-then-insert has no database
+/// constraint behind it — it is not a second concern deserving a second lock. Ordering is
+/// fast-fail Busy check → validation → lock → flip → guard → enqueue → release, so no lock is
+/// held during context creation or schema/policy validation. Callers see the instance Busy the
+/// moment the request is accepted.
+/// </para>
+/// <para>
+/// A Busy parent with an active SubFlow is admitted without a reserve of its own — it is Busy for
+/// the subflow's lifetime by design — but its SubFlow chain IS reserved down to the leaf before the
+/// response, because the state function reports the deepest active subflow's status. Skipping that
+/// would answer the caller while the leaf still reads Active, and a client long polling on the
+/// parent would see no work in progress. The relay carries the claim
+/// (<c>TransitionInput.ChainReserved</c>) so the leaf's own admission treats the pre-set Busy as an
+/// owner re-entry instead of a 409.
+/// </para>
 /// <para>
 /// Enqueue atomicity is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
 /// when ON (default), the durable intent + Dapr schedule commit in one unit of work (transactional
@@ -42,25 +47,12 @@ namespace BBT.Workflow.Execution.Strategies;
 public sealed class AsyncTransitionStrategy(
     ITransitionContextFactory ctxFactory,
     IInstanceJobRepository jobRepository,
-    IDistributedLockService distributedLockService,
-    IReservedTransitionResolver reservedTransitionResolver,
     ITransitionValidationService validationService,
     IUnitOfWorkManager uowManager,
     ITransitionAdmissionService admissionService,
     ITransitionEnqueueGateway enqueueGateway,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
-    /// <summary>
-    /// Lock lease duration in seconds — covers the check + enqueue + UoW commit cycle.
-    /// </summary>
-    private const int DefaultLockLeaseSeconds = 30;
-
-    /// <summary>
-    /// Suffix scoping the accept/enqueue lock away from the execution lock key used by the
-    /// job consumer (TransitionPipeline). Must never be used on the consumer side.
-    /// </summary>
-    public const string EnqueueLockSuffix = ":enqueue";
-
     public ExecMode Mode => ExecMode.Async;
 
     /// <inheritdoc />
@@ -124,95 +116,53 @@ public sealed class AsyncTransitionStrategy(
             ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId);
         EnrichTelemetry(activity, ctx, jobName.Value);
 
-        Result<TransitionExecutionContext> lockScopeResult =
-            Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
-
-        // Reserved transitions (cancel, exit, updateData, timeout, subflow resume, shared)
-        // scope onto their own type-specific key so the request is accepted and enqueued even
-        // while the main flow is Busy. The EnqueueLockSuffix keeps this accept-scope lock
-        // distinct from the execution lock the job consumer acquires in TransitionPipeline —
-        // the Dapr job fires while this lock is still held, so sharing the key would race.
-        var isReserved = reservedTransitionResolver.IsReserved(ctx);
-        var lockKey = (isReserved
-            ? reservedTransitionResolver.GetOwnLockKey(ctx)
-            : ctx.LockKey) + EnqueueLockSuffix;
-
-        var lockAcquired = await distributedLockService.ExecuteWithLockAsync(
-            lockKey,
-            async () =>
+        // The accept's ONE distributed lock. Admission takes the status lock on ctx.LockKey,
+        // performs the kind's status flip, and runs the callback below while still holding it —
+        // the duplicate-job guard is a check-then-insert with no database constraint behind it,
+        // so it has to share the critical section with the flip rather than get a lock of its own.
+        var acceptResult = await admissionService.AcceptAsync(
+            ctx,
+            async (flip, ct) =>
             {
                 if (await jobRepository.AnyActiveTransitionJobAsync(
                         ctx.InstanceId,
                         JobType.AsyncTransition,
                         jobName.SourceState,
                         ctx.TransitionKey,
-                        cancellationToken))
+                        ct))
                 {
                     logger.TransitionJobAlreadyQueued(jobName.Value, ctx.InstanceId, ctx.TransitionKey);
-                    lockScopeResult = Result<TransitionExecutionContext>.Fail(
+                    return Result.Fail(
                         WorkflowErrors.TransitionJobAlreadyActive(ctx.InstanceId, ctx.TransitionKey));
-                    return;
                 }
 
-                var reserved = false;
-
-                // Busy-as-mutex accept: Normal requests reserve the instance NOW (Busy under
-                // the short status lock) so a competing request gets 409 immediately; the job
-                // re-enters as the owner (IsPreReserved). Bypass/unconditional kinds (cancel/
-                // exit/timeout/updateData) are accepted without a reserve — the job's pipeline
-                // prologue admits them by kind. A Busy parent with an active SubFlow is also
-                // accepted without a reserve: the job's pipeline forwards it to the subflow.
-                if (!ctx.Directives.IsInternalResume
-                    && admissionService.Classify(ctx) == AdmissionKind.Normal
-                    && !admissionService.IsSubflowForward(ctx))
-                {
-                    var admission = admissionService.CheckAdmission(ctx);
-                    if (!admission.IsSuccess)
-                    {
-                        lockScopeResult = Result<TransitionExecutionContext>.Fail(admission.Error);
-                        return;
-                    }
-
-                    var reserve = await admissionService.ReserveAsync(ctx, cancellationToken);
-                    if (!reserve.IsSuccess)
-                    {
-                        lockScopeResult = Result<TransitionExecutionContext>.Fail(reserve.Error);
-                        return;
-                    }
-
-                    reserved = true;
-                }
+                // Inherit the claim: an intermediate relay's own accept classifies as OwnerReentry
+                // (it arrives pre-reserved), so admission performs no flip for it. Seeding from the
+                // context carries the originating accept's chain reserve through every hop —
+                // otherwise the claim is dropped after the first relay and the leaf, which that
+                // same accept flipped Busy, rejects the forward with a 409.
+                var chainReserved = ctx.SubflowChainReserved || flip == AcceptFlip.ChainReserved;
 
                 var enqueueResult = await EnqueueAndSaveJobAsync(
-                    context, ctx, jobName, jobId, activity, cancellationToken);
+                    context, ctx, jobName, jobId, activity, chainReserved, ct);
+
                 if (enqueueResult.IsSuccess)
                 {
                     LogEnqueueSuccess(context, jobName.Value);
-                    lockScopeResult = Result<TransitionExecutionContext>.Ok(ctx);
+                    return Result.Ok();
                 }
-                else
-                {
-                    LogEnqueueFailure(context);
 
-                    // Compensate a reserve whose job never made it to the queue — otherwise the
-                    // instance stays Busy with no job to settle it.
-                    if (reserved)
-                        await admissionService.ReleaseReservationAsync(ctx, cancellationToken);
-
-                    lockScopeResult = Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
-                }
+                LogEnqueueFailure(context);
+                return Result.Fail(enqueueResult.Error);
             },
-            DefaultLockLeaseSeconds,
             cancellationToken);
 
-        if (!lockAcquired)
-        {
-            logger.InstanceLockFailed(ctx.InstanceId.ToString());
-            return Result<TransitionExecutionContext>.Fail(WorkflowErrors.InstanceLockConflict(ctx.InstanceId));
-        }
+        var result = acceptResult.IsSuccess
+            ? Result<TransitionExecutionContext>.Ok(ctx)
+            : Result<TransitionExecutionContext>.Fail(acceptResult.Error);
 
-        SetActivityStatus(activity, lockScopeResult);
-        return lockScopeResult;
+        SetActivityStatus(activity, result);
+        return result;
     }
 
     /// <summary>
@@ -226,10 +176,11 @@ public sealed class AsyncTransitionStrategy(
         JobName jobName,
         Guid jobId,
         Activity? activity,
+        bool subflowChainReserved,
         CancellationToken cancellationToken)
     {
-        var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity);
-        var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity);
+        var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity, subflowChainReserved);
+        var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity, subflowChainReserved);
 
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
@@ -253,7 +204,8 @@ public sealed class AsyncTransitionStrategy(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
         string jobName,
-        Activity? activity)
+        Activity? activity,
+        bool subflowChainReserved)
     {
         return new TransitionJobPayload
         {
@@ -273,7 +225,9 @@ public sealed class AsyncTransitionStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            Stage = context.Data?.Stage
+            CorrelationId = transContext.CorrelationId,
+            Stage = context.Data?.Stage,
+            SubflowChainReserved = subflowChainReserved
         };
     }
 
@@ -285,7 +239,8 @@ public sealed class AsyncTransitionStrategy(
         TransitionExecutionContext transContext,
         JobName jobName,
         Guid jobId,
-        Activity? activity)
+        Activity? activity,
+        bool subflowChainReserved)
     {
         return new TransitionContinuationRequested
         {
@@ -305,7 +260,9 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            ChainDepth = transContext.ChainDepth
+            CorrelationId = transContext.CorrelationId,
+            ChainDepth = transContext.ChainDepth,
+            SubflowChainReserved = subflowChainReserved
         };
     }
 
@@ -333,6 +290,12 @@ public sealed class AsyncTransitionStrategy(
         activity.SetTag(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
         activity.SetTag(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.WorkflowInstanceId, ctx.InstanceId.ToString("D").ToLowerInvariant());
+        activity.SetTag(TelemetryConstants.TagNames.CorrelationId, ctx.CorrelationId);
+        var subject = GetIdentityClaim(ctx.Headers, TelemetryConstants.HeaderNames.Sub);
+        var actSub = GetIdentityClaim(ctx.Headers, TelemetryConstants.HeaderNames.ActSub);
+        activity.SetTag(TelemetryConstants.TagNames.Sub, subject);
+        activity.SetTag(TelemetryConstants.TagNames.ActSub, actSub);
         activity.SetTag(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
         activity.SetTag(TelemetryConstants.TagNames.JobName, jobName);
 
@@ -341,8 +304,33 @@ public sealed class AsyncTransitionStrategy(
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
         activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId.ToString());
+        activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId, ctx.InstanceId.ToString("D").ToLowerInvariant());
+        activity.SetBaggage(TelemetryConstants.TagNames.CorrelationId, ctx.CorrelationId);
+        if (subject is not null)
+        {
+            activity.SetBaggage(TelemetryConstants.TagNames.Sub, subject);
+        }
+        if (actSub is not null)
+        {
+            activity.SetBaggage(TelemetryConstants.TagNames.ActSub, actSub);
+        }
         activity.SetBaggage(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
         activity.SetBaggage(TelemetryConstants.TagNames.JobName, jobName);
+    }
+
+    private static string? GetIdentityClaim(
+        IReadOnlyDictionary<string, string?> headers,
+        string headerName)
+    {
+        var rawValue = headers
+            .FirstOrDefault(header => string.Equals(
+                header.Key,
+                headerName,
+                StringComparison.OrdinalIgnoreCase))
+            .Value;
+        return TelemetryConstants.TryNormalizeIdentityClaim(rawValue, out var normalized)
+            ? normalized
+            : null;
     }
 
     /// <summary>

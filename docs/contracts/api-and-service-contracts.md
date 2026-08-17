@@ -131,6 +131,45 @@ concurrent completion its active subset can be a moment fresher than `activeCorr
 Changes to the correlation set participate in the state ETag — see
 [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+### State response: scheduled transitions inside `transitions`
+
+The transitions the runtime has already armed to fire automatically ride in the **same
+`transitions` list** as the caller-triggerable entries, discriminated by `kind`, so a client can
+render countdowns and upcoming-action information without polling anything else:
+
+```jsonc
+"transitions": [
+  { "name": "pay", "kind": "stateTransition", "href": "...", "view": { ... }, "schema": { ... } },
+  { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z" }
+]
+```
+
+- `kind: "scheduled"` ⇒ the entry carries `executeAtUtc` and **no `href`/`view`/`schema`** —
+  callers cannot trigger a scheduled transition (the actor gate rejects it). Every other kind
+  carries an `href` and never an `executeAtUtc`.
+- Built from the **persisted job state**: active `InstanceJob` rows of type `ScheduledTransition`
+  whose `ExecuteAt` was captured at scheduling time — the exact instant the scheduler was armed
+  with, never a re-evaluation of the transition's timer script. Scheduled entries are appended
+  after the caller-triggerable entries, ordered by `executeAtUtc` ascending.
+- `name` is the transition key; `executeAtUtc` is always UTC with the `Z` designator.
+- Scheduled entries are **not role-filtered**, unlike the caller-triggerable ones: a scheduled
+  transition fires regardless of the caller, so the entry is a fact about the instance, not a
+  caller capability.
+- Scheduled entries always describe the **polled instance itself** — during an active-subflow
+  window they are not merged with the subflow's own schedule (poll the subflow instance for it).
+- Rows persisted before the `ExecuteAt` column existed are omitted rather than emitted without a
+  time; they age out as their jobs fire or are cancelled.
+- A scheduled entry may briefly remain visible with a past `executeAtUtc` while the fired
+  transition's pipeline is still settling — the entries reflect the persisted job rows, and the
+  row is marked processed when the handler completes.
+- **Known freshness gap (accepted, issue #864)**: changes to the scheduled-job set deliberately do
+  **not** participate in the state ETag. When the job set changes without a state/status delta —
+  a same-state re-arm via `updateData`/`$self`, an inline A→B→A chain, or a fired job rejected
+  under a lock conflict — a client validating with `If-None-Match` keeps receiving `304` and holds
+  a stale `executeAtUtc` until the next fingerprint-visible change. Clients that need the fresh
+  time after triggering such an update should re-fetch without the ETag. See
+  [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
 ### Client-facing hrefs and the `UrlTemplates` section
 
 Every `href` a client receives — `availableTransitions[].href`, `data`, `view`, `schema`, `master`,
@@ -172,6 +211,21 @@ related-instance reads (see
 | --- | --- | --- |
 | GET | `.../instances/{instance}/internal/related-data` | `200` snapshot, `204` if the instance does not exist. |
 | POST | `.../workflows/{workflow}/internal/related-data/batch` | `200` array (possibly `[]`), `400` above 100 ids. |
+
+Two more back the accept-time SubFlow chain reserve (see
+[vnext-workflow-developer](../../.claude/rules/vnext-workflow-developer.md) § SubFlow Lifecycle):
+
+| Method | Route | Response |
+| --- | --- | --- |
+| POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. |
+| PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
+
+`internal/subflow-forward` exists **because** it is internal. The relay must carry a claim proving the
+originating accept already reserved this chain's Busy flag, and the public transition endpoint cannot
+carry one safely: it copies every inbound header into `TransitionInput.Headers` unfiltered and
+serializes only the data element on the cross-domain hop, so a header-borne claim would be forgeable
+by any client and would defeat the Busy-as-mutex 409. On this route the claim rides the request body
+(`SubflowForwardInput.ChainReserved`), where only the runtime can put it.
 
 **`[ApiExplorerSettings(IgnoreApi = true)]` hides a route from Swagger. It does nothing to routing.**
 Confirmed by reading the orchestration host directly:

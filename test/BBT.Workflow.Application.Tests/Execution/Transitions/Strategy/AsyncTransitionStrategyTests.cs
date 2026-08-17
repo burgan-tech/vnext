@@ -31,14 +31,18 @@ public class AsyncTransitionStrategyTests
 {
     private readonly Mock<ITransitionContextFactory> _mockContextFactory = new();
     private readonly Mock<IInstanceJobRepository> _mockJobRepository = new();
-    private readonly Mock<IDistributedLockService> _mockDistributedLockService = new();
-    private readonly ReservedTransitionResolver _reservedTransitionResolver = new();
     private readonly Mock<ITransitionValidationService> _mockValidationService = new();
     private readonly Mock<IUnitOfWorkManager> _uowManager = new();
     private readonly Mock<ITransitionAdmissionService> _mockAdmissionService = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger = new();
     private readonly AsyncTransitionStrategy _strategy;
+
+    /// <summary>
+    /// Flip the faked admission reports to the callback. Admission owns the kind→flip policy now
+    /// (pinned in TransitionAdmissionServiceTests); these tests drive it as an input.
+    /// </summary>
+    private AcceptFlip _acceptFlip = AcceptFlip.Reserved;
 
     public AsyncTransitionStrategyTests()
     {
@@ -64,31 +68,12 @@ public class AsyncTransitionStrategyTests
             .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(It.IsAny<InstanceJob>());
 
-        _mockDistributedLockService
-            .Setup(x => x.ExecuteWithLockAsync(
-                It.IsAny<string>(),
-                It.IsAny<Func<Task>>(),
-                It.IsAny<int>(),
-                It.IsAny<CancellationToken>()))
-            .Returns<string, Func<Task>, int, CancellationToken>(async (_, action, _, _) =>
-            {
-                await action();
-                return true;
-            });
-
-        // Default: admission accepts and reserves successfully (Classify defaults to Normal).
-        _mockAdmissionService
-            .Setup(x => x.CheckAdmission(It.IsAny<TransitionExecutionContext>()))
-            .Returns(Result.Ok());
-        _mockAdmissionService
-            .Setup(x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Ok());
+        // Default: admission admits and runs the callback under its lock, reporting _acceptFlip.
+        SetupAdmissionAdmits();
 
         _strategy = new AsyncTransitionStrategy(
             _mockContextFactory.Object,
             _mockJobRepository.Object,
-            _mockDistributedLockService.Object,
-            _reservedTransitionResolver,
             _mockValidationService.Object,
             _uowManager.Object,
             _mockAdmissionService.Object,
@@ -117,32 +102,39 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldReserveBeforeEnqueue()
+    public async Task ExecuteAsync_ShouldEnqueueInsideTheAdmissionLock()
     {
-        // A Normal request reserves the instance (Busy under the short status lock) at accept
-        // time, before the job is persisted and enqueued.
-        var (wfCtx, txCtx) = SetupSuccessfulContext();
-        var reserveCalled = false;
-        var enqueueCalledAfterReserve = false;
+        // The status flip happens first and the job is persisted while admission still holds the
+        // lock — so the accept answers a caller that already reads Busy.
+        var (wfCtx, _) = SetupSuccessfulContext();
+        var admitted = false;
+        var enqueuedAfterAdmission = false;
 
         _mockAdmissionService
-            .Setup(x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
-            .Callback(() => reserveCalled = true)
-            .ReturnsAsync(Result.Ok());
+            .Setup(x => x.AcceptAsync(
+                It.IsAny<TransitionExecutionContext>(),
+                It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<TransitionExecutionContext, Func<AcceptFlip, CancellationToken, Task<Result>>, CancellationToken>(
+                (_, underLock, ct) =>
+                {
+                    admitted = true;
+                    return underLock(_acceptFlip, ct);
+                });
 
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
                 It.IsAny<CancellationToken>()))
-            .Callback(() => enqueueCalledAfterReserve = reserveCalled)
+            .Callback(() => enqueuedAfterAdmission = admitted)
             .Returns(Task.CompletedTask);
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        reserveCalled.ShouldBeTrue();
-        enqueueCalledAfterReserve.ShouldBeTrue();
+        admitted.ShouldBeTrue();
+        enqueuedAfterAdmission.ShouldBeTrue();
     }
 
     #endregion
@@ -194,11 +186,11 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<CancellationToken>()),
             Times.Never);
 
-        _mockDistributedLockService.Verify(
-            x => x.ExecuteWithLockAsync(
-                It.IsAny<string>(),
-                It.IsAny<Func<Task>>(),
-                It.IsAny<int>(),
+        // Validation runs BEFORE any lock is taken — admission is never even reached.
+        _mockAdmissionService.Verify(
+            x => x.AcceptAsync(
+                It.IsAny<TransitionExecutionContext>(),
+                It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -238,90 +230,63 @@ public class AsyncTransitionStrategyTests
 
     #endregion
 
-    #region Busy manager delegation
+    #region Admission delegation
 
     [Fact]
-    public async Task ExecuteAsync_WithNormalTransition_ShouldReserveViaAdmission()
+    public async Task ExecuteAsync_ShouldAdmitThroughTheSingleAdmissionLock()
     {
-        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        // The accept owns no lock of its own any more: admission takes ctx.LockKey once and the
+        // enqueue runs inside that critical section.
+        var (wfCtx, _) = SetupSuccessfulContext();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         _mockAdmissionService.Verify(
-            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WithBypassKind_ShouldAcceptWithoutReserve()
-    {
-        // Cancel/exit/timeout/updateData are accepted while the instance is Busy by design —
-        // no reserve at accept; the job's pipeline prologue admits them by kind.
-        var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "cancel");
-        _mockAdmissionService
-            .Setup(x => x.Classify(It.IsAny<TransitionExecutionContext>()))
-            .Returns(AdmissionKind.BypassBusyCheck);
-
-        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        _mockAdmissionService.Verify(
-            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_BusyParentWithActiveSubflow_ShouldEnqueueWithoutReserve()
-    {
-        // Busy + aktif SubFlow: 409 yok, reserve yok — job'un pipeline'ı isteği subflow'a
-        // forward eder (ForwardToActiveSubflowStep).
-        var (wfCtx, txCtx) = SetupSuccessfulContext();
-        _mockAdmissionService
-            .Setup(x => x.IsSubflowForward(It.IsAny<TransitionExecutionContext>()))
-            .Returns(true);
-
-        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        _mockAdmissionService.Verify(
-            x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-        _mockEnqueueGateway.Verify(
-            x => x.EnqueueAsync(
-                It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+            x => x.AcceptAsync(
+                It.IsAny<TransitionExecutionContext>(),
+                It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenIsInternalResume_ShouldSkipReserve()
+    public async Task ExecuteAsync_ShouldNotPerformItsOwnStatusFlips()
     {
-        var (wfCtx, txCtx) = SetupSuccessfulContext();
-        txCtx.Directives.MarkAsSubFlowResume();
+        // Kind→flip policy belongs to admission; the strategy must not reach for the individual
+        // reserve/takeover entry points (they would acquire the same key a second time).
+        var (wfCtx, _) = SetupSuccessfulContext();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         _mockAdmissionService.Verify(
             x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Never);
+        _mockAdmissionService.Verify(
+            x => x.TakeOverAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockAdmissionService.Verify(
+            x => x.ReserveSubflowChainAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockAdmissionService.Verify(
+            x => x.ReleaseReservationAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockAdmissionService.Verify(
+            x => x.ReleaseSubflowChainAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenInstanceAlreadyBusy_ShouldReturn409WithoutEnqueue()
+    public async Task ExecuteAsync_WhenAdmissionRejects_ShouldNotEnqueue()
     {
-        // Busy-as-mutex: a Normal request against a Busy instance is rejected at accept time.
+        // Busy 409, lock conflict, completed instance — admission decides and the callback that
+        // would persist the job never runs.
         var (wfCtx, txCtx) = SetupSuccessfulContext();
-
-        _mockAdmissionService
-            .Setup(x => x.CheckAdmission(It.IsAny<TransitionExecutionContext>()))
-            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(txCtx.Instance.Id, txCtx.TransitionKey)));
+        SetupAdmissionRejects(WorkflowErrors.InstanceBusy(txCtx.Instance.Id, txCtx.TransitionKey));
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
-
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
@@ -331,19 +296,24 @@ public class AsyncTransitionStrategyTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenReserveFails_ShouldNotEnqueue()
+    public async Task ExecuteAsync_WhenAnActiveJobAlreadyExists_ShouldRejectInsideTheLock()
     {
-        // A failed reserve (lock conflict / completed instance) must not persist a job.
-        var (wfCtx, txCtx) = SetupSuccessfulContext();
-
-        _mockAdmissionService
-            .Setup(x => x.ReserveAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Fail(WorkflowErrors.InstanceLockConflict(txCtx.Instance.Id)));
+        // The duplicate-request guard shares admission's critical section — its check-then-insert
+        // has no database constraint behind it.
+        var (wfCtx, _) = SetupSuccessfulContext();
+        _mockJobRepository
+            .Setup(x => x.AnyActiveTransitionJobAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<JobType>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
-
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TransitionLocked);
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
@@ -354,57 +324,103 @@ public class AsyncTransitionStrategyTests
 
     #endregion
 
-    #region Enqueue lock key scoping
+    #region Subflow chain claim
 
     [Fact]
-    public async Task ExecuteAsync_WithNormalTransition_ShouldLockOnEnqueueSuffixedKey()
+    public async Task ExecuteAsync_WhenAdmissionReservedTheChain_ShouldStampTheClaimOnTheEnqueuedJob()
     {
-        var (wfCtx, txCtx) = SetupSuccessfulContext();
-        var capturedKey = CaptureLockKey();
+        // Without the claim the leaf — which this accept flipped Busy — rejects the relay with 409.
+        var (wfCtx, _) = SetupSuccessfulContext();
+        _acceptFlip = AcceptFlip.ChainReserved;
+
+        var (payload, outboxEvent) = CaptureEnqueue();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        capturedKey().ShouldBe(txCtx.LockKey + AsyncTransitionStrategy.EnqueueLockSuffix);
-        // Invariant: the producer must never lock the consumer's execution key —
-        // the Dapr job fires while this lock is still held (race condition).
-        capturedKey().ShouldNotBe(txCtx.LockKey);
+        payload()!.SubflowChainReserved.ShouldBeTrue();
+        outboxEvent()!.SubflowChainReserved.ShouldBeTrue();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithReservedTransition_ShouldLockOnOwnTypeScopedEnqueueKey()
+    public async Task ExecuteAsync_WhenAdmissionTookNoChainReserve_ShouldNotStampTheClaim()
     {
-        var (wfCtx, txCtx) = SetupSuccessfulContext(transitionKey: "cancel");
-        var capturedKey = CaptureLockKey();
+        // A forward may never claim a reserve that was not taken, or it would barge past a leaf
+        // that is Busy for its own reasons.
+        var (wfCtx, _) = SetupSuccessfulContext();
+        _acceptFlip = AcceptFlip.Reserved;
+
+        var (payload, _) = CaptureEnqueue();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        _reservedTransitionResolver.IsReserved(txCtx).ShouldBeTrue();
-        capturedKey().ShouldBe(txCtx.LockKey + ":cancel" + AsyncTransitionStrategy.EnqueueLockSuffix);
-        // Invariant: never the consumer's reserved execution key either.
-        capturedKey().ShouldNotBe(txCtx.LockKey + ":cancel");
-        capturedKey().ShouldNotBe(txCtx.LockKey);
+        payload()!.SubflowChainReserved.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRelayArrivesWithAnInheritedClaim_ShouldCarryItOntoTheNextHop()
+    {
+        // An intermediate relay's own accept classifies as OwnerReentry, so admission performs no
+        // flip for it. If the claim were not inherited from the context it would be dropped after
+        // the first hop and the leaf would reject the forward with a 409, deadlocking the chain.
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        txCtx.SubflowChainReserved = true;
+        _acceptFlip = AcceptFlip.None;
+
+        var (payload, _) = CaptureEnqueue();
+
+        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        payload()!.SubflowChainReserved.ShouldBeTrue();
     }
 
     #endregion
 
     #region Helpers
 
-    private Func<string?> CaptureLockKey()
+    /// <summary>
+    /// Fakes admission's single-lock accept: runs the callback (the duplicate guard and the
+    /// enqueue) and reports <see cref="_acceptFlip"/> to it, the way the real service does while
+    /// holding ctx.LockKey.
+    /// </summary>
+    private void SetupAdmissionAdmits()
     {
-        string? captured = null;
-        _mockDistributedLockService
-            .Setup(x => x.ExecuteWithLockAsync(
-                It.IsAny<string>(),
-                It.IsAny<Func<Task>>(),
-                It.IsAny<int>(),
+        _mockAdmissionService
+            .Setup(x => x.AcceptAsync(
+                It.IsAny<TransitionExecutionContext>(),
+                It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
                 It.IsAny<CancellationToken>()))
-            .Returns<string, Func<Task>, int, CancellationToken>(async (key, action, _, _) =>
-            {
-                captured = key;
-                await action();
-                return true;
-            });
-        return () => captured;
+            .Returns<TransitionExecutionContext, Func<AcceptFlip, CancellationToken, Task<Result>>, CancellationToken>(
+                (_, underLock, ct) => underLock(_acceptFlip, ct));
+    }
+
+    /// <summary>
+    /// Fakes a rejected accept: the callback never runs, exactly as when the status flip fails.
+    /// </summary>
+    private void SetupAdmissionRejects(Error error)
+    {
+        _mockAdmissionService
+            .Setup(x => x.AcceptAsync(
+                It.IsAny<TransitionExecutionContext>(),
+                It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(error));
+    }
+
+    private (Func<TransitionJobPayload?>, Func<TransitionContinuationRequested?>) CaptureEnqueue()
+    {
+        TransitionJobPayload? payload = null;
+        TransitionContinuationRequested? outboxEvent = null;
+
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
+                (p, e, _) => { payload = p; outboxEvent = e; })
+            .Returns(Task.CompletedTask);
+
+        return (() => payload, () => outboxEvent);
     }
 
     private (WorkflowExecutionContext, TransitionExecutionContext) SetupSuccessfulContext(string transitionKey = "test-transition")

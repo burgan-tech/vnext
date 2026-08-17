@@ -15,6 +15,25 @@ public static class TelemetryConstants
         public const string Flow = "vnext.flow.key";
         public const string FlowVersion = "vnext.flow.version";
         public const string InstanceId = "vnext.instance.id";
+        /// <summary>
+        /// Vendor-neutral workflow instance identifier used to correlate telemetry
+        /// emitted by dependencies that are not part of vNext.
+        /// </summary>
+        public const string WorkflowInstanceId = "workflow.instance.id";
+        /// <summary>
+        /// Business-operation correlation identifier. This is intentionally separate
+        /// from the per-request X-Request-Id and the W3C trace identifier.
+        /// </summary>
+        public const string CorrelationId = "correlation.id";
+        /// <summary>
+        /// Primary subject exposed by the gateway authentication chain.
+        /// It is propagated as correlation metadata only.
+        /// </summary>
+        public const string Sub = "sub";
+        /// <summary>
+        /// Actor subject exposed by the gateway authentication chain.
+        /// </summary>
+        public const string ActSub = "act.sub";
         public const string InstanceKey = "vnext.instance.key";
         public const string TransitionKey = "vnext.transition.key";
         public const string TriggerType = "vnext.trigger.type";
@@ -38,6 +57,26 @@ public static class TelemetryConstants
         /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
         /// </summary>
         public const string RootInstanceId = "vnext.root.instance.id";
+        /// <summary>
+        /// Originating request id (X-Request-Id value) — joins spans/logs across the async
+        /// job, Execution and worker hops back to the client request that started them.
+        /// <para>
+        /// The value is the normalized form of the <c>X-Request-Id</c> header (lowercase, '-'
+        /// replaced by '_') so log backends surface it under exactly the name the platform uses
+        /// for the header. It carries no dot on purpose: backends that flatten dotted keys
+        /// (OpenObserve, Elasticsearch) leave this one untouched, so the queried field is
+        /// <c>x_request_id</c> everywhere.
+        /// </para>
+        /// <para>
+        /// Because this key is identical to what Aether's header enricher would produce for
+        /// <c>X-Request-Id</c>, that header must NEVER be listed in
+        /// <c>Telemetry:Logging:Enrichers:Headers</c> — the enricher writes first and reports a
+        /// value fabricated from <c>HttpContext.TraceIdentifier</c> on platform-originated
+        /// requests (Dapr job callbacks, pub/sub deliveries), which would then suppress the
+        /// correct value stamped from the correlation provider.
+        /// </para>
+        /// </summary>
+        public const string RequestId = "x_request_id";
         public const string SubItemType = "vnext.subitem.type";
         public const string SubItemOutcome = "vnext.subitem.outcome";
         public const string TerminationOrigin = "vnext.termination.origin";
@@ -67,6 +106,22 @@ public static class TelemetryConstants
     public static class HeaderNames
     {
         /// <summary>
+        /// Canonical workflow instance identifier propagated to trusted HTTP dependencies.
+        /// </summary>
+        public const string WorkflowInstanceId = "X-Workflow-Instance-Id";
+        /// <summary>
+        /// Canonical business correlation identifier propagated to trusted HTTP dependencies.
+        /// </summary>
+        public const string CorrelationId = "X-Correlation-Id";
+        /// <summary>
+        /// Primary subject emitted by the gateway after authentication.
+        /// </summary>
+        public const string Sub = "sub";
+        /// <summary>
+        /// Actor subject emitted by the gateway after authentication.
+        /// </summary>
+        public const string ActSub = "act_sub";
+        /// <summary>
         /// Request header carrying the parent instance ID when invoking subflow/subprocess remotely.
         /// </summary>
         public const string ParentInstanceId = "X-Parent-Instance-Id";
@@ -75,5 +130,34 @@ public static class TelemetryConstants
         /// Remains constant at A's ID regardless of nesting depth.
         /// </summary>
         public const string RootInstanceId = "X-Root-Instance-Id";
+        /// <summary>
+        /// Request header carrying the originating request id. Read/generated at the edge by
+        /// the gateway and by Aether's correlation middleware; forwarded on every internal hop.
+        /// </summary>
+        public const string RequestId = "X-Request-Id";
+    }
+
+    /// <summary>
+    /// Accepts a constrained actor claim emitted by the gateway authentication chain.
+    /// The exact value is retained; unsafe or unexpectedly large values are omitted.
+    /// </summary>
+    public static bool TryNormalizeIdentityClaim(string? value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrEmpty(value) || value.Length > 128)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-')
+            {
+                return false;
+            }
+        }
+
+        normalized = value;
+        return true;
     }
 }

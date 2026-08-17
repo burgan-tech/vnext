@@ -124,6 +124,7 @@ public sealed class TransitionContextFactory(
             CallerMode = input.CallerMode,
             IsReentry = input.IsReentry,
             IsPreReserved = input.IsPreReserved,
+            SubflowChainReserved = input.SubflowChainReserved,
             RetryOfTransitionRecordId = input.Retry?.TransitionId,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
             Termination = input.Termination,

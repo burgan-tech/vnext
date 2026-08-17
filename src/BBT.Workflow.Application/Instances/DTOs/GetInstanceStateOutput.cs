@@ -54,7 +54,10 @@ public sealed class GetInstanceStateOutput
     public List<ActiveCorrelationHref> Correlations { get; set; } = [];
 
     /// <summary>
-    /// Available transition items with href links
+    /// Available transition items with href links, followed by the transitions the runtime has armed
+    /// to fire automatically (<c>kind: "scheduled"</c>, carrying <c>executeAtUtc</c>, no href — they
+    /// cannot be triggered by callers). Scheduled entries are read from the persisted job state,
+    /// always describe the polled instance itself, and are not role-filtered.
     /// </summary>
     public List<TransitionItem> Transitions { get; set; } = [];
 

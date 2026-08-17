@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -18,12 +16,9 @@ public sealed class ApplyTimeoutStateStep(
     public int Order => LifecycleOrder.ApplyTimeoutState;
 
     /// <inheritdoc />
-    [Trace]
     public Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ApplyTimeoutStateStep)}");
-
         // Only process this step for timeout transitions
         if (!context.Directives.IsTimeoutTransition)
         {

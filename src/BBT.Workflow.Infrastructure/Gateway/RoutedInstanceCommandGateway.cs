@@ -128,6 +128,28 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result<TransitionOutput>> ForwardTransitionAsync(
+        Guid instanceId,
+        string transitionKey,
+        TransitionInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.ForwardTransitionAsync(instanceId, transitionKey, input, cancellationToken)
+            : _remote.ForwardTransitionAsync(instanceId, transitionKey, input, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<Result> ReleaseBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _runtimeInfoProvider.IsDomainMatch(input.Domain)
+            ? _local.ReleaseBusyAsync(input, cancellationToken)
+            : _remote.ReleaseBusyAsync(input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> AcknowledgeLongPollAsync(
         AcknowledgeLongPollInput input,
         CancellationToken cancellationToken = default)

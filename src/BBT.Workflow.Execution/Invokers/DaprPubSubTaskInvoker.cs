@@ -71,6 +71,16 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
 
             var metadata = binding.Metadata ?? new Dictionary<string, string>();
 
+            // Pub/sub publishes bypass HttpClient's DiagnosticsHandler, so stamp the live W3C
+            // trace context into the CloudEvent envelope explicitly (Dapr cloudevent.* metadata).
+            var currentActivity = Activity.Current;
+            if (currentActivity is not null)
+            {
+                metadata["cloudevent.traceparent"] = currentActivity.Id!;
+                if (!string.IsNullOrEmpty(currentActivity.TraceStateString))
+                    metadata["cloudevent.tracestate"] = currentActivity.TraceStateString;
+            }
+
             await _daprClient.PublishEventAsync(
                 binding.PubSubName,
                 binding.TopicName,

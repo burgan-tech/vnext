@@ -69,6 +69,13 @@ public sealed record StartSubflowJob(
 /// <param name="DataElement">The data element to forward.</param>
 /// <param name="Headers">The headers to forward.</param>
 /// <param name="RouteValues">The route values to forward.</param>
+/// <param name="ChainReserved">
+/// True when the accept already reserved this SubFlow chain's Busy flag down to the leaf, so the
+/// forwarded request must be admitted as an owner re-entry instead of being rejected with a 409
+/// for finding the target Busy. Server-internal: it rides the in-process call for a same-domain
+/// hop and the internal-only subflow-forward endpoint's body for a cross-domain hop, never a
+/// caller-supplied header.
+/// </param>
 public sealed record ForwardToSubflowJob(
     Guid SubflowInstanceId,
     Guid ParentInstanceId,
@@ -81,7 +88,8 @@ public sealed record ForwardToSubflowJob(
     string[]? Tags,
     JsonElement? DataElement,
     Dictionary<string, string?> Headers,
-    Dictionary<string, string?> RouteValues) : IPostCommitContinuationJob
+    Dictionary<string, string?> RouteValues,
+    bool ChainReserved = false) : IPostCommitContinuationJob
 {
     public PostCommitContinuationBehavior ContinuationBehavior => PostCommitContinuationBehavior.HandoffToChild;
 }

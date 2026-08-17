@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
@@ -18,13 +16,10 @@ public class ForwardToActiveSubflowStep : ITransitionStep
     public int Order => LifecycleOrder.ForwardToActiveSubflow;
 
     /// <inheritdoc />
-    [Trace]
     public Task<Result<StepOutcome>> ExecuteAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ForwardToActiveSubflowStep)}");
-
         // Skip if no active subflow - early return for non-applicable case
         if (!HasActiveSubflow(context))
         {
@@ -60,7 +55,13 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             context.Tags,
             context.DataElement,
             context.Headers.ToDictionary(),
-            context.RouteValues.ToDictionary()));
+            context.RouteValues.ToDictionary(),
+            // Claim the accept-time chain reserve, and ONLY that: without it the leaf — which the
+            // accept already flipped to Busy so a long-polling client sees work in progress —
+            // would reject this relay with a 409 for being Busy. Never claim a reserve that was
+            // not taken (sync origin, cancel/exit/timeout accepts), or the relay would barge past
+            // a leaf that is Busy for its own reasons.
+            context.SubflowChainReserved));
 
         // Set initial client response (will be updated by handler if forward succeeds)
         context.ClientResponse = new ClientResponse

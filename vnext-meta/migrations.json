@@ -43,6 +43,17 @@
       "title": "Human-task list authorization now matches the transition-execution rule",
       "description": "The list split a transition's grants into static and predefined subsets, evaluated each separately and required BOTH to match. A transition declaring [allow: teller, allow: $InstanceStarter] was therefore only listed for a caller who was both a teller and the instance starter, even though either one alone was enough to execute it — the task was hidden from users who could act on it. The list now applies the same any-matching-ALLOW rule as execution and additionally honors dynamic $.context.* grants, which it previously ignored entirely. Expect more tasks to appear for the same caller.",
       "action": "Re-check human-task expectations for transitions that mix static and predefined grants. To require both conditions, model the second as a DENY for the complement rather than relying on the old AND behavior."
+    },
+    {
+      "id": "self-target-transitions-skip-state-lifecycle",
+      "type": "behavior",
+      "component": "workflow",
+      "path": "workflow.attributes.states[].transitions[].target",
+      "since": "0.0.80",
+      "severity": "error",
+      "title": "updateData no longer re-runs the state's OnEntry/OnExit or re-arms its timers",
+      "description": "updateData previously ran the full pipeline: the current state's OnExit tasks ran, its OnEntry tasks ran a second time, and the state's scheduled transitions were cancelled and re-armed - restarting every timeout from zero. Those four steps (CancelScheduledJobs, OnExit, OnEntry, Schedule) are now excluded for updateData, whose target is fixed to the reserved $self key and which therefore leaves and enters no state. The transition's own onExecute tasks, the data write and the auto-transition evaluation are unchanged. This applies to updateData ONLY. Other transitions declaring target $self - shared transitions in particular - are unaffected and keep running the full state lifecycle, as do transitions naming the current state literally, including self-loops.",
+      "action": "If a workflow relied on updateData re-running the current state's OnEntry to refresh something, move that logic into the transition's own onExecutionTasks. If it relied on updateData resetting the state's scheduled-transition timer, model the reset explicitly. Only the workflow-level updateData transition is affected, so no search of state transitions is needed. Note the converse for $self shared transitions, which are unchanged: because they still cancel and re-arm the state's scheduled transitions, a frequently invoked one on a state with a short timeout defers that timeout on every call."
     }
   ]
 }
