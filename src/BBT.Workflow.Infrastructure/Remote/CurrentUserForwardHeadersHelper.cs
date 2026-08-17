@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using BBT.Workflow.Logging;
+
 namespace BBT.Workflow.Remote;
 
 /// <summary>
@@ -18,8 +21,10 @@ public static class CurrentUserForwardHeadersHelper
     /// <summary>
     /// Merges forward headers with input headers. Input headers take precedence (override) for the same key.
     /// Content headers (e.g. Content-Type) are silently skipped as they cannot be set on HttpRequestMessage.Headers.
+    /// Also stamps cross-domain correlation headers when absent: X-Root-Instance-Id from the ambient
+    /// Activity baggage, and X-Request-Id from <paramref name="correlationId"/> when provided.
     /// </summary>
-    public static void MergeIntoRequest(HttpRequestMessage request, Dictionary<string, string?> forwardHeaders, IReadOnlyDictionary<string, string?>? inputHeaders, Func<string, bool>? isRestrictedHeader = null)
+    public static void MergeIntoRequest(HttpRequestMessage request, Dictionary<string, string?> forwardHeaders, IReadOnlyDictionary<string, string?>? inputHeaders, Func<string, bool>? isRestrictedHeader = null, string? correlationId = null)
     {
         isRestrictedHeader ??= _ => false;
         foreach (var kv in forwardHeaders)
@@ -39,6 +44,13 @@ public static class CurrentUserForwardHeadersHelper
                     request.Headers.TryAddWithoutValidation(kv.Key, kv.Value);
             }
         }
+
+        var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
+        if (!string.IsNullOrEmpty(rootIdBaggage) && !request.Headers.Contains(TelemetryConstants.HeaderNames.RootInstanceId))
+            request.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RootInstanceId, rootIdBaggage);
+
+        if (!string.IsNullOrEmpty(correlationId) && !request.Headers.Contains(TelemetryConstants.HeaderNames.RequestId))
+            request.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, correlationId);
     }
 
     private static bool IsAsciiSafe(string? value)

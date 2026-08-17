@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
@@ -18,13 +16,10 @@ public class ForwardToActiveSubflowStep : ITransitionStep
     public int Order => LifecycleOrder.ForwardToActiveSubflow;
 
     /// <inheritdoc />
-    [Trace]
     public Task<Result<StepOutcome>> ExecuteAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ForwardToActiveSubflowStep)}");
-
         // Skip if no active subflow - early return for non-applicable case
         if (!HasActiveSubflow(context))
         {

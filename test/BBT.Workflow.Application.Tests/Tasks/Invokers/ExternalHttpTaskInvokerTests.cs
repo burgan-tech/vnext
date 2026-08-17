@@ -126,12 +126,13 @@ public sealed class ExternalHttpTaskInvokerTests
 
     /// <summary>
     /// The trusted correlation/identity header enforcement lives in the shared send core, so the
-    /// orchestrator-executed type gets the same protection as type 6: mapping-provided values for
-    /// the workflow context headers are stripped and only trusted Activity-baggage values (absent
-    /// here) may replace them.
+    /// orchestrator-executed type gets the same rules as type 6: the workflow context headers
+    /// (X-Workflow-Instance-Id, X-Correlation-Id) are reserved and can never be set from the
+    /// binding, while the identity claims (sub, act_sub) are fill-if-absent — a binding-provided
+    /// value wins over the (absent here) Activity-baggage value.
     /// </summary>
     [Fact]
-    public async Task InvokeAsync_StripsSpoofedWorkflowCorrelationHeaders()
+    public async Task InvokeAsync_StripsSpoofedWorkflowContextButKeepsBindingIdentityClaims()
     {
         var handler = new StubHttpMessageHandler(Ok());
         var invoker = CreateInvoker(new CapturingHttpClientFactory(handler));
@@ -139,12 +140,35 @@ public sealed class ExternalHttpTaskInvokerTests
         await invoker.InvokeAsync("local-call", CreateBinding(
             method: "POST",
             body: "{}",
-            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"spoofed.value","act_sub":"spoofed.value","X-Custom":"kept"}"""));
+            headers: """{"X-Workflow-Instance-Id":"spoofed","X-Correlation-Id":"spoofed","sub":"binding.value","act_sub":"binding.value","X-Custom":"kept"}"""));
 
         handler.LastRequest!.Headers.NonValidated.Contains("X-Workflow-Instance-Id").ShouldBeFalse();
         handler.LastRequest.Headers.NonValidated.Contains("X-Correlation-Id").ShouldBeFalse();
-        handler.LastRequest.Headers.NonValidated.Contains("sub").ShouldBeFalse();
-        handler.LastRequest.Headers.NonValidated.Contains("act_sub").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated["sub"].ToString().ShouldBe("binding.value");
+        handler.LastRequest.Headers.NonValidated["act_sub"].ToString().ShouldBe("binding.value");
+        handler.LastRequest.Headers.NonValidated.Contains("X-Custom").ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// The reserved trace-header guard also lives in the shared send core: a stale traceparent or
+    /// forged x-request-id in the binding's headers must not detach the downstream service from
+    /// the live trace — for type 21 exactly as for type 6.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ReservedTraceHeadersInBinding_AreNotCopiedToRequest()
+    {
+        var handler = new StubHttpMessageHandler(Ok());
+        var invoker = CreateInvoker(new CapturingHttpClientFactory(handler));
+
+        await invoker.InvokeAsync("local-call", CreateBinding(
+            method: "POST",
+            body: "{}",
+            headers: """{"traceparent":"stale","tracestate":"stale","baggage":"stale","x-request-id":"stale","X-Custom":"kept"}"""));
+
+        handler.LastRequest!.Headers.NonValidated.Contains("traceparent").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("tracestate").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("baggage").ShouldBeFalse();
+        handler.LastRequest.Headers.NonValidated.Contains("x-request-id").ShouldBeFalse();
         handler.LastRequest.Headers.NonValidated.Contains("X-Custom").ShouldBeTrue();
     }
 

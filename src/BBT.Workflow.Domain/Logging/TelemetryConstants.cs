@@ -57,6 +57,26 @@ public static class TelemetryConstants
         /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
         /// </summary>
         public const string RootInstanceId = "vnext.root.instance.id";
+        /// <summary>
+        /// Originating request id (X-Request-Id value) — joins spans/logs across the async
+        /// job, Execution and worker hops back to the client request that started them.
+        /// <para>
+        /// The value is the normalized form of the <c>X-Request-Id</c> header (lowercase, '-'
+        /// replaced by '_') so log backends surface it under exactly the name the platform uses
+        /// for the header. It carries no dot on purpose: backends that flatten dotted keys
+        /// (OpenObserve, Elasticsearch) leave this one untouched, so the queried field is
+        /// <c>x_request_id</c> everywhere.
+        /// </para>
+        /// <para>
+        /// Because this key is identical to what Aether's header enricher would produce for
+        /// <c>X-Request-Id</c>, that header must NEVER be listed in
+        /// <c>Telemetry:Logging:Enrichers:Headers</c> — the enricher writes first and reports a
+        /// value fabricated from <c>HttpContext.TraceIdentifier</c> on platform-originated
+        /// requests (Dapr job callbacks, pub/sub deliveries), which would then suppress the
+        /// correct value stamped from the correlation provider.
+        /// </para>
+        /// </summary>
+        public const string RequestId = "x_request_id";
         public const string SubItemType = "vnext.subitem.type";
         public const string SubItemOutcome = "vnext.subitem.outcome";
         public const string TerminationOrigin = "vnext.termination.origin";
@@ -110,6 +130,11 @@ public static class TelemetryConstants
         /// Remains constant at A's ID regardless of nesting depth.
         /// </summary>
         public const string RootInstanceId = "X-Root-Instance-Id";
+        /// <summary>
+        /// Request header carrying the originating request id. Read/generated at the edge by
+        /// the gateway and by Aether's correlation middleware; forwarded on every internal hop.
+        /// </summary>
+        public const string RequestId = "X-Request-Id";
     }
 
     /// <summary>

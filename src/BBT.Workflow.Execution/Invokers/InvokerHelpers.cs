@@ -19,6 +19,26 @@ internal static class InvokerHelpers
     };
 
     /// <summary>
+    /// Returns true when the header name is reserved for trace/correlation propagation and must
+    /// not be copied from a task binding's header definition onto an outbound request. Delegates
+    /// to <see cref="HttpTaskInvocation.IsReservedTraceHeader"/> — the single implementation
+    /// shared with the Orchestrator's in-process HTTP task — so the reserved set cannot drift
+    /// between hosts.
+    /// </summary>
+    public static bool IsReservedTraceHeader(string headerName) =>
+        HttpTaskInvocation.IsReservedTraceHeader(headerName);
+
+    /// <summary>
+    /// Stamps the trusted workflow correlation headers onto an outbound HTTP request from the
+    /// ambient Activity baggage. Delegates to
+    /// <see cref="HttpTaskInvocation.ApplyTrustedCorrelationHeaders"/> — the single
+    /// implementation shared with the Orchestrator's in-process HTTP task — see it for the
+    /// precedence rules (workflow context authoritative, sub/act_sub fill-if-absent).
+    /// </summary>
+    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request) =>
+        HttpTaskInvocation.ApplyTrustedCorrelationHeaders(request);
+
+    /// <summary>
     /// Attempts to parse JSON content. Returns the original content if parsing fails.
     /// Used for TriggerTask (e.g. GetInstances / GetInstanceData) response body parsing.
     /// </summary>

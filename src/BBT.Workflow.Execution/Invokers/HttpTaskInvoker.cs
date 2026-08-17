@@ -9,9 +9,9 @@ namespace BBT.Workflow.Execution.Invokers;
 /// Pure HTTP task invoker - stateless execution with strongly-typed binding.
 /// Receives prepared URL, headers, body and delegates the call to
 /// <see cref="HttpTaskInvocation"/> — the single HTTP-send implementation shared with the
-/// Orchestrator's in-process external HTTP task (type 21), including the trusted
-/// correlation/identity header enforcement — then adds this host's logging and metrics on top
-/// of the returned result.
+/// Orchestrator's in-process external HTTP task (type 21), including the reserved
+/// trace-header filtering and the trusted correlation/identity header enforcement — then adds
+/// this host's logging and metrics on top of the returned result.
 /// </summary>
 public sealed class HttpTaskInvoker(
     IHttpClientFactory httpClientFactory,

@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -39,11 +37,8 @@ public sealed class RunOnExitTasksStep(
     public int Order => LifecycleOrder.OnExit;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(RunOnExitTasksStep)}");
-
         // Skip if no OnExit tasks
         if (!HasOnExitTasks(context))
         {

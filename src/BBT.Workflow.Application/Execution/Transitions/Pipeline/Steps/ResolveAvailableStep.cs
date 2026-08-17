@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -25,13 +23,10 @@ public sealed class ResolveAvailableStep(
     public int Order => LifecycleOrder.ResolveAvailable;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(ResolveAvailableStep)}");
-
         // Check if instance should become Available
         if (!ShouldSetAvailable(context))
         {

@@ -30,9 +30,10 @@ public sealed class StateFunctionCache(
     /// instance fingerprint and the caller scope only — it does not cover the response body's shape.
     /// So whenever a runtime change alters what the body contains for an unchanged instance (for
     /// example v2, which started listing the workflow-level <c>updateData</c> and <c>exit</c>
-    /// transitions; v3, which added the workflow's <c>functions</c> discovery links; or v4, which
+    /// transitions; v3, which added the workflow's <c>functions</c> discovery links; v4, which
     /// replaced that inline list with a <c>hasFunctions</c> flag plus a link to the <c>catalog</c>
-    /// function), this constant
+    /// function; or v6, which started listing the runtime-armed scheduled transitions inside
+    /// <c>transitions</c> as <c>kind: "scheduled"</c> entries carrying <c>executeAtUtc</c>), this constant
     /// must be bumped: it invalidates every previously issued ETag and every cached body, and without
     /// it a client long-polling an instance whose state never changes would keep receiving
     /// <c>304 Not Modified</c> and never observe the new shape.
@@ -43,7 +44,7 @@ public sealed class StateFunctionCache(
     /// <see cref="InstanceStateFingerprint.FlowVersion"/> already covers — and so cannot change while an
     /// instance is parked. What needed invalidating was the shape change, once, not the value.
     /// </remarks>
-    private const string ResponseShapeVersion = "v5";
+    private const string ResponseShapeVersion = "v6";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 
@@ -77,6 +78,9 @@ public sealed class StateFunctionCache(
         // The correlation members participate because the response body carries the full correlation
         // set: a sub item starting, terminating or advancing its state changes the body without
         // touching the instance's own state or status, and must still invalidate the caller's ETag.
+        // Scheduled-job changes deliberately do NOT participate (team decision, issue #864): a
+        // same-state re-arm can leave the kind:"scheduled" transition entries stale behind a 304 —
+        // accepted as a known gap; see the ETag doc.
         var material = string.Join('|',
             ResponseShapeVersion,
             fingerprint.Id,

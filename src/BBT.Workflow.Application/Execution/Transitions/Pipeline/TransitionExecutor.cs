@@ -110,6 +110,7 @@ public sealed class TransitionExecutor
             [TelemetryConstants.TagNames.StateTo]       = context.Transition?.Target ?? "N/A",
             [TelemetryConstants.TagNames.TransitionKey] = context.TransitionKey,
             [TelemetryConstants.TagNames.TriggerType]    = context.Transition?.TriggerType.ToString() ?? "N/A",
+            [TelemetryConstants.TagNames.CorrelationId] = context.CorrelationId,
             ["ChainDepth"] = context.ChainDepth,
             ["PipelineProfile"] = context.Profile?.Name ?? "unknown",
         };
@@ -135,6 +136,10 @@ public sealed class TransitionExecutor
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // Verbose-only step span. In Business mode NO step Activity may exist: a created-but-
+        // export-filtered span would orphan every child started inside the step body (see
+        // PipelineStepActivityHelper).
+        using var stepActivity = PipelineStepActivityHelper.StartStepActivity(step);
         try
         {
             return await step.ExecuteAsync(context, cancellationToken);
@@ -166,9 +171,20 @@ public sealed class TransitionExecutor
         activity.SetTag("vnext.pipeline.profile", context.Profile?.Name ?? "unknown");
         activity.SetTag("vnext.chain.id", context.ExecutionChainId);
 
+        // Business correlation + vendor-neutral instance id: published for EVERY pipeline run
+        // (sync and async alike) so downstream stampers (RemoteInvokerService.CreateTraceContext,
+        // ApplyTrustedCorrelationHeaders) read one consistent source. CorrelationId is the
+        // chain-stable execution correlation id, distinct from the per-request X-Request-Id.
+        activity.SetTag(TelemetryConstants.TagNames.CorrelationId, context.CorrelationId);
+        activity.SetTag(TelemetryConstants.TagNames.WorkflowInstanceId,
+            context.InstanceId.ToString("D").ToLowerInvariant());
+
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
         activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+        activity.SetBaggage(TelemetryConstants.TagNames.CorrelationId, context.CorrelationId);
+        activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId,
+            context.InstanceId.ToString("D").ToLowerInvariant());
 
         var rootId = context.Instance.GetRootInstanceId();
         if (rootId != context.InstanceId)

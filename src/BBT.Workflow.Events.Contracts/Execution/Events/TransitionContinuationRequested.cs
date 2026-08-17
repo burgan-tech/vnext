@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Events;
+using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Execution.Events;
 
@@ -17,7 +18,7 @@ namespace BBT.Workflow.Execution.Events;
 /// exactly the desired distributed delivery for a continuation.
 /// </remarks>
 [EventName("transition.continuation.requested")]
-public sealed class TransitionContinuationRequested : IDistributedEvent
+public sealed class TransitionContinuationRequested : IDistributedEvent, ITraceableDistributedEvent
 {
     /// <summary>The instance the transition belongs to.</summary>
     [EventSubject]
@@ -67,10 +68,20 @@ public sealed class TransitionContinuationRequested : IDistributedEvent
     public required string ExecutionActor { get; init; }
 
     /// <summary>W3C traceparent for cross-service correlation, if available.</summary>
-    public string? TraceParent { get; init; }
+    public string? TraceParent { get; set; }
 
     /// <summary>W3C tracestate, if available.</summary>
-    public string? TraceState { get; init; }
+    public string? TraceState { get; set; }
+
+    /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
+    public string? RequestId { get; set; }
+
+    /// <summary>
+    /// Business correlation id of the originating execution chain (chain-stable, distinct from
+    /// <see cref="RequestId"/>). Copied into the downstream job payload so auto-chain hops keep
+    /// one correlation.id.
+    /// </summary>
+    public string? CorrelationId { get; init; }
 
     /// <summary>The chain depth of the continuation (for the chain-depth guard).</summary>
     public int ChainDepth { get; init; }

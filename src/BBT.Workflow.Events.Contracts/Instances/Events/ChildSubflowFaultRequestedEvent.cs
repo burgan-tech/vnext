@@ -1,4 +1,5 @@
 using BBT.Aether.Events;
+using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
 
@@ -7,7 +8,7 @@ namespace BBT.Workflow.Instances.Events;
 /// Mirrors the <see cref="ChildSubflowCancelRequestedEvent"/> pattern for downward fault propagation.
 /// </summary>
 [EventName("instance.faulted.child")]
-public class ChildSubflowFaultRequestedEvent : IDistributedEvent
+public class ChildSubflowFaultRequestedEvent : IDistributedEvent, ITraceableDistributedEvent
 {
     /// <summary>
     /// The ID of the child SubFlow instance that should be faulted
@@ -50,4 +51,13 @@ public class ChildSubflowFaultRequestedEvent : IDistributedEvent
     /// Typed context identifying the terminal cascade that requested this fault.
     /// </summary>
     public TerminationContext Termination { get; init; } = default!;
+
+    /// <summary>W3C traceparent captured at publish time (stamped centrally by the event bus).</summary>
+    public string? TraceParent { get; set; }
+
+    /// <summary>W3C tracestate accompanying <see cref="TraceParent"/>.</summary>
+    public string? TraceState { get; set; }
+
+    /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
+    public string? RequestId { get; set; }
 }

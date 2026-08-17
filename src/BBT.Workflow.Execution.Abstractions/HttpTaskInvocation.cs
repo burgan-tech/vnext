@@ -39,6 +39,31 @@ public static class HttpTaskInvocation
     private const string ActSubBaggage = "act.sub";
 
     /// <summary>
+    /// Header names owned by the tracing/correlation infrastructure. Task binding definitions
+    /// must never overwrite these on outbound calls: a stale traceparent copied into a binding
+    /// would detach the downstream service from the live trace, and a forged x-request-id or
+    /// workflow-context header would break log correlation or spoof workflow identity. The
+    /// live values are injected by HttpClient's DiagnosticsHandler (traceparent/tracestate) and
+    /// by <see cref="ApplyTrustedCorrelationHeaders"/>. The identity claims (sub/act_sub) are
+    /// deliberately NOT reserved: a developer may set them in the task binding and that value
+    /// wins — see <see cref="ApplyTrustedCorrelationHeaders"/>.
+    /// </summary>
+    private static readonly string[] ReservedTraceHeaders =
+    [
+        "traceparent", "tracestate", "baggage", "x-request-id",
+        WorkflowInstanceHeader, CorrelationHeader
+    ];
+
+    /// <summary>
+    /// Returns true when the header name is reserved for trace/correlation propagation and must
+    /// not be copied from a task binding's header definition onto an outbound request. Public so
+    /// the Execution host's non-HTTP invokers (Dapr, SOAP, direct trigger) apply the same guard
+    /// via <c>InvokerHelpers</c>.
+    /// </summary>
+    public static bool IsReservedTraceHeader(string headerName) =>
+        ReservedTraceHeaders.Contains(headerName, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Response-body parse options: deep payloads are tolerated and cycles ignored rather than
     /// failing the task.
     /// </summary>
@@ -93,6 +118,9 @@ public static class HttpTaskInvocation
                             headerContentType = header.Value;
                             continue;
                         }
+
+                        if (IsReservedTraceHeader(header.Key))
+                            continue;
 
                         request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }
@@ -186,17 +214,24 @@ public static class HttpTaskInvocation
         result.Metadata?.TryGetValue("Cancelled", out var flag) == true && flag is true;
 
     /// <summary>
-    /// Replaces the workflow correlation/identity headers with trusted values from Activity
-    /// baggage. Mapping-provided values are untrusted and must never be allowed to spoof the
-    /// workflow context established by vNext. Shared here so both HTTP task types (6 remote,
-    /// 21 orchestrator-executed) enforce the same rule.
+    /// Stamps the trusted workflow correlation headers onto an outbound HTTP request from the
+    /// ambient Activity baggage. Shared by both HTTP task types (6 remote, 21
+    /// orchestrator-executed) via <see cref="SendAsync"/>, and by the Execution host's other
+    /// invokers (Dapr, SOAP, direct trigger) via <c>InvokerHelpers</c>. Two precedence rules:
+    /// <list type="bullet">
+    /// <item><b>Workflow context</b> (X-Workflow-Instance-Id, X-Correlation-Id) is authoritative:
+    /// mapping-provided values must never spoof the context established by vNext, so any
+    /// pre-existing values are removed and the baggage values stamped.</item>
+    /// <item><b>Identity claims</b> (sub, act_sub) are fill-if-absent: they are token-derived
+    /// claims the platform provides as a DEFAULT — a developer who set them explicitly in the
+    /// task binding's input mapping keeps their value; only when the binding did not set them
+    /// are they filled from the gateway token (baggage).</item>
+    /// </list>
     /// </summary>
-    private static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request)
+    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request)
     {
         request.Headers.Remove(WorkflowInstanceHeader);
         request.Headers.Remove(CorrelationHeader);
-        request.Headers.Remove(SubHeader);
-        request.Headers.Remove(ActSubHeader);
 
         var workflowInstance = Activity.Current?.GetBaggageItem(WorkflowInstanceBaggage);
         if (Guid.TryParse(workflowInstance, out var workflowInstanceId)
@@ -214,16 +249,22 @@ public static class HttpTaskInvocation
             request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId.ToString("N"));
         }
 
-        var subject = Activity.Current?.GetBaggageItem(SubBaggage);
-        if (IsSafeIdentityClaim(subject))
+        if (!request.Headers.NonValidated.Contains(SubHeader))
         {
-            request.Headers.TryAddWithoutValidation(SubHeader, subject);
+            var subject = Activity.Current?.GetBaggageItem(SubBaggage);
+            if (IsSafeIdentityClaim(subject))
+            {
+                request.Headers.TryAddWithoutValidation(SubHeader, subject);
+            }
         }
 
-        var actSub = Activity.Current?.GetBaggageItem(ActSubBaggage);
-        if (IsSafeIdentityClaim(actSub))
+        if (!request.Headers.NonValidated.Contains(ActSubHeader))
         {
-            request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
+            var actSub = Activity.Current?.GetBaggageItem(ActSubBaggage);
+            if (IsSafeIdentityClaim(actSub))
+            {
+                request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
+            }
         }
     }
 

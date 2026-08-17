@@ -42,6 +42,13 @@ public sealed class TransitionInput(
     public string[]? Extensions { get; set; }
 
     /// <summary>
+    /// Business correlation id carried over from the originating execution (e.g. restored from a
+    /// background-job payload) so an async hop continues the SAME correlation instead of minting
+    /// a new one. Null on fresh client requests — a new id is minted in ToExecutionContext.
+    /// </summary>
+    public string? CorrelationId { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>
@@ -60,7 +67,7 @@ public sealed class TransitionInput(
             TriggerType = TriggerType.Manual, // TransitionInput always represents manual triggers
             Mode = Sync ? ExecMode.Sync : ExecMode.Async,
             CallerMode = Sync ? ExecMode.Sync : ExecMode.Async,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            CorrelationId = CorrelationId ?? Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = Headers,
             RouteValues = RouteValues,

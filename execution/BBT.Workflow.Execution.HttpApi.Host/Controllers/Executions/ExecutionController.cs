@@ -20,6 +20,12 @@ public sealed class ExecutionController(
     : AetherControllerBase
 {
     /// <summary>
+    /// ActivitySource for spans restored from the request body's trace context when
+    /// transport-level (traceparent header) propagation did not produce an ambient activity.
+    /// </summary>
+    private static readonly ActivitySource ActivitySource = new("BBT.Workflow.Execution");
+
+    /// <summary>
     /// Invokes a task using the envelope-based routing pattern.
     /// The envelope contains TaskType, Version, TaskKey and strongly-typed Binding.
     /// The registry routes the invocation to the appropriate invoker based on TaskType.
@@ -51,6 +57,7 @@ public sealed class ExecutionController(
             ? normalizedActSub
             : null;
 
+        using var restoredActivity = RestoreActivityFromBodyIfDetached(traceContext);
         var activity = Activity.Current;
         activity?.SetTag(TelemetryConstants.TagNames.Domain, traceContext?.Domain ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, traceContext?.WorkflowKey ?? "unknown");
@@ -66,6 +73,8 @@ public sealed class ExecutionController(
         activity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
         activity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        if (!string.IsNullOrEmpty(traceContext?.RequestId))
+            activity?.SetTag(TelemetryConstants.TagNames.RequestId, traceContext.RequestId);
 
         if (traceContext?.InstanceId is { } instanceId && instanceId != Guid.Empty)
         {
@@ -98,16 +107,15 @@ public sealed class ExecutionController(
             [TelemetryConstants.TagNames.CorrelationId] = traceContext?.CorrelationId ?? "unknown",
             [TelemetryConstants.TagNames.TaskKey] = envelope.TaskKey,
             [TelemetryConstants.TagNames.TaskType] = envelope.TaskType
-        };
-        if (subject is not null)
-        {
-            scope[TelemetryConstants.TagNames.Sub] = subject;
-        }
-        if (actSub is not null)
-        {
-            scope[TelemetryConstants.TagNames.ActSub] = actSub;
-        }
 
+        };
+
+        // sub / act_sub are deliberately NOT in this scope: RemoteInvokerService forwards them as
+        // request headers and the log enricher (Telemetry:Logging:Enrichers:Headers, emitted
+        // without a prefix) already attaches them to EVERY log record of this request — a wider
+        // reach than this block. Adding them here too would put the same value on the record
+        // twice, since the scope key act.sub flattens to act_sub in the log backend. They remain
+        // span tags and baggage above.
         using (logger.BeginScope(scope))
         {
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
@@ -119,5 +127,38 @@ public sealed class ExecutionController(
                 ExecutionDurationMs = result.ExecutionDurationMs
             });
         }
+    }
+
+    /// <summary>
+    /// Restores the caller's trace from the body's <see cref="TaskTraceContext"/> when transport
+    /// propagation left no ambient activity — the fallback keeps the trace tree whole if the
+    /// implicit traceparent header is ever lost. When an ambient activity exists but belongs to a
+    /// DIFFERENT trace than the body claims, the body is NOT trusted over the transport: the
+    /// mismatch is only surfaced via an ActivityLink + tag for diagnostics.
+    /// </summary>
+    private static Activity? RestoreActivityFromBodyIfDetached(TaskTraceContext? traceContext)
+    {
+        if (string.IsNullOrEmpty(traceContext?.TraceParent) ||
+            !ActivityContext.TryParse(traceContext.TraceParent, traceContext.TraceState, isRemote: true, out var bodyContext))
+        {
+            return null;
+        }
+
+        var ambient = Activity.Current;
+        if (ambient is null)
+        {
+            return ActivitySource.StartActivity(
+                "Execution.InvokeTask",
+                ActivityKind.Server,
+                parentContext: bodyContext);
+        }
+
+        if (ambient.Context.TraceId != bodyContext.TraceId)
+        {
+            ambient.AddLink(new ActivityLink(bodyContext));
+            ambient.SetTag("vnext.trace.mismatch", true);
+        }
+
+        return null;
     }
 }

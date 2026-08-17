@@ -24,6 +24,8 @@ using Moq;
 using Shouldly;
 using Xunit;
 
+using BBT.Aether.Tracing;
+
 namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
 /// <summary>
@@ -33,6 +35,7 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 public class RemoteInvokerServiceTests
 {
     private readonly Mock<DaprClient> _daprClient = new();
+    private readonly Mock<ICorrelationIdProvider> _correlationIdProvider = new();
     private readonly Mock<ILogger<RemoteInvokerService>> _logger = new();
 
     private RemoteInvokerService CreateService(int invocationTimeoutSeconds = 60)
@@ -45,7 +48,7 @@ public class RemoteInvokerServiceTests
             })
             .Build();
 
-        return new RemoteInvokerService(_daprClient.Object, config, _logger.Object);
+        return new RemoteInvokerService(_daprClient.Object, config, _logger.Object, _correlationIdProvider.Object);
     }
 
     private static TaskEnvelope CreateEnvelope() => new()

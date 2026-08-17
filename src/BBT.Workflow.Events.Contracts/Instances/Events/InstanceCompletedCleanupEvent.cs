@@ -1,5 +1,6 @@
 using BBT.Aether.Events;
 using BBT.Workflow.Events.Hooks;
+using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
 
@@ -15,7 +16,7 @@ namespace BBT.Workflow.Instances.Events;
 /// </remarks>
 [EventHook]
 [EventName("instance.completed.cleanup")]
-public class InstanceCompletedCleanupEvent : IDistributedEvent
+public class InstanceCompletedCleanupEvent : IDistributedEvent, ITraceableDistributedEvent
 {
     /// <summary>
     /// The ID of the completed instance
@@ -48,4 +49,13 @@ public class InstanceCompletedCleanupEvent : IDistributedEvent
     /// <c>null</c> when this is a root (non-subflow) instance.
     /// </summary>
     public Guid? RootInstanceId { get; init; }
+
+    /// <summary>W3C traceparent captured at publish time (stamped centrally by the event bus).</summary>
+    public string? TraceParent { get; set; }
+
+    /// <summary>W3C tracestate accompanying <see cref="TraceParent"/>.</summary>
+    public string? TraceState { get; set; }
+
+    /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
+    public string? RequestId { get; set; }
 }
