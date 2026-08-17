@@ -239,10 +239,21 @@ self-healing condition is converted into a permanent business outcome.
   violations, a missing implementing type, and exceptions thrown by the mapping's own logic. Current
   behaviour is retained: incident, fault, commit.
 - **Transient** — the mapping would succeed on a later attempt: assembly load and load-context
-  faults (`FileLoadException`, `BadImageFormatException`) and `OperationCanceledException`. These
-  are **rethrown rather than converted to a failed `Result`**, so `correlationUow` never commits.
-  The inner-exception chain is walked, because script invocation and type initialisation both wrap
-  the original fault.
+  faults (`FileLoadException`, `BadImageFormatException`). These are **rethrown rather than
+  converted to a failed `Result`**, so `correlationUow` never commits. The inner-exception chain is
+  walked, because script invocation and type initialisation both wrap the original fault.
+
+  **`OperationCanceledException` is deliberately NOT on this list**, and the reason matters. It was
+  on it in the first implementation, and the final review found that this introduced a worse failure
+  mode than the one being fixed. Mapping scripts hold a `DaprClient`, so a downstream timeout
+  arrives as `TaskCanceledException`, which derives from `OperationCanceledException`. Classifying
+  that transient means rethrowing on every redelivery — and with no `maxRetries` or dead-letter
+  configured, the parent stays Busy with an open correlation **indefinitely and silently**, where
+  before it faulted visibly. `FileLoadException` self-heals once the cache warms; a downstream
+  outage does not. Genuine cancellation is instead handled by its own catch, guarded on
+  `cancellationToken.IsCancellationRequested`: host shutdown or an abandoned caller rethrows, while
+  a `TaskCanceledException` arriving with our token still live falls through to the permanent path
+  and faults visibly, exactly as before this change.
 
   The walk must also open `ReflectionTypeLoadException.LoaderExceptions`. `CompileAndLoad` calls
   `assembly.GetTypes()`, and that exception carries its load faults in an array with
