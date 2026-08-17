@@ -74,7 +74,8 @@ public class CSharpEvaluator : IEvaluator
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
-        IReadOnlyList<string>? sandboxGrant = null)
+        IReadOnlyList<string>? sandboxGrant = null,
+        string? cacheScope = null)
     {
         if (string.IsNullOrWhiteSpace(code))
             throw new ArgumentException("Code cannot be null or empty", nameof(code));
@@ -84,7 +85,8 @@ public class CSharpEvaluator : IEvaluator
         // ScriptHelperRegistry applies to helper-set builds.
         cancellationToken.ThrowIfCancellationRequested();
 
-        var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives, sandboxGrant);
+        var cacheKey = GenerateCacheKey(
+            code, typeof(T), extraReferences, usingDirectives, sandboxGrant, cacheScope);
 
         // Fast path: an already-materialised entry is the overwhelmingly common case (every script in
         // every transition after the first). Check it before GetOrAdd so the closure below — which
@@ -326,7 +328,8 @@ public class CSharpEvaluator : IEvaluator
         Type targetType,
         IEnumerable<MetadataReference>? extraReferences,
         IEnumerable<string>? usingDirectives,
-        IReadOnlyList<string>? sandboxGrant = null)
+        IReadOnlyList<string>? sandboxGrant = null,
+        string? cacheScope = null)
     {
         var sb = new StringBuilder();
         sb.Append(code);
@@ -335,6 +338,13 @@ public class CSharpEvaluator : IEvaluator
 
         // Sandbox state is part of the compilation identity.
         sb.Append("|sbx:").Append(_sandbox.Enabled ? '1' : '0');
+
+        // The load context is part of the compilation identity: a type compiled into helper set A's
+        // context must never be served to a caller compiling against helper set B.
+        if (cacheScope != null)
+        {
+            sb.Append("|alc:").Append(cacheScope);
+        }
 
         if (sandboxGrant != null)
         {
@@ -420,10 +430,12 @@ public class CSharpEvaluator : IEvaluator
     public bool InvalidateScript<T>(
         string code,
         IEnumerable<MetadataReference>? extraReferences = null,
-        IEnumerable<string>? usingDirectives = null)
+        IEnumerable<string>? usingDirectives = null,
+        string? cacheScope = null)
     {
-        var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives);
-        
+        var cacheKey = GenerateCacheKey(
+            code, typeof(T), extraReferences, usingDirectives, sandboxGrant: null, cacheScope: cacheScope);
+
         if (_typeCache.TryRemove(cacheKey, out var cached) && cached.IsValueCreated)
         {
             try

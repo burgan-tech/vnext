@@ -44,6 +44,12 @@ public interface IEvaluator
     /// Optional per-compile assembly grant merged on top of the sandbox baseline (effective only when
     /// the sandbox is enabled).
     /// </param>
+    /// <param name="cacheScope">
+    /// Optional identity of the load context the compilation belongs to. Two callers using different
+    /// shared contexts must not share a cached type, and the helper assembly's
+    /// <see cref="MetadataReference"/> cannot express that (its <c>Display</c> is null for an
+    /// in-memory image), so the scope is passed explicitly.
+    /// </param>
     /// <returns>A task containing the compiled instance of type T</returns>
     Task<T> CompileToInstanceAsync<T>(
         string code,
@@ -52,7 +58,8 @@ public interface IEvaluator
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
-        IReadOnlyList<string>? sandboxGrant = null);
+        IReadOnlyList<string>? sandboxGrant = null,
+        string? cacheScope = null);
 
     /// <summary>
     /// Compiles a set of helper component sources into a single assembly loaded into the supplied

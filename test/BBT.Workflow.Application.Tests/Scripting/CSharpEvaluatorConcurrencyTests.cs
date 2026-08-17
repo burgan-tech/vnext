@@ -128,6 +128,23 @@ public sealed class CSharpEvaluatorConcurrencyTests
     }
 
     [Fact]
+    public async Task CompileToInstanceAsync_WhenSameCodeCompiledUnderDifferentScopes_ShouldNotShareCacheEntry()
+    {
+        var evaluator = new CSharpEvaluator();
+        var contextA = new TestLoadContext();
+        var contextB = new TestLoadContext();
+
+        var a = await evaluator.CompileToInstanceAsync<object>(
+            SampleScript, loadContext: contextA, cacheScope: "helper-set-a");
+        var b = await evaluator.CompileToInstanceAsync<object>(
+            SampleScript, loadContext: contextB, cacheScope: "helper-set-b");
+
+        evaluator.CachedTypeCount.ShouldBe(2);
+        AssemblyLoadContext.GetLoadContext(a.GetType().Assembly).ShouldBeSameAs(contextA);
+        AssemblyLoadContext.GetLoadContext(b.GetType().Assembly).ShouldBeSameAs(contextB);
+    }
+
+    [Fact]
     public async Task CompileToInstanceAsync_WhenRetryingAfterATypeMatchFailure_ShouldSurfaceTheRealDiagnostic()
     {
         // Reproduces the real production trigger: a single evaluator (it's a process-wide singleton,
