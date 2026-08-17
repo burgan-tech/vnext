@@ -932,4 +932,6 @@ Master carries a known set of pre-existing failures (largely `AmbientServiceProv
 | §7 tests 1–4 | 1, 2, 3 |
 | §7 test 5 | 4 |
 
-One deliberate narrowing against the spec: §7 test 5 also asked for a `SubflowFaultService` variant. `SubflowFaultService` gets no code change — a transient failure aborts its delivery because `ApplyAsync` throws, and its own `if (!mappingResult.IsSuccess)` branch only ever sees permanent failures. A mocked test there would assert that an exception thrown by a mock propagates through a method that does not catch it, which pins nothing real. The behaviour is covered by `OutputMappingFailureClassifierTests` (which decides) and the completion-service tests (which pin the caller contract). If you disagree while implementing, add it — it costs little.
+**Reversed during implementation.** This plan originally skipped the `SubflowFaultService` test from spec §7 test 5, arguing it would only assert that an exception propagates through a method that does not catch it. That was wrong: `SubflowFaultService.cs:288-292` *does* catch, and the behaviour is correct only because that handler rethrows. Change it to swallow and redelivery breaks silently, dropping the child's data with no signal. The test was added.
+
+The same review round added `SubflowOutputMappingServiceTests.cs`, which the plan lacked entirely: the two caller-contract tests in Task 4 mock `ISubflowOutputMappingService` wholesale and therefore never execute the catch-split this change is about.

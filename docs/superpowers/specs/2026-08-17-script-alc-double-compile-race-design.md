@@ -266,9 +266,15 @@ The classification lives in `SubflowOutputMappingService` — it owns the except
 place with enough information to judge it. Callers stay simple: a failed `Result` still means
 permanent, and an exception still means retry.
 
-`SubflowFaultService` uses the same classification. Its permanent branch keeps today's
-log-and-proceed (the parent is already faulted; re-faulting is wrong), while a transient failure
-rethrows for redelivery instead of silently dropping the child's data.
+`SubflowFaultService` gets the same behaviour with **no code change**, and it is worth saying why so
+this does not read as half-implemented. Its permanent branch keeps today's log-and-proceed (the
+parent is already faulted; re-faulting would be wrong), and it only ever sees permanent failures now,
+because a transient one throws past it. The throw then reaches its outer handler at
+`SubflowFaultService.cs:288-292`, which logs and **rethrows** — so no commit happens and the delivery
+is redelivered, exactly as on the completion path.
+
+That correctness rests on that outer catch continuing to rethrow, which is invisible from the code
+this change touches. A test pins it.
 
 | Situation | Behaviour |
 |---|---|
