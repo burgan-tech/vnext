@@ -200,7 +200,7 @@ public sealed class ScriptEngine(
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default)
     {
-        return CompileCoreAsync<T>(code, extraReferences, usingDirectives, null, null, cancellationToken);
+        return CompileCoreAsync<T>(code, extraReferences, usingDirectives, null, null, cancellationToken, cacheScope: null);
     }
 
     /// <inheritdoc />
@@ -227,7 +227,7 @@ public sealed class ScriptEngine(
         if (effective?.HasHelpers != true)
         {
             return await CompileCoreAsync<T>(
-                body, extraReferences, usingDirectives, null, grant, cancellationToken);
+                body, extraReferences, usingDirectives, null, grant, cancellationToken, cacheScope: null);
         }
 
         if (!_helpersOptions.Enabled)
@@ -355,7 +355,7 @@ public sealed class ScriptEngine(
         AssemblyLoadContext? loadContext,
         IReadOnlyList<string>? sandboxGrant,
         CancellationToken cancellationToken,
-        string? cacheScope = null)
+        string? cacheScope)
     {
         var stopwatch = Stopwatch.StartNew();
         const string scriptType = "compilation";

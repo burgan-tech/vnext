@@ -341,7 +341,7 @@ public class CSharpEvaluator : IEvaluator
 
         // The load context is part of the compilation identity: a type compiled into helper set A's
         // context must never be served to a caller compiling against helper set B.
-        if (cacheScope != null)
+        if (!string.IsNullOrEmpty(cacheScope))
         {
             sb.Append("|alc:").Append(cacheScope);
         }

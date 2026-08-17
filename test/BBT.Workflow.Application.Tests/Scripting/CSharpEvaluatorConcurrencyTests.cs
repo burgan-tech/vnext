@@ -145,6 +145,20 @@ public sealed class CSharpEvaluatorConcurrencyTests
     }
 
     [Fact]
+    public async Task CompileToInstanceAsync_WhenNoScopeIsSupplied_ShouldStillShareOneCacheEntry()
+    {
+        // The negative case for the scope fix above: the no-helper path never passes a cacheScope, so
+        // two identical compiles with none supplied must still hit the same cache entry — the scope
+        // must not mint a distinct key when it is absent.
+        var evaluator = new CSharpEvaluator();
+
+        await evaluator.CompileToInstanceAsync<object>(SampleScript);
+        await evaluator.CompileToInstanceAsync<object>(SampleScript);
+
+        evaluator.CachedTypeCount.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task CompileToInstanceAsync_WhenRetryingAfterATypeMatchFailure_ShouldSurfaceTheRealDiagnostic()
     {
         // Reproduces the real production trigger: a single evaluator (it's a process-wide singleton,
