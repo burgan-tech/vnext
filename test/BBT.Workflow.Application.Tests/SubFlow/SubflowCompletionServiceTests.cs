@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -699,6 +700,44 @@ public sealed class SubflowCompletionServiceTests
         _instanceRepository.Verify(x => x.FindWithAllCorrelationsAsync(
             parent.Id, CancellationToken.None), Times.Once);
         VerifyRevertFailureLogged();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenOutputMappingFailsTransiently_ShouldPropagateWithoutFaultingOrCommitting()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        SetupCompletedCorrelationPath(parent);
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
+                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new FileLoadException("Assembly with same name is already loaded"));
+
+        await Should.ThrowAsync<FileLoadException>(
+            () => CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId)));
+
+        // Nothing is committed, so the correlation completion rolls back with the transaction and
+        // the delivery is redelivered against unchanged state.
+        parent.Status.ShouldNotBe(InstanceStatus.Faulted);
+        _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenOutputMappingFailsPermanently_ShouldFaultParentAndCommit()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        SetupCompletedCorrelationPath(parent);
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
+                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
+                parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
+
+        await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        parent.Status.ShouldBe(InstanceStatus.Faulted);
+        _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private static Instance CloneParentWithCompletedCorrelation(Instance source, Guid subInstanceId)

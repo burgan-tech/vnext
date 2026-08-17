@@ -79,6 +79,15 @@ public sealed class SubflowOutputMappingService(
 
             return Result.Ok();
         }
+        catch (Exception ex) when (OutputMappingFailureClassifier.IsTransient(ex))
+        {
+            // Rethrow so the caller's UnitOfWork is never committed: the correlation completion rolls
+            // back with the transaction and the delivery is redelivered against unchanged state.
+            // Returning Result.Fail here would fault the parent permanently, with nothing to retry it
+            // — see docs/superpowers/specs/2026-08-17-script-alc-double-compile-race-design.md §5.4.
+            logger.SubFlowOutputMappingTransientFailure(ex, parentInstance.Id);
+            throw;
+        }
         catch (Exception ex)
         {
             logger.SubFlowOutputMappingFailed(ex, parentInstance.Id);

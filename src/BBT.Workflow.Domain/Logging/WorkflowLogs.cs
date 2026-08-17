@@ -1144,6 +1144,19 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
+    /// Logs that a subflow output mapping hit a transient infrastructure fault and is being rethrown
+    /// for redelivery rather than faulting the parent.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40089,
+        Level = LogLevel.Warning,
+        Message = "SubFlow output mapping hit a transient failure for parent instance {ParentInstanceId}; rethrowing for redelivery")]
+    public static partial void SubFlowOutputMappingTransientFailure(
+        this ILogger logger,
+        Exception exception,
+        Guid parentInstanceId);
+
+    /// <summary>
     /// Logs when pipeline is resumed after SubFlow completion.
     /// </summary>
     [LoggerMessage(
