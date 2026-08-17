@@ -80,6 +80,7 @@ services:
     container_name: vnext-orchestration-dapr
     command: [
       "./daprd",
+      "--config", "/dapr-config.yaml",
       "--app-id", "vnext-app",
       "--app-port", "5000",
       "--resources-path", "./components",
@@ -90,6 +91,7 @@ services:
     ]
     volumes:
       - "../../etc/orchestration/dapr/components:/components"
+      - "../../etc/orchestration/dapr/config.yaml:/dapr-config.yaml"
     network_mode: "service:vnext-app"
     depends_on:
       - vnext-app
@@ -103,6 +105,7 @@ services:
     container_name: vnext-execution-dapr
     command: [
       "./daprd",
+      "--config", "/dapr-config.yaml",
       "--app-id", "vnext-execution-app",
       "--app-port", "5000",
       "--resources-path", "./components",
@@ -113,6 +116,7 @@ services:
     ]
     volumes:
       - "../../etc/execution/dapr/components:/components"
+      - "../../etc/execution/dapr/config.yaml:/dapr-config.yaml"
     network_mode: "service:vnext-execution-app"
     depends_on:
       - vnext-execution-app
@@ -150,6 +154,7 @@ services:
     container_name: vnext-monitoring-dapr
     command: [
       "./daprd",
+      "--config", "/dapr-config.yaml",
       "--app-id", "vnext-monitoring",
       "--app-port", "5000",
       "--resources-path", "./components",
@@ -160,6 +165,7 @@ services:
     ]
     volumes:
       - "../../etc/monitoring/dapr/components:/components"
+      - "../../etc/monitoring/dapr/config.yaml:/dapr-config.yaml"
     network_mode: "service:vnext-monitoring-app"
     depends_on:
       - vnext-monitoring-app
@@ -173,6 +179,7 @@ services:
     container_name: vnext-db-migrator-dapr
     command: [
       "./daprd",
+      "--config", "/dapr-config.yaml",
       "--app-id", "vnext-db-migrator",
       "--resources-path", "./components",
       "--dapr-grpc-port", "44211",
@@ -182,6 +189,7 @@ services:
     ]
     volumes:
       - "../../etc/workers/db-migrator/dapr/components:/components"
+      - "../../etc/workers/db-migrator/dapr/config.yaml:/dapr-config.yaml"
     ports:
       - "44210:44210"
       - "44211:44211"
@@ -312,6 +320,73 @@ services:
     networks:
       - bbt-development
 
+  # Elasticsearch — local mirror of the production trace backend. OpenObserve and
+  # Elastic APM reconstruct a waterfall differently (Elastic re-parents a span whose
+  # parent was never exported), so a trace that looks correct in OpenObserve can look
+  # broken in Elastic. Both run side by side here so the two renderings can be compared.
+  elasticsearch:
+    container_name: vnext-elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.15.3}
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      ingest.geoip.downloader.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - bbt-development
+
+  # Kibana — the APM app (Observability > APM > Traces) is the renderer to verify against.
+  kibana:
+    container_name: vnext-kibana
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.15.3}
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      # Must be at least 32 chars, and stable, or saved objects are re-encrypted on
+      # every restart and the APM app loses its state.
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "vnext-local-dev-kibana-encryption-key"
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - bbt-development
+
+  # APM Server — accepts OTLP natively on 8200 (gRPC and HTTP on the same port) and
+  # writes Elastic's traces-apm-* / logs-apm-* data streams.
+  apm-server:
+    container_name: vnext-apm-server
+    image: docker.elastic.co/apm/apm-server:${ELASTIC_VERSION:-8.15.3}
+    # strict.perms is relaxed because the config file is bind-mounted from the repo and
+    # will not be owned by the in-image apm-server user.
+    command: ["--strict.perms=false", "-e"]
+    volumes:
+      - ./config/apm/apm-server.yml:/usr/share/apm-server/apm-server.yml:ro
+    ports:
+      # Vault already publishes 8200 on the host, so this is 8201 outside; inside the
+      # compose network it still listens on 8200, which is what the collector targets.
+      - "8201:8200"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - bbt-development
+
   # OpenObserve for observability
   openobserve:
     container_name: vnext-openobserve
@@ -343,6 +418,7 @@ services:
       - "55679:55679" # zpages extension
     depends_on:
       - openobserve
+      - apm-server
     networks:
       - bbt-development
 
@@ -354,5 +430,6 @@ volumes:
   redis:
   postgres:
   openobserve:
+  elasticsearch:
   vnext-monitoring-app:
   npm-cache: {}
