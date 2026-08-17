@@ -92,6 +92,29 @@ public sealed class SubflowOutputMappingServiceTests
     }
 
     /// <summary>
+    /// A cancellation-shaped exception (e.g. <see cref="TaskCanceledException"/> from a
+    /// <c>DaprClient</c> call inside the mapping timing out) arriving while OUR token is NOT
+    /// cancelled is a downstream fault, not "our own cancellation". It must fault the parent visibly
+    /// — there is no <c>maxRetries</c>/dead-letter configured, so classifying it transient would
+    /// strand the parent Busy forever instead.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WhenCancellationExceptionArrivesWithoutOurTokenCancelled_ShouldReturnFailedResultWithoutThrowing()
+    {
+        var parentInstance = CreateParentInstance();
+        var parentWorkflow = CreateParentWorkflowWithMapping();
+        _scriptContextFactory
+            .Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>()))
+            .Throws(new TaskCanceledException("downstream call timed out"));
+
+        var result = await CreateService().ApplyAsync(
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
+    }
+
+    /// <summary>
     /// Mocks the whole fluent <see cref="IScriptContextBuilder"/> chain plus a real
     /// <see cref="ScriptContext"/>, mirroring <c>ResourceLockStepTests.SetupScriptContextFactory</c>,
     /// so the script-context build succeeds and execution reaches the compile step.

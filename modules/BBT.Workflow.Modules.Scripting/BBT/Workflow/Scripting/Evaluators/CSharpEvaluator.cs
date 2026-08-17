@@ -76,6 +76,15 @@ public class CSharpEvaluator : IEvaluator
     /// it — is never collected either. It, and this table's entry for it, are retained for the process
     /// lifetime, not stranded. A retained context is the correct trade against ever serving a compile
     /// from the wrong one, which is what the withdrawn content-hash design risked.
+    ///
+    /// Deliberately <c>static</c>, not per-instance: two <see cref="CSharpEvaluator"/> instances that
+    /// share one <see cref="AssemblyLoadContext"/> (the production shape — the evaluator is a
+    /// singleton, but tests construct several against one context) must agree on that context's scope
+    /// id, or the reuse path in <see cref="CompileAndLoad{T}"/> derives two different cache keys for
+    /// the same compilation and silently loads a second copy instead of reusing the first. Scope it to
+    /// an instance and <c>CSharpEvaluatorConcurrencyTests.CompileToInstanceAsync_WhenAssemblyAlreadyLoadedInContext_ShouldReuseItInsteadOfThrowing</c>
+    /// passes vacuously — each evaluator gets its own scope id, the two never agree, and the test can no
+    /// longer tell the difference.
     /// </summary>
     private static readonly ConditionalWeakTable<AssemblyLoadContext, string> LoadContextScopes = new();
 
@@ -85,6 +94,20 @@ public class CSharpEvaluator : IEvaluator
     /// Gets the number of cached script types (unique scripts compiled).
     /// </summary>
     public int CachedTypeCount => _typeCache.Count;
+
+    private long _compileInvocationCount;
+
+    /// <summary>
+    /// Test-only observability seam: counts actual calls into <see cref="CompileAndLoad{T}"/> — the
+    /// Roslyn emit path — regardless of what the cache or the load context end up holding afterwards.
+    /// <see cref="CachedTypeCount"/> and the compiled <see cref="Type"/> identity of a result cannot
+    /// distinguish "compiled once" from "compiled N times but the last write won" once the assembly
+    /// reuse in <see cref="CompileAndLoad{T}"/> is in play: N redundant concurrent compiles into a
+    /// shared context can all resolve to the very same reused assembly without throwing, so those
+    /// signals go green even if the <c>Lazy</c> de-duplication in <see cref="CompileToInstanceAsync{T}"/>
+    /// regressed away. This counter is the only signal that is not fooled by that.
+    /// </summary>
+    internal long CompileInvocationCount => Interlocked.Read(ref _compileInvocationCount);
 
     /// <inheritdoc />
     public Task<T> CompileToInstanceAsync<T>(
@@ -213,6 +236,8 @@ public class CSharpEvaluator : IEvaluator
         IReadOnlyList<string>? sandboxGrant,
         AssemblyLoadContext? loadContext)
     {
+        Interlocked.Increment(ref _compileInvocationCount);
+
         var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions);
 
         // Add using directives if provided
@@ -236,15 +261,22 @@ public class CSharpEvaluator : IEvaluator
         var image = EmitToImage(compilation, CancellationToken.None);
 
         // Use the shared collectible context when supplied (so mappings resolve helper types),
-        // otherwise a fresh per-script collectible context (so we CAN unload, e.g. ClearCache).
+        // otherwise a fresh per-script collectible context (so we CAN unload it below when no
+        // implementing type is found).
         var context = loadContext ?? new ScriptAssemblyLoadContext(assemblyName);
 
-        // Reuse over reload. An assembly already loaded here under this name IS this compilation —
-        // the name is the full hash of the compilation inputs. A shared context cannot unload a
-        // single assembly, so if an earlier attempt loaded it and then failed before caching the
-        // type, reloading would throw for the rest of the process lifetime.
-        var assembly = context.Assemblies.FirstOrDefault(a => a.GetName().Name == assemblyName)
-                       ?? context.LoadFromStream(new MemoryStream(image));
+        // Reuse over reload — but only for a shared context. An assembly already loaded here under
+        // this name IS this compilation (the name is the full hash of the compilation inputs), and a
+        // shared context cannot unload a single assembly, so if an earlier attempt loaded it and then
+        // failed before caching the type, reloading would throw for the rest of the process lifetime.
+        // A `loadContext is null` context was just created a few lines above, so the scan can only
+        // ever return null there — skip it. `context.Assemblies` accumulates every script assembly
+        // ever loaded for the process lifetime (see LoadContextScopes above), so scanning it on every
+        // compile into a context that provably cannot contain a match is an unbounded, pointless cost.
+        var assembly = loadContext is not null
+            ? context.Assemblies.FirstOrDefault(a => a.GetName().Name == assemblyName)
+              ?? context.LoadFromStream(new MemoryStream(image))
+            : context.LoadFromStream(new MemoryStream(image));
 
         // Find the type that implements T
         var types = assembly.GetTypes();
@@ -445,55 +477,6 @@ public class CSharpEvaluator : IEvaluator
             .Where(r => r != null)
             .Cast<MetadataReference>()
             .ToList();
-    }
-
-    /// <summary>
-    /// Clears all cached types and unloads their assemblies.
-    /// Call this to reclaim memory if script definitions change.
-    /// </summary>
-    public void ClearCache()
-    {
-        foreach (var key in _typeCache.Keys.ToList())
-        {
-            if (_typeCache.TryRemove(key, out var cached) && cached.IsValueCreated)
-            {
-                try
-                {
-                    cached.Value.Context.Unload();
-                }
-                catch
-                {
-                    // Ignore unload failures
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Removes a specific script from the cache by its code.
-    /// Useful when a script definition is updated.
-    /// </summary>
-    public bool InvalidateScript<T>(
-        string code,
-        IEnumerable<MetadataReference>? extraReferences = null,
-        IEnumerable<string>? usingDirectives = null)
-    {
-        var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives);
-
-        if (_typeCache.TryRemove(cacheKey, out var cached) && cached.IsValueCreated)
-        {
-            try
-            {
-                cached.Value.Context.Unload();
-            }
-            catch
-            {
-                // Ignore
-            }
-            return true;
-        }
-
-        return false;
     }
 
     /// <summary>A compiled script type and the context its assembly was loaded into.</summary>

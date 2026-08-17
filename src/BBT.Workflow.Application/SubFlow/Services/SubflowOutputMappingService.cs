@@ -79,6 +79,15 @@ public sealed class SubflowOutputMappingService(
 
             return Result.Ok();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Our own cancellation (shutdown, caller gone) — not a mapping failure. Let it out so the
+            // UnitOfWork rolls back; the delivery is redelivered when the runtime is healthy again.
+            // A cancellation-shaped exception arriving while OUR token is still live (e.g. a
+            // DaprClient call inside the mapping timing out) is a downstream fault, not this case —
+            // it falls through to the classifier below, which no longer treats it as transient.
+            throw;
+        }
         catch (Exception ex) when (OutputMappingFailureClassifier.IsTransient(ex))
         {
             // Rethrow so the caller's UnitOfWork is never committed: the correlation completion rolls

@@ -26,7 +26,7 @@ internal static class OutputMappingFailureClassifier
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
-            if (current is FileLoadException or BadImageFormatException or OperationCanceledException)
+            if (current is FileLoadException or BadImageFormatException)
             {
                 return true;
             }

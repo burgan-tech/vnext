@@ -18,8 +18,15 @@ public sealed class OutputMappingFailureClassifierTests
         => OutputMappingFailureClassifier.IsTransient(new BadImageFormatException()).ShouldBeTrue();
 
     [Fact]
-    public void IsTransient_ForCancellation_ShouldBeTrue()
-        => OutputMappingFailureClassifier.IsTransient(new OperationCanceledException()).ShouldBeTrue();
+    public void IsTransient_ForCancellation_ShouldBeFalse()
+    {
+        // A bare OperationCanceledException is not on the allowlist. Genuine "our own cancellation"
+        // (shutdown, caller gone) is handled as its own catch in ApplyAsync, ahead of the classifier —
+        // it never reaches IsTransient. Anything that does reach here is a downstream fault (e.g. a
+        // DaprClient call timing out as TaskCanceledException) and must fault the parent visibly,
+        // not be redelivered forever with no maxRetries/dead-letter configured.
+        OutputMappingFailureClassifier.IsTransient(new OperationCanceledException()).ShouldBeFalse();
+    }
 
     [Fact]
     public void IsTransient_ForWrappedAssemblyLoadFailure_ShouldBeTrue()

@@ -70,6 +70,14 @@ public sealed class CSharpEvaluatorConcurrencyTests
         results.ShouldAllBe(r => r != null);
         results.Select(r => r.GetType()).Distinct().Count().ShouldBe(1);
         evaluator.CachedTypeCount.ShouldBe(1);
+
+        // The assertions above pass even if the Lazy de-duplication regressed away: the assembly-reuse
+        // fix (CompileAndLoad) lets N redundant concurrent compiles into this shared context all
+        // resolve to the one reused assembly without throwing, so "no exception" plus a shared final
+        // Type no longer prove there was only one Roslyn emit. Count the actual compile invocations —
+        // the one signal the reuse fix cannot mask — to prove the real guarantee: exactly one compile,
+        // not eight that happened to converge on the same assembly.
+        evaluator.CompileInvocationCount.ShouldBe(1);
     }
 
     [Fact]
