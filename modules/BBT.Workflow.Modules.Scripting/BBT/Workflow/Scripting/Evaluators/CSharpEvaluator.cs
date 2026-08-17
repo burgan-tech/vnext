@@ -65,7 +65,7 @@ public class CSharpEvaluator : IEvaluator
     /// <summary>
     /// Assigns each shared <see cref="AssemblyLoadContext"/> a stable scope id, on first use, so the
     /// cache key can distinguish compiles into different contexts without a second parameter that
-    /// could disagree with <paramref name="loadContext"/> itself (see <see cref="GetCacheScope"/>) —
+    /// could disagree with the load context itself (see <see cref="GetCacheScope"/>) —
     /// the API previously took an explicit <c>cacheScope</c> string, and nothing stopped a caller from
     /// passing a scope that named one context while compiling into another. Keyed weakly: the table
     /// must never be what keeps a context alive — <see cref="CompiledScript.Context"/> already holds
@@ -348,7 +348,7 @@ public class CSharpEvaluator : IEvaluator
     /// byte-identical to before this existed.
     ///
     /// Root cause this exists for: the helper-set assembly's <see cref="MetadataReference"/> is built
-    /// with <see cref="MetadataReference.CreateFromImage(byte[])"/>, whose <c>Display</c> is null, so
+    /// with <c>MetadataReference.CreateFromImage(...)</c>, whose <c>Display</c> is null, so
     /// it contributes nothing to <see cref="GenerateCacheKey"/>'s reference loop below — without this,
     /// two helper sets exporting the same namespace/type could share one cache entry for identical
     /// mapping source and the wrong compiled type would be served with no exception.
