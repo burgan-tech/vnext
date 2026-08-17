@@ -214,7 +214,12 @@ public class CSharpEvaluator : IEvaluator
         // otherwise a fresh per-script collectible context (so we CAN unload, e.g. ClearCache).
         var context = loadContext ?? new ScriptAssemblyLoadContext(assemblyName);
 
-        var assembly = context.LoadFromStream(new MemoryStream(image));
+        // Reuse over reload. An assembly already loaded here under this name IS this compilation —
+        // the name is the full hash of the compilation inputs. A shared context cannot unload a
+        // single assembly, so if an earlier attempt loaded it and then failed before caching the
+        // type, reloading would throw for the rest of the process lifetime.
+        var assembly = context.Assemblies.FirstOrDefault(a => a.GetName().Name == assemblyName)
+                       ?? context.LoadFromStream(new MemoryStream(image));
 
         // Find the type that implements T
         var types = assembly.GetTypes();

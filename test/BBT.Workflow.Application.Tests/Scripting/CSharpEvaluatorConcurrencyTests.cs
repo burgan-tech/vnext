@@ -101,4 +101,21 @@ public sealed class CSharpEvaluatorConcurrencyTests
             () => evaluator.CompileToInstanceAsync<object>(broken));
         evaluator.CachedTypeCount.ShouldBe(0);
     }
+
+    [Fact]
+    public async Task CompileToInstanceAsync_WhenAssemblyAlreadyLoadedInContext_ShouldReuseItInsteadOfThrowing()
+    {
+        // Two evaluators sharing one context reproduces the state an earlier partial failure
+        // leaves behind: the assembly is loaded, but this evaluator's cache knows nothing about it.
+        var context = new TestLoadContext();
+        var first = new CSharpEvaluator();
+        var second = new CSharpEvaluator();
+
+        await first.CompileToInstanceAsync<object>(SampleScript, loadContext: context);
+
+        var result = await second.CompileToInstanceAsync<object>(SampleScript, loadContext: context);
+
+        result.ShouldNotBeNull();
+        second.CachedTypeCount.ShouldBe(1);
+    }
 }
