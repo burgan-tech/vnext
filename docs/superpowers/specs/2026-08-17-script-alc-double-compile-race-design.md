@@ -1,8 +1,9 @@
-# Script Assembly Load Context Double-Compile Race — Design
+# Script Compile Race and Output-Mapping Failure Classification — Design
 
-**Date:** 2026-08-17
+**Date:** 2026-08-17 (revised 2026-08-18 — corrected §1c, added §5.4)
 **Status:** Approved (design)
-**Scope:** Runtime (`BBT.Workflow.Modules.Scripting`, `BBT.Workflow.Application`)
+**Scope:** Runtime (`BBT.Workflow.Modules.Scripting`, `BBT.Workflow.Application` — scripting
+evaluator and SubFlow terminal services)
 
 ## 1. Problem
 
@@ -34,13 +35,16 @@ null and every compilation gets a fresh collectible context
 (`CSharpEvaluator.cs:185`), where a name collision is impossible. An `AssemblyLoadContext` cannot
 hold two assemblies with the same simple name, so the second `LoadFromStream` throws.
 
-**(c) The concurrency is structural, not incidental.** `InstanceSubCompletedEvent`,
-`InstanceSubFaultedEvent` and `InstanceSubCanceledEvent` are all `EventHookMode.DurablePostCommit`,
-so every subflow completion is processed **twice** — local hook plus Inbox forward — and both paths
-reach the same `SubflowOutputMappingService.ApplyAsync`. Both callers receive the *same* `HelperSet`
-(the registry's `Lazy` guarantees it), both miss `_typeCache`, both compile, and the loser throws.
+**(c) Concurrent completions of the same flow compile the same mapping.** Every parallel subflow
+completion of a given workflow reaches `SubflowOutputMappingService.ApplyAsync` with identical
+mapping source, so they share one cache key and one `HelperSet` load context. Whenever more than one
+is in flight while the entry is still cold, they all compile and every one but the winner throws.
 
-On a cold cache, losing this race is the expected outcome rather than an edge case.
+Note what is **not** the source: duplicate deliveries of the *same* completion cannot race here.
+`SubflowCompletionService` serializes them behind a per-`(parent, subInstance)` distributed lock
+(`vnext:{domain}:{flow}:{parentId}:sub:{subInstanceId}`), so the second delivery either waits and
+short-circuits on `correlation.IsCompleted` or is redelivered. The concurrency comes from *distinct*
+instances, each holding a different lock key.
 
 ### Why it surfaced recently
 
@@ -52,9 +56,19 @@ crash. The evaluator's source is byte-identical across v0.0.70 → v0.0.80 → m
 
 ### Why "under load"
 
-Once a compilation succeeds the entry is cached, so the race is confined to each pod's cold window.
-Load triggers HPA scale-out; every new pod opens a fresh cold window, and on that pod one copy of
-every concurrent subflow completion fails. Rolling deploys have the same effect.
+Once a compilation succeeds the entry is cached, so the exposure is each pod's cold window — but
+load determines how many completions fall inside it. At low volume, completions arrive far enough
+apart that the first one warms the cache before the next begins. At high volume, N completions of
+the same flow overlap inside that window and N-1 of them fail. Pod churn widens it further: HPA
+scale-out and rolling deploys each open a fresh cold window on a pod that is immediately taking
+load.
+
+### Consequential damage
+
+The failure does not stop at a logged error. `SubflowCompletionService` treats any failed output
+mapping as permanent and faults the parent (§5.4), so each loser terminates an otherwise healthy
+instance. That is the flow inconsistency observed in preprod, and it is what makes this urgent
+rather than merely noisy.
 
 ## 2. Goals
 
@@ -62,18 +76,23 @@ every concurrent subflow completion fails. Rolling deploys have the same effect.
 2. Loading a script assembly into a load context is idempotent, so a partial failure cannot leave a
    shared context permanently unable to serve that script.
 3. The cache key distinguishes load contexts, so two helper sets cannot share one compiled type.
+4. A transient infrastructure failure during output mapping no longer terminates the parent
+   instance. Only a genuinely permanent failure produces a terminal outcome.
 
 ## 3. Non-goals
 
 Explicitly out of scope, tracked separately so they are not lost:
 
-- **Double-apply of subflow output mapping.** Fixing the crash makes *both* processings succeed, and
-  both then call `instanceDataWriteService.AppendAsync`. The dual-processing design
-  (`EventHookMode.DurablePostCommit`) is the likely source of the observed flow inconsistency, and
-  this design does not address it.
+- **Deduplication of subflow terminal event processing.** Already handled: `ISubItemTerminalGuard`
+  plus the per-`(parent, subInstance)` lock make correlation completion and output mapping commit in
+  one transaction, so a duplicate delivery cannot apply the mapping twice. Making the at-least-twice
+  delivery cheaper remains a separate workstream.
 - **Helper-set load contexts are never unloaded.** `ScriptHelperRegistry` only unloads on a faulted
   build; a superseded healthy set leaks. Pre-existing, unchanged here.
-- **Deduplication of subflow terminal event processing.** Separate workstream.
+- **`SubflowFaultService` skipping output mapping on failure.** It logs and proceeds
+  (`SubflowFaultService.cs:249-257`), which is correct about not re-faulting an already-faulted
+  parent but silently drops the child's data. §5.4 extends the same classification there; the wider
+  question of what a fault-path parent should receive is out of scope.
 
 ## 4. Existing building blocks (verified)
 
@@ -88,6 +107,11 @@ Explicitly out of scope, tracked separately so they are not lost:
   `GetOrBuildHelpers`.
 - `ScriptSettings.HasHelpers` requires an explicit non-empty `helpers` list — there is no implicit
   default helper set.
+- `SubflowCompletionService` already runs correlation completion and output mapping inside one
+  distributed lock and one `correlationUow`, with a `correlation.IsCompleted` short-circuit after
+  re-reading under the lock. Duplicate protection is therefore transactional, not best-effort.
+- Throwing out of `CompletionAsync` is an established redelivery mechanism in this file:
+  `SubflowTerminalLockNotAcquiredException` does exactly that, deliberately, so the broker retries.
 
 ## 5. Architecture
 
@@ -157,7 +181,45 @@ also produce distinct assembly names, so they cannot collide even within one con
 `cacheScope` is added as an optional trailing parameter on `IEvaluator.CompileToInstanceAsync`, which
 keeps existing call sites source-compatible.
 
-## 6. Error semantics
+### 5.4 Output-mapping failure classification
+
+The three changes above remove this particular infrastructure failure. They do not remove the reason
+it was so damaging, which is a separate defect worth fixing in the same change.
+
+`SubflowOutputMappingService.ApplyAsync` catches every exception and collapses it into one
+`Instance:100030` result. `SubflowCompletionService` then treats that result as permanent:
+
+```
+AddIncident → parentInstance.Fault(...) → UpdateAsync → CommitAsync
+```
+
+`Instance.Fault` is terminal — it sets `Status = Faulted` and `CompletedAt`, and raises
+`InstanceFaultedCleanupEvent`, which cascades to children. Because the correlation was completed in
+the same transaction, nothing retries. The in-code justification, *"Retrying would never succeed"*,
+holds for a mapping the author wrote incorrectly and fails for an infrastructure fault. A transient,
+self-healing condition is converted into a permanent business outcome.
+
+`ApplyAsync` therefore classifies its failure:
+
+- **Permanent** — the mapping cannot succeed as written: `CompilationErrorException`, sandbox
+  violations, a missing implementing type, and exceptions thrown by the mapping's own logic. Current
+  behaviour is retained: incident, fault, commit.
+- **Transient** — the mapping would succeed on a later attempt: assembly load and load-context
+  faults (`FileLoadException`, `BadImageFormatException`), `OperationCanceledException`, and
+  transient data-access failures. These are **rethrown rather than converted to a failed `Result`**,
+  so `correlationUow` never commits.
+
+Rolling the transaction back also rolls back the correlation completion, so the delivery is
+redelivered against unchanged state and the retry finds a warm cache. Atomicity works in our favour
+here: there is no half-applied state to reconcile.
+
+The classification lives in `SubflowOutputMappingService` — it owns the exception and is the only
+place with enough information to judge it. Callers stay simple: a failed `Result` still means
+permanent, and an exception still means retry.
+
+`SubflowFaultService` uses the same classification. Its permanent branch keeps today's
+log-and-proceed (the parent is already faulted; re-faulting is wrong), while a transient failure
+rethrows for redelivery instead of silently dropping the child's data.
 
 | Situation | Behaviour |
 |---|---|
@@ -166,8 +228,12 @@ keeps existing call sites source-compatible.
 | Assembly already present in the context under that name | Reused; no `FileLoadException`. |
 | No implementing type found | Throws as today; unloads only when the context is owned. The next attempt reuses the loaded assembly rather than failing to load it again. |
 | Caller cancels during a shared compile | The compile continues for the other callers; the cancelling caller's token is observed on entry only. |
+| Output mapping fails permanently | Unchanged: incident, parent faulted, committed. |
+| Output mapping fails transiently | Exception propagates; `correlationUow` is not committed, correlation completion rolls back, the delivery is redelivered. |
+| Output mapping fails transiently on the fault path | Rethrown for redelivery instead of logged and skipped. The permanent branch keeps log-and-proceed. |
 
-No new error codes. `Instance:100030` continues to report genuine output-mapping failures.
+No new error codes. `Instance:100030` continues to report genuine, permanent output-mapping
+failures — and now only those, which makes the code meaningful as a signal for the first time.
 
 ## 7. Testing
 
@@ -183,6 +249,13 @@ New tests in `test/BBT.Workflow.Application.Tests/Scripting/`:
 4. **Cache scope** — identical mapping source compiled against two different helper sets yields two
    distinct cache entries, each resolving its own helper set's types.
 
+In `test/BBT.Workflow.Application.Tests/SubFlow/`:
+
+5. **Failure classification** — a transient failure (a stubbed `FileLoadException`) propagates out of
+   `CompletionAsync`, leaves the correlation open and the parent un-faulted; a permanent failure (a
+   compilation error) still faults the parent and commits. The fault-path variant asserts the same
+   split in `SubflowFaultService`.
+
 Regression guard: the existing sandbox and helper tests must stay green. Note the known master
 baseline of pre-existing failures unrelated to scripting.
 
@@ -195,7 +268,11 @@ baseline of pre-existing failures unrelated to scripting.
 | `modules/BBT.Workflow.Modules.Scripting/.../Helpers/IScriptHelperRegistry.cs` | `HelperSet.Key` |
 | `modules/BBT.Workflow.Modules.Scripting/.../Helpers/ScriptHelperRegistry.cs` | Populate `Key` |
 | `src/BBT.Workflow.Application/Scripting/ScriptEngine.cs` | Pass `helperSet.Key` as `cacheScope` |
+| `src/BBT.Workflow.Application/SubFlow/Services/SubflowOutputMappingService.cs` | Classify transient vs permanent; rethrow transient |
+| `src/BBT.Workflow.Application/SubFlow/Services/SubflowCompletionService.cs` | Comment update only — the failed-`Result` branch already means "permanent" |
+| `src/BBT.Workflow.Application/SubFlow/Services/SubflowFaultService.cs` | Keep log-and-proceed for permanent; let transient propagate |
 | `test/BBT.Workflow.Application.Tests/Scripting/` | Four new tests |
+| `test/BBT.Workflow.Application.Tests/SubFlow/` | Classification tests |
 
 ## 9. Decisions log
 
@@ -210,3 +287,16 @@ baseline of pre-existing failures unrelated to scripting.
 - **Blocking is accepted.** Waiting threads would otherwise each run the same Roslyn emit.
 - **Detached cancellation mirrors `ScriptHelperRegistry`.** Deliberately consistent with the adjacent
   shared-artifact cache rather than inventing a second policy.
+- **An earlier reading of this incident was wrong and is recorded here so it is not repeated.** The
+  duplicate `DurablePostCommit` processing was initially blamed both for the compile concurrency and
+  for a supposed double-apply of output mapping. Neither holds: the per-`(parent, subInstance)` lock
+  serializes duplicate deliveries, and correlation completion and output mapping share one
+  transaction. The real concurrency source is parallel *distinct* completions (§1c), and the real
+  consistency damage is the permanent-fault classification (§5.4).
+- **Classification lives in `SubflowOutputMappingService`, not its callers.** It owns the exception
+  and is the only place with enough information to judge it. Callers keep a simple contract: a failed
+  `Result` means permanent, an exception means retry.
+- **Transient failures rethrow instead of returning a distinguishable `Result`.** Returning a
+  "transient" result would require every caller to remember not to commit. Throwing makes the
+  transaction roll back by default and reuses the redelivery path
+  `SubflowTerminalLockNotAcquiredException` already relies on.
