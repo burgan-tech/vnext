@@ -42,11 +42,8 @@ public interface IEvaluator
     ///
     /// The context is also part of the cache-key identity: two callers compiling identical source into
     /// different shared contexts must never share a cached type. Implementations must derive that
-    /// identity from this parameter itself rather than take it as a separate argument — a helper set's
-    /// <see cref="MetadataReference"/> is built with <c>CreateFromImage</c>, whose <c>Display</c> is
-    /// null, so without deriving from <paramref name="loadContext"/> the reference contributes nothing
-    /// to the key and two helper sets exporting the same namespace/type could silently share one
-    /// compiled type.
+    /// identity from this parameter itself rather than take it as a separate argument, so the two can
+    /// never be supplied out of agreement.
     /// </param>
     /// <param name="sandboxGrant">
     /// Optional per-compile assembly grant merged on top of the sandbox baseline (effective only when

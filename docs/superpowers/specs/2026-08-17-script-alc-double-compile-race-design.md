@@ -204,9 +204,16 @@ an existing test doing exactly it. Deriving from the context instead is better o
   context-derived scope needs no such promise: a replaced set gets a new context and therefore a new
   scope, automatically.
 
-One consequence worth stating: entries cached under a superseded context's scope are never served
-again, so they are stranded rather than reused. A leak is the correct trade against serving the
-wrong code, and it is recorded as a comment on the table.
+One consequence worth stating plainly: if a helper set is ever superseded, its old load context and
+every assembly in it are **retained for the process lifetime**. The context is not collected —
+`_typeCache` holds `CompiledScript.Context` strongly — so the weak keying does not reclaim anything
+here. That is still the right trade: a retained context beats serving the wrong compiled code, which
+is exactly what the content-hash design would have done. It is recorded as a comment on the table.
+
+(This paragraph originally claimed the entries were "stranded" and the context collected. That was
+wrong, and the code comment inherited the error before review caught it — noted because the mistake
+is easy to repeat: `ConditionalWeakTable`'s weak key says nothing about what the *value cache*
+pins.)
 
 ### 5.4 Output-mapping failure classification
 

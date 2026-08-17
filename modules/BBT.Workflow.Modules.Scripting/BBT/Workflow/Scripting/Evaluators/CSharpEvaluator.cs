@@ -68,13 +68,14 @@ public class CSharpEvaluator : IEvaluator
     /// could disagree with the load context itself (see <see cref="GetCacheScope"/>) —
     /// the API previously took an explicit <c>cacheScope</c> string, and nothing stopped a caller from
     /// passing a scope that named one context while compiling into another. Keyed weakly: the table
-    /// must never be what keeps a context alive — <see cref="CompiledScript.Context"/> already holds
-    /// the strong reference that does.
+    /// must never be what keeps a context alive — <see cref="CompiledScript.Context"/>, held strongly
+    /// by <see cref="_typeCache"/>, already does that.
     ///
-    /// Consequence worth knowing: once nothing else references a superseded context, its entry here
-    /// is collected and the cache entries compiled under that scope are never looked up again — they
-    /// are stranded, not reused. That leak is the correct trade against ever serving a compile from
-    /// the wrong context.
+    /// Consequence worth knowing: because <see cref="_typeCache"/> pins every <c>CompiledScript</c> for
+    /// the singleton's lifetime, a superseded helper load context — and every assembly loaded into
+    /// it — is never collected either. It, and this table's entry for it, are retained for the process
+    /// lifetime, not stranded. A retained context is the correct trade against ever serving a compile
+    /// from the wrong one, which is what the withdrawn content-hash design risked.
     /// </summary>
     private static readonly ConditionalWeakTable<AssemblyLoadContext, string> LoadContextScopes = new();
 
@@ -360,11 +361,11 @@ public class CSharpEvaluator : IEvaluator
             return null;
         }
 
-        return LoadContextScopes.GetValue(loadContext, ctx =>
-        {
-            var id = Interlocked.Increment(ref _loadContextScopeSequence);
-            return string.IsNullOrEmpty(ctx.Name) ? $"alc{id}" : $"{ctx.Name}#{id}";
-        });
+        // The factory can run more than once under concurrent first use of the same context —
+        // ConditionalWeakTable.GetValue does not guard against that, only against publishing more than
+        // one result — so the incrementing id can skip values. That is fine: only uniqueness matters,
+        // not density. Do not "fix" this into TryGetValue + Add; that throws on the same race.
+        return LoadContextScopes.GetValue(loadContext, _ => $"alc{Interlocked.Increment(ref _loadContextScopeSequence)}");
     }
 
     /// <summary>
@@ -386,8 +387,6 @@ public class CSharpEvaluator : IEvaluator
         // Sandbox state is part of the compilation identity.
         sb.Append("|sbx:").Append(_sandbox.Enabled ? '1' : '0');
 
-        // The load context is part of the compilation identity: a type compiled into helper set A's
-        // context must never be served to a caller compiling against helper set B.
         if (!string.IsNullOrEmpty(cacheScope))
         {
             sb.Append("|alc:").Append(cacheScope);
