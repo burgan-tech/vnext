@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
@@ -62,6 +63,24 @@ public class CSharpEvaluator : IEvaluator
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.CSharp12);
 
     /// <summary>
+    /// Assigns each shared <see cref="AssemblyLoadContext"/> a stable scope id, on first use, so the
+    /// cache key can distinguish compiles into different contexts without a second parameter that
+    /// could disagree with <paramref name="loadContext"/> itself (see <see cref="GetCacheScope"/>) —
+    /// the API previously took an explicit <c>cacheScope</c> string, and nothing stopped a caller from
+    /// passing a scope that named one context while compiling into another. Keyed weakly: the table
+    /// must never be what keeps a context alive — <see cref="CompiledScript.Context"/> already holds
+    /// the strong reference that does.
+    ///
+    /// Consequence worth knowing: once nothing else references a superseded context, its entry here
+    /// is collected and the cache entries compiled under that scope are never looked up again — they
+    /// are stranded, not reused. That leak is the correct trade against ever serving a compile from
+    /// the wrong context.
+    /// </summary>
+    private static readonly ConditionalWeakTable<AssemblyLoadContext, string> LoadContextScopes = new();
+
+    private static long _loadContextScopeSequence;
+
+    /// <summary>
     /// Gets the number of cached script types (unique scripts compiled).
     /// </summary>
     public int CachedTypeCount => _typeCache.Count;
@@ -74,8 +93,7 @@ public class CSharpEvaluator : IEvaluator
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
-        IReadOnlyList<string>? sandboxGrant = null,
-        string? cacheScope = null)
+        IReadOnlyList<string>? sandboxGrant = null)
     {
         if (string.IsNullOrWhiteSpace(code))
             throw new ArgumentException("Code cannot be null or empty", nameof(code));
@@ -85,6 +103,10 @@ public class CSharpEvaluator : IEvaluator
         // ScriptHelperRegistry applies to helper-set builds.
         cancellationToken.ThrowIfCancellationRequested();
 
+        // The load context is part of the compilation identity (a type compiled into helper set A's
+        // context must never be served to a caller compiling against helper set B), so the scope is
+        // derived from loadContext itself rather than taken as a separate parameter.
+        var cacheScope = GetCacheScope(loadContext);
         var cacheKey = GenerateCacheKey(
             code, typeof(T), extraReferences, usingDirectives, sandboxGrant, cacheScope);
 
@@ -321,6 +343,31 @@ public class CSharpEvaluator : IEvaluator
     }
 
     /// <summary>
+    /// Derives the cache-key scope for a load context, assigning a stable id on first use. Returns
+    /// null for the (very common) no-shared-context case, so the no-helper compile path's keys are
+    /// byte-identical to before this existed.
+    ///
+    /// Root cause this exists for: the helper-set assembly's <see cref="MetadataReference"/> is built
+    /// with <see cref="MetadataReference.CreateFromImage(byte[])"/>, whose <c>Display</c> is null, so
+    /// it contributes nothing to <see cref="GenerateCacheKey"/>'s reference loop below — without this,
+    /// two helper sets exporting the same namespace/type could share one cache entry for identical
+    /// mapping source and the wrong compiled type would be served with no exception.
+    /// </summary>
+    private static string? GetCacheScope(AssemblyLoadContext? loadContext)
+    {
+        if (loadContext is null)
+        {
+            return null;
+        }
+
+        return LoadContextScopes.GetValue(loadContext, ctx =>
+        {
+            var id = Interlocked.Increment(ref _loadContextScopeSequence);
+            return string.IsNullOrEmpty(ctx.Name) ? $"alc{id}" : $"{ctx.Name}#{id}";
+        });
+    }
+
+    /// <summary>
     /// Generates a stable cache key from the code and configuration.
     /// </summary>
     private string GenerateCacheKey(
@@ -430,11 +477,9 @@ public class CSharpEvaluator : IEvaluator
     public bool InvalidateScript<T>(
         string code,
         IEnumerable<MetadataReference>? extraReferences = null,
-        IEnumerable<string>? usingDirectives = null,
-        string? cacheScope = null)
+        IEnumerable<string>? usingDirectives = null)
     {
-        var cacheKey = GenerateCacheKey(
-            code, typeof(T), extraReferences, usingDirectives, sandboxGrant: null, cacheScope: cacheScope);
+        var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives);
 
         if (_typeCache.TryRemove(cacheKey, out var cached) && cached.IsValueCreated)
         {

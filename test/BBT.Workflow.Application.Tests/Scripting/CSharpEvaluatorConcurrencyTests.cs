@@ -128,16 +128,18 @@ public sealed class CSharpEvaluatorConcurrencyTests
     }
 
     [Fact]
-    public async Task CompileToInstanceAsync_WhenSameCodeCompiledUnderDifferentScopes_ShouldNotShareCacheEntry()
+    public async Task CompileToInstanceAsync_WhenSameCodeCompiledUnderDifferentLoadContexts_ShouldNotShareCacheEntry()
     {
+        // The load context is derived internally (a ConditionalWeakTable-backed scope keyed on the
+        // AssemblyLoadContext instance itself), not passed as a separate argument — so there is no way
+        // to express a context/scope mismatch. Same source, two distinct contexts, must still land in
+        // two separate cache entries and two separate assemblies.
         var evaluator = new CSharpEvaluator();
         var contextA = new TestLoadContext();
         var contextB = new TestLoadContext();
 
-        var a = await evaluator.CompileToInstanceAsync<object>(
-            SampleScript, loadContext: contextA, cacheScope: "helper-set-a");
-        var b = await evaluator.CompileToInstanceAsync<object>(
-            SampleScript, loadContext: contextB, cacheScope: "helper-set-b");
+        var a = await evaluator.CompileToInstanceAsync<object>(SampleScript, loadContext: contextA);
+        var b = await evaluator.CompileToInstanceAsync<object>(SampleScript, loadContext: contextB);
 
         evaluator.CachedTypeCount.ShouldBe(2);
         AssemblyLoadContext.GetLoadContext(a.GetType().Assembly).ShouldBeSameAs(contextA);
@@ -145,11 +147,11 @@ public sealed class CSharpEvaluatorConcurrencyTests
     }
 
     [Fact]
-    public async Task CompileToInstanceAsync_WhenNoScopeIsSupplied_ShouldStillShareOneCacheEntry()
+    public async Task CompileToInstanceAsync_WhenNoLoadContextIsSupplied_ShouldStillShareOneCacheEntry()
     {
-        // The negative case for the scope fix above: the no-helper path never passes a cacheScope, so
-        // two identical compiles with none supplied must still hit the same cache entry — the scope
-        // must not mint a distinct key when it is absent.
+        // The negative case for the test above: the no-helper path never passes a shared load context,
+        // so two identical compiles with none supplied must still hit the same cache entry — an absent
+        // context must not mint a distinct scope.
         var evaluator = new CSharpEvaluator();
 
         await evaluator.CompileToInstanceAsync<object>(SampleScript);

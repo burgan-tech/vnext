@@ -22,22 +22,11 @@ public sealed record HelperSource(string Key, string Version, string Code, strin
 /// <param name="LoadContext">The collectible context the helper assembly is loaded into; the consuming
 /// mapping must be compiled into the same context so helper types resolve at runtime.</param>
 /// <param name="FromCache">True when this set was served from cache rather than freshly compiled.</param>
-/// <param name="Key">
-/// Content hash identifying this helper set — the registry's cache key. Callers pass it to the
-/// evaluator as <c>cacheScope</c> so a compiled mapping is never shared across load contexts.
-///
-/// INVARIANT: this is a *content* hash, so it is stable across rebuilds of the same sources. That is
-/// only safe because a healthy set is never replaced — <c>Evict</c> runs solely from the catch around
-/// a faulted build, and <c>Dispose</c> only at process shutdown — so a cached type can never outlive
-/// its load context. If TTL expiry, hot reload, or capacity eviction is ever added to the registry,
-/// the evaluator's type cache must be invalidated with it, or this must become a per-context identity.
-/// </param>
 public sealed record HelperSet(
     MetadataReference Reference,
     IReadOnlyList<string> Namespaces,
     AssemblyLoadContext LoadContext,
-    bool FromCache,
-    string Key);
+    bool FromCache);
 
 /// <summary>
 /// Compiles and caches helper sets. A helper set is the expensive, process-wide artifact: it is

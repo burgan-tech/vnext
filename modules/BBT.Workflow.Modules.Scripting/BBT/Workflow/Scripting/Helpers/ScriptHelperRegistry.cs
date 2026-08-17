@@ -107,7 +107,7 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
                 sandboxGrant: allowedAssemblies,
                 cancellationToken: CancellationToken.None);
 
-            return new HelperSet(compiled.Reference, compiled.Namespaces, alc, FromCache: false, Key: key);
+            return new HelperSet(compiled.Reference, compiled.Namespaces, alc, FromCache: false);
         }
         catch
         {
@@ -120,11 +120,6 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
     /// <summary>
     /// Removes a faulted cache entry, but only when it is still the entry we observed — never clobbers a
     /// healthy set that another caller has already published under the same key.
-    ///
-    /// This is the ONLY eviction path, and it only ever removes a faulted build. The evaluator's type
-    /// cache depends on that: it keys compiled mappings by <see cref="HelperSet.Key"/>, a content hash,
-    /// so evicting a healthy set would leave cached types pointing at an unloaded context. Any new
-    /// eviction policy must invalidate the evaluator cache too.
     /// </summary>
     private void Evict(string key, Lazy<HelperSet> lazy)
     {

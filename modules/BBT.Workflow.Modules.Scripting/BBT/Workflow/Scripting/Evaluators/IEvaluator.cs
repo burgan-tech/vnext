@@ -39,16 +39,18 @@ public interface IEvaluator
     /// Optional shared collectible <see cref="AssemblyLoadContext"/> to load the compiled assembly into.
     /// Used so a mapping resolves the helper types compiled into the same context. When <c>null</c> a
     /// fresh per-script context is created (legacy behaviour).
+    ///
+    /// The context is also part of the cache-key identity: two callers compiling identical source into
+    /// different shared contexts must never share a cached type. Implementations must derive that
+    /// identity from this parameter itself rather than take it as a separate argument — a helper set's
+    /// <see cref="MetadataReference"/> is built with <c>CreateFromImage</c>, whose <c>Display</c> is
+    /// null, so without deriving from <paramref name="loadContext"/> the reference contributes nothing
+    /// to the key and two helper sets exporting the same namespace/type could silently share one
+    /// compiled type.
     /// </param>
     /// <param name="sandboxGrant">
     /// Optional per-compile assembly grant merged on top of the sandbox baseline (effective only when
     /// the sandbox is enabled).
-    /// </param>
-    /// <param name="cacheScope">
-    /// Optional identity of the load context the compilation belongs to. Two callers using different
-    /// shared contexts must not share a cached type, and the helper assembly's
-    /// <see cref="MetadataReference"/> cannot express that (its <c>Display</c> is null for an
-    /// in-memory image), so the scope is passed explicitly.
     /// </param>
     /// <returns>A task containing the compiled instance of type T</returns>
     Task<T> CompileToInstanceAsync<T>(
@@ -58,8 +60,7 @@ public interface IEvaluator
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
-        IReadOnlyList<string>? sandboxGrant = null,
-        string? cacheScope = null);
+        IReadOnlyList<string>? sandboxGrant = null);
 
     /// <summary>
     /// Compiles a set of helper component sources into a single assembly loaded into the supplied

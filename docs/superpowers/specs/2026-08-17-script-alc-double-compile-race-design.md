@@ -1,7 +1,8 @@
 # Script Compile Race and Output-Mapping Failure Classification — Design
 
 **Date:** 2026-08-17 (revised 2026-08-18 — corrected §1c, added §5.4, closed three gaps in
-§5.2/§5.3/§5.4)
+§5.2/§5.3/§5.4; §5.3 reworked during implementation review to derive the scope from the load context
+rather than pass it explicitly)
 **Status:** Approved (design)
 **Scope:** Runtime (`BBT.Workflow.Modules.Scripting`, `BBT.Workflow.Application` — scripting
 evaluator and SubFlow terminal services)
@@ -173,34 +174,39 @@ is unchanged for the `loadContext is null` path.
 
 ### 5.3 Cache scope
 
-`HelperSet` gains a `Key` property carrying the registry's content hash (already computed in
-`GetOrBuildHelpers`). `ScriptEngine` passes it to the evaluator as an explicit `cacheScope`
-argument — `helperSet.Key` on the helper path, `null` otherwise. `GenerateCacheKey` appends
-`|alc:{cacheScope}`.
+The cache key gains a component identifying the load context the compilation belongs to.
+`CSharpEvaluator` derives it from the `AssemblyLoadContext` itself: a private
+`ConditionalWeakTable<AssemblyLoadContext, string>` hands each context instance a stable id on first
+use, and `GenerateCacheKey` folds that in. A null `loadContext` yields a null scope, so keys on the
+no-helper path are unchanged.
 
 This removes a latent correctness bug: `MetadataReference.CreateFromImage(image).Display` is null,
 so the helper assembly contributes nothing to the cache key today. Two helper sets exporting the same
 namespaces would share one cache entry for identical mapping source, and the second flow would
 silently execute the first flow's helper implementations. Relying on `Display` is replaced by an
-explicit identity.
+identity that cannot be absent.
 
 Defence in depth: because the assembly name is derived from the cache key, distinct helper sets now
 also produce distinct assembly names, so they cannot collide even within one context.
 
-`cacheScope` is added as an optional trailing parameter on `IEvaluator.CompileToInstanceAsync`, which
-keeps existing call sites source-compatible.
+**Why derive rather than pass it in.** The first version of this section threaded an explicit
+`cacheScope` string alongside `loadContext` through `IEvaluator`, `ScriptEngine`, and a new
+`HelperSet.Key`. It worked, but the scope and the context must always agree and nothing enforced
+that — a caller could supply one without the other. That hazard was not hypothetical: review found
+an existing test doing exactly it. Deriving from the context instead is better on every axis raised:
 
-**Invariant this depends on.** `cacheScope` is a *content* hash, so it is stable across rebuilds of
-the same helper sources. That is safe only because `ScriptHelperRegistry` never replaces a healthy
-entry: `Evict` is called solely from the `catch` around `lazy.Value` (`ScriptHelperRegistry.cs:77`),
-and `Dispose` runs only at process shutdown. A healthy `HelperSet` therefore keeps one load context
-for the process lifetime, and a cached `Type` can never outlive its context.
+- No parameter is added to `IEvaluator`, which ships in a NuGet-published module — no
+  binary-compatibility question, and `CompileToInstanceAsync` does not grow an eighth parameter.
+- A scope/context mismatch becomes unrepresentable rather than merely undocumented.
+- **The registry invariant disappears.** The earlier design keyed on the helper set's *content*
+  hash, which is stable across rebuilds, so it was correct only while `ScriptHelperRegistry` never
+  replaced a healthy entry — a property that had to be preserved by documentation at two sites. A
+  context-derived scope needs no such promise: a replaced set gets a new context and therefore a new
+  scope, automatically.
 
-If anyone later adds TTL expiry, hot reload, or capacity eviction to the registry, this breaks
-silently: `_typeCache` would keep serving `Type` objects from an unloaded context. Any such change
-must either invalidate the matching `_typeCache` entries or move `cacheScope` from the content hash
-to a per-context identity. This is recorded as a comment on both `HelperSet.Key` and the registry's
-`Evict`.
+One consequence worth stating: entries cached under a superseded context's scope are never served
+again, so they are stranded rather than reused. A leak is the correct trade against serving the
+wrong code, and it is recorded as a comment on the table.
 
 ### 5.4 Output-mapping failure classification
 
@@ -283,8 +289,12 @@ New tests in `test/BBT.Workflow.Application.Tests/Scripting/`:
    throw and no entry remains. Mirrors the helper-registry test added in `4fcc95af`.
 3. **Idempotent load** — a context that already holds an assembly with the colliding simple name
    serves it rather than throwing.
-4. **Cache scope** — identical mapping source compiled against two different helper sets yields two
-   distinct cache entries, each resolving its own helper set's types.
+4. **Cache scope** — identical mapping source compiled into two different load contexts yields two
+   distinct cache entries, each assembly landing in its own context; and two scope-less compiles
+   still share one entry. Crucially, this is also covered end-to-end through `ScriptEngine`: two
+   helper sets exporting the same namespace and type name but different values, one byte-identical
+   mapping, each resolving its own helper. The evaluator-level test alone would pass even with the
+   wiring broken.
 
 In `test/BBT.Workflow.Application.Tests/SubFlow/`:
 
@@ -302,10 +312,7 @@ baseline of pre-existing failures unrelated to scripting.
 | File | Change |
 |---|---|
 | `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/CSharpEvaluator.cs` | `Lazy` cache, eviction, detached token, idempotent load, `cacheScope` in key |
-| `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/IEvaluator.cs` | Optional `cacheScope` parameter + docs |
-| `modules/BBT.Workflow.Modules.Scripting/.../Helpers/IScriptHelperRegistry.cs` | `HelperSet.Key` + the §5.3 invariant on it |
-| `modules/BBT.Workflow.Modules.Scripting/.../Helpers/ScriptHelperRegistry.cs` | Populate `Key`; invariant comment on `Evict` |
-| `src/BBT.Workflow.Application/Scripting/ScriptEngine.cs` | Pass `helperSet.Key` as `cacheScope` |
+| `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/IEvaluator.cs` | Unchanged surface — the null-`Display` rationale moves to the derivation |
 | `src/BBT.Workflow.Application/SubFlow/Services/SubflowOutputMappingService.cs` | Classify transient vs permanent; rethrow transient |
 | `src/BBT.Workflow.Application/SubFlow/Services/SubflowCompletionService.cs` | Comment update only — the failed-`Result` branch already means "permanent" |
 | `src/BBT.Workflow.Application/SubFlow/Services/SubflowFaultService.cs` | Keep log-and-proceed for permanent; let transient propagate |
@@ -345,6 +352,9 @@ baseline of pre-existing failures unrelated to scripting.
 - **The assembly name carries the full cache key rather than a 16-character prefix.** §5.2's reuse
   rule is only sound if the name identifies the compilation uniquely; truncation to 64 bits made
   that probabilistic, and widening it costs nothing but stack-trace length.
-- **`cacheScope` is a content hash, which couples §5.3 to a registry invariant.** Safe today because
-  a healthy `HelperSet` is never evicted. Documented at both ends so a future eviction policy cannot
-  break it silently.
+- **The cache scope is derived from the load context, not passed alongside it.** An explicit
+  `cacheScope` string was implemented first and then withdrawn during review: it made scope/context
+  disagreement representable (an existing test already did it), added a parameter to a
+  NuGet-published contract, and was correct only while `ScriptHelperRegistry` never replaced a
+  healthy entry — an invariant that had to be held up by documentation at two sites. Deriving from
+  the context removes all three problems at once. See §5.3.

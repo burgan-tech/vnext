@@ -353,11 +353,13 @@ public class SandboxedScriptingTests
     [Fact]
     public async Task ScriptEngine_Compiles_Same_Mapping_Against_Different_Helper_Sets_Without_Cross_Contamination()
     {
-        // Regression for the cacheScope fix. Two helper sets export the same namespace and type name but
-        // return different values. The mapping source compiled against each is byte-identical.
+        // Regression for the load-context cache-scope fix. Two helper sets export the same namespace and
+        // type name but return different values. The mapping source compiled against each is
+        // byte-identical.
         //
         // Before the fix: MetadataReference.CreateFromImage(...) (the helper reference) has a null
-        // Display, so it contributed nothing to CSharpEvaluator.GenerateCacheKey. The second
+        // Display, so it contributed nothing to CSharpEvaluator.GenerateCacheKey, and the evaluator had
+        // no other way to tell the two helper sets' load contexts apart. The second
         // ScriptEngine.CompileToInstanceAsync call below hit the cache entry the first call created and
         // returned the FIRST helper set's compiled type verbatim — GetValue() on the second instance
         // would answer "A" instead of "B", with no exception. This test drives the real wiring (ScriptEngine
@@ -553,11 +555,9 @@ public class SandboxedScriptingTests
             IEnumerable<string>? usingDirectives = null,
             CancellationToken cancellationToken = default,
             AssemblyLoadContext? loadContext = null,
-            IReadOnlyList<string>? sandboxGrant = null,
-            string? cacheScope = null)
+            IReadOnlyList<string>? sandboxGrant = null)
             => Inner.CompileToInstanceAsync<T>(
-                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant,
-                cacheScope);
+                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant);
 
         // Declared without default values: defaults are not part of the signature, so this still
         // implements IEvaluator.CompileHelpers, and every call site here passes all arguments.

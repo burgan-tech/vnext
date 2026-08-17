@@ -200,7 +200,7 @@ public sealed class ScriptEngine(
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default)
     {
-        return CompileCoreAsync<T>(code, extraReferences, usingDirectives, null, null, cancellationToken, cacheScope: null);
+        return CompileCoreAsync<T>(code, extraReferences, usingDirectives, null, null, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -227,7 +227,7 @@ public sealed class ScriptEngine(
         if (effective?.HasHelpers != true)
         {
             return await CompileCoreAsync<T>(
-                body, extraReferences, usingDirectives, null, grant, cancellationToken, cacheScope: null);
+                body, extraReferences, usingDirectives, null, grant, cancellationToken);
         }
 
         if (!_helpersOptions.Enabled)
@@ -265,7 +265,7 @@ public sealed class ScriptEngine(
         var usings = (usingDirectives ?? []).Concat(helperSet.Namespaces);
 
         return await CompileCoreAsync<T>(
-            body, refs, usings, helperSet.LoadContext, grant, cancellationToken, helperSet.Key);
+            body, refs, usings, helperSet.LoadContext, grant, cancellationToken);
     }
 
     /// <summary>
@@ -354,8 +354,7 @@ public sealed class ScriptEngine(
         IEnumerable<string>? usingDirectives,
         AssemblyLoadContext? loadContext,
         IReadOnlyList<string>? sandboxGrant,
-        CancellationToken cancellationToken,
-        string? cacheScope)
+        CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
         const string scriptType = "compilation";
@@ -381,8 +380,7 @@ public sealed class ScriptEngine(
                 mergedUsings,
                 cancellationToken,
                 loadContext,
-                MergeDefaultGrant(sandboxGrant),
-                cacheScope);
+                MergeDefaultGrant(sandboxGrant));
 
             stopwatch.Stop();
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
