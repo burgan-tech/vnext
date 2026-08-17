@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Base version (e.g. 0.0.50). Required when prerelease_type is not none.'
+        description: 'Version (e.g. 0.0.80). Required for a prerelease; on a stable run it pins the version instead of walking to the next free patch — use with force_publish to re-publish a shipped release whose packages failed.'
         required: false
         type: string
       prerelease_type:
@@ -116,6 +116,33 @@ jobs:
             fi
 
             echo "Resolved prerelease version: $VERSION"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$INPUT_VERSION" ]]; then
+            # Re-publish an EXACT stable version. The branch path below deliberately walks to the
+            # first unused patch, so it can never target a version that already shipped — which is
+            # exactly what is needed when a release succeeded but one publish job failed (e.g. the
+            # NuGet push), leaving images and packages on different versions. Pinning the version
+            # here lets that release be completed instead of skipped.
+            echo "Pinned stable version requested via workflow_dispatch"
+
+            if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Error: 'version' must match X.Y.Z (got: $INPUT_VERSION)"
+              exit 1
+            fi
+
+            VERSION="$INPUT_VERSION"
+            TAG="v${VERSION}"
+
+            # Re-publishing over a shipped tag is intentional here, but never implicit.
+            if git tag -l "$TAG" | grep -q "^$TAG$"; then
+              if [[ "$INPUT_FORCE_PUBLISH" == "true" ]]; then
+                echo "Warning: Tag $TAG already exists but force_publish=true, re-publishing it"
+              else
+                echo "Error: Tag $TAG already exists. Set force_publish=true to re-publish this version."
+                exit 1
+              fi
+            fi
+
+            echo "Resolved pinned version: $VERSION"
           elif [[ "$BRANCH_NAME" =~ ^release-v([0-9]+\.[0-9]+)$ ]]; then
             BASE_VERSION="${BASH_REMATCH[1]}"
             echo "Base version from branch: $BASE_VERSION"
@@ -771,12 +798,15 @@ jobs:
             -p:Version=${{ env.NUGET_VERSION }} \
             --output ./nuget-artifacts
 
-      # An undefined repository variable is silently the empty string, which would
-      # surface as an opaque token-exchange failure below.
+      # An undefined secret is silently the empty string, which would surface as an
+      # opaque token-exchange failure below. Read through env rather than inlining the
+      # expression, so the value stays masked and cannot be interpolated into the script.
       - name: Verify NuGet trusted publishing is configured
+        env:
+          NUGET_USER: ${{ secrets.NUGET_USER }}
         run: |
-          if [ -z "${{ vars.NUGET_USER }}" ]; then
-            echo "::error::Repository variable NUGET_USER is not set. It must hold the nuget.org username that owns the trusted publishing policy for burgan-tech/vnext."
+          if [ -z "$NUGET_USER" ]; then
+            echo "::error::Repository secret NUGET_USER is not set. It must hold the nuget.org username that owns the trusted publishing policy for burgan-tech/vnext."
             exit 1
           fi
 
@@ -788,7 +818,7 @@ jobs:
         id: nuget-login
         uses: NuGet/login@v1
         with:
-          user: ${{ vars.NUGET_USER }}
+          user: ${{ secrets.NUGET_USER }}
 
       - name: Push all packages to NuGet.org
         run: |
