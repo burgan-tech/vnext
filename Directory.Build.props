@@ -25,6 +25,9 @@
 
         <!-- OpenTelemetry packages -->
         <OpenTelemetryPackageVersion>1.15.3</OpenTelemetryPackageVersion>
+        <!-- Instrumentation packages that only ship as prerelease. Kept on the same 1.15.x line
+             Aether already pulls for OpenTelemetry.Instrumentation.Process. -->
+        <OpenTelemetryInstrumentationPrereleasePackageVersion>1.15.1-beta.1</OpenTelemetryInstrumentationPrereleasePackageVersion>
       
         <!-- Microsot Test SDK packages -->
         <TestSdkPackageVersion>18.0.1</TestSdkPackageVersion>

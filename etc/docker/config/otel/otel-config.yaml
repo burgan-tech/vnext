@@ -63,6 +63,29 @@ exporters:
 processors:
   batch:
 
+  # Drops the sidecar's own span for state-store and lock gRPC calls.
+  #
+  # These are pure duplicates with a broken parent. The app already emits
+  # `dapr.proto.runtime.v1.Dapr/GetState` (GrpcNetClient instrumentation) with the call's
+  # timing, correctly nested under the business span. The sidecar's counterpart adds only
+  # its internal handling time — and arrives orphaned, because the HttpClient activity
+  # between the two puts its id on the wire without ever being exported. Elastic APM
+  # re-roots such a span to the trace root, so a single transition litters the waterfall
+  # with ~50 detached GetState spans (45 -> 173 spans measured on one transition).
+  #
+  # Scoped by instrumentation scope, NOT by name: the app-side client span carries the same
+  # `…/GetState` suffix and must survive. `dapr-diagnostics` is the sidecar's scope.
+  # Service-invocation spans (`CallLocal/*`) are deliberately untouched — those are the ones
+  # that reconnect orchestration to Execution.
+  #
+  # This hides a symptom rather than fixing the missing HttpClient span; the underlying hole
+  # lives in the cache/lock client construction path. Remove this processor when that is fixed.
+  filter/drop-dapr-statestore-spans:
+    error_mode: ignore
+    traces:
+      span:
+        - 'instrumentation_scope.name == "dapr-diagnostics" and IsMatch(name, "/(GetState|GetBulkState|SaveState|DeleteState|DeleteBulkState|QueryStateAlpha1|TryLockAlpha1|UnlockAlpha1)$")'
+
 # Configure pipelines. Pipeline defines a path the data follows in the Collector
 # starting from reception, then further processing or modification and finally
 # exiting the Collector via exporters.
@@ -72,7 +95,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [filter/drop-dapr-statestore-spans, batch]
       exporters: [debug, otlphttp/openobserve-traces, otlp/elastic]
     metrics:
       receivers: [otlp]

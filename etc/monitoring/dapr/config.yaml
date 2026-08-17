@@ -6,8 +6,12 @@ metadata:
 spec:
   tracing:
     samplingRate: "1"
-    otlp:
-      endpointAddress: "http://otel-collector:4317"
+    # See etc/orchestration/dapr/config.yaml — `otel` (not `otlp`), plus an explicit
+    # protocol and isSecure, are all three required for the sidecar to export its spans.
+    otel:
+      endpointAddress: "otel-collector:4317"
+      protocol: "grpc"
+      isSecure: false
   secrets:
     scopes:
       - storeName: vnext-execution-secret
