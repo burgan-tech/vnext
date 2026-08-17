@@ -66,6 +66,8 @@ public sealed class DaprHttpEndpointTaskInvoker(
                 request.Content = new StringContent(binding.Body, Encoding.UTF8, "application/json");
             }
 
+            InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+
             // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
             using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
 

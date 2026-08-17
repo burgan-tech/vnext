@@ -494,6 +494,9 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
+                    b.Property<DateTime?>("ExecuteAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("FlowName")
                         .IsRequired()
                         .HasMaxLength(100)

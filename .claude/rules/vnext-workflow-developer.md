@@ -64,6 +64,7 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
 - **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc }` entries (no href — not caller-triggerable), appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
 

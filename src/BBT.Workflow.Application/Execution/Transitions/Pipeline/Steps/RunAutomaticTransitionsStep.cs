@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -19,11 +17,8 @@ public sealed class RunAutomaticTransitionsStep(
     public int Order => LifecycleOrder.Auto;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
     {
-        Activity.Current?.SetDisplayName($"[{Order}] {nameof(RunAutomaticTransitionsStep)}");
-
         var nonBlockingFailures = NonBlockingTaskFailures.Get(context);
 
         // Check if target state has any automatic transitions

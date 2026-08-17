@@ -37,6 +37,7 @@ public sealed class InstanceQueryAppService(
     IInstanceRepository instanceRepository,
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceCorrelationRepository instanceCorrelationRepository,
+    IInstanceJobRepository instanceJobRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -96,6 +97,43 @@ public sealed class InstanceQueryAppService(
         });
     }
 
+    /// <summary>
+    /// Opens the per-request instance log scope for the read/function path (state, view, schema,
+    /// data, get, history), mirroring the keys <c>TransitionExecutor.BuildLogScope</c> uses on the
+    /// write path — so every poll log line is queryable by the REAL instance id even when the
+    /// client addressed the instance by business key. Also stamps the matching Activity tags and
+    /// composes the subflow root-id scope so callers make a single call.
+    /// </summary>
+    private IDisposable BeginInstanceScope(Instance instance)
+    {
+        var activity = Activity.Current;
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instance.Id.ToString());
+        if (instance.HasKey)
+            activity?.SetTag(TelemetryConstants.TagNames.InstanceKey, instance.Key);
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, instance.Flow);
+        activity?.SetTag(TelemetryConstants.TagNames.Domain, runtimeInfoProvider.Domain);
+
+        var scope = logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.Domain] = runtimeInfoProvider.Domain,
+            [TelemetryConstants.TagNames.Flow] = instance.Flow,
+            [TelemetryConstants.TagNames.FlowVersion] = instance.FlowVersion,
+            [TelemetryConstants.TagNames.InstanceId] = instance.Id,
+            [TelemetryConstants.TagNames.InstanceKey] = instance.Key ?? "N/A"
+        });
+        var rootScope = BeginRootIdScopeIfSubflow(instance);
+        return new CompositeScope(scope, rootScope);
+    }
+
+    private sealed class CompositeScope(IDisposable? first, IDisposable? second) : IDisposable
+    {
+        public void Dispose()
+        {
+            second?.Dispose();
+            first?.Dispose();
+        }
+    }
+
     public async Task<ConditionalResult<GetInstanceOutput>> GetInstanceAsync(
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
@@ -106,6 +144,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async instance =>
                 {
+                    using var instanceScope = BeginInstanceScope(instance);
                     var instanceData = instance.FindData(input.Version);
                     
                     var result = await BuildInstanceOutputAsync(
@@ -346,6 +385,7 @@ public sealed class InstanceQueryAppService(
         return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
             {
+                using var instanceScope = BeginInstanceScope(instance);
                 var transitions = await instanceTransitionRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
 
                 var dtoList = transitions
@@ -775,6 +815,7 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     var (flow, instance) = data;
+                    using var instanceScope = BeginInstanceScope(instance);
 
                     if (!await IsInstanceQueryAllowedAsync(flow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
                         return ConditionalResult<GetInstanceDataOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
@@ -953,6 +994,14 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     private const string UpdateDataTransitionKind = "updateData";
 
+    /// <summary>
+    /// <see cref="TransitionItem.Kind"/> value for runtime-armed scheduled transitions listed in
+    /// <c>transitions</c>. Never produced by <see cref="ResolveTransitionKind"/> — scheduled
+    /// transitions are excluded from the caller-triggerable candidates — so the two vocabularies
+    /// cannot collide on an entry.
+    /// </summary>
+    private const string ScheduledTransitionKind = "scheduled";
+
     private static string ResolveTransitionKind(
         Definitions.Workflow workflow,
         State currentState,
@@ -1013,7 +1062,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var rootScope = BeginRootIdScopeIfSubflow(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance);
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
@@ -1137,6 +1186,14 @@ public sealed class InstanceQueryAppService(
         IReadOnlyCollection<InstanceCorrelation> allCorrelations,
         CancellationToken cancellationToken)
     {
+        // Active scheduled-transition jobs feed the kind:"scheduled" entries of the transitions
+        // response list only — deliberately NOT the fingerprint ETag (team decision, issue #864;
+        // known staleness gap, see the ETag doc). Loaded here so the fast 304 path never pays for it.
+        var activeScheduledTransitionJobs = (await instanceJobRepository
+                .GetListActiveAsync(instance.Id, cancellationToken))
+            .Where(j => j.JobType == JobType.ScheduledTransition)
+            .ToList();
+
         // Build instance transition information using shared logic (no DB call - uses instance.ActiveCorrelations)
         var transitionInfo = BuildInstanceTransitionInfo(instance);
 
@@ -1431,6 +1488,10 @@ public sealed class InstanceQueryAppService(
                 input.Domain, input.Workflow, instance.Id.ToString())
         };
 
+        // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
+        // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present, no href).
+        transitionItems.AddRange(BuildScheduledTransitionEntries(activeScheduledTransitionJobs));
+
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
             Data = dataHref,
@@ -1448,6 +1509,27 @@ public sealed class InstanceQueryAppService(
             Interaction = interaction
         });
     }
+
+    /// <summary>
+    /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the
+    /// response's <c>transitions</c> list, ordered by execution time ascending. No href/view/schema —
+    /// callers cannot trigger a scheduled transition. Rows without an
+    /// <see cref="InstanceJob.ExecuteAt"/> (persisted before the column existed) are omitted rather
+    /// than emitted without a time — every scheduled entry carries an execution instant, and such rows
+    /// age out as their jobs fire or are cancelled. Not role-filtered: a scheduled transition fires
+    /// regardless of the caller, so the entries are facts about the instance, not caller capabilities.
+    /// </summary>
+    private static IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
+        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs) =>
+        activeScheduledTransitionJobs
+            .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
+            .OrderBy(j => j.ExecuteAt!.Value)
+            .Select(j => new TransitionItem
+            {
+                Name = j.TransitionKey!,
+                Kind = ScheduledTransitionKind,
+                ExecuteAtUtc = j.ExecuteAt!.Value
+            });
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
@@ -1589,8 +1671,11 @@ public sealed class InstanceQueryAppService(
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data =>
-                ResolveViewAsync(data.instance, data.workflow, input, transitionKey, cancellationToken));
+            .ThenAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+                return await ResolveViewAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
+            });
     }
 
     /// <summary>
@@ -1628,6 +1713,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    using var instanceScope = BeginInstanceScope(data.instance);
                     var buildResult = await BuildSchemaOutputAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
@@ -1751,8 +1837,11 @@ public sealed class InstanceQueryAppService(
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
-            .ThenAsync(data =>
-                BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken));
+            .ThenAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+                return await BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken);
+            });
     }
 
     /// <summary>
@@ -1786,6 +1875,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
+                    using var instanceScope = BeginInstanceScope(data.instance);
                     var buildResult = await BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);

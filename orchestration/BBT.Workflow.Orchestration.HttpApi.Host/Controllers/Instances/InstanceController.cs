@@ -388,7 +388,8 @@ public sealed class InstanceController(
             ExecutionActor = actor,
             CallerSync = false,
             TraceParent = continuation.TraceParent,
-            TraceState = continuation.TraceState
+            TraceState = continuation.TraceState,
+            CorrelationId = continuation.CorrelationId
         };
 
         await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);

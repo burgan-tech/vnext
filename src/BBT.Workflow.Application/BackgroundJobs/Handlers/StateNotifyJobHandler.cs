@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Tracing;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -30,13 +31,18 @@ public sealed class StateNotifyJobHandler(
     ITaskConditionService conditionService,
     IRuntimeInfoProvider runtimeInfoProvider,
     ICurrentSchema currentSchema,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<StateNotifyJobHandler> logger) : IBackgroundJobHandler<StateNotifyPayload>
 {
     public const string HandlerName = "state.notify";
 
     public async Task HandleAsync(StateNotifyPayload args, CancellationToken cancellationToken)
     {
-        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("StateNotify.Execute", args);
+        using var activity = BackgroundJobActivityHelper.StartActivityContinuingTrace("StateNotify.Execute", args);
+        // The Dapr scheduler callback is a fresh HTTP request, so restore the originating request id
+        // from the captured headers — RequestIdLogProcessor stamps it onto every log record from here.
+        var requestId = args.Headers?.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
+        using var correlationScope = string.IsNullOrEmpty(requestId) ? null : correlationIdProvider.Change(requestId);
         using (currentSchema.Change(args.FlowName))
         {
             using (logger.BeginScope(new Dictionary<string, object>
@@ -46,6 +52,7 @@ public sealed class StateNotifyJobHandler(
                        [TelemetryConstants.TagNames.Domain] = args.Domain,
                        [TelemetryConstants.TagNames.FlowVersion] = args.Version,
                        [TelemetryConstants.TagNames.JobName] = args.JobName
+
                    }))
             {
                 try

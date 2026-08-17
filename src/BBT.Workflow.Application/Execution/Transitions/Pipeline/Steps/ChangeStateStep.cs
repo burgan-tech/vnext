@@ -3,7 +3,6 @@ using BBT.Workflow.Monitoring;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -21,12 +20,9 @@ public sealed class ChangeStateStep(
     public int Order => LifecycleOrder.ChangeState;
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
      {
-                      Activity.Current?.SetDisplayName($"[{Order}] {nameof(ChangeStateStep)}");
-
         // Skip for SubFlow resume - state cleared/managed by ClearBusyOnResumeStep
         if (context.Directives.IsSubFlowResume)
         {

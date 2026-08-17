@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
+using BBT.Aether.Tracing;
 using BBT.Workflow.Logging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -12,13 +13,17 @@ namespace BBT.Workflow.Middlewares;
 /// Middleware that reads <c>X-Parent-Instance-Id</c> and <c>X-Root-Instance-Id</c> request headers
 /// (when present) and adds them to the current Activity (tag and baggage) and to the log scope,
 /// so that traces and logs for subflow/subprocess requests are searchable by parent and root instance ID.
-/// Should be registered after UseCorrelationId() and before controllers.
+/// It also tags the ASP.NET Core server span with the originating request id.
+/// Must be registered after UseCorrelationId() and before controllers.
 /// </summary>
-public sealed class ParentInstanceIdEnrichmentMiddleware(RequestDelegate next, ILogger<ParentInstanceIdEnrichmentMiddleware> logger)
+public sealed class ParentInstanceIdEnrichmentMiddleware(
+    RequestDelegate next,
+    ICorrelationIdProvider correlationIdProvider,
+    ILogger<ParentInstanceIdEnrichmentMiddleware> logger)
 {
     /// <summary>
-    /// Reads the parent and root instance ID headers, enriches Activity and log scope when present,
-    /// then invokes the next middleware.
+    /// Tags the server span with the request id, reads the parent and root instance ID headers,
+    /// enriches Activity and log scope when present, then invokes the next middleware.
     /// </summary>
     public async Task InvokeAsync(HttpContext context)
     {
@@ -27,6 +32,16 @@ public sealed class ParentInstanceIdEnrichmentMiddleware(RequestDelegate next, I
 
         var activity = Activity.Current;
         var scopeProperties = new Dictionary<string, object>();
+
+        // The ASP.NET Core server span starts before UseCorrelationId(), so RequestIdSpanProcessor
+        // cannot see the correlation scope at its OnStart. This middleware runs right after that
+        // scope is opened and Activity.Current is still the server span, so it closes the gap.
+        // Read from the provider, not the header, so the value has a single source.
+        var requestId = correlationIdProvider.Get();
+        if (!string.IsNullOrEmpty(requestId))
+        {
+            activity?.SetTag(TelemetryConstants.TagNames.RequestId, requestId);
+        }
 
         if (!string.IsNullOrEmpty(parentInstanceId))
         {

@@ -3,6 +3,7 @@ using BBT.Aether.AspNetCore.ExceptionHandling;
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Domain.Services;
 using BBT.Aether.Events;
+using BBT.Aether.Tracing;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
@@ -10,9 +11,12 @@ using BBT.Workflow.Data;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Monitoring;
+using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
 using Dapr.Jobs.Extensions;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Trace;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -226,7 +230,19 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddTelemetry(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddAetherTelemetry(configuration);
+        // The RequestIdLogProcessor runs after Aether's header enricher and before the exporter,
+        // stamping the originating request id on every log record of every service — including
+        // paths with no HttpContext, where the enricher is silent. See the processor's remarks
+        // for why the header enricher cannot be the source of this field.
+        services.AddAetherTelemetry(configuration, configure: builder =>
+            builder
+                .ConfigureLogging((_, logging) =>
+                    logging.AddProcessor(serviceProvider =>
+                        new RequestIdLogProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>())))
+                // Span counterpart, so a trace filters on the same x_request_id value as the logs.
+                .ConfigureTracing((_, tracing) =>
+                    tracing.AddProcessor(serviceProvider =>
+                        new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
         return services;
     }
 

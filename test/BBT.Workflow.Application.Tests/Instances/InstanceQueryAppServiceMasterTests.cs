@@ -79,6 +79,7 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             instanceRepository: _instanceRepository,
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
+            instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,

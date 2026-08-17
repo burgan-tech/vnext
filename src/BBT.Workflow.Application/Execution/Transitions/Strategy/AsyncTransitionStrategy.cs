@@ -273,6 +273,7 @@ public sealed class AsyncTransitionStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            CorrelationId = transContext.CorrelationId,
             Stage = context.Data?.Stage
         };
     }
@@ -305,6 +306,7 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth
         };
     }
@@ -333,6 +335,12 @@ public sealed class AsyncTransitionStrategy(
         activity.SetTag(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
         activity.SetTag(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId);
+        activity.SetTag(TelemetryConstants.TagNames.WorkflowInstanceId, ctx.InstanceId.ToString("D").ToLowerInvariant());
+        activity.SetTag(TelemetryConstants.TagNames.CorrelationId, ctx.CorrelationId);
+        var subject = GetIdentityClaim(ctx.Headers, TelemetryConstants.HeaderNames.Sub);
+        var actSub = GetIdentityClaim(ctx.Headers, TelemetryConstants.HeaderNames.ActSub);
+        activity.SetTag(TelemetryConstants.TagNames.Sub, subject);
+        activity.SetTag(TelemetryConstants.TagNames.ActSub, actSub);
         activity.SetTag(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
         activity.SetTag(TelemetryConstants.TagNames.JobName, jobName);
 
@@ -341,8 +349,33 @@ public sealed class AsyncTransitionStrategy(
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
         activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId.ToString());
+        activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId, ctx.InstanceId.ToString("D").ToLowerInvariant());
+        activity.SetBaggage(TelemetryConstants.TagNames.CorrelationId, ctx.CorrelationId);
+        if (subject is not null)
+        {
+            activity.SetBaggage(TelemetryConstants.TagNames.Sub, subject);
+        }
+        if (actSub is not null)
+        {
+            activity.SetBaggage(TelemetryConstants.TagNames.ActSub, actSub);
+        }
         activity.SetBaggage(TelemetryConstants.TagNames.TransitionKey, ctx.TransitionKey);
         activity.SetBaggage(TelemetryConstants.TagNames.JobName, jobName);
+    }
+
+    private static string? GetIdentityClaim(
+        IReadOnlyDictionary<string, string?> headers,
+        string headerName)
+    {
+        var rawValue = headers
+            .FirstOrDefault(header => string.Equals(
+                header.Key,
+                headerName,
+                StringComparison.OrdinalIgnoreCase))
+            .Value;
+        return TelemetryConstants.TryNormalizeIdentityClaim(rawValue, out var normalized)
+            ? normalized
+            : null;
     }
 
     /// <summary>

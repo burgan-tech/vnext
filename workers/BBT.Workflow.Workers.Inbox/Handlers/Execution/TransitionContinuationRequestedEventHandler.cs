@@ -3,6 +3,8 @@ using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Workers.Inbox.Forwarding;
+using BBT.Aether.Tracing;
+using BBT.Workflow.Workers.Inbox.Tracing;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -16,6 +18,7 @@ namespace BBT.Workflow.Workers.Inbox.Handlers;
 internal sealed class TransitionContinuationRequestedEventHandler(
     IRuntimeInfoProvider runtimeInfoProvider,
     IOrchestrationForwarder forwarder,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<TransitionContinuationRequestedEventHandler> logger)
     : IEventHandler<TransitionContinuationRequested>
 {
@@ -31,6 +34,8 @@ internal sealed class TransitionContinuationRequestedEventHandler(
                 eventData.Domain, runtimeInfoProvider.Domain, eventData.InstanceId);
             return;
         }
+
+        using var traceScope = EventTraceScope.Start("TransitionContinuationRequested.Handle", eventData, correlationIdProvider);
 
         logger.TransitionContinuationReceived(
             eventData.InstanceId, eventData.TransitionKey, eventData.JobName);

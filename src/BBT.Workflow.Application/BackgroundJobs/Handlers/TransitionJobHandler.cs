@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Tracing;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.BackgroundJobs.Recovery;
@@ -27,6 +28,7 @@ public sealed class TransitionJobHandler(
     IJobTimeoutRecoveryService recoveryService,
     IOptions<WorkflowExecutionOptions> executionOptions,
     IHostApplicationLifetime hostLifetime,
+    ICorrelationIdProvider correlationIdProvider,
     ILogger<TransitionJobHandler> logger) : IBackgroundJobHandler<TransitionJobPayload>
 {
     public const string HandlerName = "flow.transition";
@@ -34,7 +36,12 @@ public sealed class TransitionJobHandler(
     public async Task HandleAsync(TransitionJobPayload args, CancellationToken cancellationToken)
     {
         // Restore trace context from the original request for distributed tracing correlation
-        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TransitionJob.Execute", args);
+        using var activity = BackgroundJobActivityHelper.StartActivityContinuingTrace("TransitionJob.Execute", args);
+        // The Dapr scheduler callback is a fresh HTTP request, so the client's X-Request-Id is not
+        // ambient here — restore it from the captured request headers so log scopes and downstream
+        // calls (Execution invoke, cross-domain) keep correlating to the originating request.
+        var requestId = args.Headers.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
+        using var correlationScope = string.IsNullOrEmpty(requestId) ? null : correlationIdProvider.Change(requestId);
         using (currentSchema.Change(args.Workflow))
         {
             using (logger.BeginScope(new Dictionary<string, object>
@@ -45,7 +52,8 @@ public sealed class TransitionJobHandler(
                        [TelemetryConstants.TagNames.FlowVersion] = args.Version,
                        [TelemetryConstants.TagNames.InstanceKey] = args.InstanceKey ?? "N/A",
                        [TelemetryConstants.TagNames.TransitionKey] = args.TransitionKey,
-                       [TelemetryConstants.TagNames.JobName] = args.JobName
+                       [TelemetryConstants.TagNames.JobName] = args.JobName,
+                       [TelemetryConstants.TagNames.CorrelationId] = args.CorrelationId ?? "N/A"
                    }))
             {
                 var timeoutSeconds = executionOptions.Value.TransitionJobTimeoutSeconds;
@@ -82,7 +90,10 @@ public sealed class TransitionJobHandler(
                             sync: true) // Force sync=true to avoid infinite loop
                         {
                             Headers = args.Headers,
-                            RouteValues = args.RouteValues
+                            RouteValues = args.RouteValues,
+                            // Continue the originating chain's business correlation instead of
+                            // minting a new one per job hop.
+                            CorrelationId = args.CorrelationId
                         };
 
                     var context =

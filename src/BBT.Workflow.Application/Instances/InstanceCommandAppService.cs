@@ -27,6 +27,7 @@ using BBT.Workflow.Extentions;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Definitions.Timer;
+using Dapr.Jobs.Models;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.AspNetCore.Http;
@@ -103,7 +104,13 @@ public sealed class InstanceCommandAppService(
                         data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
                     return Result<StartInstanceOutput>.Ok(output);
                 }))
-            .OnSuccess(output => AddWorkflowHeader(output, input));
+            .OnSuccess(output =>
+            {
+                // Emitted while the start HTTP request is live: the log-record enrichers attach
+                // the request id, closing the X-Request-Id ↔ instance-id join for the client.
+                logger.InstanceStarted(output.Id, output.Key, input.Domain, input.Workflow, workflow.Version);
+                AddWorkflowHeader(output, input);
+            });
     }
 
     /// <summary>
@@ -458,20 +465,17 @@ public sealed class InstanceCommandAppService(
             var resolvedSchedule = await ResolveTimeoutScheduleAsync(
                 effectiveTimeout, workflow, instance, cancellationToken);
 
-            var schedule = resolvedSchedule.ToDaprJobSchedule().ExpressionValue;
-
-            var timeoutAt = resolvedSchedule.ScheduleType == TimerScheduleType.DateTime
-                ? resolvedSchedule.ScheduledDateTime!.Value
-                : resolvedSchedule.Duration.HasValue
-                    ? DateTime.UtcNow.Add(resolvedSchedule.Duration.Value)
-                    : DateTime.UtcNow;
+            // One instant feeds the scheduler arming, the timeoutAt metadata and the persisted
+            // ExecuteAt — separate clock reads would make the three disagree for Duration schedules.
+            var timeoutAt = resolvedSchedule.ResolveExecuteAt(DateTimeOffset.UtcNow);
+            var schedule = DaprJobSchedule.FromDateTime(timeoutAt).ExpressionValue;
 
             var metadata = new Dictionary<string, object>
             {
                 ["domain"] = workflow.Domain,
                 ["flowName"] = workflow.Key,
                 ["instanceId"] = instance.Id.ToString(),
-                ["timeoutAt"] = timeoutAt.ToString("O")
+                ["timeoutAt"] = timeoutAt.UtcDateTime.ToString("O")
             };
 
             // Enqueue the timeout job
@@ -491,12 +495,13 @@ public sealed class InstanceCommandAppService(
                     jobId,
                     workflow.Domain,
                     workflow.Key,
-                    instance.Id
+                    instance.Id,
+                    timeoutAt
                 ),
                 true,
                 cancellationToken);
 
-            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutAt);
+            logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutAt.UtcDateTime);
         }
         catch (Exception ex)
         {

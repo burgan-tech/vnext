@@ -45,6 +45,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IViewContentResolutionService _viewContentResolutionService;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly IInstanceCorrelationRepository _instanceCorrelationRepository;
+    private readonly IInstanceJobRepository _instanceJobRepository;
     private readonly Caching.IStateFunctionCache _stateFunctionCache;
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
@@ -66,6 +67,10 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _viewContentResolutionService = Substitute.For<IViewContentResolutionService>();
         _transitionAuthorizationManager = Substitute.For<ITransitionAuthorizationManager>();
         _instanceCorrelationRepository = Substitute.For<IInstanceCorrelationRepository>();
+        _instanceJobRepository = Substitute.For<IInstanceJobRepository>();
+        _instanceJobRepository
+            .GetListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns([]);
         // Enabled defaults to false so existing tests exercise the full build path;
         // cache-specific tests opt in explicitly.
         _stateFunctionCache = Substitute.For<Caching.IStateFunctionCache>();
@@ -91,6 +96,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceRepository: _instanceRepository,
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: _instanceCorrelationRepository,
+            instanceJobRepository: _instanceJobRepository,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -503,6 +509,139 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         transitions["approve"].Kind.ShouldBe("stateTransition");
         transitions["add-note"].Kind.ShouldBe("sharedTransition");
         transitions["cancel-request"].Kind.ShouldBe("cancel");
+    }
+
+    /// <summary>
+    /// Scheduled transitions ride inside the <c>transitions</c> list as <c>kind: "scheduled"</c>
+    /// entries built from the persisted job state: appended after the caller-triggerable entries,
+    /// ordered by execution time ascending, each carrying the transition key and the UTC execution
+    /// instant — and no href, since callers cannot trigger them. Caller-triggerable entries carry
+    /// no <c>executeAtUtc</c>.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ListsScheduledEntriesInTransitions_OrderedByExecuteAt()
+    {
+        // Arrange — one manual transition plus two armed scheduled jobs
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddTransition(Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var laterAt = new DateTimeOffset(2026, 8, 3, 14, 30, 0, TimeSpan.Zero);
+        var soonerAt = new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero);
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(
+            [
+                CreateScheduledTransitionJob(instance.Id, "payment-timeout", laterAt),
+                CreateScheduledTransitionJob(instance.Id, "send-reminder", soonerAt)
+            ]);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var transitions = result.Result.Value!.Transitions;
+        transitions.Count.ShouldBe(3);
+
+        // The caller-triggerable entry keeps its shape and gains no execution time.
+        transitions[0].Name.ShouldBe("approve");
+        transitions[0].Kind.ShouldBe("stateTransition");
+        transitions[0].ExecuteAtUtc.ShouldBeNull();
+
+        // Scheduled entries follow, ordered by execution time, without an href.
+        transitions[1].Name.ShouldBe("send-reminder");
+        transitions[1].Kind.ShouldBe("scheduled");
+        transitions[1].ExecuteAtUtc.ShouldBe(soonerAt.UtcDateTime);
+        transitions[1].ExecuteAtUtc!.Value.Kind.ShouldBe(DateTimeKind.Utc);
+        transitions[1].Href.ShouldBeNull();
+        transitions[2].Name.ShouldBe("payment-timeout");
+        transitions[2].Kind.ShouldBe("scheduled");
+        transitions[2].ExecuteAtUtc.ShouldBe(laterAt.UtcDateTime);
+    }
+
+    /// <summary>
+    /// Only scheduled-transition jobs with a persisted execution time are exposed: other job kinds
+    /// (here the workflow timeout) are not scheduled transitions, and rows persisted before the
+    /// ExecuteAt column existed carry no instant to display and are omitted rather than emitted
+    /// without one.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_OmitsOtherJobKindsAndRowsWithoutExecuteAt()
+    {
+        // Arrange
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+
+        var legacyRow = InstanceJob.Create(
+            Guid.NewGuid(),
+            JobName.ForScheduledTransition(instance.Id, TestState, "pre-upgrade"),
+            Guid.NewGuid(), TestDomain, TestWorkflow, instance.Id);
+        var timeoutJob = InstanceJob.Create(
+            Guid.NewGuid(),
+            JobName.ForTimeout(instance.Id),
+            Guid.NewGuid(), TestDomain, TestWorkflow, instance.Id,
+            new DateTimeOffset(2026, 8, 4, 0, 0, 0, TimeSpan.Zero));
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([legacyRow, timeoutJob]);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Transitions.ShouldNotContain(t => t.Kind == "scheduled");
+    }
+
+    /// <summary>
+    /// Wire-shape contract: a scheduled entry serializes as exactly { name, kind, executeAtUtc }
+    /// (UTC with the Z designator), while a caller-triggerable entry carries an href and no
+    /// executeAtUtc — the discrimination rule clients rely on.
+    /// </summary>
+    [Fact]
+    public void TransitionItem_SerializesScheduledAndTriggerableEntries_Distinctly()
+    {
+        var scheduled = new Shared.TransitionItem
+        {
+            Name = "payment-timeout",
+            Kind = "scheduled",
+            ExecuteAtUtc = new DateTime(2026, 8, 3, 14, 30, 0, DateTimeKind.Utc)
+        };
+        var triggerable = new Shared.TransitionItem
+        {
+            Name = "pay",
+            Kind = "stateTransition",
+            Href = "/api/v1/d/workflows/w/instances/i/transitions/pay"
+        };
+
+        var scheduledJson = System.Text.Json.JsonSerializer.Serialize(scheduled, JsonSerializerConstants.JsonOptions);
+        var triggerableJson = System.Text.Json.JsonSerializer.Serialize(triggerable, JsonSerializerConstants.JsonOptions);
+
+        scheduledJson.ShouldContain("\"executeAtUtc\":\"2026-08-03T14:30:00Z\"");
+        scheduledJson.ShouldNotContain("href");
+        scheduledJson.ShouldNotContain("view");
+        scheduledJson.ShouldNotContain("schema");
+        triggerableJson.ShouldContain("\"href\"");
+        triggerableJson.ShouldNotContain("executeAtUtc");
+    }
+
+    private InstanceJob CreateScheduledTransitionJob(
+        Guid instanceId, string transitionKey, DateTimeOffset executeAt)
+    {
+        var jobId = Guid.NewGuid();
+        return InstanceJob.Create(
+            jobId,
+            JobName.ForScheduledTransition(instanceId, TestState, transitionKey),
+            jobId, TestDomain, TestWorkflow, instanceId, executeAt);
     }
 
     [Fact]

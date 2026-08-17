@@ -57,6 +57,23 @@ public sealed class TaskTraceContext
     public string? WorkflowVersion { get; init; }
 
     /// <summary>
+    /// Business-operation correlation identifier (chain-stable execution correlation id)
+    /// propagated from orchestration. Intentionally separate from the per-request
+    /// <see cref="RequestId"/> and the W3C trace identifier.
+    /// </summary>
+    public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// Gateway-authenticated primary subject propagated for dependency log correlation.
+    /// </summary>
+    public string? Sub { get; init; }
+
+    /// <summary>
+    /// Gateway-authenticated actor subject propagated for dependency log correlation.
+    /// </summary>
+    public string? ActSub { get; init; }
+
+    /// <summary>
     /// Original HTTP request headers forwarded from orchestration.
     /// Used for <c>{HEADER.*}</c> placeholder resolution.
     /// </summary>
@@ -67,6 +84,22 @@ public sealed class TaskTraceContext
     /// Used for <c>{INSTANCE.*}</c> placeholder resolution.
     /// </summary>
     public string? InstanceDataJson { get; init; }
+
+    /// <summary>
+    /// Originating request id (X-Request-Id value) for cross-service log correlation.
+    /// </summary>
+    public string? RequestId { get; init; }
+
+    /// <summary>
+    /// W3C traceparent captured at invoke time on the orchestration side.
+    /// Fallback for restoring the trace tree when transport-level propagation is unavailable.
+    /// </summary>
+    public string? TraceParent { get; init; }
+
+    /// <summary>
+    /// W3C tracestate accompanying <see cref="TraceParent"/>.
+    /// </summary>
+    public string? TraceState { get; init; }
 }
 
 /// <summary>
@@ -84,4 +117,3 @@ public sealed class TaskInvokeRequest
     /// </summary>
     public TaskTraceContext? TraceContext { get; init; }
 }
-
