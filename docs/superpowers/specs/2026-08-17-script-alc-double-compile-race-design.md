@@ -244,6 +244,13 @@ self-healing condition is converted into a permanent business outcome.
   The inner-exception chain is walked, because script invocation and type initialisation both wrap
   the original fault.
 
+  The walk must also open `ReflectionTypeLoadException.LoaderExceptions`. `CompileAndLoad` calls
+  `assembly.GetTypes()`, and that exception carries its load faults in an array with
+  `InnerException == null` — so a plain chain walk classifies a `FileLoadException` surfacing there
+  as *permanent* and faults a healthy parent. That is precisely the incident this design exists to
+  prevent, escaping through the classifier meant to catch it. Found in review, after the first
+  implementation shipped the naive walk.
+
 Transient data-access failures are deliberately **not** classified. Recognising them needs
 provider-specific inspection (Npgsql error codes), which is a different problem with a different
 failure mode, and adding it here would widen this change without evidence that it occurs on this

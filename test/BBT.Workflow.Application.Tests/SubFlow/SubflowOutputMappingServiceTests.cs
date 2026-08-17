@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
@@ -10,6 +11,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.SubFlow;
+using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Shouldly;
@@ -60,6 +62,53 @@ public sealed class SubflowOutputMappingServiceTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
+    }
+
+    /// <summary>
+    /// The two tests above throw from the very first statement in the `try` — the weakest point in
+    /// the method, since a narrowed `try` or an inner catch would still leave them green. This test
+    /// reproduces the actual production failure site: the script-context build succeeds and
+    /// <c>scriptEngine.CompileToInstanceAsync</c> is what throws, several statements deeper, exactly
+    /// where the real `FileLoadException` surfaced in the incident.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WhenScriptCompilationFailsTransiently_ShouldRethrow()
+    {
+        var parentInstance = CreateParentInstance();
+        var parentWorkflow = CreateParentWorkflowWithMapping();
+        SetupScriptContextFactory();
+        _scriptEngine
+            .Setup(x => x.CompileToInstanceAsync<object>(
+                It.IsAny<ScriptCode>(),
+                It.IsAny<ScriptSettings>(),
+                It.IsAny<IEnumerable<MetadataReference>>(),
+                It.IsAny<IEnumerable<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new FileLoadException("Assembly with same name is already loaded"));
+
+        await Should.ThrowAsync<FileLoadException>(
+            () => CreateService().ApplyAsync(
+                parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Mocks the whole fluent <see cref="IScriptContextBuilder"/> chain plus a real
+    /// <see cref="ScriptContext"/>, mirroring <c>ResourceLockStepTests.SetupScriptContextFactory</c>,
+    /// so the script-context build succeeds and execution reaches the compile step.
+    /// </summary>
+    private void SetupScriptContextFactory()
+    {
+        var builder = new Mock<IScriptContextBuilder>();
+        builder.Setup(x => x.WithWorkflow(It.IsAny<Definitions.Workflow>())).Returns(builder.Object);
+        builder.Setup(x => x.WithInstance(It.IsAny<Instance>())).Returns(builder.Object);
+        builder.Setup(x => x.WithRuntime(It.IsAny<IRuntimeInfoProvider>())).Returns(builder.Object);
+        builder.Setup(x => x.WithBody(It.IsAny<object>())).Returns(builder.Object);
+        builder.Setup(x => x.BuildAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScriptContext(Mock.Of<ILogger<ScriptContext>>()));
+
+        _scriptContextFactory
+            .Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>()))
+            .Returns(builder.Object);
     }
 
     private SubflowOutputMappingService CreateService()

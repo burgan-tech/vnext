@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using BBT.Workflow.SubFlow;
 using Shouldly;
 using Xunit;
@@ -35,4 +36,20 @@ public sealed class OutputMappingFailureClassifierTests
     [Fact]
     public void IsTransient_ForAnUnclassifiedException_ShouldBeFalse()
         => OutputMappingFailureClassifier.IsTransient(new NotSupportedException()).ShouldBeFalse();
+
+    [Fact]
+    public void IsTransient_ForReflectionTypeLoadExceptionWrappingAssemblyLoadFailure_ShouldBeTrue()
+        => OutputMappingFailureClassifier
+            .IsTransient(new ReflectionTypeLoadException(
+                classes: new Type?[] { null },
+                exceptions: new Exception?[] { new FileLoadException() }))
+            .ShouldBeTrue();
+
+    [Fact]
+    public void IsTransient_ForReflectionTypeLoadExceptionWrappingOnlyPermanentFailures_ShouldBeFalse()
+        => OutputMappingFailureClassifier
+            .IsTransient(new ReflectionTypeLoadException(
+                classes: new Type?[] { null },
+                exceptions: new Exception?[] { new NotSupportedException() }))
+            .ShouldBeFalse();
 }

@@ -1150,11 +1150,12 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 40089,
         Level = LogLevel.Warning,
-        Message = "SubFlow output mapping hit a transient failure for parent instance {ParentInstanceId}; rethrowing for redelivery")]
+        Message = "SubFlow output mapping hit a transient failure for parent instance {ParentInstanceId} in state {ParentStateKey}; rethrowing for redelivery")]
     public static partial void SubFlowOutputMappingTransientFailure(
         this ILogger logger,
         Exception exception,
-        Guid parentInstanceId);
+        Guid parentInstanceId,
+        string parentStateKey);
 
     /// <summary>
     /// Logs when pipeline is resumed after SubFlow completion.

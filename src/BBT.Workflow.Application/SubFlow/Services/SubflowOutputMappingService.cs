@@ -85,7 +85,7 @@ public sealed class SubflowOutputMappingService(
             // back with the transaction and the delivery is redelivered against unchanged state.
             // Returning Result.Fail here would fault the parent permanently, with nothing to retry it
             // — see docs/superpowers/specs/2026-08-17-script-alc-double-compile-race-design.md §5.4.
-            logger.SubFlowOutputMappingTransientFailure(ex, parentInstance.Id);
+            logger.SubFlowOutputMappingTransientFailure(ex, parentInstance.Id, parentStateKey);
             throw;
         }
         catch (Exception ex)
