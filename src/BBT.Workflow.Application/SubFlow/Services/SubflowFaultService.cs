@@ -246,9 +246,11 @@ public sealed class SubflowFaultService(
                         input.InstanceData,
                         cancellationToken);
 
-                    // Output mapping failure is non-blocking here: the instance is already
-                    // marked Faulted/transitioned above. Just log and proceed so the fault
-                    // is committed and propagated upward via InstanceSubFaultedEvent.
+                    // Output-mapping failures are permanent at this boundary. Recoverable
+                    // assembly-load contention is handled locally by CSharpEvaluator. Failure is
+                    // non-blocking here because the instance is already marked Faulted/transitioned
+                    // above; re-faulting would be wrong. Log and proceed so the fault is committed
+                    // and propagated upward via InstanceSubFaultedEvent.
                     if (!mappingResult.IsSuccess)
                     {
                         logger.SubFlowOutputMappingFailed(
