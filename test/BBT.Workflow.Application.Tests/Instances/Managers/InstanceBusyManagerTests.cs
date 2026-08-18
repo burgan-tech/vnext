@@ -52,8 +52,8 @@ public sealed class InstanceBusyManagerTests
         // Act
         await CreateSut().MarkBusyAsync(instanceId);
 
-        // Assert — no UoW opened, no throw
-        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        // Assert — the authoritative read happens inside the isolated UoW, but no write occurs
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
         _instanceRepository.Verify(r => r.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -73,7 +73,7 @@ public sealed class InstanceBusyManagerTests
         await CreateSut().MarkBusyAsync(instanceId);
 
         // Assert
-        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
         _instanceRepository.Verify(r => r.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -118,7 +118,7 @@ public sealed class InstanceBusyManagerTests
         await CreateSut().MarkBusyWithPropagationAsync(instanceId);
 
         // Assert
-        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -220,7 +220,7 @@ public sealed class InstanceBusyManagerTests
 
         // Assert
         outcome.ShouldBe(BusyMarkOutcome.Skipped);
-        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -239,9 +239,9 @@ public sealed class InstanceBusyManagerTests
         // Act
         var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(instanceId);
 
-        // Assert — short-circuits: no UoW, no gateway propagation
+        // Assert — the second check runs inside the UoW and short-circuits without a write
         outcome.ShouldBe(BusyMarkOutcome.AlreadyBusy);
-        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -290,7 +290,7 @@ public sealed class InstanceBusyManagerTests
         await CreateSut().MarkBusyWithPropagationAsync(parentId);
 
         parent.IsBusy.ShouldBeTrue();
-        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never); // no re-flip
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once); // read-only re-check
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(
             It.Is<MarkBusyInput>(i => i.InstanceId == subInstanceId && i.Workflow == "child-flow"),
             It.IsAny<CancellationToken>()), Times.Once);
