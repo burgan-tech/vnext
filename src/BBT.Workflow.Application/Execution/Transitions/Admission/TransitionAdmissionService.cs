@@ -33,6 +33,15 @@ public sealed class TransitionAdmissionService(
         if (context.Directives.IsTimeoutTransition)
             return AdmissionKind.BypassBusyCheck;
 
+        // A subflow error-boundary transition resumes the parent under the Busy ownership that
+        // the blocking subflow established for its lifetime. Treating it as Normal would reject
+        // the expected Busy parent after the correlation is completed (and therefore no longer
+        // qualifies for subflow forwarding). Scope this exemption specifically to error-boundary
+        // transitions: IsReentry also covers timers and retries, which must retain their own
+        // admission semantics.
+        if (context.IsErrorBoundaryTransition)
+            return AdmissionKind.OwnerReentry;
+
         // Subflow resume / long-poll ack resume own the Busy instance by directive; a
         // background-job re-entry (async accept or chain continuation) owns it because the
         // accept already reserved it. Shared transitions and state transitions classify as
