@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -126,34 +125,6 @@ public sealed class SubflowFaultServiceTests
         _workflowExecutionService.Verify(
             x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Never);
-    }
-
-    [Fact]
-    public async Task FaultAsync_WhenOutputMappingFailsTransiently_ShouldPropagateWithoutCommitting()
-    {
-        // Pins today's behaviour after the Task 4 classification split: SubflowOutputMappingService
-        // rethrows a transient infrastructure fault instead of returning a failed Result, and this
-        // service's own catch (line 288) logs it and rethrows rather than swallowing it. If that catch
-        // is ever changed to swallow, redelivery breaks silently and the child's data is dropped with
-        // no signal — this test exists so that regression is caught here, not in production.
-        var childData = CreateJsonElement("""{"childStatus":"Faulted"}""");
-        var parentInstance = CreateParentInstance(out var subInstanceId);
-        var parentWorkflow = CreateParentWorkflow(ErrorBoundary.AbortAll);
-        var input = CreateInput(parentInstance.Id, subInstanceId, childData);
-
-        SetupParent(parentInstance, parentWorkflow);
-        _outputMappingService
-            .Setup(x => x.ApplyAsync(
-                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new FileLoadException("Assembly with same name is already loaded"));
-
-        await Should.ThrowAsync<FileLoadException>(
-            () => CreateService().FaultAsync(input, CancellationToken.None));
-
-        // Nothing is committed: the correlation-completion write and the fault write both roll back
-        // with the transaction, so a redelivered fault signal finds the correlation still open.
-        _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

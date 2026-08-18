@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
@@ -273,10 +274,40 @@ public class CSharpEvaluator : IEvaluator
         // ever return null there — skip it. `context.Assemblies` accumulates every script assembly
         // ever loaded for the process lifetime (see LoadContextScopes above), so scanning it on every
         // compile into a context that provably cannot contain a match is an unbounded, pointless cost.
-        var assembly = loadContext is not null
-            ? context.Assemblies.FirstOrDefault(a => a.GetName().Name == assemblyName)
-              ?? context.LoadFromStream(new MemoryStream(image))
-            : context.LoadFromStream(new MemoryStream(image));
+        Assembly assembly;
+        if (loadContext is null)
+        {
+            assembly = context.LoadFromStream(new MemoryStream(image));
+        }
+        else
+        {
+            var loaded = FindLoadedAssembly(context, assemblyName);
+            if (loaded is not null)
+            {
+                assembly = loaded;
+            }
+            else
+            {
+                try
+                {
+                    assembly = context.LoadFromStream(new MemoryStream(image));
+                }
+                catch (FileLoadException)
+                {
+                    // Close the scan/load race across evaluator instances. If another caller loaded
+                    // this exact full-cache-key assembly after our scan, that assembly is the desired
+                    // result and can be reused safely. If no exact match exists, this is an unrelated
+                    // loader failure; preserve it for the normal permanent-failure path.
+                    loaded = FindLoadedAssembly(context, assemblyName);
+                    if (loaded is null)
+                    {
+                        throw;
+                    }
+
+                    assembly = loaded;
+                }
+            }
+        }
 
         // Find the type that implements T
         var types = assembly.GetTypes();
@@ -296,6 +327,12 @@ public class CSharpEvaluator : IEvaluator
         }
 
         return new CompiledScript(context, matchedType);
+    }
+
+    private static Assembly? FindLoadedAssembly(AssemblyLoadContext context, string assemblyName)
+    {
+        return context.Assemblies.FirstOrDefault(assembly =>
+            string.Equals(assembly.GetName().Name, assemblyName, StringComparison.Ordinal));
     }
 
     /// <summary>

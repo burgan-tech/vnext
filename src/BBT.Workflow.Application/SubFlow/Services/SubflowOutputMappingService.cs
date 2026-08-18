@@ -84,17 +84,8 @@ public sealed class SubflowOutputMappingService(
             // Our own cancellation (shutdown, caller gone) — not a mapping failure. Let it out so the
             // UnitOfWork rolls back; the delivery is redelivered when the runtime is healthy again.
             // A cancellation-shaped exception arriving while OUR token is still live (e.g. a
-            // DaprClient call inside the mapping timing out) is a downstream fault, not this case —
-            // it falls through to the classifier below, which no longer treats it as transient.
-            throw;
-        }
-        catch (Exception ex) when (OutputMappingFailureClassifier.IsTransient(ex))
-        {
-            // Rethrow so the caller's UnitOfWork is never committed: the correlation completion rolls
-            // back with the transaction and the delivery is redelivered against unchanged state.
-            // Returning Result.Fail here would fault the parent permanently, with nothing to retry it
-            // — see docs/superpowers/specs/2026-08-17-script-alc-double-compile-race-design.md §5.4.
-            logger.SubFlowOutputMappingTransientFailure(ex, parentInstance.Id, parentStateKey);
+            // DaprClient call inside the mapping timing out) is a downstream fault, not this case;
+            // it falls through to the permanent failed-Result path below.
             throw;
         }
         catch (Exception ex)

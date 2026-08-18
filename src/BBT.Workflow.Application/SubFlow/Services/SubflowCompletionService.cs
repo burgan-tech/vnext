@@ -250,12 +250,11 @@ public sealed class SubflowCompletionService(
 
                     if (!mappingResult.IsSuccess)
                     {
-                        // A failed Result means PERMANENT: OutputMappingFailureClassifier rethrows
-                        // transient infrastructure faults, so they never reach this branch — they
-                        // abort the delivery before any commit and it is redelivered. Faulting here
-                        // is therefore correct: a mapping that cannot succeed as written would only
-                        // replay the same failure, and the fault propagates to the grandparent via
-                        // InstanceSubFaultedEvent.
+                        // Output-mapping failures are permanent at this boundary. Recoverable
+                        // assembly-load contention is handled locally by CSharpEvaluator; an
+                        // unclassified loader failure must not consume the Inbox retry budget and
+                        // dead-letter while leaving the parent open. Faulting here makes the failure
+                        // visible and propagates it to the grandparent via InstanceSubFaultedEvent.
                         var incident = InstanceIncidentFactory.Create(
                             state: parentInstance.GetCurrentState,
                             transition: string.Empty,

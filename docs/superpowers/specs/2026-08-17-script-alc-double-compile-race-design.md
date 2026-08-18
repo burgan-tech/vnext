@@ -78,8 +78,8 @@ rather than merely noisy.
 2. Loading a script assembly into a load context is idempotent, so a partial failure cannot leave a
    shared context permanently unable to serve that script.
 3. The cache key distinguishes load contexts, so two helper sets cannot share one compiled type.
-4. A transient infrastructure failure during output mapping no longer terminates the parent
-   instance. Only a genuinely permanent failure produces a terminal outcome.
+4. Recoverable duplicate assembly loading is resolved inside the evaluator without redelivery;
+   loader failures that cannot be proven recoverable produce a visible terminal outcome.
 
 ## 3. Non-goals
 
@@ -215,84 +215,29 @@ wrong, and the code comment inherited the error before review caught it — note
 is easy to repeat: `ConditionalWeakTable`'s weak key says nothing about what the *value cache*
 pins.)
 
-### 5.4 Output-mapping failure classification
+### 5.4 Loader recovery belongs at the source
 
-The three changes above remove this particular infrastructure failure. They do not remove the reason
-it was so damaging, which is a separate defect worth fixing in the same change.
+The assembly-name collision is recoverable only when the evaluator can prove that another caller
+loaded the exact same compilation. That proof is the presence of an assembly whose simple name is
+the full cache key in the same load context. `CompileAndLoad` therefore scans before loading and, if
+`LoadFromStream` still throws `FileLoadException`, scans once more to close the scan/load race across
+different evaluator instances. An exact match is reused; without one the original exception is
+preserved.
 
-`SubflowOutputMappingService.ApplyAsync` catches every exception and collapses it into one
-`Instance:100030` result. `SubflowCompletionService` then treats that result as permanent:
+The SubFlow layer must not infer retryability from broad CLR exception types. `FileLoadException`
+also represents permanent strong-name, dependency and version failures; `BadImageFormatException`
+normally represents a corrupt or incompatible image. Retrying either type generically consumes the
+Inbox retry budget (five attempts in the default worker configuration) and can dead-letter the event
+while leaving the parent correlation open. Unclassified loader failures therefore follow the normal
+failed-`Result` path: completion faults and commits the parent visibly, while the already-faulted path
+logs and commits its terminal state.
 
-```
-AddIncident → parentInstance.Fault(...) → UpdateAsync → CommitAsync
-```
-
-`Instance.Fault` is terminal — it sets `Status = Faulted` and `CompletedAt`, and raises
-`InstanceFaultedCleanupEvent`, which cascades to children. Because the correlation was completed in
-the same transaction, nothing retries. The in-code justification, *"Retrying would never succeed"*,
-holds for a mapping the author wrote incorrectly and fails for an infrastructure fault. A transient,
-self-healing condition is converted into a permanent business outcome.
-
-`ApplyAsync` therefore classifies its failure:
-
-- **Permanent** — the mapping cannot succeed as written: `CompilationErrorException`, sandbox
-  violations, a missing implementing type, and exceptions thrown by the mapping's own logic. Current
-  behaviour is retained: incident, fault, commit.
-- **Transient** — the mapping would succeed on a later attempt: assembly load and load-context
-  faults (`FileLoadException`, `BadImageFormatException`). These are **rethrown rather than
-  converted to a failed `Result`**, so `correlationUow` never commits. The inner-exception chain is
-  walked, because script invocation and type initialisation both wrap the original fault.
-
-  **`OperationCanceledException` is deliberately NOT on this list**, and the reason matters. It was
-  on it in the first implementation, and the final review found that this introduced a worse failure
-  mode than the one being fixed. Mapping scripts hold a `DaprClient`, so a downstream timeout
-  arrives as `TaskCanceledException`, which derives from `OperationCanceledException`. Classifying
-  that transient means rethrowing on every redelivery — and with no `maxRetries` or dead-letter
-  configured, the parent stays Busy with an open correlation **indefinitely and silently**, where
-  before it faulted visibly. `FileLoadException` self-heals once the cache warms; a downstream
-  outage does not. Genuine cancellation is instead handled by its own catch, guarded on
-  `cancellationToken.IsCancellationRequested`: host shutdown or an abandoned caller rethrows, while
-  a `TaskCanceledException` arriving with our token still live falls through to the permanent path
-  and faults visibly, exactly as before this change.
-
-  The walk must also open `ReflectionTypeLoadException.LoaderExceptions`. `CompileAndLoad` calls
-  `assembly.GetTypes()`, and that exception carries its load faults in an array with
-  `InnerException == null` — so a plain chain walk classifies a `FileLoadException` surfacing there
-  as *permanent* and faults a healthy parent. That is precisely the incident this design exists to
-  prevent, escaping through the classifier meant to catch it. Found in review, after the first
-  implementation shipped the naive walk.
-
-Transient data-access failures are deliberately **not** classified. Recognising them needs
-provider-specific inspection (Npgsql error codes), which is a different problem with a different
-failure mode, and adding it here would widen this change without evidence that it occurs on this
-path. It is a candidate for a later allowlist entry, not part of this work.
-
-**Transient is an allowlist; anything unrecognised is permanent.** An exception type not on the list
-keeps today's behaviour — incident, fault, commit. The alternative (treat the unknown as transient)
-protects instances but turns a genuine mapping bug into a poison message the broker redelivers
-indefinitely, and it changes the blast radius of every future exception type by default. The
-allowlist accepts a narrower failure mode instead: a transient type nobody has classified yet still
-faults the parent, exactly as it does today, until it is added to the list. Adding an entry is a
-one-line change; the list is the intended maintenance point, and each new entry belongs in this
-document's decisions log.
-
-Rolling the transaction back also rolls back the correlation completion, so the delivery is
-redelivered against unchanged state and the retry finds a warm cache. Atomicity works in our favour
-here: there is no half-applied state to reconcile.
-
-The classification lives in `SubflowOutputMappingService` — it owns the exception and is the only
-place with enough information to judge it. Callers stay simple: a failed `Result` still means
-permanent, and an exception still means retry.
-
-`SubflowFaultService` gets the same behaviour with **no code change**, and it is worth saying why so
-this does not read as half-implemented. Its permanent branch keeps today's log-and-proceed (the
-parent is already faulted; re-faulting would be wrong), and it only ever sees permanent failures now,
-because a transient one throws past it. The throw then reaches its outer handler at
-`SubflowFaultService.cs:288-292`, which logs and **rethrows** — so no commit happens and the delivery
-is redelivered, exactly as on the completion path.
-
-That correctness rests on that outer catch continuing to rethrow, which is invisible from the code
-this change touches. A test pins it.
+Genuine caller/host cancellation remains separate: `OperationCanceledException` is rethrown only
+when the supplied cancellation token is cancelled. A cancellation-shaped downstream failure with a
+live caller token is a permanent mapping failure at this boundary. If a future component has a
+provably retryable infrastructure condition, that component must expose a dedicated typed exception;
+the SubFlow layer must not reconstruct that meaning from `FileLoadException`, message text, or other
+framework exception categories.
 
 | Situation | Behaviour |
 |---|---|
@@ -303,11 +248,11 @@ this change touches. A test pins it.
 | No implementing type found | Throws as today; unloads only when the context is owned. The next attempt reuses the loaded assembly rather than failing to load it again. |
 | Caller cancels during a shared compile | The compile continues for the other callers; the cancelling caller's token is observed on entry only. |
 | Output mapping fails permanently | Unchanged: incident, parent faulted, committed. |
-| Output mapping fails transiently | Exception propagates; `correlationUow` is not committed, correlation completion rolls back, the delivery is redelivered. |
-| Output mapping fails transiently on the fault path | Rethrown for redelivery instead of logged and skipped. The permanent branch keeps log-and-proceed. |
+| Duplicate load wins between scan and load | The evaluator rescans and reuses the exact full-key assembly; no redelivery is needed. |
+| Unclassified loader failure during output mapping | Failed `Result`; completion faults and commits the parent visibly. |
 
 No new error codes. `Instance:100030` continues to report genuine, permanent output-mapping
-failures — and now only those, which makes the code meaningful as a signal for the first time.
+failures, including loader failures that could not be proven to be the recoverable duplicate-load race.
 
 ## 7. Testing
 
@@ -329,11 +274,9 @@ New tests in `test/BBT.Workflow.Application.Tests/Scripting/`:
 
 In `test/BBT.Workflow.Application.Tests/SubFlow/`:
 
-5. **Failure classification** — a transient failure (a stubbed `FileLoadException`) propagates out of
-   `CompletionAsync`, leaves the correlation open and the parent un-faulted; a permanent failure (a
-   compilation error) still faults the parent and commits. A third case pins the allowlist default:
-   an exception type that is on neither list faults the parent. The fault-path variant asserts the
-   same split in `SubflowFaultService`.
+5. **Permanent loader failure** — unclassified `FileLoadException` and
+   `BadImageFormatException` values become failed results instead of redelivery signals; completion's
+   existing permanent-failure coverage verifies that a failed result faults and commits the parent.
 
 Regression guard: the existing sandbox and helper tests must stay green. Note the known master
 baseline of pre-existing failures unrelated to scripting.
@@ -344,11 +287,11 @@ baseline of pre-existing failures unrelated to scripting.
 |---|---|
 | `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/CSharpEvaluator.cs` | `Lazy` cache, eviction, detached token, idempotent load, `cacheScope` in key |
 | `modules/BBT.Workflow.Modules.Scripting/.../Evaluators/IEvaluator.cs` | Unchanged surface — the null-`Display` rationale moves to the derivation |
-| `src/BBT.Workflow.Application/SubFlow/Services/SubflowOutputMappingService.cs` | Classify transient vs permanent; rethrow transient |
+| `src/BBT.Workflow.Application/SubFlow/Services/SubflowOutputMappingService.cs` | Preserve caller cancellation; convert unclassified failures to a failed result |
 | `src/BBT.Workflow.Application/SubFlow/Services/SubflowCompletionService.cs` | Comment update only — the failed-`Result` branch already means "permanent" |
-| `src/BBT.Workflow.Application/SubFlow/Services/SubflowFaultService.cs` | Keep log-and-proceed for permanent; let transient propagate |
+| `src/BBT.Workflow.Application/SubFlow/Services/SubflowFaultService.cs` | Keep log-and-proceed for permanent failures |
 | `test/BBT.Workflow.Application.Tests/Scripting/` | Four new tests |
-| `test/BBT.Workflow.Application.Tests/SubFlow/` | Classification tests |
+| `test/BBT.Workflow.Application.Tests/SubFlow/` | Permanent loader-failure tests |
 
 ## 9. Decisions log
 
@@ -369,17 +312,12 @@ baseline of pre-existing failures unrelated to scripting.
   serializes duplicate deliveries, and correlation completion and output mapping share one
   transaction. The real concurrency source is parallel *distinct* completions (§1c), and the real
   consistency damage is the permanent-fault classification (§5.4).
-- **Classification lives in `SubflowOutputMappingService`, not its callers.** It owns the exception
-  and is the only place with enough information to judge it. Callers keep a simple contract: a failed
-  `Result` means permanent, an exception means retry.
-- **Transient failures rethrow instead of returning a distinguishable `Result`.** Returning a
-  "transient" result would require every caller to remember not to commit. Throwing makes the
-  transaction roll back by default and reuses the redelivery path
-  `SubflowTerminalLockNotAcquiredException` already relies on.
-- **Transient is an allowlist, not a blocklist.** Chosen so an unrecognised exception cannot become
-  an indefinitely redelivered poison message, and so no future exception type silently changes
-  behaviour. The accepted cost is that an unclassified transient type still faults the parent until
-  it is added.
+- **Loader recovery lives in `CSharpEvaluator`, not SubFlow.** Only the evaluator can prove that the
+  full-key assembly appeared in the same context between scan and load. A broad CLR exception type
+  is not a retryability contract.
+- **No speculative transient marker.** There is no current producer of a domain-specific retryable
+  script-infrastructure exception, so adding one now would be dead API. A future producer may add a
+  typed exception at the source together with bounded-retry tests.
 - **The assembly name carries the full cache key rather than a 16-character prefix.** §5.2's reuse
   rule is only sound if the name identifies the compilation uniquely; truncation to 64 bits made
   that probabilistic, and widening it costs nothing but stack-trace length.

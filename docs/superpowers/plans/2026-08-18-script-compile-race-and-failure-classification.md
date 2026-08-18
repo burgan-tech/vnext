@@ -1,5 +1,13 @@
 # Script Compile Race and Output-Mapping Failure Classification — Implementation Plan
 
+> **Superseded design note (2026-08-18):** Tasks 4–5 originally classified every
+> `FileLoadException` and `BadImageFormatException` as transient. Review rejected that policy because
+> both types also represent permanent loader failures. The approved implementation recovers the
+> exact duplicate-load race inside `CSharpEvaluator` by rescanning the target context after a failed
+> load, removes the broad output-mapping classifier, and treats any unproven loader failure as a
+> permanent failed result. The spec is authoritative; the task text below is retained as execution
+> history and must not be reused as the current contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop concurrent script compilations from colliding in a shared `AssemblyLoadContext`, and stop a transient infrastructure fault during subflow output mapping from permanently faulting the parent instance.

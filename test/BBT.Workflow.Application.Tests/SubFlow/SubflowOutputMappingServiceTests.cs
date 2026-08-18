@@ -35,7 +35,7 @@ public sealed class SubflowOutputMappingServiceTests
     private readonly Mock<ILogger<SubflowOutputMappingService>> _logger = new();
 
     [Fact]
-    public async Task ApplyAsync_WhenScriptContextBuildFailsTransiently_ShouldRethrowRatherThanReturnFailure()
+    public async Task ApplyAsync_WhenScriptContextBuildThrowsUnclassifiedAssemblyLoadFailure_ShouldReturnFailedResult()
     {
         var parentInstance = CreateParentInstance();
         var parentWorkflow = CreateParentWorkflowWithMapping();
@@ -43,9 +43,27 @@ public sealed class SubflowOutputMappingServiceTests
             .Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>()))
             .Throws(new FileLoadException("Assembly with same name is already loaded"));
 
-        await Should.ThrowAsync<FileLoadException>(
-            () => CreateService().ApplyAsync(
-                parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None));
+        var result = await CreateService().ApplyAsync(
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_WhenScriptContextBuildThrowsBadImageFormat_ShouldReturnFailedResult()
+    {
+        var parentInstance = CreateParentInstance();
+        var parentWorkflow = CreateParentWorkflowWithMapping();
+        _scriptContextFactory
+            .Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>()))
+            .Throws(new BadImageFormatException("invalid assembly image"));
+
+        var result = await CreateService().ApplyAsync(
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
     }
 
     [Fact]
@@ -72,7 +90,7 @@ public sealed class SubflowOutputMappingServiceTests
     /// where the real `FileLoadException` surfaced in the incident.
     /// </summary>
     [Fact]
-    public async Task ApplyAsync_WhenScriptCompilationFailsTransiently_ShouldRethrow()
+    public async Task ApplyAsync_WhenScriptCompilationThrowsUnclassifiedAssemblyLoadFailure_ShouldReturnFailedResult()
     {
         var parentInstance = CreateParentInstance();
         var parentWorkflow = CreateParentWorkflowWithMapping();
@@ -86,17 +104,19 @@ public sealed class SubflowOutputMappingServiceTests
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new FileLoadException("Assembly with same name is already loaded"));
 
-        await Should.ThrowAsync<FileLoadException>(
-            () => CreateService().ApplyAsync(
-                parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None));
+        var result = await CreateService().ApplyAsync(
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
     }
 
     /// <summary>
     /// A cancellation-shaped exception (e.g. <see cref="TaskCanceledException"/> from a
     /// <c>DaprClient</c> call inside the mapping timing out) arriving while OUR token is NOT
-    /// cancelled is a downstream fault, not "our own cancellation". It must fault the parent visibly
-    /// — there is no <c>maxRetries</c>/dead-letter configured, so classifying it transient would
-    /// strand the parent Busy forever instead.
+    /// cancelled is a downstream fault, not "our own cancellation". It must fault the parent visibly;
+    /// redelivery would only spend the bounded Inbox retry budget before dead-lettering the event and
+    /// leaving the parent correlation open.
     /// </summary>
     [Fact]
     public async Task ApplyAsync_WhenCancellationExceptionArrivesWithoutOurTokenCancelled_ShouldReturnFailedResultWithoutThrowing()
