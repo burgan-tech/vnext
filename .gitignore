@@ -276,7 +276,8 @@ ai-docs/
 
 # Claude
 .claude/worktrees/*
-./claude/*.local.json
+.claude/*.local.json
+CLAUDE.local.md
 
 # Codex isolated worktrees
 .worktrees/
