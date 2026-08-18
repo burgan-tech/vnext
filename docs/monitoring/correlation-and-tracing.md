@@ -189,17 +189,55 @@ baggage. Do not re-add them to a log scope.
 
 ## Telemetry configuration
 
-- **OTLP endpoint**: `Telemetry:Otlp:Endpoint` is intentionally NOT set in `appsettings.json` —
-  Aether treats config as stronger than environment, so a hardcoded value would silently override
-  `OTEL_EXPORTER_OTLP_ENDPOINT`. Containers set `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`
-  (http/protobuf); bare-metal falls back to `http://localhost:4318`. Elastic APM ingestion is plain
-  OTLP — pointing the collector's exporter at Elastic is an ops-side change only.
+- **OTLP endpoint**: Aether treats configuration as **stronger than the environment** —
+  `Telemetry:Otlp:Endpoint` in `appsettings.json` silently wins over
+  `OTEL_EXPORTER_OTLP_ENDPOINT`. The hosts set it to `http://localhost:4318`, which is correct for
+  the default local flow (`./run-docker.sh` starts infrastructure only, the apps run on the host,
+  and the collector publishes 4318). Anything that runs the apps **in containers** must therefore
+  override the config key, not the OTEL variable: the `etc/docker/.env.*` files set
+  `Telemetry__Otlp__Endpoint=http://otel-collector:4318` for exactly this reason. A deployed
+  environment that only sets `OTEL_EXPORTER_OTLP_ENDPOINT` will export to its own localhost and
+  lose everything.
 - **Workers**: Inbox/Outbox have `TracingEnabled: true` so the subflow completion / continuation
   path is visible in APM (they were previously log-only).
 - **Detail level**: `Telemetry:Tracing:DetailLevel` — `"Business"` (default) keeps production
   traces focused on service boundaries and business spans; `"Verbose"` additionally emits
   task-phase spans (`BBT.Workflow.Tasks`), cache spans (`BBT.Workflow.Cache`), EF Core and Dapr
   state-store spans. Read once at startup — changing it requires a restart.
+
+## Verifying against Elastic APM locally
+
+Production renders traces in Elastic APM, and **Elastic and OpenObserve do not draw the same
+waterfall from the same data**. Elastic resolves nesting strictly through `parent.id`: a span whose
+parent document is absent from the trace is treated as an *orphan* and re-parented to the trace
+root, so it appears at the bottom of the waterfall instead of under its real parent. OpenObserve
+groups by trace id and is far more forgiving, so the same trace can look correct there and broken
+in Elastic. A local trace that only ever gets checked in OpenObserve therefore proves nothing about
+production.
+
+`etc/docker/docker-compose.{yml,dev.yml,stage.yml}` run both backends side by side. The collector
+(`etc/docker/config/otel/otel-config.yaml`) fans traces, metrics and logs out to OpenObserve **and**
+to Elastic APM Server via `otlp/elastic` → `apm-server:8200`; APM Server accepts OTLP natively on
+that port (gRPC and HTTP share it) and writes the `traces-apm-*` / `logs-apm-*` data streams.
+
+| Service | Host port | Where to look |
+|---|---|---|
+| Kibana | 5601 | Observability → APM → Traces (the renderer to trust) |
+| Elasticsearch | 9200 | raw documents, e.g. checking a span's `parent.id` |
+| APM Server | **8201** | intake health only — Vault already owns 8200 on the host |
+| OpenObserve | 5080 | the forgiving second opinion |
+
+Pin the stack version with `ELASTIC_VERSION` (default `8.15.3`) if it needs to match a specific
+production cluster. Security is disabled and APM Server runs with no secret token — local only.
+
+**The Dapr sidecars must load their Configuration for this to be meaningful.** Every
+`etc/*/dapr/config.yaml` sets `samplingRate: "1"` and an OTLP endpoint, but a `daprd` container only
+reads it when started with `--config`; the compose files pass `--config /dapr-config.yaml` and mount
+the file. Without it the sidecars still create and propagate W3C span ids for service invocation
+while exporting none of them — so the Execution transaction's `parent.id` points at a span that
+never reaches Elasticsearch, and Elastic re-roots the whole Execution subtree to the bottom of the
+trace while OpenObserve keeps drawing it in place. That asymmetry is the single most likely cause of
+"the remote call is not under its task span".
 
 ## Diagnostic spans and the Business filter — the creation rule
 
@@ -230,3 +268,10 @@ subflow/subprocess starts have a visible parent.
 5. Spans re-rooted to the top of the trace (e.g. `TaskCoordinator.Execute` not under
    `transition/{key}`) → their parent was created but filtered at export. See "Diagnostic spans
    and the Business filter" above — some span in the chain violates the creation rule.
+6. A subtree that renders correctly in OpenObserve but hangs off the root in Elastic → the parent
+   span id exists on the wire but no document for it reached the backend. Confirm by fetching the
+   orphan's `parent.id` from Elasticsearch and searching the trace for that `span.id`; if it is
+   absent, find who owns that span. For the Orchestration → Execution hop the owner is the Dapr
+   sidecar — see "Verifying against Elastic APM locally". Task-phase spans (`Task.PrepareInput` /
+   `Task.Invoke` / `Task.ProcessOutput`) are Verbose-only by design, so run with
+   `DetailLevel: "Verbose"` while diagnosing or those levels are simply not there to nest under.

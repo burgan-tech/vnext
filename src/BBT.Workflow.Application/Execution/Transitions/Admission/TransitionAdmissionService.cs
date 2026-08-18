@@ -90,6 +90,141 @@ public sealed class TransitionAdmissionService(
     }
 
     /// <inheritdoc />
+    public async Task<Result> AcceptAsync(
+        TransitionExecutionContext context,
+        Func<AcceptFlip, CancellationToken, Task<Result>> underLock,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+        if (!scope.IsAcquired)
+            return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
+
+        var flipResult = await FlipUnderLockAsync(context, cancellationToken);
+        if (!flipResult.IsSuccess)
+            return Result.Fail(flipResult.Error);
+
+        var flip = flipResult.Value;
+
+        Result outcome;
+        try
+        {
+            outcome = await underLock(flip, cancellationToken);
+        }
+        catch
+        {
+            // A throwing enqueue strands the flip exactly as a failed one does, and for a chain
+            // reserve it strands the LEAF — which no caller holds a handle to.
+            await CompensateUnderLockAsync(context, flip, cancellationToken);
+            throw;
+        }
+
+        if (!outcome.IsSuccess)
+            await CompensateUnderLockAsync(context, flip, cancellationToken);
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// Performs the status flip the request's kind calls for. Runs with the status lock already
+    /// held, so it talks to the busy manager directly instead of going through
+    /// <see cref="ReserveAsync"/> / <see cref="TakeOverAsync"/>, which would try to acquire the
+    /// same non-reentrant key again.
+    /// </summary>
+    private async Task<Result<AcceptFlip>> FlipUnderLockAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        // Subflow resume / long-poll ack resume already own the Busy they will run under.
+        if (context.Directives.IsInternalResume)
+            return Result<AcceptFlip>.Ok(AcceptFlip.None);
+
+        switch (Classify(context))
+        {
+            // updateData is status-neutral by design, and an owner re-entry already holds the flag.
+            case AdmissionKind.Unconditional:
+            case AdmissionKind.OwnerReentry:
+                return Result<AcceptFlip>.Ok(AcceptFlip.None);
+
+            case AdmissionKind.BypassBusyCheck:
+            {
+                // cancel / exit / timeout: exempt from the Busy 409, but they DO set the status,
+                // so they take the same lock as everything else and flip under it. Idempotent —
+                // only a flip we actually performed may be compensated.
+                var flipped = await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
+                logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
+                return Result<AcceptFlip>.Ok(flipped ? AcceptFlip.TakenOver : AcceptFlip.None);
+            }
+
+            default: // AdmissionKind.Normal
+            {
+                if (IsSubflowForward(context))
+                {
+                    // The parent is Busy for the subflow's lifetime by design and does not reserve
+                    // itself; the chain BELOW it must be Busy before the caller is answered.
+                    await busyManager.MarkBusyWithPropagationAsync(context.InstanceId, cancellationToken);
+                    logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
+                    return Result<AcceptFlip>.Ok(AcceptFlip.ChainReserved);
+                }
+
+                var admission = CheckAdmission(context);
+                if (!admission.IsSuccess)
+                    return Result<AcceptFlip>.Fail(admission.Error);
+
+                var outcome = await busyManager.TryMarkBusyWithPropagationAsync(
+                    context.InstanceId, cancellationToken);
+
+                switch (outcome)
+                {
+                    case BusyMarkOutcome.Marked:
+                        logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
+                        return Result<AcceptFlip>.Ok(AcceptFlip.Reserved);
+
+                    case BusyMarkOutcome.AlreadyBusy:
+                        logger.TransitionRejectedInstanceBusy(context.InstanceId, context.TransitionKey);
+                        return Result<AcceptFlip>.Fail(
+                            WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey));
+
+                    default: // Skipped — completed or vanished between context creation and accept
+                        return Result<AcceptFlip>.Fail(ExecutionErrors.InstanceAlreadyCompleted(
+                            context.InstanceId, context.Instance.Status.Description));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Undoes an accept's own flip when the work under the lock failed. Talks to the busy manager
+    /// directly — the Release* methods acquire the status lock this call still holds.
+    /// Never throws: compensation must not mask the original failure.
+    /// </summary>
+    private async Task CompensateUnderLockAsync(
+        TransitionExecutionContext context,
+        AcceptFlip flip,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            switch (flip)
+            {
+                case AcceptFlip.Reserved:
+                case AcceptFlip.TakenOver:
+                    if (await busyManager.TryReleaseAsync(context.InstanceId, cancellationToken))
+                        logger.InstanceStatusSettled(context.InstanceId, InstanceStatus.Active.Code);
+                    break;
+
+                case AcceptFlip.ChainReserved:
+                    await busyManager.ReleaseWithPropagationAsync(context.InstanceId, cancellationToken);
+                    break;
+            }
+        }
+        catch (Exception exception)
+        {
+            // A stranded Busy is recovered by job-timeout recovery.
+            logger.ReservationReleaseFailed(exception, context.InstanceId);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<Result> ReserveAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
@@ -132,6 +267,48 @@ public sealed class TransitionAdmissionService(
         await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
         logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
         return Result.Ok();
+    }
+
+    /// <inheritdoc />
+    public async Task<Result> ReserveSubflowChainAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+        if (!scope.IsAcquired)
+            return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
+
+        // MarkBusyWithPropagation, NOT TryMarkBusyWithPropagation: the relay levels are already
+        // Busy and the Try- variant deliberately short-circuits on AlreadyBusy (its 409 contract),
+        // so it would never reach the leaf — which is the only level the client can observe.
+        await busyManager.MarkBusyWithPropagationAsync(context.InstanceId, cancellationToken);
+
+        logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
+        return Result.Ok();
+    }
+
+    /// <inheritdoc />
+    public async Task ReleaseSubflowChainAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+            if (!scope.IsAcquired)
+            {
+                logger.StatusLockAcquireFailed(context.LockKey);
+                return;
+            }
+
+            await busyManager.ReleaseWithPropagationAsync(context.InstanceId, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // Compensation must never mask the original failure; a stranded Busy is
+            // recovered by job-timeout recovery.
+            logger.ReservationReleaseFailed(exception, context.InstanceId);
+        }
     }
 
     /// <inheritdoc />

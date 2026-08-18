@@ -101,6 +101,24 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
+    public Task<Result<TransitionOutput>> ForwardTransitionAsync(
+        Guid instanceId,
+        string transitionKey,
+        TransitionInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.ForwardTransitionAsync(instanceId, transitionKey, input, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<Result> ReleaseBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default)
+    {
+        return _remoteService.ReleaseBusyAsync(input, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<Result> AcknowledgeLongPollAsync(
         AcknowledgeLongPollInput input,
         CancellationToken cancellationToken = default)

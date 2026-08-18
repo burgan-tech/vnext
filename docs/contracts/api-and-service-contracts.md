@@ -212,6 +212,21 @@ related-instance reads (see
 | GET | `.../instances/{instance}/internal/related-data` | `200` snapshot, `204` if the instance does not exist. |
 | POST | `.../workflows/{workflow}/internal/related-data/batch` | `200` array (possibly `[]`), `400` above 100 ids. |
 
+Two more back the accept-time SubFlow chain reserve (see
+[vnext-workflow-developer](../../.claude/rules/vnext-workflow-developer.md) § SubFlow Lifecycle):
+
+| Method | Route | Response |
+| --- | --- | --- |
+| POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. |
+| PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
+
+`internal/subflow-forward` exists **because** it is internal. The relay must carry a claim proving the
+originating accept already reserved this chain's Busy flag, and the public transition endpoint cannot
+carry one safely: it copies every inbound header into `TransitionInput.Headers` unfiltered and
+serializes only the data element on the cross-domain hop, so a header-borne claim would be forgeable
+by any client and would defeat the Busy-as-mutex 409. On this route the claim rides the request body
+(`SubflowForwardInput.ChainReserved`), where only the runtime can put it.
+
 **`[ApiExplorerSettings(IgnoreApi = true)]` hides a route from Swagger. It does nothing to routing.**
 Confirmed by reading the orchestration host directly:
 

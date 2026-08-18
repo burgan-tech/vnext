@@ -114,6 +114,32 @@ public interface IInstanceCommandGateway
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Compensating mirror of <see cref="MarkBusyAsync"/>: recursively settles back to Active the
+    /// instances an accept-time subflow-chain reserve actually flipped. Levels holding an open
+    /// SubFlow correlation are Busy by design and are recursed past, not released.
+    /// Routes to local or remote execution based on target domain.
+    /// </summary>
+    /// <param name="input">Target domain, workflow, and instance id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result indicating success or failure of remote or local persistence.</returns>
+    Task<Result> ReleaseBusyAsync(
+        MarkBusyInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Relays a transition to an active SubFlow instance. Routes to local or remote execution
+    /// based on target domain: same-domain hops call the app service in process, cross-domain hops
+    /// use the internal-only subflow-forward endpoint so the chain-reserve claim
+    /// (<see cref="TransitionInput.ChainReserved"/>) never rides a caller-supplied header.
+    /// Behaves exactly like <see cref="TransitionAsync"/> otherwise, including its error contract.
+    /// </summary>
+    Task<Result<TransitionOutput>> ForwardTransitionAsync(
+        Guid instanceId,
+        string transitionKey,
+        TransitionInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Acknowledges a long-poll termination signal and resumes the paused pipeline, descending the
     /// active SubFlow chain (local or cross-domain) to the instance that is actually awaiting.
     /// Routes to local or remote execution based on target domain. Each level either resumes (if it is

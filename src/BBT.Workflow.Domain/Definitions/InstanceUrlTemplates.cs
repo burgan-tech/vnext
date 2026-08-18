@@ -149,6 +149,21 @@ public static class InstanceUrlTemplates
     public const string LongPollAckTemplate = "/{0}/workflows/{1}/instances/{2}/longpoll/ack";
 
     /// <summary>
+    /// Internal-only URL template for releasing an accept-time SubFlow chain reserve.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/internal/busy-release
+    /// </summary>
+    public const string ReleaseBusyTemplate = "/{0}/workflows/{1}/instances/{2}/internal/busy-release";
+
+    /// <summary>
+    /// Internal-only URL template for relaying a transition to an active SubFlow. Distinct from the
+    /// public transition endpoint because it carries the chain-reserve claim in the request body —
+    /// the public endpoint copies caller headers unfiltered, so a claim exposed there would be
+    /// forgeable. Protected by network isolation, like the related-data endpoints.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instance}/internal/subflow-forward
+    /// </summary>
+    public const string SubflowForwardTemplate = "/{0}/workflows/{1}/instances/{2}/internal/subflow-forward";
+
+    /// <summary>
     /// Internal related-instance data read template.
     /// {0} = domain, {1} = workflow, {2} = instance
     /// </summary>
@@ -478,6 +493,28 @@ public static class InstanceUrlTemplates
     /// <returns>Generated URL</returns>
     public static string MarkBusy(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(MarkBusyTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for the internal-only chain-reserve release endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance id</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string ReleaseBusy(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(ReleaseBusyTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for the internal-only SubFlow transition relay endpoint.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance id</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated URL</returns>
+    public static string SubflowForward(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(SubflowForwardTemplate, apiVersionPrefix, domain, workflow, instance);
 
     public static string LongPollAck(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(LongPollAckTemplate, apiVersionPrefix, domain, workflow, instance);

@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -268,5 +269,104 @@ public sealed class InstanceBusyManagerTests
             o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
         instance.IsBusy.ShouldBeTrue();
+    }
+
+    // ─── MarkBusyWithPropagationAsync / ReleaseWithPropagationAsync (chain reserve) ──────────
+
+    [Fact]
+    public async Task MarkBusyWithPropagationAsync_WhenAlreadyBusyParent_ShouldStillPropagateToSubflow()
+    {
+        // A parent holding an open SubFlow correlation is Busy for that subflow's whole lifetime,
+        // so the accept-time chain reserve MUST look past it — the leaf is the only level a
+        // long-polling client observes. (Contrast the Try- variant, which short-circuits.)
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var parent = CreateParentWithActiveSubflow(parentId, subInstanceId);
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(parentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+
+        await CreateSut().MarkBusyWithPropagationAsync(parentId);
+
+        parent.IsBusy.ShouldBeTrue();
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never); // no re-flip
+        _instanceCommandGateway.Verify(g => g.MarkBusyAsync(
+            It.Is<MarkBusyInput>(i => i.InstanceId == subInstanceId && i.Workflow == "child-flow"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReleaseWithPropagationAsync_WhenInstanceHoldsActiveSubflow_ShouldRecurseWithoutReleasingIt()
+    {
+        // The parent's Busy was never taken by the chain reserve — releasing it here would settle
+        // an instance that is legitimately mid-subflow.
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var parent = CreateParentWithActiveSubflow(parentId, subInstanceId);
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(parentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parent);
+
+        await CreateSut().ReleaseWithPropagationAsync(parentId);
+
+        parent.IsBusy.ShouldBeTrue();
+        _instanceRepository.Verify(r => r.GetResultAsync(
+            parentId.ToString(), false, It.IsAny<CancellationToken>()), Times.Never);
+        _instanceCommandGateway.Verify(g => g.ReleaseBusyAsync(
+            It.Is<MarkBusyInput>(i => i.InstanceId == subInstanceId),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReleaseWithPropagationAsync_WhenLeafBusy_ShouldSettleItToActive()
+    {
+        var leafId = Guid.NewGuid();
+        var leaf = Instance.Create(leafId, "child-flow", "1.0.0");
+        leaf.Busy();
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(leafId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(leaf);
+        _instanceRepository
+            .Setup(r => r.GetResultAsync(leafId.ToString(), false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(leaf));
+        _instanceRepository
+            .Setup(r => r.UpdateAsync(leaf, false, It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(leaf));
+
+        await CreateSut().ReleaseWithPropagationAsync(leafId);
+
+        leaf.Status.ShouldBe(InstanceStatus.Active);
+        _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _instanceCommandGateway.Verify(g => g.ReleaseBusyAsync(
+            It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ReleaseWithPropagationAsync_WhenInstanceNotFound_ShouldNoOp()
+    {
+        var instanceId = Guid.NewGuid();
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(instanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Instance?)null);
+
+        await CreateSut().ReleaseWithPropagationAsync(instanceId);
+
+        _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Never);
+        _instanceCommandGateway.Verify(g => g.ReleaseBusyAsync(
+            It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static Instance CreateParentWithActiveSubflow(Guid parentId, Guid subInstanceId)
+    {
+        var parent = Instance.Create(parentId, "parent-flow", "1.0.0", "parent-key");
+        parent.ChangeState(StateFactory.CreateDefault("waiting-child", StateType.SubFlow));
+        // AddCorrelation flips the parent Busy for the subflow's lifetime.
+        parent.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), parentId, "waiting-child", subInstanceId,
+            SubFlowType.SubFlow.Code, "bank", "child-flow", "1.0.0"));
+        return parent;
     }
 }

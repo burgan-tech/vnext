@@ -13,7 +13,7 @@ public sealed class InstanceBusyManager(
     ILogger<InstanceBusyManager> logger) : IInstanceBusyManager
 {
     /// <inheritdoc />
-    public async Task MarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    public async Task<bool> MarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
     {
         var result = await instanceRepository.GetResultAsync(
             instanceId.ToString(), includeDetails: false, cancellationToken);
@@ -21,12 +21,12 @@ public sealed class InstanceBusyManager(
         if (!result.IsSuccess || result.Value is null)
         {
             logger.InstanceNotFoundForBusyMarker(instanceId);
-            return;
+            return false;
         }
 
         var instance = result.Value;
         if (instance.IsBusy || instance.IsCompleted)
-            return;
+            return false;
 
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
@@ -36,6 +36,7 @@ public sealed class InstanceBusyManager(
         await uow.CommitAsync(cancellationToken);
 
         logger.InstanceMarkedBusy(instanceId);
+        return true;
     }
 
     /// <inheritdoc />
@@ -95,6 +96,26 @@ public sealed class InstanceBusyManager(
         return true;
     }
 
+    /// <inheritdoc />
+    public async Task ReleaseWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var instance = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
+
+        if (instance is null)
+            return;
+
+        // An instance with an open SubFlow correlation is Busy for that subflow's lifetime by
+        // design — the chain reserve never flipped it, so releasing it here would settle a parent
+        // that is legitimately mid-subflow. Recurse past it and release the leaf only.
+        if (instance.Subflow is not null)
+        {
+            await PropagateReleaseToSubflowAsync(instance, cancellationToken);
+            return;
+        }
+
+        await TryReleaseAsync(instanceId, cancellationToken);
+    }
+
     /// <summary>
     /// Persists the Busy flip for an already-loaded instance in an isolated RequiresNew transaction.
     /// </summary>
@@ -118,13 +139,28 @@ public sealed class InstanceBusyManager(
         var subflow = instance.Subflow;
         if (subflow is not null)
         {
-            await instanceCommandGateway.MarkBusyAsync(new MarkBusyInput
-            {
-                Domain = subflow.SubFlowDomain,
-                Workflow = subflow.SubFlowName,
-                InstanceId = subflow.SubFlowInstanceId,
-                Version = subflow.SubFlowVersion
-            }, cancellationToken);
+            await instanceCommandGateway.MarkBusyAsync(ToBusyInput(subflow), cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Propagates the release to the active SubFlow (if any) via the instance command gateway.
+    /// </summary>
+    private async Task PropagateReleaseToSubflowAsync(Instance instance, CancellationToken cancellationToken)
+    {
+        var subflow = instance.Subflow;
+        if (subflow is not null)
+        {
+            await instanceCommandGateway.ReleaseBusyAsync(ToBusyInput(subflow), cancellationToken);
+        }
+    }
+
+    private static MarkBusyInput ToBusyInput(InstanceCorrelation subflow)
+        => new()
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            InstanceId = subflow.SubFlowInstanceId,
+            Version = subflow.SubFlowVersion
+        };
 }

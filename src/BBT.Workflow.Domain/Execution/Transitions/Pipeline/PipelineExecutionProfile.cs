@@ -52,6 +52,27 @@ public sealed class PipelineExecutionProfile
         LifecycleOrder.ForwardToActiveSubflow,
         LifecycleOrder.ResourceLock);
 
+    // Composed on top of the trigger's base profile for an updateData transition, whose target is
+    // fixed to $self: it writes data without moving the instance, so the state's lifecycle must not
+    // fire — OnExit/OnEntry would re-run hooks for a state the instance never left, and
+    // CancelScheduledJobs+Schedule would tear down and re-arm its timers, silently restarting every
+    // timeout.
+    //
+    // NOT every $self target gets this. The name says "self" because the target IS $self, but the
+    // POLICY deciding who gets the variant lives in PipelineProfileResolver and admits updateData
+    // alone (TransitionExecutionContextExtensions.SkipsStateLifecycle). A $self shared transition
+    // runs the FULL lifecycle. Reading "+Self" as "every $self transition" is the wrong conclusion
+    // and has cost real work twice — check the resolver before assuming.
+    // ChangeState (50) deliberately stays IN: it is the only step that sets context.Target, which
+    // RunAutomaticTransitionsStep (90) needs to evaluate the state's auto transitions against the
+    // freshly written data. OnExecute (30) also stays — that is the transition's own work, not the
+    // state's lifecycle.
+    private static readonly ImmutableHashSet<int> SelfTargetExcluded = ImmutableHashSet.Create(
+        LifecycleOrder.CancelScheduledJobs,
+        LifecycleOrder.OnExit,
+        LifecycleOrder.OnEntry,
+        LifecycleOrder.Schedule);
+
     private static readonly PipelineExecutionProfile ManualInstance = new()
     {
         Name = "Manual",
@@ -92,6 +113,18 @@ public sealed class PipelineExecutionProfile
         AllowSubFlow = false,
     };
 
+    // Pre-composed self-target variants of every base profile, keyed by the base profile's name.
+    // Declared after the base instances so their initializers have already run.
+    private static readonly Dictionary<string, PipelineExecutionProfile> SelfVariantsByBaseName =
+        new(StringComparer.Ordinal)
+        {
+            [ManualInstance.Name] = ComposeSelfTarget(ManualInstance),
+            [AutoChainInstance.Name] = ComposeSelfTarget(AutoChainInstance),
+            [ScheduledInstance.Name] = ComposeSelfTarget(ScheduledInstance),
+            [EventInstance.Name] = ComposeSelfTarget(EventInstance),
+            [ErrorBoundaryInstance.Name] = ComposeSelfTarget(ErrorBoundaryInstance),
+        };
+
     /// <summary>
     /// Creates the profile used for manual transitions: full pipeline, no exclusions; auto-chain and subflow enabled.
     /// </summary>
@@ -119,4 +152,33 @@ public sealed class PipelineExecutionProfile
     /// auto-chain and subflow are disabled.
     /// </summary>
     public static PipelineExecutionProfile ForErrorBoundary() => ErrorBoundaryInstance;
+
+    /// <summary>
+    /// Composes <paramref name="baseProfile"/> with the state-lifecycle exclusions. The base
+    /// profile's own exclusions and its <see cref="AllowAutoChain"/> / <see cref="AllowSubFlow"/>
+    /// settings are preserved; only the state-lifecycle steps are additionally skipped.
+    /// <para>
+    /// This is the MECHANISM. The policy of who receives it is the caller's:
+    /// <c>PipelineProfileResolver</c> applies it to <c>updateData</c> only, never to other
+    /// <c>$self</c> transitions.
+    /// </para>
+    /// </summary>
+    /// <param name="baseProfile">The trigger's profile to compose on top of.</param>
+    /// <returns>The self-target variant of <paramref name="baseProfile"/>.</returns>
+    public static PipelineExecutionProfile ForSelfTarget(PipelineExecutionProfile baseProfile)
+    {
+        ArgumentNullException.ThrowIfNull(baseProfile);
+
+        return SelfVariantsByBaseName.TryGetValue(baseProfile.Name, out var variant)
+            ? variant
+            : ComposeSelfTarget(baseProfile);
+    }
+
+    private static PipelineExecutionProfile ComposeSelfTarget(PipelineExecutionProfile baseProfile) => new()
+    {
+        Name = $"{baseProfile.Name}+Self",
+        ExcludedStepOrders = SelfTargetExcluded.Union(baseProfile.ExcludedStepOrders),
+        AllowAutoChain = baseProfile.AllowAutoChain,
+        AllowSubFlow = baseProfile.AllowSubFlow,
+    };
 }

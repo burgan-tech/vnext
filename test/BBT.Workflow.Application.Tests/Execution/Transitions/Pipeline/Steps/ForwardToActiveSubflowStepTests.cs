@@ -42,6 +42,35 @@ public class ForwardToActiveSubflowStepTests
         context.Directives.PostCommitJobs.ShouldBeEmpty(); // no ForwardToSubflowJob
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenAcceptReservedTheChain_ShouldStampTheClaimOnTheJob()
+    {
+        // The accept flipped the leaf Busy so a long-polling client sees work in progress; without
+        // the claim the relay would then be rejected by that same leaf with a 409.
+        var step = new ForwardToActiveSubflowStep();
+        var context = CreateContextWithActiveSubFlow();
+        context.SubflowChainReserved = true;
+
+        await step.ExecuteAsync(context, CancellationToken.None);
+
+        var job = context.Directives.ConsumePostCommitJobs().Single().ShouldBeOfType<ForwardToSubflowJob>();
+        job.ChainReserved.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAcceptDidNotReserveTheChain_ShouldNotStampTheClaim()
+    {
+        // Claiming a reserve that was never taken would let the relay barge past a leaf that is
+        // Busy for its own reasons.
+        var step = new ForwardToActiveSubflowStep();
+        var context = CreateContextWithActiveSubFlow();
+
+        await step.ExecuteAsync(context, CancellationToken.None);
+
+        var job = context.Directives.ConsumePostCommitJobs().Single().ShouldBeOfType<ForwardToSubflowJob>();
+        job.ChainReserved.ShouldBeFalse();
+    }
+
     private static TransitionExecutionContext CreateContextWithActiveSubFlow(
         string transitionKey = "child-transition")
     {

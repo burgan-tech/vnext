@@ -129,7 +129,8 @@ public sealed class ForwardToSubflowJobHandler(
             sync: mode == ExecMode.Sync)
         {
             Headers = headers,
-            RouteValues = job.RouteValues
+            RouteValues = job.RouteValues,
+            ChainReserved = job.ChainReserved
         };
     }
 }
