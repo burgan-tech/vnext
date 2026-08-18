@@ -1,0 +1,25 @@
+# Elastic APM Server — local development only.
+#
+# Purpose: give the local stack the same trace renderer that production uses. The
+# OpenTelemetry Collector forwards OTLP to this server on 8200 (gRPC and HTTP share
+# the port), which writes into Elasticsearch data streams that Kibana's APM app reads.
+#
+# Deliberately no `auth.secret_token` and no `auth.api_key`: with neither set the
+# server accepts unauthenticated intake, so the collector needs no credentials. Do
+# not copy this file to any shared or deployed environment.
+apm-server:
+  host: "0.0.0.0:8200"
+
+  # No browser agents talk to this server, and RUM would relax CORS for nothing.
+  rum:
+    enabled: false
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+
+# The collector already batches, so a small queue is enough and keeps startup light.
+queue.mem.events: 4096
+
+logging:
+  level: warning
+  to_stderr: true

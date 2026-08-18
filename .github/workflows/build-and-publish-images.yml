@@ -836,7 +836,10 @@ jobs:
           echo "| Package | NuGet |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Events.Contracts | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Events.Contracts) |" >> $GITHUB_STEP_SUMMARY
-          echo "| BBT.Workflow.Modules.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Modules.Scripting) |" >> $GITHUB_STEP_SUMMARY
+          # PackageId, not the project name: modules/BBT.Workflow.Modules.Scripting packs as
+          # BBT.Workflow.Scripting, and the old link pointed at an id that does not exist on
+          # nuget.org — every release summary carried a dead link.
+          echo "| BBT.Workflow.Scripting | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Scripting) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Domain | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Domain) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Tasks.Abstractions | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Tasks.Abstractions) |" >> $GITHUB_STEP_SUMMARY
           echo "| BBT.Workflow.Mcp (dotnet tool: \`vnext-mcp\`) | [nuget.org](https://www.nuget.org/packages/BBT.Workflow.Mcp) |" >> $GITHUB_STEP_SUMMARY
@@ -886,7 +889,26 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Verify npm version
-        run: npm -v 
+        run: npm -v
+
+      # `npm publish` fails hard on an already-published version and has no equivalent of
+      # `dotnet nuget push --skip-duplicate`. That turns a re-publish run — the one used to complete
+      # a release whose package step failed — into a red workflow even though nothing is wrong and
+      # nothing is missing. Check first, and skip rather than fail.
+      - name: Check whether this version is already on npm
+        id: npm_exists
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION="${{ needs.prepare.outputs.version }}"
+
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "::notice::${NAME}@${VERSION} is already published on npm; skipping publish."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "${NAME}@${VERSION} is not on npm yet; publishing."
+          fi
 
       - name: Publish to npm (OIDC)
+        if: steps.npm_exists.outputs.exists != 'true'
         run: npm publish --provenance --access public --tag ${{ steps.dist_tag.outputs.tag }}

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
@@ -40,10 +41,15 @@ public class CSharpEvaluator : IEvaluator
     }
 
     /// <summary>
-    /// Cached compiled types indexed by code hash.
-    /// Stores (LoadContext, Type) tuple so we can track the context for potential cleanup.
+    /// Cached compiled scripts indexed by cache key.
+    ///
+    /// The value is a <see cref="Lazy{T}"/> so concurrent callers with the same key compile exactly
+    /// once. This is a correctness requirement, not an optimisation: the assembly's simple name is
+    /// derived from the cache key, and an <see cref="AssemblyLoadContext"/> cannot hold two
+    /// assemblies with the same simple name, so a second concurrent load into a shared helper
+    /// context throws.
     /// </summary>
-    private readonly ConcurrentDictionary<string, (AssemblyLoadContext Context, Type CompiledType)> _typeCache = new();
+    private readonly ConcurrentDictionary<string, Lazy<CompiledScript>> _typeCache = new();
 
     /// <summary>
     /// Cached metadata references - created once and reused for all compilations.
@@ -58,9 +64,51 @@ public class CSharpEvaluator : IEvaluator
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.CSharp12);
 
     /// <summary>
+    /// Assigns each shared <see cref="AssemblyLoadContext"/> a stable scope id, on first use, so the
+    /// cache key can distinguish compiles into different contexts without a second parameter that
+    /// could disagree with the load context itself (see <see cref="GetCacheScope"/>) —
+    /// the API previously took an explicit <c>cacheScope</c> string, and nothing stopped a caller from
+    /// passing a scope that named one context while compiling into another. Keyed weakly: the table
+    /// must never be what keeps a context alive — <see cref="CompiledScript.Context"/>, held strongly
+    /// by <see cref="_typeCache"/>, already does that.
+    ///
+    /// Consequence worth knowing: because <see cref="_typeCache"/> pins every <c>CompiledScript</c> for
+    /// the singleton's lifetime, a superseded helper load context — and every assembly loaded into
+    /// it — is never collected either. It, and this table's entry for it, are retained for the process
+    /// lifetime, not stranded. A retained context is the correct trade against ever serving a compile
+    /// from the wrong one, which is what the withdrawn content-hash design risked.
+    ///
+    /// Deliberately <c>static</c>, not per-instance: two <see cref="CSharpEvaluator"/> instances that
+    /// share one <see cref="AssemblyLoadContext"/> (the production shape — the evaluator is a
+    /// singleton, but tests construct several against one context) must agree on that context's scope
+    /// id, or the reuse path in <see cref="CompileAndLoad{T}"/> derives two different cache keys for
+    /// the same compilation and silently loads a second copy instead of reusing the first. Scope it to
+    /// an instance and <c>CSharpEvaluatorConcurrencyTests.CompileToInstanceAsync_WhenAssemblyAlreadyLoadedInContext_ShouldReuseItInsteadOfThrowing</c>
+    /// passes vacuously — each evaluator gets its own scope id, the two never agree, and the test can no
+    /// longer tell the difference.
+    /// </summary>
+    private static readonly ConditionalWeakTable<AssemblyLoadContext, string> LoadContextScopes = new();
+
+    private static long _loadContextScopeSequence;
+
+    /// <summary>
     /// Gets the number of cached script types (unique scripts compiled).
     /// </summary>
     public int CachedTypeCount => _typeCache.Count;
+
+    private long _compileInvocationCount;
+
+    /// <summary>
+    /// Test-only observability seam: counts actual calls into <see cref="CompileAndLoad{T}"/> — the
+    /// Roslyn emit path — regardless of what the cache or the load context end up holding afterwards.
+    /// <see cref="CachedTypeCount"/> and the compiled <see cref="Type"/> identity of a result cannot
+    /// distinguish "compiled once" from "compiled N times but the last write won" once the assembly
+    /// reuse in <see cref="CompileAndLoad{T}"/> is in play: N redundant concurrent compiles into a
+    /// shared context can all resolve to the very same reused assembly without throwing, so those
+    /// signals go green even if the <c>Lazy</c> de-duplication in <see cref="CompileToInstanceAsync{T}"/>
+    /// regressed away. This counter is the only signal that is not fooled by that.
+    /// </summary>
+    internal long CompileInvocationCount => Interlocked.Read(ref _compileInvocationCount);
 
     /// <inheritdoc />
     public Task<T> CompileToInstanceAsync<T>(
@@ -75,19 +123,46 @@ public class CSharpEvaluator : IEvaluator
         if (string.IsNullOrWhiteSpace(code))
             throw new ArgumentException("Code cannot be null or empty", nameof(code));
 
-        // Generate cache key from code + target type + configuration (incl. sandbox grant).
-        var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives, sandboxGrant);
+        // The caller's token gates entry only. Once a compile starts it is shared by every caller
+        // waiting on the same Lazy, so one abandoned request must not fail it — the same rule
+        // ScriptHelperRegistry applies to helper-set builds.
+        cancellationToken.ThrowIfCancellationRequested();
 
-        // Try to get cached type and create instance from it
-        if (_typeCache.TryGetValue(cacheKey, out var cached))
+        // The load context is part of the compilation identity (a type compiled into helper set A's
+        // context must never be served to a caller compiling against helper set B), so the scope is
+        // derived from loadContext itself rather than taken as a separate parameter.
+        var cacheScope = GetCacheScope(loadContext);
+        var cacheKey = GenerateCacheKey(
+            code, typeof(T), extraReferences, usingDirectives, sandboxGrant, cacheScope);
+
+        // Fast path: an already-materialised entry is the overwhelmingly common case (every script in
+        // every transition after the first). Check it before GetOrAdd so the closure below — which
+        // captures code/cacheKey/extraReferences/usingDirectives/sandboxGrant/loadContext — is not
+        // allocated on every cache hit. Mirrors ScriptHelperRegistry.GetOrBuildHelpers.
+        if (_typeCache.TryGetValue(cacheKey, out var existing) && existing.IsValueCreated)
         {
-            var instance = CreateAndInjectServices<T>(cached.CompiledType, services);
-            return Task.FromResult(instance);
+            return Task.FromResult(CreateAndInjectServices<T>(existing.Value.CompiledType, services));
         }
 
-        // Compile, cache the type, and return instance
-        return CompileAndCacheAsync<T>(
-            code, cacheKey, services, extraReferences, usingDirectives, sandboxGrant, loadContext, cancellationToken);
+        var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<CompiledScript>(
+            () => CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext),
+            LazyThreadSafetyMode.ExecutionAndPublication));
+
+        CompiledScript compiled;
+        try
+        {
+            compiled = lazy.Value;
+        }
+        catch
+        {
+            // Lazy<T> caches the exception as well as the value, and this evaluator is a singleton:
+            // without eviction one transient failure would be replayed for the rest of the process
+            // lifetime. Remove only the entry we observed — never one another caller has published.
+            _typeCache.TryRemove(new KeyValuePair<string, Lazy<CompiledScript>>(cacheKey, lazy));
+            throw;
+        }
+
+        return Task.FromResult(CreateAndInjectServices<T>(compiled.CompiledType, services));
     }
 
     /// <inheritdoc />
@@ -148,42 +223,91 @@ public class CSharpEvaluator : IEvaluator
     }
 
     /// <summary>
-    /// Compiles the code, caches the Type, and returns an instance.
+    /// Compiles the code and loads it into the target context, returning the type to cache.
+    ///
+    /// Runs under <see cref="CancellationToken.None"/> deliberately: the result is shared by every
+    /// caller waiting on the same <see cref="Lazy{T}"/>, so one caller disconnecting must not fail
+    /// the compile the others are waiting on.
     /// </summary>
-    private Task<T> CompileAndCacheAsync<T>(
+    private CompiledScript CompileAndLoad<T>(
         string code,
         string cacheKey,
-        IScriptServices? services,
         IEnumerable<MetadataReference>? extraReferences,
         IEnumerable<string>? usingDirectives,
         IReadOnlyList<string>? sandboxGrant,
-        AssemblyLoadContext? loadContext,
-        CancellationToken cancellationToken)
+        AssemblyLoadContext? loadContext)
     {
-        var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions, cancellationToken: cancellationToken);
+        Interlocked.Increment(ref _compileInvocationCount);
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions);
 
         // Add using directives if provided
         if (usingDirectives != null && usingDirectives.Any())
         {
-            var root = syntaxTree.GetRoot(cancellationToken);
+            var root = syntaxTree.GetRoot();
             var usings = usingDirectives.Select(u => SyntaxFactory.UsingDirective(SyntaxFactory.ParseName(u)));
             var newRoot = ((CompilationUnitSyntax)root).WithUsings(SyntaxFactory.List(usings));
             syntaxTree = syntaxTree.WithRootAndOptions(newRoot, syntaxTree.Options);
         }
 
-        var assemblyName = $"Script_{cacheKey[..Math.Min(16, cacheKey.Length)]}";
+        // The WHOLE cache key, not a prefix: a later change reuses an already-loaded assembly by
+        // simple name, which is only exact if the name identifies the compilation uniquely.
+        var assemblyName = $"Script_{cacheKey}";
 
         var compilation = CreateCompilation(assemblyName, [syntaxTree], extraReferences, sandboxGrant);
 
         // Layer 2 of the sandbox: semantic ban list, run before emit.
         RunSandboxAnalyzer(compilation);
 
-        var image = EmitToImage(compilation, cancellationToken);
+        var image = EmitToImage(compilation, CancellationToken.None);
 
         // Use the shared collectible context when supplied (so mappings resolve helper types),
-        // otherwise a fresh per-script collectible context (so we CAN unload, e.g. ClearCache).
+        // otherwise a fresh per-script collectible context (so we CAN unload it below when no
+        // implementing type is found).
         var context = loadContext ?? new ScriptAssemblyLoadContext(assemblyName);
-        var assembly = context.LoadFromStream(new MemoryStream(image));
+
+        // Reuse over reload — but only for a shared context. An assembly already loaded here under
+        // this name IS this compilation (the name is the full hash of the compilation inputs), and a
+        // shared context cannot unload a single assembly, so if an earlier attempt loaded it and then
+        // failed before caching the type, reloading would throw for the rest of the process lifetime.
+        // A `loadContext is null` context was just created a few lines above, so the scan can only
+        // ever return null there — skip it. `context.Assemblies` accumulates every script assembly
+        // ever loaded for the process lifetime (see LoadContextScopes above), so scanning it on every
+        // compile into a context that provably cannot contain a match is an unbounded, pointless cost.
+        Assembly assembly;
+        if (loadContext is null)
+        {
+            assembly = context.LoadFromStream(new MemoryStream(image));
+        }
+        else
+        {
+            var loaded = FindLoadedAssembly(context, assemblyName);
+            if (loaded is not null)
+            {
+                assembly = loaded;
+            }
+            else
+            {
+                try
+                {
+                    assembly = context.LoadFromStream(new MemoryStream(image));
+                }
+                catch (FileLoadException)
+                {
+                    // Close the scan/load race across evaluator instances. If another caller loaded
+                    // this exact full-cache-key assembly after our scan, that assembly is the desired
+                    // result and can be reused safely. If no exact match exists, this is an unrelated
+                    // loader failure; preserve it for the normal permanent-failure path.
+                    loaded = FindLoadedAssembly(context, assemblyName);
+                    if (loaded is null)
+                    {
+                        throw;
+                    }
+
+                    assembly = loaded;
+                }
+            }
+        }
 
         // Find the type that implements T
         var types = assembly.GetTypes();
@@ -202,11 +326,13 @@ public class CSharpEvaluator : IEvaluator
                 $"No type implementing {typeof(T).FullName} found.\nAvailable types: {available}");
         }
 
-        // Cache the type for future reuse (same script = same assembly = same type)
-        _typeCache.TryAdd(cacheKey, (context, matchedType));
+        return new CompiledScript(context, matchedType);
+    }
 
-        // Create instance and inject services
-        return Task.FromResult(CreateAndInjectServices<T>(matchedType, services));
+    private static Assembly? FindLoadedAssembly(AssemblyLoadContext context, string assemblyName)
+    {
+        return context.Assemblies.FirstOrDefault(assembly =>
+            string.Equals(assembly.GetName().Name, assemblyName, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -287,6 +413,31 @@ public class CSharpEvaluator : IEvaluator
     }
 
     /// <summary>
+    /// Derives the cache-key scope for a load context, assigning a stable id on first use. Returns
+    /// null for the (very common) no-shared-context case, so the no-helper compile path's keys are
+    /// byte-identical to before this existed.
+    ///
+    /// Root cause this exists for: the helper-set assembly's <see cref="MetadataReference"/> is built
+    /// with <c>MetadataReference.CreateFromImage(...)</c>, whose <c>Display</c> is null, so
+    /// it contributes nothing to <see cref="GenerateCacheKey"/>'s reference loop below — without this,
+    /// two helper sets exporting the same namespace/type could share one cache entry for identical
+    /// mapping source and the wrong compiled type would be served with no exception.
+    /// </summary>
+    private static string? GetCacheScope(AssemblyLoadContext? loadContext)
+    {
+        if (loadContext is null)
+        {
+            return null;
+        }
+
+        // The factory can run more than once under concurrent first use of the same context —
+        // ConditionalWeakTable.GetValue does not guard against that, only against publishing more than
+        // one result — so the incrementing id can skip values. That is fine: only uniqueness matters,
+        // not density. Do not "fix" this into TryGetValue + Add; that throws on the same race.
+        return LoadContextScopes.GetValue(loadContext, _ => $"alc{Interlocked.Increment(ref _loadContextScopeSequence)}");
+    }
+
+    /// <summary>
     /// Generates a stable cache key from the code and configuration.
     /// </summary>
     private string GenerateCacheKey(
@@ -294,7 +445,8 @@ public class CSharpEvaluator : IEvaluator
         Type targetType,
         IEnumerable<MetadataReference>? extraReferences,
         IEnumerable<string>? usingDirectives,
-        IReadOnlyList<string>? sandboxGrant = null)
+        IReadOnlyList<string>? sandboxGrant = null,
+        string? cacheScope = null)
     {
         var sb = new StringBuilder();
         sb.Append(code);
@@ -303,6 +455,11 @@ public class CSharpEvaluator : IEvaluator
 
         // Sandbox state is part of the compilation identity.
         sb.Append("|sbx:").Append(_sandbox.Enabled ? '1' : '0');
+
+        if (!string.IsNullOrEmpty(cacheScope))
+        {
+            sb.Append("|alc:").Append(cacheScope);
+        }
 
         if (sandboxGrant != null)
         {
@@ -359,52 +516,6 @@ public class CSharpEvaluator : IEvaluator
             .ToList();
     }
 
-    /// <summary>
-    /// Clears all cached types and unloads their assemblies.
-    /// Call this to reclaim memory if script definitions change.
-    /// </summary>
-    public void ClearCache()
-    {
-        foreach (var key in _typeCache.Keys.ToList())
-        {
-            if (_typeCache.TryRemove(key, out var cached))
-            {
-                try
-                {
-                    cached.Context.Unload();
-                }
-                catch
-                {
-                    // Ignore unload failures
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Removes a specific script from the cache by its code.
-    /// Useful when a script definition is updated.
-    /// </summary>
-    public bool InvalidateScript<T>(
-        string code,
-        IEnumerable<MetadataReference>? extraReferences = null,
-        IEnumerable<string>? usingDirectives = null)
-    {
-        var cacheKey = GenerateCacheKey(code, typeof(T), extraReferences, usingDirectives);
-        
-        if (_typeCache.TryRemove(cacheKey, out var cached))
-        {
-            try
-            {
-                cached.Context.Unload();
-            }
-            catch
-            {
-                // Ignore
-            }
-            return true;
-        }
-        
-        return false;
-    }
+    /// <summary>A compiled script type and the context its assembly was loaded into.</summary>
+    private readonly record struct CompiledScript(AssemblyLoadContext Context, Type CompiledType);
 }

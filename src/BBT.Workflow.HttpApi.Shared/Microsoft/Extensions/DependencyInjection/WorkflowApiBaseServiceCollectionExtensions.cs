@@ -241,8 +241,19 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         new RequestIdLogProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>())))
                 // Span counterpart, so a trace filters on the same x_request_id value as the logs.
                 .ConfigureTracing((_, tracing) =>
-                    tracing.AddProcessor(serviceProvider =>
-                        new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
+                    tracing
+                        // Aether registers AspNetCore + HttpClient instrumentation, but nothing for
+                        // gRPC. Grpc.Net.Client — which every Dapr.Client call goes through — creates
+                        // its own activity regardless, and the System.Net.Http span for the HTTP/2
+                        // request nests under it. Unexported, that activity leaves a hole: the
+                        // HttpClient span names a parent no backend ever saw, and Elastic APM
+                        // re-parents such a span to the trace root, detaching it from the pipeline
+                        // that issued the call. Registering the instrumentation exports the parent
+                        // and closes the hole; this is the same failure mode Business-mode span
+                        // filtering causes, documented on PipelineStepActivityHelper.
+                        .AddGrpcClientInstrumentation()
+                        .AddProcessor(serviceProvider =>
+                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
         return services;
     }
 

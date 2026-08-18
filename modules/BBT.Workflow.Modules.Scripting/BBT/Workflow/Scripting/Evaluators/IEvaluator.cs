@@ -30,11 +30,20 @@ public interface IEvaluator
     /// <param name="services">Optional script services to inject into ScriptBase instances</param>
     /// <param name="extraReferences">Optional additional metadata references for compilation</param>
     /// <param name="usingDirectives">Optional additional using directives to include</param>
-    /// <param name="cancellationToken">Token to cancel the operation</param>
+    /// <param name="cancellationToken">
+    /// Gates entry only: checked before a compile is looked up/started, but not honoured once one is
+    /// under way. A compile for a given cache key is shared by every caller waiting on it, so one
+    /// caller's token cannot cancel work the others are still waiting on.
+    /// </param>
     /// <param name="loadContext">
     /// Optional shared collectible <see cref="AssemblyLoadContext"/> to load the compiled assembly into.
     /// Used so a mapping resolves the helper types compiled into the same context. When <c>null</c> a
     /// fresh per-script context is created (legacy behaviour).
+    ///
+    /// The context is also part of the cache-key identity: two callers compiling identical source into
+    /// different shared contexts must never share a cached type. Implementations must derive that
+    /// identity from this parameter itself rather than take it as a separate argument, so the two can
+    /// never be supplied out of agreement.
     /// </param>
     /// <param name="sandboxGrant">
     /// Optional per-compile assembly grant merged on top of the sandbox baseline (effective only when

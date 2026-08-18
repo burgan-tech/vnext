@@ -250,8 +250,11 @@ public sealed class SubflowCompletionService(
 
                     if (!mappingResult.IsSuccess)
                     {
-                        // Output mapping failed — fault the parent instead of resuming the pipeline.
-                        // Retrying would never succeed; faulting propagates the error to A via InstanceSubFaultedEvent.
+                        // Output-mapping failures are permanent at this boundary. Recoverable
+                        // assembly-load contention is handled locally by CSharpEvaluator; an
+                        // unclassified loader failure must not consume the Inbox retry budget and
+                        // dead-letter while leaving the parent open. Faulting here makes the failure
+                        // visible and propagates it to the grandparent via InstanceSubFaultedEvent.
                         var incident = InstanceIncidentFactory.Create(
                             state: parentInstance.GetCurrentState,
                             transition: string.Empty,

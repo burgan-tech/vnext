@@ -6,8 +6,17 @@ metadata:
 spec:
   tracing:
     samplingRate: "1"
-    otlp:
-      endpointAddress: "http://otel-collector:4317"
+    # Key MUST be `otel` — Dapr's TracingSpec has no `otlp` field, so an `otlp:` block is
+    # silently ignored: the sampler still initializes and the sidecar still creates and
+    # propagates span ids, but no exporter is built. The callee's transaction then names a
+    # parent span no backend ever saw and Elastic APM re-roots the whole subtree.
+    # `protocol` and `isSecure` are both required, not optional: Dapr builds no exporter
+    # without an explicit protocol, and isSecure defaults to TLS, which a plaintext
+    # collector refuses. All three verified by span-arrival tests.
+    otel:
+      endpointAddress: "otel-collector:4317"
+      protocol: "grpc"
+      isSecure: false
   secrets:
     scopes:
       - storeName: vnext-secret
