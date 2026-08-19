@@ -3,6 +3,7 @@ using BBT.Aether;
 using BBT.Workflow;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
@@ -54,6 +55,30 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
+        // A task's filter is authored in a versioned workflow definition, so an unexecutable one is
+        // a definition defect. Reject it here — on both the local and remote paths — rather than
+        // let it degrade into an unfiltered read that loads every instance of the target workflow
+        // into instance data. Validating before the branch also stops a bad filter leaving the box.
+        var validation = InstanceQueryValidator.Validate(new InstanceQueryValidationRequest
+        {
+            Filter = task.Filter,
+            Sort = task.Sort
+        });
+
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors)
+            {
+                Logger.InstanceTaskFilterRejected(
+                    task.Key, task.TriggerDomain, task.TriggerFlow, error.Code, error.Message);
+            }
+
+            return Result<TaskInvocationResult>.Fail(Error.Validation(
+                validation.PrimaryErrorCode,
+                $"GetInstances task '{task.Key}' has an invalid query: {validation.ToMessage()}",
+                validation.Errors[0].Target ?? "filter"));
+        }
+
         var isSameDomain = IsSameDomain(task);
 
         Logger.LogDebug(
@@ -100,9 +125,11 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                     task.TriggerFlow,
                     instanceListResult.Error.Message ?? "GetInstanceList failed");
 
+                // Carry the real status rather than a hardcoded 500, so a local failure classifies
+                // the same way the equivalent remote (Dapr) failure would.
                 return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                     error: instanceListResult.Error.Message ?? "GetInstanceList failed",
-                    statusCode: 500,
+                    statusCode: MapErrorToStatusCode(instanceListResult.Error),
                     taskType: TaskType.ToString()));
             }
 

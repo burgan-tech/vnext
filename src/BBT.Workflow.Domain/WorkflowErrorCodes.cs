@@ -15,6 +15,19 @@ public static class WorkflowErrorCodes
     public const string Locked = "App:900001";
     public const string ValidationErrors = "App:900002";
     public const string SchemaFilterValidation = "Validation:900010";
+
+    /// <summary>Instance-query filter failed boundary validation (syntax, unknown operator, unrecognized format).</summary>
+    public const string InstanceFilterInvalid = "Validation:900011";
+
+    /// <summary>Instance-query sort/orderBy failed boundary validation.</summary>
+    public const string InstanceSortInvalid = "Validation:900012";
+
+    /// <summary>Instance-query groupBy failed boundary validation.</summary>
+    public const string InstanceGroupByInvalid = "Validation:900013";
+
+    /// <summary>Instance-query aggregations failed boundary validation.</summary>
+    public const string InstanceAggregationInvalid = "Validation:900014";
+
     public const string ExecutionStrategyNotSupported = "App:900003";
     public const string TransitionHandlerNotSupported = "App:900004";
     public const string InvalidSchema = "App:900005";

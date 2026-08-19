@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Security;
 
 namespace BBT.Workflow.Definitions.GraphQL;
@@ -42,7 +43,13 @@ public static class UnifiedFilterService
         {
             FilterFormat.GraphQL => ApplyGraphQLFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator, schemaContext),
             FilterFormat.Legacy => PostgreSqlJsonFilterService.ApplyJsonFilters(dbSet, filter, jsonColumnName, tableName, schema, schemaValidator, schemaContext),
-            _ => dbSet
+
+            // Blank input already returned above, so Empty here means "non-blank but unrecognized"
+            // — typically a filter truncated so it no longer ends in '}'. Returning dbSet would
+            // apply no filter at all and answer every row.
+            _ => throw new FilterCompilationException(
+                "Filter format is not recognized. Provide GraphQL-style JSON or the legacy " +
+                "'field=operator:value' form.")
         };
     }
 
@@ -203,97 +210,6 @@ public static class UnifiedFilterService
         return (whereClause, parameters.ToArray());
     }
 
-    /// <summary>
-    /// Validates a GraphQL filter JSON string without executing it
-    /// </summary>
-    /// <param name="filterJson">Filter JSON to validate</param>
-    /// <returns>Validation result with error message if invalid</returns>
-    public static (bool isValid, string? errorMessage) ValidateFilter(string? filterJson)
-    {
-        if (string.IsNullOrWhiteSpace(filterJson))
-            return (true, null);
-
-        try
-        {
-            var node = GraphQLFilterParser.ParseFilter(filterJson);
-            
-            if (node == null)
-                return (true, null); // Empty filter is valid
-
-            // Validate the filter structure
-            return ValidateNode(node);
-        }
-        catch (ArgumentException ex)
-        {
-            return (false, ex.Message);
-        }
-        catch (System.Text.Json.JsonException ex)
-        {
-            return (false, $"Invalid JSON filter format: {ex.Message}");
-        }
-        catch (Exception ex)
-        {
-            return (false, $"Invalid filter format: {ex.Message}");
-        }
-    }
-
-    private static (bool isValid, string? errorMessage) ValidateNode(GraphQLFilterNode node)
-    {
-        switch (node.NodeType)
-        {
-            case FilterNodeType.And:
-                if (node.And == null || node.And.Count == 0)
-                    return (false, "AND operator requires at least one condition");
-                
-                foreach (var child in node.And)
-                {
-                    var (isValid, error) = ValidateNode(child);
-                    if (!isValid)
-                        return (false, error);
-                }
-                break;
-
-            case FilterNodeType.Or:
-                if (node.Or == null || node.Or.Count == 0)
-                    return (false, "OR operator requires at least one condition");
-                
-                foreach (var child in node.Or)
-                {
-                    var (isValid, error) = ValidateNode(child);
-                    if (!isValid)
-                        return (false, error);
-                }
-                break;
-
-            case FilterNodeType.Not:
-                if (node.Not == null)
-                    return (false, "NOT operator requires a condition");
-                
-                var (notValid, notError) = ValidateNode(node.Not);
-                if (!notValid)
-                    return (false, notError);
-                break;
-
-            case FilterNodeType.Condition:
-                if (node.Attributes == null || node.Attributes.Count == 0)
-                    return (false, "Condition must have at least one field");
-                
-                foreach (var (fieldName, condition) in node.Attributes)
-                {
-                    if (string.IsNullOrEmpty(fieldName))
-                        return (false, "Field name cannot be empty");
-
-                    if (!condition.GetOperators().Any() && condition.NestedConditions == null)
-                        return (false, $"Field '{fieldName}' must have at least one operator");
-                }
-                break;
-            default:
-                // Unknown node type, consider invalid
-                return (false, $"Unknown node type: {node.NodeType}");
-        }
-
-        return (true, null);
-    }
 }
 
 

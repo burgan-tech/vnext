@@ -77,12 +77,46 @@ public static class GraphQLFilterParser
     }
 
     /// <summary>
+    /// Deserializes a filter string as a <see cref="GraphQLFilterRequest"/> envelope, throwing on
+    /// malformed input.
+    /// </summary>
+    /// <param name="filterString">Filter string to parse</param>
+    /// <returns>The parsed envelope, or null when the input is blank</returns>
+    /// <exception cref="ArgumentException">The input is not valid envelope JSON.</exception>
+    /// <remarks>
+    /// The throwing counterpart to <see cref="TryParseRequest"/>, for callers that need to
+    /// distinguish "malformed" from "not an envelope" — <see cref="TryParseRequest"/> collapses
+    /// both into <c>false</c>.
+    /// </remarks>
+    public static GraphQLFilterRequest? ParseRequestEnvelope(string? filterString)
+    {
+        if (string.IsNullOrWhiteSpace(filterString))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<GraphQLFilterRequest>(filterString, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException($"Invalid JSON filter format: {ex.Message}", nameof(filterString), ex);
+        }
+    }
+
+    /// <summary>
     /// Tries to parse a filter string as GraphQLFilterRequest format
     /// Returns true if the string is in GraphQLFilterRequest format (contains "filter" and/or "groupBy" properties)
     /// </summary>
     /// <param name="filterString">Filter string to check</param>
     /// <param name="request">Parsed request if successful, null otherwise</param>
     /// <returns>True if the string is in GraphQLFilterRequest format</returns>
+    /// <remarks>
+    /// This is a <em>format sniffer</em>, not a validator: it is called on strings that may
+    /// legitimately be a bare filter node rather than an envelope, so it must return false instead
+    /// of throwing. Callers MUST run <c>InstanceQueryValidator</c> first — otherwise a false return
+    /// caused by malformed JSON is indistinguishable from "this is not an envelope", and the
+    /// request silently degrades into an unfiltered list.
+    /// </remarks>
     public static bool TryParseRequest(string? filterString, out GraphQLFilterRequest? request)
     {
         request = null;
@@ -158,7 +192,13 @@ public static class GraphQLFilterParser
     /// or multiple: {"fields":[{"field":"status","direction":"asc"},{"field":"createdAt","direction":"desc"}]}.
     /// </summary>
     /// <param name="jsonOrderBy">OrderBy JSON string</param>
-    /// <returns>Parsed orderBy request, or null if empty/invalid</returns>
+    /// <returns>Parsed orderBy request, or null when the input is blank or carries no sort entry</returns>
+    /// <exception cref="ArgumentException">The input is not valid orderBy JSON.</exception>
+    /// <remarks>
+    /// Malformed JSON throws rather than returning null. Returning null would fall back to the
+    /// default <c>CreatedAt DESC</c> ordering and answer HTTP 200 with results in an order the
+    /// caller did not ask for.
+    /// </remarks>
     public static OrderByRequest? ParseOrderBy(string? jsonOrderBy)
     {
         if (string.IsNullOrWhiteSpace(jsonOrderBy))
@@ -173,9 +213,9 @@ public static class GraphQLFilterParser
                 return null;
             return parsed;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            throw new ArgumentException($"Invalid JSON orderBy format: {ex.Message}", nameof(jsonOrderBy), ex);
         }
     }
 
