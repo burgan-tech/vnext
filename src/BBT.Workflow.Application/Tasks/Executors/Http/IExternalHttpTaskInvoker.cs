@@ -18,9 +18,14 @@ public interface IExternalHttpTaskInvoker
     /// <param name="taskKey">Task key, for logging only.</param>
     /// <param name="binding">The prepared HTTP binding (URL, method, headers, body, options).</param>
     /// <param name="cancellationToken">Pipeline cancellation token.</param>
+    /// <param name="traceContext">Pipeline-built workflow correlation context (the same object the
+    /// type-6 invoke envelope carries). Required for the trusted correlation headers
+    /// (X-Workflow-Instance-Id, X-Correlation-Id, sub/act_sub fill) on the outbound call —
+    /// ambient Activity baggage is not reliable in the orchestrator's task-span subtree.</param>
     /// <returns>The invocation result; transport failures become failed results, never exceptions.</returns>
     Task<TaskInvocationResult> InvokeAsync(
         string? taskKey,
         HttpTaskBinding binding,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        TaskTraceContext? traceContext = null);
 }

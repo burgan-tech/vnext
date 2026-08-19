@@ -83,11 +83,18 @@ public static class HttpTaskInvocation
     /// <param name="taskType">Task-type label stamped on the result (each host stamps its own).</param>
     /// <param name="cancellationToken">Caller cancellation; a fire during the request yields a
     /// failed result with <c>Cancelled = true</c> metadata.</param>
+    /// <param name="traceContext">Explicit workflow correlation source for
+    /// <see cref="ApplyTrustedCorrelationHeaders"/>. The Orchestrator's in-process task (type 21)
+    /// MUST pass it: ambient Activity baggage is not reliable there, because intermediate task
+    /// spans are created from <see cref="System.Diagnostics.ActivityContext"/> which severs the
+    /// managed parent chain baggage lookups walk. The Execution host passes null — its request
+    /// activity carries the values restored from the invoke envelope.</param>
     public static async Task<TaskInvocationResult> SendAsync(
         Func<string, HttpClient> createClient,
         HttpTaskBinding binding,
         string taskType,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TaskTraceContext? traceContext = null)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -127,7 +134,7 @@ public static class HttpTaskInvocation
                 }
             }
 
-            ApplyTrustedCorrelationHeaders(request);
+            ApplyTrustedCorrelationHeaders(request, traceContext);
 
             // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
             if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
@@ -214,26 +221,35 @@ public static class HttpTaskInvocation
         result.Metadata?.TryGetValue("Cancelled", out var flag) == true && flag is true;
 
     /// <summary>
-    /// Stamps the trusted workflow correlation headers onto an outbound HTTP request from the
-    /// ambient Activity baggage. Shared by both HTTP task types (6 remote, 21
-    /// orchestrator-executed) via <see cref="SendAsync"/>, and by the Execution host's other
-    /// invokers (Dapr, SOAP, direct trigger) via <c>InvokerHelpers</c>. Two precedence rules:
+    /// Stamps the trusted workflow correlation headers onto an outbound HTTP request. Shared by
+    /// both HTTP task types (6 remote, 21 orchestrator-executed) via <see cref="SendAsync"/>, and
+    /// by the Execution host's other invokers (Dapr, SOAP, direct trigger) via
+    /// <c>InvokerHelpers</c>. Two precedence rules:
     /// <list type="bullet">
     /// <item><b>Workflow context</b> (X-Workflow-Instance-Id, X-Correlation-Id) is authoritative:
     /// mapping-provided values must never spoof the context established by vNext, so any
-    /// pre-existing values are removed and the baggage values stamped.</item>
+    /// pre-existing values are removed and the trusted values stamped.</item>
     /// <item><b>Identity claims</b> (sub, act_sub) are fill-if-absent: they are token-derived
     /// claims the platform provides as a DEFAULT — a developer who set them explicitly in the
     /// task binding's input mapping keeps their value; only when the binding did not set them
-    /// are they filled from the gateway token (baggage).</item>
+    /// are they filled from the gateway token.</item>
     /// </list>
+    /// Value source per field: <paramref name="trusted"/> (the pipeline-built
+    /// <see cref="TaskTraceContext"/>, same object the type-6 invoke envelope carries) wins when
+    /// it supplies the field; ambient Activity baggage is the fallback. The fallback is what the
+    /// Execution host uses — its request activity carries the envelope-restored values — while
+    /// the Orchestrator's in-process path must pass <paramref name="trusted"/> because its task
+    /// spans are created from <see cref="System.Diagnostics.ActivityContext"/>, which severs the
+    /// managed parent chain that in-process baggage lookups walk.
     /// </summary>
-    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request)
+    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request, TaskTraceContext? trusted = null)
     {
         request.Headers.Remove(WorkflowInstanceHeader);
         request.Headers.Remove(CorrelationHeader);
 
-        var workflowInstance = Activity.Current?.GetBaggageItem(WorkflowInstanceBaggage);
+        var workflowInstance = trusted?.InstanceId is { } trustedId && trustedId != Guid.Empty
+            ? trustedId.ToString("D")
+            : Activity.Current?.GetBaggageItem(WorkflowInstanceBaggage);
         if (Guid.TryParse(workflowInstance, out var workflowInstanceId)
             && workflowInstanceId != Guid.Empty)
         {
@@ -242,7 +258,9 @@ public static class HttpTaskInvocation
                 workflowInstanceId.ToString("D").ToLowerInvariant());
         }
 
-        var correlation = Activity.Current?.GetBaggageItem(CorrelationBaggage);
+        var correlation = !string.IsNullOrEmpty(trusted?.CorrelationId)
+            ? trusted!.CorrelationId
+            : Activity.Current?.GetBaggageItem(CorrelationBaggage);
         if (Guid.TryParseExact(correlation, "N", out var correlationId)
             && correlationId != Guid.Empty)
         {
@@ -251,7 +269,9 @@ public static class HttpTaskInvocation
 
         if (!request.Headers.NonValidated.Contains(SubHeader))
         {
-            var subject = Activity.Current?.GetBaggageItem(SubBaggage);
+            var subject = !string.IsNullOrEmpty(trusted?.Sub)
+                ? trusted!.Sub
+                : Activity.Current?.GetBaggageItem(SubBaggage);
             if (IsSafeIdentityClaim(subject))
             {
                 request.Headers.TryAddWithoutValidation(SubHeader, subject);
@@ -260,7 +280,9 @@ public static class HttpTaskInvocation
 
         if (!request.Headers.NonValidated.Contains(ActSubHeader))
         {
-            var actSub = Activity.Current?.GetBaggageItem(ActSubBaggage);
+            var actSub = !string.IsNullOrEmpty(trusted?.ActSub)
+                ? trusted!.ActSub
+                : Activity.Current?.GetBaggageItem(ActSubBaggage);
             if (IsSafeIdentityClaim(actSub))
             {
                 request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);

@@ -21,7 +21,8 @@ public sealed class ExternalHttpTaskInvoker(
     public async Task<TaskInvocationResult> InvokeAsync(
         string? taskKey,
         HttpTaskBinding binding,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TaskTraceContext? traceContext = null)
     {
         if (!binding.ValidateSSL)
         {
@@ -32,7 +33,8 @@ public sealed class ExternalHttpTaskInvoker(
             httpClientFactory.CreateClient,
             binding,
             TaskType.ExternalHttp.ToString(),
-            cancellationToken);
+            cancellationToken,
+            ToWireTraceContext(traceContext));
 
         // The shared core never throws or logs; classify the failed results here so this host's
         // log lines carry the workflow-structured events.
@@ -47,6 +49,26 @@ public sealed class ExternalHttpTaskInvoker(
 
         return ToOrchestratorResult(result);
     }
+
+    /// <summary>
+    /// Maps the orchestrator-side trace context (<c>BBT.Workflow.Tasks.TaskTraceContext</c>, built
+    /// by <c>IRemoteInvokerService.CreateTraceContext</c>) to the wire-side twin the shared send
+    /// core consumes — the reverse of <see cref="ToOrchestratorResult"/>. Only the correlation and
+    /// identity fields are carried: the core reads nothing else, and the heavy placeholder fields
+    /// (request headers, instance data JSON) have no business on an in-process call.
+    /// </summary>
+    private static Execution.TaskTraceContext? ToWireTraceContext(TaskTraceContext? trace) =>
+        trace is null ? null : new Execution.TaskTraceContext
+        {
+            InstanceId = trace.InstanceId,
+            Domain = trace.Domain,
+            WorkflowKey = trace.WorkflowKey,
+            WorkflowVersion = trace.WorkflowVersion,
+            CorrelationId = trace.CorrelationId,
+            Sub = trace.Sub,
+            ActSub = trace.ActSub,
+            RequestId = trace.RequestId
+        };
 
     /// <summary>
     /// Maps the wire-side result (<c>BBT.Workflow.Execution.TaskInvocationResult</c>) to the

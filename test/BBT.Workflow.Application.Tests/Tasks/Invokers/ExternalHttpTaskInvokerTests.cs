@@ -150,6 +150,36 @@ public sealed class ExternalHttpTaskInvokerTests
     }
 
     /// <summary>
+    /// The orchestrator path passes the pipeline-built trace context explicitly (ambient Activity
+    /// baggage does not survive the task-span subtree in-process), and the shared core stamps the
+    /// trusted correlation headers from it: workflow context always, identity claims
+    /// fill-if-absent — a binding-provided sub still wins over the trusted value.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_TrustedTraceContext_StampsWorkflowHeadersAndFillsIdentity()
+    {
+        var handler = new StubHttpMessageHandler(Ok());
+        var invoker = CreateInvoker(new CapturingHttpClientFactory(handler));
+        var instanceId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid().ToString("N");
+
+        var trace = TaskTraceContext.Create(
+            instanceId: instanceId, domain: "core", workflowKey: "flow", workflowVersion: "1.0.0",
+            correlationId: correlationId, sub: "trusted-sub", actSub: "trusted-act");
+
+        await invoker.InvokeAsync("local-call", CreateBinding(
+            method: "POST",
+            body: "{}",
+            headers: """{"X-Workflow-Instance-Id":"spoofed","sub":"binding.value"}"""), traceContext: trace);
+
+        handler.LastRequest!.Headers.NonValidated["X-Workflow-Instance-Id"].ToString()
+            .ShouldBe(instanceId.ToString("D").ToLowerInvariant());
+        handler.LastRequest.Headers.NonValidated["X-Correlation-Id"].ToString().ShouldBe(correlationId);
+        handler.LastRequest.Headers.NonValidated["sub"].ToString().ShouldBe("binding.value");
+        handler.LastRequest.Headers.NonValidated["act_sub"].ToString().ShouldBe("trusted-act");
+    }
+
+    /// <summary>
     /// The reserved trace-header guard also lives in the shared send core: a stale traceparent or
     /// forged x-request-id in the binding's headers must not detach the downstream service from
     /// the live trace — for type 21 exactly as for type 6.

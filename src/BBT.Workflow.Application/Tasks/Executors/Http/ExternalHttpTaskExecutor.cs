@@ -30,6 +30,7 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
 {
     private readonly IExternalHttpTaskInvoker _localInvoker;
     private readonly IScriptEngine _scriptEngine;
+    private readonly IRemoteInvokerService _remoteInvoker;
 
     /// <summary>
     /// Initializes a new instance of ExternalHttpTaskExecutor.
@@ -37,11 +38,13 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
     public ExternalHttpTaskExecutor(
         IExternalHttpTaskInvoker localInvoker,
         IScriptEngine scriptEngine,
+        IRemoteInvokerService remoteInvoker,
         ILogger<ExternalHttpTaskExecutor> logger)
         : base(logger)
     {
         _localInvoker = localInvoker;
         _scriptEngine = scriptEngine;
+        _remoteInvoker = remoteInvoker;
     }
 
     /// <inheritdoc />
@@ -110,7 +113,12 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
                 $"External HTTP task {task.Key} produced an empty HTTP binding."));
         }
 
-        var result = await _localInvoker.InvokeAsync(task.Key, binding, cancellationToken);
+        // The same pipeline-built correlation context the type-6 path puts in its invoke envelope.
+        // Passed explicitly because ambient Activity baggage does not survive the task-span
+        // subtree in-process (spans created from ActivityContext sever the baggage parent chain).
+        var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
+
+        var result = await _localInvoker.InvokeAsync(task.Key, binding, cancellationToken, traceContext);
 
         if (!result.IsSuccess && result.StatusCode is null)
         {

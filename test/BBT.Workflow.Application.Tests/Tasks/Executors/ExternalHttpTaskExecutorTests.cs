@@ -121,9 +121,17 @@ public sealed class ExternalHttpTaskExecutorTests
             NullLogger<ExternalHttpTaskInvoker>.Instance);
 
         // No mapping code is attached in these tests, so the script engine is never invoked.
+        var remoteInvoker = Substitute.For<IRemoteInvokerService>();
+        remoteInvoker.CreateTraceContext(Arg.Any<ScriptContext>())
+            .Returns(TaskTraceContext.Create(
+                instanceId: Guid.Empty, domain: "test", workflowKey: "test", workflowVersion: "1.0.0",
+                correlationId: null, headers: null, instanceDataJson: null,
+                traceParent: null, traceState: null, sub: null, actSub: null, requestId: null));
+
         return new ExternalHttpTaskExecutor(
             invoker,
             Substitute.For<IScriptEngine>(),
+            remoteInvoker,
             NullLogger<ExternalHttpTaskExecutor>.Instance);
     }
 

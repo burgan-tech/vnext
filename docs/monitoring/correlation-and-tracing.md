@@ -81,7 +81,10 @@ not carry `traceparent`, `tracestate`, `baggage`, `x-request-id`, `X-Correlation
 `InvokerHelpers.ApplyTrustedCorrelationHeaders` from Activity baggage (applied by every
 HTTP-shaped invoker: http, soap, daprservice, daprhttpendpoint, trigger — and by the
 orchestrator-executed externalhttp task, type 21, which reaches the same rules through the shared
-`HttpTaskInvocation` send core where the single implementation lives). A stale traceparent or
+`HttpTaskInvocation` send core where the single implementation lives; type 21 passes the
+pipeline-built `TaskTraceContext` explicitly because the orchestrator's task spans are created
+from `ActivityContext`, which severs the managed parent chain that in-process Activity-baggage
+lookups walk — the same reason type 6 carries the context in its invoke envelope). A stale traceparent or
 forged correlation copied into a task definition would detach or spoof the workflow context;
 that's why the guard exists. The identity claims `sub`/`act_sub` are deliberately NOT reserved:
 a binding MAY set them and that value wins; when absent they are filled from the gateway token
