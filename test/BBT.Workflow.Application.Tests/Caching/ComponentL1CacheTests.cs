@@ -1,5 +1,6 @@
 using System;
 using BBT.Workflow.Definitions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 using Xunit;
 
@@ -15,7 +16,10 @@ public class ComponentL1CacheTests
     {
         var options = new ComponentCacheOptions();
         configure?.Invoke(options);
-        return new ComponentL1Cache(Microsoft.Extensions.Options.Options.Create(options));
+        return new ComponentL1Cache(
+            Microsoft.Extensions.Options.Options.Create(options),
+            TimeProvider.System,
+            NullLogger<ComponentL1Cache>.Instance);
     }
 
     private static CacheEnvelope<View> Envelope(string version = "1.0.0-pkg.1.0.0")

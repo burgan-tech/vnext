@@ -1,5 +1,7 @@
 using System.Text.Json;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Caching;
@@ -16,10 +18,19 @@ namespace BBT.Workflow.Caching;
 /// </remarks>
 public sealed class ComponentL1Cache : IComponentL1Cache
 {
-    private readonly MemoryCache? _cache;
+    private const string OperationL1Set = "Cache.L1Set";
 
-    public ComponentL1Cache(IOptions<ComponentCacheOptions> options)
+    private readonly MemoryCache? _cache;
+    private readonly TimeProvider _timeProvider;
+    private readonly ILogger<ComponentL1Cache> _logger;
+
+    public ComponentL1Cache(
+        IOptions<ComponentCacheOptions> options,
+        TimeProvider timeProvider,
+        ILogger<ComponentL1Cache> logger)
     {
+        _timeProvider = timeProvider;
+        _logger = logger;
         if (options.Value.L1Enabled)
         {
             _cache = new MemoryCache(new MemoryCacheOptions
@@ -53,19 +64,28 @@ public sealed class ComponentL1Cache : IComponentL1Cache
         if (_cache is null || envelope.IsNegative || envelope.Entity is null)
             return;
 
+        // Expirations are produced by the caller's TimeProvider while MemoryCache runs on its own
+        // clock, so convert to a relative TTL — "valid this long from now" survives the difference.
+        var timeToLive = absoluteExpiration - _timeProvider.GetUtcNow();
+        if (timeToLive <= TimeSpan.Zero)
+            return;
+
         byte[] bytes;
         try
         {
             bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonSerializerConstants.JsonOptions);
         }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        catch (Exception ex)
         {
+            // Serialization walks entity getters, which may throw on partially populated instances.
+            // L1 is an optimization: skipping the write is always correct, failing the caller never is.
+            _logger.ComponentCacheOperationFailed(ex, OperationL1Set, cacheKey);
             return;
         }
 
         _cache.Set(cacheKey, bytes, new MemoryCacheEntryOptions
         {
-            AbsoluteExpiration = absoluteExpiration,
+            AbsoluteExpirationRelativeToNow = timeToLive,
             Size = bytes.LongLength
         });
     }
