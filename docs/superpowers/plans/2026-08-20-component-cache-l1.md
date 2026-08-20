@@ -1,5 +1,14 @@
 # Component Cache L1 Layer Implementation Plan
 
+> **Status (2026-08-20):** Tasks 0–6 executed inline and committed on `feature/component-cache-l1`.
+> Caching tests 119/119 green; full Application.Tests matches the master baseline exactly (same 20
+> pre-existing failures, zero regression). Two deviations from the written steps, both fixes found
+> by the tests: L1 population must happen AFTER `HydrateReference` (L2 round-trips leave
+> private-setter reference properties null and `View.SemanticVersion` throws on serialization), and
+> `ComponentL1Cache` takes `TimeProvider` to convert absolute expirations to relative TTLs
+> (`MemoryCache` runs on its own clock). Task 7.2 (integration regression) and 7.3 (Helm envs)
+> remain open — infra was not running.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a generation-keyed, bytes-mode in-process (L1) cache in front of the distributed component cache so full-version reads cost zero Dapr calls and range resolutions cost only the small generation read — with publish visibility unchanged.
