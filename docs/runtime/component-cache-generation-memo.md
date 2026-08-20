@@ -1,8 +1,11 @@
 # Component Cache — Generation Memoization (Phase 2)
 
-Status: **designed, not yet enabled** — the mechanism ships in the runtime
-(`ComponentCacheOptions.GenerationMemoSeconds`, default `0` = off) and is activated per
-environment by configuration. This document defines what turning it on means, what it costs,
+Status: **enabled by shipped configuration** — the mechanism lives in the runtime
+(`ComponentCacheOptions.GenerationMemoSeconds`, code default `0` = off, pinned by unit test)
+and is activated by the orchestration host's `appsettings.json`, which ships
+`ComponentCache:GenerationMemoSeconds: 5`. Environments can override or disable it through
+standard configuration layering (e.g. env var `ComponentCache__GenerationMemoSeconds=0`) with
+no Helm chart change required. This document defines what the setting means, what it costs,
 and what the CI/CD process must change to accept that cost.
 
 ## What it is
@@ -92,14 +95,20 @@ gain saturates at small N, while the CD window grows linearly with it.
 
 ### Configuration
 
-Environment-level, never a code default (the runtime default stays `0`; a unit test pins the
-"correctness first" default deliberately):
+The code default stays `0` (a unit test pins the "correctness first" default deliberately);
+activation ships as an `appsettings.json` value in the **orchestration host** — the only host
+that wires the component cache module and resolves component versions (the execution host
+receives already-resolved work; the read-only monitor host keeps the code default):
 
-```
-ComponentCache__GenerationMemoSeconds: "5"
+```json
+"ComponentCache": {
+  "GenerationMemoSeconds": 5
+}
 ```
 
-Surfaced in vnext-helm-charts values so product teams opt in per environment.
+Override per environment via standard configuration layering
+(`ComponentCache__GenerationMemoSeconds` env var); no Helm chart change is required — the
+chart's generic env passthrough suffices if an environment ever needs a different value.
 
 ## Failure-mode interaction (unchanged from Phase 1)
 

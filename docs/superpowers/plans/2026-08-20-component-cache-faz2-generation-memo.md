@@ -1,5 +1,15 @@
 # Component Cache Phase 2 (GenerationMemoSeconds) Implementation Plan
 
+> **Status (2026-08-20):** Executed with a user-directed scope change: activation is an
+> `appsettings.json` default (`ComponentCache:GenerationMemoSeconds: 5` in the orchestration
+> host), NOT a Helm value — Task 2 as written is superseded. Investigation also corrected a
+> claim: the execution host does not wire the component cache module at all (its DI chain has
+> no `AddApplicationModule`; all component GetStates in traces are on vnext-app), so
+> orchestration is the only activation point; the monitor host keeps the code default. Task 1
+> tests landed 5/5 green — they pin existing behavior, no production change was needed.
+> Task 3 (lab re-run with the memo active) requires an orchestration restart to pick up
+> appsettings.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Activate in-process memoization of component generation tokens so hot-path version
