@@ -1489,8 +1489,9 @@ public sealed class InstanceQueryAppService(
         };
 
         // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
-        // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present, no href).
-        transitionItems.AddRange(BuildScheduledTransitionEntries(activeScheduledTransitionJobs));
+        // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present).
+        transitionItems.AddRange(BuildScheduledTransitionEntries(
+            activeScheduledTransitionJobs, input.Domain, input.Workflow, instance.Id.ToString()));
 
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
@@ -1512,15 +1513,26 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the
-    /// response's <c>transitions</c> list, ordered by execution time ascending. No href/view/schema —
-    /// callers cannot trigger a scheduled transition. Rows without an
+    /// response's <c>transitions</c> list, ordered by execution time ascending. Rows without an
     /// <see cref="InstanceJob.ExecuteAt"/> (persisted before the column existed) are omitted rather
     /// than emitted without a time — every scheduled entry carries an execution instant, and such rows
     /// age out as their jobs fire or are cancelled. Not role-filtered: a scheduled transition fires
     /// regardless of the caller, so the entries are facts about the instance, not caller capabilities.
+    /// <para>
+    /// href/view/schema are emitted with the SAME url shapes as the caller-triggerable entries but
+    /// with <c>hasView</c>/<c>loadData</c>/<c>hasSchema</c> hardcoded false — a TEMPORARY uniformity
+    /// concession so existing domain clients that assume every transitions[] item carries the three
+    /// link objects do not break on scheduled entries; domains will adapt and the links may then be
+    /// dropped again. The href is not an invitation to call: scheduled transitions stay
+    /// System-actor-gated at execution (<c>ActorAuthorizationSpecification</c>), so a client PATCHing
+    /// it is rejected exactly as before.
+    /// </para>
     /// </summary>
-    private static IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
-        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs) =>
+    private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
+        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
+        string domain,
+        string workflow,
+        string instanceId) =>
         activeScheduledTransitionJobs
             .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
             .OrderBy(j => j.ExecuteAt!.Value)
@@ -1528,7 +1540,19 @@ public sealed class InstanceQueryAppService(
             {
                 Name = j.TransitionKey!,
                 Kind = ScheduledTransitionKind,
-                ExecuteAtUtc = j.ExecuteAt!.Value
+                ExecuteAtUtc = j.ExecuteAt!.Value,
+                Href = urlTemplateBuilder.BuildTransitionUrl(domain, workflow, instanceId, j.TransitionKey!),
+                View = new ViewHref
+                {
+                    Href = urlTemplateBuilder.BuildViewUrl(domain, workflow, instanceId, j.TransitionKey!),
+                    HasView = false,
+                    LoadData = false
+                },
+                Schema = new SchemaHref
+                {
+                    Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
+                    HasSchema = false
+                }
             });
 
     /// <summary>

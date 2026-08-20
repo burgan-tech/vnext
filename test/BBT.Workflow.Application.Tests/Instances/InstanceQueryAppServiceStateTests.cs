@@ -556,15 +556,26 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         transitions[0].Kind.ShouldBe("stateTransition");
         transitions[0].ExecuteAtUtc.ShouldBeNull();
 
-        // Scheduled entries follow, ordered by execution time, without an href.
+        // Scheduled entries follow, ordered by execution time. They carry the same href/view/schema
+        // link shapes as triggerable entries (temporary uniformity for domain clients) but with the
+        // capability flags hardcoded false — the href is not an invitation to call (execution stays
+        // System-actor-gated for scheduled transitions).
         transitions[1].Name.ShouldBe("send-reminder");
         transitions[1].Kind.ShouldBe("scheduled");
         transitions[1].ExecuteAtUtc.ShouldBe(soonerAt.UtcDateTime);
         transitions[1].ExecuteAtUtc!.Value.Kind.ShouldBe(DateTimeKind.Utc);
-        transitions[1].Href.ShouldBeNull();
+        transitions[1].Href.ShouldBe("https://transition-url");
+        transitions[1].View.ShouldNotBeNull();
+        transitions[1].View!.HasView.ShouldBeFalse();
+        transitions[1].View.LoadData.ShouldBeFalse();
+        transitions[1].View.Href.ShouldBe("https://transition-view-url");
+        transitions[1].Schema.ShouldNotBeNull();
+        transitions[1].Schema!.HasSchema.ShouldBeFalse();
+        transitions[1].Schema.Href.ShouldBe("https://schema-url");
         transitions[2].Name.ShouldBe("payment-timeout");
         transitions[2].Kind.ShouldBe("scheduled");
         transitions[2].ExecuteAtUtc.ShouldBe(laterAt.UtcDateTime);
+        transitions[2].Href.ShouldBe("https://transition-url");
     }
 
     /// <summary>
@@ -603,9 +614,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
-    /// Wire-shape contract: a scheduled entry serializes as exactly { name, kind, executeAtUtc }
-    /// (UTC with the Z designator), while a caller-triggerable entry carries an href and no
-    /// executeAtUtc — the discrimination rule clients rely on.
+    /// Wire-shape contract: a scheduled entry serializes with executeAtUtc (UTC with the Z
+    /// designator) PLUS the uniform href/view/schema link objects whose capability flags are
+    /// hardcoded false (temporary, so domain clients that assume every transitions[] item carries
+    /// the three links do not break); a caller-triggerable entry carries no executeAtUtc. The
+    /// discrimination rule clients rely on is kind + executeAtUtc presence — no longer href absence.
     /// </summary>
     [Fact]
     public void TransitionItem_SerializesScheduledAndTriggerableEntries_Distinctly()
@@ -614,7 +627,19 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         {
             Name = "payment-timeout",
             Kind = "scheduled",
-            ExecuteAtUtc = new DateTime(2026, 8, 3, 14, 30, 0, DateTimeKind.Utc)
+            ExecuteAtUtc = new DateTime(2026, 8, 3, 14, 30, 0, DateTimeKind.Utc),
+            Href = "/api/v1/d/workflows/w/instances/i/transitions/payment-timeout",
+            View = new Shared.ViewHref
+            {
+                Href = "/api/v1/d/workflows/w/instances/i/views/payment-timeout",
+                HasView = false,
+                LoadData = false
+            },
+            Schema = new Shared.SchemaHref
+            {
+                Href = "/api/v1/d/workflows/w/instances/i/schemas/payment-timeout",
+                HasSchema = false
+            }
         };
         var triggerable = new Shared.TransitionItem
         {
@@ -627,9 +652,10 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var triggerableJson = System.Text.Json.JsonSerializer.Serialize(triggerable, JsonSerializerConstants.JsonOptions);
 
         scheduledJson.ShouldContain("\"executeAtUtc\":\"2026-08-03T14:30:00Z\"");
-        scheduledJson.ShouldNotContain("href");
-        scheduledJson.ShouldNotContain("view");
-        scheduledJson.ShouldNotContain("schema");
+        scheduledJson.ShouldContain("\"href\"");
+        scheduledJson.ShouldContain("\"hasView\":false");
+        scheduledJson.ShouldContain("\"loadData\":false");
+        scheduledJson.ShouldContain("\"hasSchema\":false");
         triggerableJson.ShouldContain("\"href\"");
         triggerableJson.ShouldNotContain("executeAtUtc");
     }
