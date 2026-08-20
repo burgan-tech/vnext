@@ -1,11 +1,6 @@
-using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
-using BBT.Aether.Users;
-using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
-using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -13,7 +8,8 @@ namespace BBT.Workflow.Functions;
 
 /// <summary>
 /// Unit tests for <see cref="FunctionAccessPolicy"/> - the single gate both function execution and
-/// function discovery pass through, so a caller denied on one is denied on the other.
+/// function discovery pass through, so a caller denied on one is denied on the other. The gate covers
+/// <c>scope</c> only; <c>function.roles</c> is evaluated by the <c>authorize</c> function, not here.
 /// </summary>
 public sealed class FunctionAccessPolicyTests
 {
@@ -22,15 +18,7 @@ public sealed class FunctionAccessPolicyTests
     private const string FunctionKey = "my-fn";
     private const string TestFlow = "my-flow";
 
-    private readonly ICurrentUser _currentUser = Substitute.For<ICurrentUser>();
-    private readonly ITransitionAuthorizationManager _authorizationManager =
-        Substitute.For<ITransitionAuthorizationManager>();
-    private readonly FunctionAccessPolicy _policy;
-
-    public FunctionAccessPolicyTests()
-    {
-        _policy = new FunctionAccessPolicy(_currentUser, _authorizationManager);
-    }
+    private readonly FunctionAccessPolicy _policy = new();
 
     [Fact]
     public async Task DomainScope_WithoutAnInstance_IsAllowed()
@@ -76,68 +64,30 @@ public sealed class FunctionAccessPolicyTests
         result.IsSuccess.ShouldBeTrue();
     }
 
+    /// <summary>
+    /// The behaviour change: custom function invocation is no longer role-gated by the runtime.
+    /// A function declaring an allowlist grant still runs for a caller carrying no roles at all —
+    /// the middle tier owns that decision, and <c>authorize</c> remains the surface that reports it.
+    /// </summary>
     [Fact]
-    public async Task NoRolesDeclared_SkipsRoleEvaluationEntirely()
+    public async Task RolesDeclared_AreNotEnforced_AndTheCallIsAllowed()
     {
-        await Authorize(Function("D"), instance: null, workflow: null);
-
-        await _authorizationManager.DidNotReceiveWithAnyArgs()
-            .IsAnyRoleAllowedForGrantsAsync(default!, default!, default, default, default);
-    }
-
-    [Fact]
-    public async Task RolesDeclared_AndDenied_IsForbidden()
-    {
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        var result = await Authorize(FunctionWithRoles(), instance: null, workflow: null);
-
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
-    }
-
-    [Fact]
-    public async Task RolesDeclared_AndAllowed_IsAllowed()
-    {
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(true);
-
         var result = await Authorize(FunctionWithRoles(), instance: null, workflow: null);
 
         result.IsSuccess.ShouldBeTrue();
     }
 
     /// <summary>
-    /// Dynamic role grants navigate <c>$.context.Headers</c> / <c>QueryParameters</c>; a surface that
-    /// omits the request context makes those grants silently unable to match.
+    /// The scope gate outranks the (now absent) role gate: a roles-bearing Flow-scoped function
+    /// called without an instance is still rejected on scope.
     /// </summary>
     [Fact]
-    public async Task RequestContext_IsPassedToTheEvaluator()
+    public async Task RolesDeclared_StillFailsTheScopeGate()
     {
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+        var result = await Authorize(FunctionWithRoles("F"), instance: null, workflow: null);
 
-        var headers = new Dictionary<string, string?> { ["x-user"] = "alice" };
-        var query = new Dictionary<string, string?> { ["scope"] = "wide" };
-
-        await _policy.AuthorizeAsync(FunctionWithRoles(), null, null, headers, query);
-
-        await _authorizationManager.Received(1).IsAnyRoleAllowedForGrantsAsync(
-            Arg.Any<IReadOnlyList<string>>(),
-            Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-            Arg.Any<Instance?>(),
-            Arg.Is<AuthorizationRequestContext?>(c => c != null),
-            Arg.Any<CancellationToken>());
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionScopeNotSatisfied);
     }
 
     private Task<BBT.Aether.Results.Result> Authorize(
@@ -147,11 +97,11 @@ public sealed class FunctionAccessPolicyTests
     private static Function Function(string scope) =>
         FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(scope: scope), FunctionKey);
 
-    private static Function FunctionWithRoles() =>
+    private static Function FunctionWithRoles(string scope = "D") =>
         FunctionTestFactory.FromJson(
             FunctionTestFactory.Attributes("""
                 "roles": [ { "role": "backoffice.operator", "grant": "allow" } ]
-                """),
+                """, scope: scope),
             FunctionKey);
 
     private static Instance Instance() =>
