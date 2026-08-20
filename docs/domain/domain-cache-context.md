@@ -90,6 +90,11 @@ The L1 cache stores serialized envelopes under these same keys (`ComponentCache:
 default on; `ComponentCache:L1SizeLimitMb`, default 64). Bytes are deserialized per read, so
 every hit returns a fresh instance, and negative answers are never stored in L1.
 
+The one remaining per-resolution round trip — the generation-token read — can additionally be
+memoized in process (`ComponentCache:GenerationMemoSeconds`, default 0 = off) at the cost of a
+≤N-second cross-pod publish-visibility window; enabling it is a CI/CD contract change, see
+[Component Cache Generation Memo](../runtime/component-cache-generation-memo.md).
+
 Version resolution:
 
 - Null, empty, or `latest` resolves to the latest definition.

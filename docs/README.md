@@ -23,7 +23,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 1. Read [System Overview](architecture/system-overview.md) to understand the two-host runtime.
 2. Read [Workflow Execution Pipeline](architecture/workflow-execution-pipeline.md) before changing transition behavior.
 3. Read [Async Transition Execution Modes](architecture/async-transition-execution-modes.md) before changing the `WorkflowExecution` flags (outbox / transition-per-job / chain-token gate / reaper).
-4. Read [Domain Cache Context](domain/domain-cache-context.md) before changing definition cache behavior.
+4. Read [Domain Cache Context](domain/domain-cache-context.md) before changing definition cache behavior, and [Component Cache Generation Memo](runtime/component-cache-generation-memo.md) before enabling `GenerationMemoSeconds` or editing the CD propagation window.
 5. Read [Task Executors and Invokers](runtime/task-executors-and-invokers.md) before adding a task type.
 6. Read [API and Service Contracts](contracts/api-and-service-contracts.md) before changing HTTP or Dapr-facing contracts.
 7. Read [JSON Validation](contracts/json-validation.md) before changing schema validation errors.
