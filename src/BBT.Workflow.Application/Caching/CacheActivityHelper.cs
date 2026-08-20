@@ -28,6 +28,7 @@ public static class CacheActivityHelper
 
     private const string TagCacheKey = "cache.key";
     private const string TagCacheHit = "cache.hit";
+    private const string TagCacheL1Hit = "cache.l1.hit";
     private const string TagCacheNegative = "cache.negative";
     private const string TagCacheCoalesced = "cache.coalesced";
     private const string TagCacheGeneration = "cache.generation";
@@ -72,6 +73,15 @@ public static class CacheActivityHelper
     public static void SetCacheHit(Activity? activity, bool hit)
     {
         activity?.SetTag(TagCacheHit, hit);
+    }
+
+    /// <summary>
+    /// Records whether the in-process (L1) envelope cache answered the read, so load tests can
+    /// attribute latency between L1 and the distributed store.
+    /// </summary>
+    public static void SetL1Hit(Activity? activity, bool hit)
+    {
+        activity?.SetTag(TagCacheL1Hit, hit);
     }
 
     /// <summary>

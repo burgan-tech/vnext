@@ -40,7 +40,8 @@ public class CacheSet<T>(
     IComponentGenerationProvider generationProvider,
     IOptions<ComponentCacheOptions> options,
     TimeProvider timeProvider,
-    ILogger<CacheSet<T>> logger)
+    ILogger<CacheSet<T>> logger,
+    IComponentL1Cache l1Cache)
     : ICacheSet<T>
     where T : class, IDomainEntity, IReferenceSetter
 {
@@ -122,7 +123,10 @@ public class CacheSet<T>(
 
         // A full version identifies one revision, so its body is the only body worth dropping.
         if (InstanceDataVersionComparer.IsFullVersion(version))
+        {
+            l1Cache.Remove(CreateFullKey(domain, key, version));
             await TryRemoveAsync(CreateFullKey(domain, key, version), cancellationToken);
+        }
 
         // Deliberately not warmed: the version may have been deactivated or deleted, so the correct
         // winner is whatever the database says on the next read.
@@ -157,6 +161,17 @@ public class CacheSet<T>(
             CacheActivityHelper.OperationGet, redisKey, ComponentKeyName);
         CacheActivityHelper.SetGeneration(activity, generation);
 
+        // The key embeds the generation just fetched, so an L1 answer is exactly as fresh as an L2
+        // one — a publish bump changes the key and this lookup simply misses.
+        var l1Envelope = l1Cache.TryGet<T>(redisKey);
+        if (l1Envelope?.Entity is not null)
+        {
+            CacheActivityHelper.SetCacheHit(activity, true);
+            CacheActivityHelper.SetL1Hit(activity, true);
+            HydrateReference(l1Envelope);
+            return Result<T>.Ok(l1Envelope.Entity);
+        }
+
         var envelope = await TryGetEnvelopeAsync(redisKey, activity, cancellationToken);
         if (envelope is not null)
         {
@@ -170,7 +185,11 @@ public class CacheSet<T>(
 
             if (envelope.Entity is not null)
             {
+                CacheActivityHelper.SetL1Hit(activity, false);
+                // Hydrate before storing: the entity's reference properties have private setters, so
+                // the L2 round-trip leaves them null until HydrateReference fills them back in.
                 HydrateReference(envelope);
+                PopulateL1(redisKey, envelope, ResolutionEntryOptions());
                 return Result<T>.Ok(envelope.Entity);
             }
         }
@@ -297,11 +316,24 @@ public class CacheSet<T>(
         using var activity = CacheActivityHelper.StartActivity(
             CacheActivityHelper.OperationGet, redisKey, ComponentKeyName);
 
+        // Full versions are immutable, so an L1 body needs no freshness check at all.
+        var l1Envelope = l1Cache.TryGet<T>(redisKey);
+        if (l1Envelope?.Entity is not null)
+        {
+            CacheActivityHelper.SetCacheHit(activity, true);
+            CacheActivityHelper.SetL1Hit(activity, true);
+            HydrateReference(l1Envelope);
+            return Result<T>.Ok(l1Envelope.Entity);
+        }
+
         var envelope = await TryGetEnvelopeAsync(redisKey, activity, cancellationToken);
         if (envelope?.Entity is not null)
         {
             CacheActivityHelper.SetCacheHit(activity, true);
+            CacheActivityHelper.SetL1Hit(activity, false);
+            // Hydrate before storing — see GetResolvedAsync.
             HydrateReference(envelope);
+            PopulateL1(redisKey, envelope, FullEntryOptions());
             return Result<T>.Ok(envelope.Entity);
         }
 
@@ -443,6 +475,10 @@ public class CacheSet<T>(
         DistributedCacheEntryOptions entryOptions,
         CancellationToken cancellationToken)
     {
+        // Write-through: negatives are rejected by the L1 itself, and an entity left in L1 after a
+        // failed L2 write is still correct — it came from the backend.
+        PopulateL1(redisKey, envelope, entryOptions);
+
         try
         {
             await distributedCache.SetAsync(redisKey, envelope, entryOptions, cancellationToken);
@@ -451,6 +487,12 @@ public class CacheSet<T>(
         {
             logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationSet, redisKey);
         }
+    }
+
+    private void PopulateL1(string redisKey, CacheEnvelope<T> envelope, DistributedCacheEntryOptions entryOptions)
+    {
+        if (entryOptions.AbsoluteExpiration is { } expiry)
+            l1Cache.Set(redisKey, envelope, expiry);
     }
 
     private async Task TryRemoveAsync(string redisKey, CancellationToken cancellationToken)
