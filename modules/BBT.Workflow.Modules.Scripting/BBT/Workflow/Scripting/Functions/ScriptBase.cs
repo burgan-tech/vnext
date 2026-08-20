@@ -51,6 +51,14 @@ public abstract class ScriptBase
     /// <returns>The secret value</returns>
     protected string GetSecret(string storeName, string secretStore, string secretKey)
     {
+        // Lock-free L1 probe first: a cache hit is served with no blocking and no async state
+        // machine. Only a miss (cold, in-flight, faulted or expired entry) drops down to the
+        // async path and blocks for the fetch. A hit is only reachable for arguments that
+        // previously passed the async path's validation, so invalid arguments still throw there.
+        var cache = Services?.SecretCache;
+        if (cache != null && cache.TryGetCachedSecret(storeName, secretStore, secretKey, out var value))
+            return value;
+
         return GetSecretAsync(storeName, secretStore, secretKey)
             .ConfigureAwait(false).GetAwaiter().GetResult();
     }
@@ -104,6 +112,11 @@ public abstract class ScriptBase
     /// <returns>Dictionary of secret keys and values</returns>
     protected Dictionary<string, string> GetSecrets(string storeName, string secretStore)
     {
+        // Same lock-free L1 probe as GetSecret: hits never block, only misses drop to async.
+        var cache = Services?.SecretCache;
+        if (cache != null && cache.TryGetCachedBundle(storeName, secretStore, out var bundle))
+            return bundle;
+
         return GetSecretsAsync(storeName, secretStore)
             .ConfigureAwait(false).GetAwaiter().GetResult();
     }

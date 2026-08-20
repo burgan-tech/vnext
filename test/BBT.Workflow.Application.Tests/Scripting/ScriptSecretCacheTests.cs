@@ -223,6 +223,108 @@ public sealed class ScriptSecretCacheTests
     }
 
     [Fact]
+    public void Probe_BeforeAnyFetch_Misses()
+    {
+        var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });
+        var cache = CreateCache(daprMock);
+
+        cache.TryGetCachedSecret(Store, Bundle, "a", out _).ShouldBeFalse();
+        cache.TryGetCachedBundle(Store, Bundle, out _).ShouldBeFalse();
+        VerifyFetchCount(daprMock, Times.Never());
+    }
+
+    [Fact]
+    public async Task Probe_AfterSuccessfulFetch_HitsWithoutExtraVaultCall()
+    {
+        var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });
+        var cache = CreateCache(daprMock);
+
+        await cache.GetSecretAsync(Store, Bundle, "a");
+
+        cache.TryGetCachedSecret(Store, Bundle, "a", out var value).ShouldBeTrue();
+        value.ShouldBe("1");
+        cache.TryGetCachedBundle(Store, Bundle, out var bundle).ShouldBeTrue();
+        bundle!.ShouldContainKeyAndValue("a", "1");
+        VerifyFetchCount(daprMock, Times.Once());
+    }
+
+    [Fact]
+    public async Task Probe_MissingKeyOnCachedBundle_HitsWithEmptyString()
+    {
+        var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });
+        var cache = CreateCache(daprMock);
+
+        await cache.GetSecretAsync(Store, Bundle, "a");
+
+        // Same contract as GetSecretAsync: bundle hit + absent key => empty string, still a hit.
+        cache.TryGetCachedSecret(Store, Bundle, "missing", out var value).ShouldBeTrue();
+        value.ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public async Task Probe_AfterTtlExpiry_Misses_WithoutEvictingOrRefetching()
+    {
+        var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });
+        var time = new FakeTimeProvider();
+        var cache = CreateCache(daprMock, time);
+
+        await cache.GetSecretAsync(Store, Bundle, "a");
+        time.Advance(TimeSpan.FromSeconds(31));
+
+        cache.TryGetCachedSecret(Store, Bundle, "a", out _).ShouldBeFalse();
+        VerifyFetchCount(daprMock, Times.Once()); // probe never fetches; the async path refreshes
+    }
+
+    [Fact]
+    public void Probe_WhileFetchInFlight_Misses()
+    {
+        var gate = new TaskCompletionSource<Dictionary<string, string>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var daprMock = new Mock<DaprClient>();
+        daprMock.Setup(x => x.GetSecretAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(gate.Task);
+        var cache = CreateCache(daprMock);
+
+        var pending = cache.GetSecretAsync(Store, Bundle, "a"); // installs the in-flight lazy
+
+        cache.TryGetCachedSecret(Store, Bundle, "a", out _).ShouldBeFalse();
+
+        gate.SetResult(new Dictionary<string, string> { ["a"] = "1" });
+        pending.Result.ShouldBe("1"); // waits for the released fetch's continuations to finish
+        cache.TryGetCachedSecret(Store, Bundle, "a", out var value).ShouldBeTrue();
+        value.ShouldBe("1");
+    }
+
+    [Fact]
+    public void Probe_WhenBypassed_Misses()
+    {
+        var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });
+        var cache = CreateCache(daprMock, options: new SecretCacheOptions { Enabled = false });
+
+        cache.TryGetCachedSecret(Store, Bundle, "a", out _).ShouldBeFalse();
+        cache.TryGetCachedBundle(Store, Bundle, out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Probe_ReturnedBundle_IsADefensiveCopy()
+    {
+        var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });
+        var cache = CreateCache(daprMock);
+
+        await cache.GetSecretAsync(Store, Bundle, "a");
+
+        cache.TryGetCachedBundle(Store, Bundle, out var first).ShouldBeTrue();
+        first!["a"] = "tampered";
+
+        cache.TryGetCachedBundle(Store, Bundle, out var second).ShouldBeTrue();
+        second!["a"].ShouldBe("1");
+    }
+
+    [Fact]
     public async Task MissingKey_ReturnsEmptyString()
     {
         var daprMock = CreateDaprMock(new Dictionary<string, string> { ["a"] = "1" });

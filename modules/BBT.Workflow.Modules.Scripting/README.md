@@ -81,6 +81,12 @@ Configuration (section `Scripting:SecretCache`):
 vault). After a secret rotation, a process may serve the previous value for at most
 `TtlSeconds` seconds.
 
+The synchronous `GetSecret`/`GetSecrets` wrappers first probe the cache with a lock-free,
+never-blocking check and serve hits without touching the async machinery at all; only a cache
+miss (cold, in-flight, faulted or expired entry) drops down to the async path and blocks the
+calling thread for the fetch. In miss-heavy or highly concurrent scripts, prefer
+`GetSecretAsync`/`GetSecretsAsync` — a synchronous API must block someone on a miss.
+
 #### `GetSecret(storeName, secretStore, secretKey)`
 
 Retrieves a single secret value (synchronous).

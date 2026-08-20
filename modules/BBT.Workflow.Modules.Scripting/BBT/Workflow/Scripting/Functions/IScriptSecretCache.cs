@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 
 namespace BBT.Workflow.Scripting.Functions;
@@ -29,4 +30,26 @@ public interface IScriptSecretCache
     /// <param name="storeName">The name of the Dapr secret store component.</param>
     /// <param name="secretStore">The name of the secret bundle within the store.</param>
     Task<Dictionary<string, string>> GetSecretsAsync(string storeName, string secretStore);
+
+    /// <summary>
+    /// Lock-free L1 probe for synchronous callers: returns <c>true</c> only when a fresh,
+    /// successfully fetched bundle is already cached. Never blocks and never triggers a fetch,
+    /// so a sync caller can serve hits without any sync-over-async hazard and fall back to the
+    /// async path only on a miss. <paramref name="value"/> is <see cref="string.Empty"/> when
+    /// the cached bundle lacks the key (same contract as <see cref="GetSecretAsync"/>).
+    /// </summary>
+    /// <param name="storeName">The name of the Dapr secret store component.</param>
+    /// <param name="secretStore">The name of the secret bundle within the store.</param>
+    /// <param name="secretKey">The key of the secret inside the bundle.</param>
+    /// <param name="value">The secret value on a hit; <see cref="string.Empty"/> otherwise.</param>
+    bool TryGetCachedSecret(string storeName, string secretStore, string secretKey, out string value);
+
+    /// <summary>
+    /// Same lock-free probe as <see cref="TryGetCachedSecret"/>, returning a defensive copy of
+    /// the whole cached bundle on a hit. Never blocks and never triggers a fetch.
+    /// </summary>
+    /// <param name="storeName">The name of the Dapr secret store component.</param>
+    /// <param name="secretStore">The name of the secret bundle within the store.</param>
+    /// <param name="bundle">A defensive copy of the cached bundle on a hit; <c>null</c> otherwise.</param>
+    bool TryGetCachedBundle(string storeName, string secretStore, [NotNullWhen(true)] out Dictionary<string, string>? bundle);
 }

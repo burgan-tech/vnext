@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 using Dapr.Client;
@@ -53,6 +54,67 @@ public sealed class ScriptSecretCache(
     /// <inheritdoc />
     public async Task<Dictionary<string, string>> GetSecretsAsync(string storeName, string secretStore)
         => new(await GetBundleAsync(storeName, secretStore).ConfigureAwait(false));
+
+    /// <inheritdoc />
+    public bool TryGetCachedSecret(string storeName, string secretStore, string secretKey, out string value)
+    {
+        if (TryGetLiveBundle(storeName, secretStore, out var values))
+        {
+            value = values.TryGetValue(secretKey, out var cached) ? cached : string.Empty;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    /// <inheritdoc />
+    public bool TryGetCachedBundle(string storeName, string secretStore, [NotNullWhen(true)] out Dictionary<string, string>? bundle)
+    {
+        if (TryGetLiveBundle(storeName, secretStore, out var values))
+        {
+            bundle = new Dictionary<string, string>(values);
+            return true;
+        }
+
+        bundle = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Read-only, never-blocking probe: a hit requires an already-created, successfully completed,
+    /// unexpired entry. In-flight, faulted, or expired entries are misses — this path never
+    /// triggers the Lazy factory and never evicts (evict-and-refresh stays single-flight in
+    /// <see cref="GetBundleAsync"/>).
+    /// </summary>
+    private bool TryGetLiveBundle(string storeName, string secretStore, out Dictionary<string, string> values)
+    {
+        values = null!;
+        if (BypassCache)
+        {
+            return false;
+        }
+
+        if (!_bundles.TryGetValue(CacheKey(storeName, secretStore), out var lazy) || !lazy.IsValueCreated)
+        {
+            return false;
+        }
+
+        var task = lazy.Value;
+        if (!task.IsCompletedSuccessfully)
+        {
+            return false;
+        }
+
+        var bundle = task.Result; // non-blocking: the task already completed successfully
+        if (bundle.ExpiresAt <= _timeProvider.GetUtcNow())
+        {
+            return false;
+        }
+
+        values = bundle.Values;
+        return true;
+    }
 
     private async Task<Dictionary<string, string>> GetBundleAsync(string storeName, string secretStore)
     {
