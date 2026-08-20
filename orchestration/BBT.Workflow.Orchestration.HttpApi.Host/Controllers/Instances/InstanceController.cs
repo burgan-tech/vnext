@@ -21,6 +21,7 @@ using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using BBT.Workflow.Authorization;
 
 namespace BBT.Workflow.Orchestration.Controllers.Instances;
 
@@ -44,7 +45,7 @@ public sealed class InstanceController(
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
-    ICurrentUser currentUser) : AetherControllerBase
+    ICallerRoleResolver callerRoleResolver) : AetherControllerBase
 {
     /// <summary>
     /// Starts a new workflow instance.
@@ -861,6 +862,12 @@ public sealed class InstanceController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
+        // Resolved through the configured provider so this route and the `data` function handler agree
+        // about the same instance; without it the queryRoles gate would evaluate a role-less caller.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
+
         var input = new GetInstanceDataInput
         {
             Domain = domain,
@@ -870,9 +877,7 @@ public sealed class InstanceController(
             Version = version,
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters,
-            // Without this the queryRoles gate evaluates a role-less caller, so this route would
-            // disagree with the `data` function handler about the very same instance.
-            Roles = currentUser.ResolveCallerRoles(requestContext.Headers)
+            Roles = callerRoles.Value
         };
 
         var result = await queryAppService.GetInstanceDataAsync(input, cancellationToken);

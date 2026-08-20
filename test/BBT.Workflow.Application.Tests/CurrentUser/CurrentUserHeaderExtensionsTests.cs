@@ -20,28 +20,6 @@ public class CurrentUserHeaderExtensionsTests
     }
 
     [Fact]
-    public void ResolveCallerRole_PrefersFirstUserRole()
-    {
-        var user = UserWithRoles("admin", "ops");
-        user.ResolveCallerRole(new Dictionary<string, string?> { ["role"] = "ignored" }).ShouldBe("admin");
-    }
-
-    [Fact]
-    public void ResolveCallerRole_FallsBackToHeader_WhenUserHasNoRoles()
-    {
-        var user = UserWithRoles();
-        var headers = new Dictionary<string, string?> { ["role"] = "approver, auditor" };
-        user.ResolveCallerRole(headers).ShouldBe("approver");
-    }
-
-    [Fact]
-    public void ResolveCallerRole_Null_WhenNeitherPresent()
-    {
-        UserWithRoles().ResolveCallerRole(null).ShouldBeNull();
-        UserWithRoles().ResolveCallerRole(new Dictionary<string, string?>()).ShouldBeNull();
-    }
-
-    [Fact]
     public void ResolveCallerRoles_ReturnsAllUserRoles()
     {
         var user = UserWithRoles("admin", "ops");

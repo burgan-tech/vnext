@@ -2970,6 +2970,80 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Caller Role Provider (2044x)
+
+    /// <summary>
+    /// Logs a successful role-set fetch from an external caller-role provider. Debug: this happens at
+    /// most once per request scope, but on every authorized request.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20440,
+        Level = LogLevel.Debug,
+        Message = "Caller roles resolved from provider. Provider={Provider}, RoleCount={RoleCount}, ElapsedMs={ElapsedMs}")]
+    public static partial void CallerRolesResolvedFromProvider(
+        this ILogger logger,
+        string provider,
+        int roleCount,
+        long elapsedMs);
+
+    /// <summary>
+    /// Logs when the provider answered that the caller has no operation set at all. This is a valid
+    /// answer, not a failure — but it denies every allowlist grant, so it is worth seeing.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20441,
+        Level = LogLevel.Warning,
+        Message = "Caller role provider returned no operation set. Provider={Provider}, Subject={Subject}, Actor={Actor}, Position={Position}")]
+    public static partial void CallerRoleProviderReturnedNoContent(
+        this ILogger logger,
+        string provider,
+        string? subject,
+        string? actor,
+        string? position);
+
+    /// <summary>
+    /// Logs a failed provider call. The request is denied (fail-closed) after this is written, so this
+    /// is the only record of why a caller lost access.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20442,
+        Level = LogLevel.Error,
+        Message = "Caller role provider call failed. Provider={Provider}, StatusCode={StatusCode}, Reason={Reason}")]
+    public static partial void CallerRoleProviderCallFailed(
+        this ILogger logger,
+        Exception? exception,
+        string provider,
+        int? statusCode,
+        string reason);
+
+    /// <summary>
+    /// Logs when a surface was served the memoized role set instead of triggering a second provider
+    /// call. Useful to confirm the one-call-per-request guarantee holds under concurrent fan-out.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20443,
+        Level = LogLevel.Debug,
+        Message = "Caller roles served from request-scope memo. Provider={Provider}, RoleCount={RoleCount}")]
+    public static partial void CallerRolesServedFromRequestScopeMemo(
+        this ILogger logger,
+        string provider,
+        int roleCount);
+
+    /// <summary>
+    /// Logs when the long-poll ownership gate could not establish the caller's roles and therefore
+    /// declined to arm the pause. The transition continues normally; nothing faults.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20444,
+        Level = LogLevel.Warning,
+        Message = "Long-poll ownership undetermined: caller roles unresolved. InstanceId={InstanceId}, State={StateKey}")]
+    public static partial void LongPollOwnershipUndeterminedRoles(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>

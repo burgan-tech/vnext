@@ -19,11 +19,14 @@ public sealed class AuthorizeFunctionHandler(
         InstanceFunctionRequest request, CancellationToken cancellationToken)
     {
         var qp = request.QueryParameters;
-        var role = request.CurrentUser.Roles?.Length > 0
-            ? string.Join(",", request.CurrentUser.Roles)
-            : (request.Parameters.Role
-               ?? qp.GetValueOrDefault("role", null)
-               ?? string.Empty);
+
+        // Only the explicitly requested role is forwarded. The caller's own role set is resolved inside
+        // AuthorizeAppService through the configured provider — reading ICurrentUser.Roles here would
+        // pin the answer to the default provider's source and make `authorize` contradict every other
+        // surface whenever a different provider is configured.
+        var role = request.Parameters.Role
+                   ?? qp.GetValueOrDefault("role", null)
+                   ?? string.Empty;
 
         var version = request.Parameters.Version
                       ?? qp.GetValueOrDefault("version", null);

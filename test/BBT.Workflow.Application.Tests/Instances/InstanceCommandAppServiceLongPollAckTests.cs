@@ -99,7 +99,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             longPollAckResumeService: _resumeService,
             instanceCommandGateway: _gateway,
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

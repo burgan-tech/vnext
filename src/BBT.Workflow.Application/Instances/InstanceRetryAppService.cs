@@ -12,6 +12,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
+using BBT.Workflow.Authorization;
 
 namespace BBT.Workflow.Instances;
 
@@ -30,7 +31,7 @@ public sealed class InstanceRetryAppService(
     IInstanceRetryGateway instanceRetryGateway,
     IComponentCacheStore componentCacheStore,
     IWorkflowExecutionService workflowExecutionService,
-    ICurrentUser currentUser,
+    ICallerRoleResolver callerRoleResolver,
     ILogger<InstanceRetryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceRetryAppService
 {
@@ -82,6 +83,10 @@ public sealed class InstanceRetryAppService(
         RetryInstanceInput input,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(input.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<RetryInstanceOutput>.Fail(callerRoles.Error);
+
         // Query SubFlow state via gateway (supports cross-domain)
         var subflowStateInput = new GetFunctionWithInstanceInput
         {
@@ -91,8 +96,8 @@ public sealed class InstanceRetryAppService(
             Instance = subflowCorrelation.SubFlowInstanceId.ToString(),
             Headers = input.Headers,
             QueryParams = input.RouteValues,
-            Role = currentUser.ResolveCallerRole(input.Headers),
-            Roles = currentUser.ResolveCallerRoles(input.Headers)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
 
         var subflowStateResult = await instanceQueryGateway.GetFunctionWithStateAsync(

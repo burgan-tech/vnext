@@ -50,7 +50,7 @@ public class HandleLongPollTerminationStepTests
         _guidGenerator.Create().Returns(Guid.NewGuid());
         _step = new HandleLongPollTerminationStep(
             _instanceRepository, _jobRepository, _jobService, _guidGenerator,
-            _authManager, _currentUser,
+            _authManager, new DefaultCallerRoleResolver(_currentUser),
             Substitute.For<ILogger<HandleLongPollTerminationStep>>());
     }
 

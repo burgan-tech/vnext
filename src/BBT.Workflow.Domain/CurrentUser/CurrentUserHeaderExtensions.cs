@@ -15,6 +15,7 @@ public static class CurrentUserHeaderKeys
     public const string SurName = "family_name";
     public const string Role = "role";
     public const string ActorSub = "act_sub";
+    public const string Position = "position";
     public const string ActorUserId = "act_uid";
     public const string ConsentId = "consent_id";
 }
@@ -66,7 +67,16 @@ public static class CurrentUserHeaderExtensions
     /// Builds the forward headers dictionary from the current user for remote/subflow requests.
     /// Downstream can resolve ICurrentUser from these headers.
     /// </summary>
-    public static Dictionary<string, string?> ToForwardHeaders(this ICurrentUser currentUser)
+    /// <param name="currentUser">The current user.</param>
+    /// <param name="position">
+    /// The caller's <c>position</c>, forwarded so a downstream domain running an external caller-role
+    /// provider can resolve the same operation set. Passed explicitly because <c>position</c> is not
+    /// yet carried on <see cref="ICurrentUser"/>; when it lands there this parameter's default becomes
+    /// <c>currentUser.Position</c> and callers need not supply it. Omitted from the dictionary when empty.
+    /// </param>
+    public static Dictionary<string, string?> ToForwardHeaders(
+        this ICurrentUser currentUser,
+        string? position = null)
     {
         var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrEmpty(currentUser.Id))
@@ -85,32 +95,21 @@ public static class CurrentUserHeaderExtensions
             headers[CurrentUserHeaderKeys.ActorSub] = currentUser.ActorUserName;
         if (!string.IsNullOrEmpty(currentUser.ConsentId))
             headers[CurrentUserHeaderKeys.ConsentId] = currentUser.ConsentId;
+        if (!string.IsNullOrEmpty(position))
+            headers[CurrentUserHeaderKeys.Position] = position;
         return headers;
-    }
-
-    /// <summary>
-    /// Resolves the single caller role used when locally routing the state function. Prefers the first
-    /// role on the current user; when the user carries no roles, falls back to the first role parsed from
-    /// the request <c>role</c> header; returns <c>null</c> when neither is present.
-    /// </summary>
-    /// <param name="currentUser">The current user.</param>
-    /// <param name="headers">Request headers to read the <c>role</c> value from when the user has none.</param>
-    public static string? ResolveCallerRole(
-        this ICurrentUser currentUser,
-        IReadOnlyDictionary<string, string?>? headers)
-    {
-        if (currentUser.Roles is { Length: > 0 } roles)
-            return roles[0];
-
-        var headerRole = headers is null ? null : GetHeader(headers, CurrentUserHeaderKeys.Role);
-        var parsed = ParseRolesFromHeader(headerRole);
-        return parsed is { Length: > 0 } ? parsed[0] : null;
     }
 
     /// <summary>
     /// Resolves the caller role list used when locally routing a function. Prefers all roles on the
     /// current user; when the user carries no roles, falls back to the roles parsed from the request
     /// <c>role</c> header; returns <c>null</c> when neither is present.
+    /// <para>
+    /// This is the <b>default caller-role provider's</b> implementation, reached through
+    /// <c>ICallerRoleResolver</c>. Do not call it directly from an authorization surface: under a
+    /// non-default provider it returns the wrong role set, and the surface silently disagrees with
+    /// every other one.
+    /// </para>
     /// </summary>
     /// <param name="currentUser">The current user.</param>
     /// <param name="headers">Request headers to read the <c>role</c> value from when the user has none.</param>
@@ -142,7 +141,7 @@ public static class CurrentUserHeaderExtensions
 
     private static string? GetHeader(IReadOnlyDictionary<string, string?> headers, string key)
     {
-        return headers.TryGetValue(key, out var value) ? value : null;
+        return headers.GetValueOrDefault(key);
     }
 
     private sealed class EmptyDisposable : IDisposable

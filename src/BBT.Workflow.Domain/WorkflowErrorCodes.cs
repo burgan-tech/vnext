@@ -160,6 +160,9 @@ public static class WorkflowErrorCodes
     /// <summary>Query roles check is only valid for instance-level authorize.</summary>
     public const string AuthorizeQueryRolesRequiresInstance = "Authorization:110003";
 
+    /// <summary>The configured caller-role provider could not resolve the caller's role set.</summary>
+    public const string CallerRoleResolutionFailed = "Authorization:110004";
+
     #endregion
     
     #region Discovery Errors (700xxx)

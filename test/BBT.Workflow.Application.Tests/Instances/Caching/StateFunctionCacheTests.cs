@@ -70,10 +70,12 @@ public class StateFunctionCacheTests
         // `functions` discovery links; v4 replaced that list with a hasFunctions flag plus a catalog
         // link; v6 started listing scheduled transitions inside transitions as kind:"scheduled"
         // entries with executeAtUtc) cannot be served from entries written by an
-        // earlier build.
+        // earlier build. v7 retires entries written before caller roles became provider-resolved:
+        // the hash covers role strings, so an identically named set from a different provider would
+        // otherwise collide with one produced under different authorization inputs.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v6:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v7:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]

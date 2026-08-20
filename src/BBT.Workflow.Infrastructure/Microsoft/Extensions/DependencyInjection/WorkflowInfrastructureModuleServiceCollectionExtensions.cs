@@ -18,6 +18,7 @@ using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BBT.Workflow.Authorization.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -104,6 +105,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Remote vnext api
         services.AddVNextApiServices();
+        services.AddCallerRoleResolver(services.GetConfiguration());
         
         // Instance Gateways - route between local and remote execution
         services.AddInstanceGatewayServices();
