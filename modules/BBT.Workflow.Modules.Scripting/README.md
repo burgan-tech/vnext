@@ -57,6 +57,36 @@ public class MyMapping : ScriptBase, IMapping
 
 ### Secret Management Functions
 
+All secret functions read through a process-wide, short-TTL, in-memory cache of secret
+**bundles** (`ScriptSecretCache`). One vault round-trip fetches the whole
+`(storeName, secretStore)` bundle; subsequent reads for any key in that bundle are served
+from memory until the TTL (default **30 seconds**) expires. Concurrent readers of the same
+bundle collapse into a single vault call (single-flight), and failed fetches are never
+cached. The cache is deliberately in-process — secret material never transits Redis.
+
+Configuration (section `Scripting:SecretCache`):
+
+```json
+{
+  "Scripting": {
+    "SecretCache": {
+      "Enabled": true,
+      "TtlSeconds": 30
+    }
+  }
+}
+```
+
+`Enabled: false` or `TtlSeconds <= 0` bypasses the cache entirely (every read goes to the
+vault). After a secret rotation, a process may serve the previous value for at most
+`TtlSeconds` seconds.
+
+The synchronous `GetSecret`/`GetSecrets` wrappers first probe the cache with a lock-free,
+never-blocking check and serve hits without touching the async machinery at all; only a cache
+miss (cold, in-flight, faulted or expired entry) drops down to the async path and blocks the
+calling thread for the fetch. In miss-heavy or highly concurrent scripts, prefer
+`GetSecretAsync`/`GetSecretsAsync` — a synchronous API must block someone on a miss.
+
 #### `GetSecret(storeName, secretStore, secretKey)`
 
 Retrieves a single secret value (synchronous).
@@ -308,6 +338,7 @@ public interface IScriptServices
     DaprClient DaprClient { get; }
     ILogger Logger { get; }
     IConfiguration Configuration { get; }
+    IScriptSecretCache? SecretCache { get; }   // null => uncached direct Dapr access
 }
 ```
 
@@ -316,6 +347,7 @@ public interface IScriptServices
 Services are registered in `TaskServiceCollectionExtensions.AddScriptingServices()`:
 
 ```csharp
+services.TryAddSingleton<IScriptSecretCache, ScriptSecretCache>(); // singleton: outlives request scopes
 services.TryAddScoped<IScriptServices, ScriptServices>();
 services.TryAddSingleton<IEvaluator, CSharpEvaluator>();
 services.TryAddScoped<IScriptEngine, ScriptEngine>();
