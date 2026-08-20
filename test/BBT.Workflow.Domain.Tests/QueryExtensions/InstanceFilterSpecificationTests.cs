@@ -156,29 +156,23 @@ public class InstanceFilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void InstanceFilterSpecification_InvalidKeyFormat_ShouldReturnEmpty()
+    public void InstanceFilterSpecification_InvalidKeyFormat_ShouldThrow()
     {
         var spec = new InstanceFilterSpecification("key");
         var instances = CreateTestInstances().AsQueryable();
 
-        // Act
-        var result = spec.Apply(instances).ToList();
-
-        // Assert - Should return all instances when filter is invalid
-        Assert.Equal(3, result.Count);
+        // Assert - an unparseable filter must not silently return every instance
+        Assert.Throws<ArgumentException>(() => spec.Apply(instances).ToList());
     }
 
     [Fact]
-    public void InstanceFilterSpecification_InvalidTagFormat_ShouldReturnEmpty()
+    public void InstanceFilterSpecification_InvalidTagFormat_ShouldThrow()
     {
         var spec = new InstanceFilterSpecification("tag");
         var instances = CreateTestInstances().AsQueryable();
 
-        // Act
-        var result = spec.Apply(instances).ToList();
-
-        // Assert - Should return all instances when filter is invalid
-        Assert.Equal(3, result.Count);
+        // Assert - same reason as the key case above
+        Assert.Throws<ArgumentException>(() => spec.Apply(instances).ToList());
     }
 
     [Fact(Skip = "Key filter implementation incorrectly uses KeyValueRegex. FilterSpecification base class already parses the value.")]

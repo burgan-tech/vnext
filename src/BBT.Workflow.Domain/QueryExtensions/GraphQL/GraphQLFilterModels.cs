@@ -46,6 +46,11 @@ public sealed class GraphQLFilterRequest
 /// <summary>
 /// Single sort field with direction for orderBy
 /// </summary>
+/// <remarks>
+/// Unmapped members are rejected so that a misspelled property (e.g. <c>fld</c> instead of
+/// <c>field</c>) fails validation instead of being silently dropped into an unsorted query.
+/// </remarks>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class OrderByField
 {
     /// <summary>
@@ -65,6 +70,11 @@ public sealed class OrderByField
 /// OrderBy request: single field or multiple fields.
 /// Supports {"field":"createdAt","direction":"desc"} or {"fields":[{"field":"status","direction":"asc"},...]}.
 /// </summary>
+/// <remarks>
+/// Unmapped members are rejected so that a misspelled property fails validation instead of
+/// silently degrading into the default <c>CreatedAt DESC</c> ordering.
+/// </remarks>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class OrderByRequest
 {
     /// <summary>
@@ -144,6 +154,17 @@ public class GraphQLFilterNode
     public Dictionary<string, FieldCondition>? Attributes { get; set; }
 
     /// <summary>
+    /// Node-level property names the parser did not recognize and therefore dropped.
+    /// </summary>
+    /// <remarks>
+    /// Populated by <see cref="GraphQLFilterNodeConverter"/> so that
+    /// <c>InstanceQueryValidator</c> can reject the request instead of executing a query that
+    /// silently ignores part of the caller's intent. Never serialized.
+    /// </remarks>
+    [JsonIgnore]
+    public List<string>? UnrecognizedProperties { get; set; }
+
+    /// <summary>
     /// Determines the type of this filter node
     /// </summary>
     public FilterNodeType NodeType
@@ -174,6 +195,65 @@ public enum FilterNodeType
     Not,
     /// <summary>Field condition (leaf node)</summary>
     Condition
+}
+
+/// <summary>
+/// An operator name the filter parser did not recognize, captured so it can be reported rather
+/// than silently dropped.
+/// </summary>
+/// <param name="Name">The operator name as authored, lower-cased.</param>
+/// <param name="ValueKind">
+/// The JSON value kind that followed it. <see cref="JsonValueKind.Object"/> means the parser also
+/// treated it as a nested field path, which is a legitimate construct for unreserved names.
+/// </param>
+public readonly record struct UnrecognizedOperator(string Name, JsonValueKind ValueKind);
+
+/// <summary>
+/// The canonical set of filter operator names the runtime can execute, and the misspellings it
+/// knows how to correct.
+/// </summary>
+/// <remarks>
+/// This is the single source of truth shared by the validator and the error messages. It must stay
+/// in sync with the operator switch in <see cref="GraphQLFilterNodeConverter"/>; a parity test
+/// pins the invariant.
+/// </remarks>
+public static class FilterOperators
+{
+    /// <summary>Operator names accepted on the wire, lower-cased for ordinal-ignore-case lookup.</summary>
+    public static readonly IReadOnlySet<string> Supported = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "eq", "ne", "gt", "ge", "lt", "le", "between", "like", "match",
+        "startswith", "endswith", "in", "nin", "isNull", "includes"
+    };
+
+    /// <summary>
+    /// Common misspellings mapped to the operator the caller almost certainly meant.
+    /// </summary>
+    /// <remarks>
+    /// <c>gte</c>/<c>lte</c>/<c>neq</c>/<c>contains</c> are the schema-authoring spellings used by
+    /// <c>SchemaFilterContext.InternalToSchemaOperatorMap</c> for <c>x-filterOperators</c>. They are
+    /// deliberately <em>not</em> accepted as wire aliases: <c>contains</c> is ambiguous (both
+    /// <c>like</c> and <c>match</c> map to it), so aliasing would have to silently guess.
+    /// </remarks>
+    public static readonly IReadOnlyDictionary<string, string> Suggestions =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["gte"] = "ge",
+            ["lte"] = "le",
+            ["neq"] = "ne",
+            ["notequals"] = "ne",
+            ["equals"] = "eq",
+            ["contains"] = "like",
+            ["notin"] = "nin",
+            ["null"] = "isNull"
+        };
+
+    /// <summary>Supported operator names as a stable, comma-separated list for error messages.</summary>
+    public static string SupportedList { get; } = string.Join(", ", Supported.OrderBy(o => o, StringComparer.Ordinal));
+
+    /// <summary>Returns the suggested replacement for <paramref name="operatorName"/>, or null.</summary>
+    public static string? Suggest(string? operatorName) =>
+        !string.IsNullOrWhiteSpace(operatorName) && Suggestions.TryGetValue(operatorName, out var hint) ? hint : null;
 }
 
 /// <summary>
@@ -253,6 +333,17 @@ public class FieldCondition
     public Dictionary<string, object>? NestedConditions { get; set; }
 
     /// <summary>
+    /// Operator names the parser did not recognize and therefore dropped.
+    /// </summary>
+    /// <remarks>
+    /// Populated by <see cref="GraphQLFilterNodeConverter"/>. Without this, an unsupported
+    /// operator such as <c>gte</c> would leave the condition with zero operators, the WHERE
+    /// clause would compile to nothing, and the query would return every row. Never serialized.
+    /// </remarks>
+    [JsonIgnore]
+    public List<UnrecognizedOperator>? UnrecognizedOperators { get; set; }
+
+    /// <summary>
     /// Gets the operator type and value from this condition
     /// </summary>
     public IEnumerable<(string Operator, object? Value)> GetOperators()
@@ -279,6 +370,11 @@ public class FieldCondition
 /// <summary>
 /// GroupBy request configuration
 /// </summary>
+/// <remarks>
+/// Unmapped members are rejected so that a misspelled property (e.g. <c>fieldz</c>) fails
+/// validation instead of silently degrading the request into an ungrouped query.
+/// </remarks>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class GroupByRequest
 {
     /// <summary>
@@ -318,6 +414,12 @@ public sealed class GroupByRequest
 /// <summary>
 /// Aggregation functions request
 /// </summary>
+/// <remarks>
+/// Unmapped members are rejected so that an unsupported aggregation function (e.g.
+/// <c>median</c>) fails validation instead of deserializing to an empty request and silently
+/// degrading into a plain, unaggregated list.
+/// </remarks>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class AggregationRequest
 {
     /// <summary>
@@ -353,6 +455,7 @@ public sealed class AggregationRequest
     /// <summary>
     /// Checks if any aggregation is requested
     /// </summary>
+    [JsonIgnore]
     public bool HasAggregations => Count != null || Sum != null || Avg != null || Min != null || Max != null;
 }
 

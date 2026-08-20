@@ -666,44 +666,27 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
-        // Apply PostgreSQL native JSON filters if provided
+        // Apply PostgreSQL native JSON filters if provided.
+        //
+        // There is deliberately no fallback here. This method used to catch ArgumentException /
+        // FormatException / DbUpdateException and retry through InstanceFilterSpecification, which
+        // resolved an unparseable filter to Expression.Constant(true) — i.e. WHERE true. A caller
+        // who asked to narrow a query silently received every row with HTTP 200. Callers validate
+        // via InstanceQueryValidator before reaching here, so a throw at this point is a genuine
+        // defect and must surface.
         if (!string.IsNullOrWhiteSpace(filter))
         {
-            try
-            {
-                var filteredInstances = (await GetDbSetAsync())
-                    .ApplyFilters(
-                        filter,
-                        jsonColumnName: "Data",
-                        tableName: "InstancesData",
-                        schema: currentSchema.Name ?? DefaultSchemaName,
-                        schemaValidator: schemaValidator,
-                        schemaContext: schemaContext
-                    );
+            var filteredInstances = (await GetDbSetAsync())
+                .ApplyFilters(
+                    filter,
+                    jsonColumnName: "Data",
+                    tableName: "InstancesData",
+                    schema: currentSchema.Name ?? DefaultSchemaName,
+                    schemaValidator: schemaValidator,
+                    schemaContext: schemaContext
+                );
 
-                return IncludeListData(filteredInstances);
-            }
-            catch (ArgumentException)
-            {
-                var dbSet = await GetDbSetAsync();
-                var query = IncludeListData(dbSet);
-                var filterSpec = new InstanceFilterSpecification(filter);
-                return filterSpec.Apply(query);
-            }
-            catch (FormatException)
-            {
-                var dbSet = await GetDbSetAsync();
-                var query = IncludeListData(dbSet);
-                var filterSpec = new InstanceFilterSpecification(filter);
-                return filterSpec.Apply(query);
-            }
-            catch (Microsoft.EntityFrameworkCore.DbUpdateException)
-            {
-                var dbSet = await GetDbSetAsync();
-                var query = IncludeListData(dbSet);
-                var filterSpec = new InstanceFilterSpecification(filter);
-                return filterSpec.Apply(query);
-            }
+            return IncludeListData(filteredInstances);
         }
 
         var standardDbSet = await GetDbSetAsync();

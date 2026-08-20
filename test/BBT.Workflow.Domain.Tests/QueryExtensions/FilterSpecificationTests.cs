@@ -103,32 +103,38 @@ public class FilterSpecificationTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void FilterSpecification_ShouldHandleInvalidFilter()
+    public void FilterSpecification_ShouldThrow_WhenFilterIsInvalid()
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
         var spec = new FilterSpecification<TestEntity>("InvalidFormat", filterMappings);
 
-        // Act
-        var expression = spec.ToExpression();
-        var entities = CreateTestEntities().AsQueryable().Where(expression).ToList();
-
-        // Assert - should return all entities when filter is invalid
-        Assert.Equal(3, entities.Count);
+        // Act + Assert — an unparseable filter must not resolve to `x => true`. Returning every
+        // entity would silently widen a query the caller wrote to narrow it.
+        Assert.Throws<ArgumentException>(() => spec.ToExpression());
     }
 
     [Fact]
-    public void FilterSpecification_ShouldIgnoreUnmappedProperty()
+    public void FilterSpecification_ShouldThrow_WhenPropertyIsUnmapped()
     {
         // Arrange
         var filterMappings = CreateFilterMappings();
         var spec = new FilterSpecification<TestEntity>("UnmappedProperty=value", filterMappings);
 
-        // Act
-        var expression = spec.ToExpression();
-        var entities = CreateTestEntities().AsQueryable().Where(expression).ToList();
+        // Act + Assert — same reason: a filter that matches no mapping applies no restriction.
+        Assert.Throws<ArgumentException>(() => spec.ToExpression());
+    }
 
-        // Assert - should return all entities when property is not mapped
+    [Fact]
+    public void FilterSpecification_ShouldMatchEverything_WhenFilterIsAbsent()
+    {
+        // Arrange — no filter legitimately means no restriction, which stays allowed.
+        var spec = new FilterSpecification<TestEntity>(null, CreateFilterMappings());
+
+        // Act
+        var entities = CreateTestEntities().AsQueryable().Where(spec.ToExpression()).ToList();
+
+        // Assert
         Assert.Equal(3, entities.Count);
     }
 

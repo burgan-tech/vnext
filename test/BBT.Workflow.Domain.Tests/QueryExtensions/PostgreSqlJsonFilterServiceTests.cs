@@ -212,13 +212,10 @@ public class PostgreSqlJsonFilterServiceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var filters = new[] { "invalid-format" };
 
-        // Act
-        var (sql, parameters) = PostgreSqlJsonFilterService.BuildFilteredQuery<TestEntity>(
-            filters, "Json", "TestEntities");
-
-        // Assert - Should return empty results for invalid filters
-        Assert.Empty(sql);
-        Assert.Empty(parameters);
+        // Act + Assert - an unparseable filter must not be silently skipped. Doing so produced a
+        // query broader than the caller authored, with no signal anything was discarded.
+        Assert.Throws<ArgumentException>(() => PostgreSqlJsonFilterService.BuildFilteredQuery<TestEntity>(
+            filters, "Json", "TestEntities"));
     }
 
     [Fact]
