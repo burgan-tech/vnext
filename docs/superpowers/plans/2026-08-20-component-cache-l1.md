@@ -6,8 +6,13 @@
 > by the tests: L1 population must happen AFTER `HydrateReference` (L2 round-trips leave
 > private-setter reference properties null and `View.SemanticVersion` throws on serialization), and
 > `ComponentL1Cache` takes `TimeProvider` to convert absolute expirations to relative TTLs
-> (`MemoryCache` runs on its own clock). Task 7.2 (integration regression) and 7.3 (Helm envs)
-> remain open — infra was not running.
+> (`MemoryCache` runs on its own clock). Task 7.2 ran on 2026-08-20 against the local L1
+> runtime (4201): pipeline-critical suites (ChainBusy, ContractSigning, SubflowOrchestration) fully
+> green; all 31 failures in the full 107-test run attributed to non-L1 causes (RoleMatrixLab expects
+> the unmerged caller-role-provider branch; MoneyTransfer broken by #881's documented breaking
+> change; FuturePay by a MockLab template error; AccountOpening by a fixture script reading a
+> `user-agent` header the SDK does not send; DataIntegrityLab stuck-Busy matches the known pending
+> concurrent-write work). Task 7.3 (Helm envs) remains open.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
