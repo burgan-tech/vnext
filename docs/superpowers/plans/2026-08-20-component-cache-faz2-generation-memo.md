@@ -7,8 +7,12 @@
 > no `AddApplicationModule`; all component GetStates in traces are on vnext-app), so
 > orchestration is the only activation point; the monitor host keeps the code default. Task 1
 > tests landed 5/5 green — they pin existing behavior, no production change was needed.
-> Task 3 (lab re-run with the memo active) requires an orchestration restart to pick up
-> appsettings.
+> Task 3 (lab re-run with the memo active) ran after the orchestration restart: lab 18/18
+> PASS with the memo on (publish-pod immediacy holds); Redis MONITOR measured the gradient
+> 22 gen reads/start (memo off) → 8 (memo on, ≥5 s idle: one per unique component) → **0**
+> (within the window / continuous traffic). Cold restart first-touch: one gen + one body read
+> per unique component (one-time L1 fill). Remaining open: 5.3 preprod load-test comparison
+> and the release-engineering sign-off of the 5 s window.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
