@@ -78,6 +78,10 @@ public abstract class ScriptBase
 
         try
         {
+            var cache = Services.SecretCache;
+            if (cache != null)
+                return await cache.GetSecretAsync(storeName, secretStore, secretKey);
+
             var secretsResponse = await Services.DaprClient.GetSecretAsync(storeName, secretStore);
 
             if (secretsResponse == null)
@@ -120,6 +124,10 @@ public abstract class ScriptBase
 
         if (string.IsNullOrWhiteSpace(secretStore))
             throw new ArgumentException("Store name cannot be null or empty", nameof(secretStore));
+
+        var cache = Services.SecretCache;
+        if (cache != null)
+            return await cache.GetSecretsAsync(storeName, secretStore);
 
         var secretsResponse = await Services.DaprClient.GetSecretAsync(storeName, secretStore);
         return secretsResponse ?? new Dictionary<string, string>();

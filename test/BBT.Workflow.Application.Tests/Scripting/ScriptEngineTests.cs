@@ -19,6 +19,9 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 {
     private readonly IScriptEngine _scriptEngine;
 
+    // Field (not a local in AddApplication) so tests can verify vault call counts.
+    private readonly Mock<DaprClient> _mockDaprClient = new();
+
     public ScriptEngineTests()
     {
         _scriptEngine = GetRequiredService<IScriptEngine>();
@@ -26,19 +29,16 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 
     protected override void AddApplication(IServiceCollection services)
     {
-        // Mock DaprClient for testing
-        var mockDaprClient = new Mock<DaprClient>();
-        
         // Setup GetSecretAsync to return a mock secret value
-        mockDaprClient
+        _mockDaprClient
             .Setup(x => x.GetSecretAsync(
-                It.IsAny<string>(), 
-                It.IsAny<string>(), 
-                It.IsAny<IReadOnlyDictionary<string, string>>(), 
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, string> { { "test_key", "mock_secret_value" } });
 
-        services.AddSingleton(mockDaprClient.Object);
+        services.AddSingleton(_mockDaprClient.Object);
         
         // Mock Logger for IScriptServices
         var mockLogger = new Mock<ILogger<ScriptServices>>();
@@ -206,21 +206,30 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 
         // Act
         var instance = await _scriptEngine.CompileToInstanceAsync<IMapping>(code, references, usings);
-        
+
         var httpTask = WorkflowTaskFactory.CreateHttpTask();
-        var response = await instance.InputHandler(
-            task: httpTask,
-            context: new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
-                .SetWorkflow(WorkflowFactory.CreateDefault())
-                .SetInstance(InstanceFactory.CreateDefault())
-                .SetTransition(TransitionFactory.CreateDefault())
-                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
-                .SetDefinitions(new Dictionary<string, object>())
-                .Build());
+        var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetWorkflow(WorkflowFactory.CreateDefault())
+            .SetInstance(InstanceFactory.CreateDefault())
+            .SetTransition(TransitionFactory.CreateDefault())
+            .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+            .SetDefinitions(new Dictionary<string, object>())
+            .Build();
+        var response = await instance.InputHandler(task: httpTask, context: context);
+        var secondResponse = await instance.InputHandler(task: httpTask, context: context);
 
         // Assert
         Assert.NotNull(response);
         Assert.Equal("Got secret: mock_secret_value", response.Data);
+        Assert.Equal("Got secret: mock_secret_value", secondResponse.Data);
+
+        // The singleton ScriptSecretCache sits between ScriptBase and DaprClient: two GetSecret
+        // calls for the same bundle must produce exactly one vault round-trip.
+        _mockDaprClient.Verify(x => x.GetSecretAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<IReadOnlyDictionary<string, string>>(),
+            It.IsAny<CancellationToken>()), Times.Once());
     }
 
     [Fact]
