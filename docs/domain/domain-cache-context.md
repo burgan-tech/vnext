@@ -6,8 +6,10 @@
 keeps workflow, task, schema, function, view, and extension definitions available through
 Redis-first cache sets while preserving a database fallback through runtime backends.
 
-The intent is fast, cluster-wide definition reads without placing an in-memory snapshot
-inside each pod.
+The intent is fast, cluster-wide definition reads. Correctness lives in the shared (L2)
+distributed cache and its generation-token key scheme; an in-process (L1) envelope cache
+sits in front of it purely to remove Dapr/Redis round-trips, and inherits the same
+invalidation because it uses the same keys.
 
 ## Boundaries
 
@@ -17,6 +19,8 @@ inside each pod.
 | `DomainCacheContext` | Creates the six typed `CacheSet<T>` instances and resolves `Set<T>()`. |
 | `ICacheSet<T>` | Provides version-aware get, set, and invalidate operations. |
 | `CacheSet<T>` | Implements Redis-first reads, cache population, key strategy, and DB fallback. |
+| `IComponentL1Cache` / `ComponentL1Cache` | In-process bytes-mode envelope cache in front of the distributed store; keyed by the L2 keys. |
+| `IComponentGenerationProvider` | Redis-backed per-component generation token; a publish bump invalidates every cached version resolution at once. |
 | `ICacheBackend<T>` | Loads definitions from runtime storage when Redis misses. |
 | `RuntimeCacheBackend<T>` | Bridges cache misses to `IRuntimeService`. |
 | `IComponentCacheStore` | Higher-level component lookup API used by application/domain services. |
@@ -43,16 +47,24 @@ Read path:
 
 1. Caller asks `IComponentCacheStore` for a workflow, task, schema, function, view, or extension.
 2. Store delegates to the matching typed set on `IDomainCacheContext`.
-3. `CacheSet<T>` selects latest, full-version, or artifact-version lookup.
-4. Redis is checked first.
-5. On miss, backend loads from runtime storage.
-6. Loaded definitions are written back to Redis for future reads.
+3. `CacheSet<T>` classifies the request: a full version reads the immutable body key directly;
+   any range request (`latest`, `1`, `1.2`) first fetches the component's generation token and
+   builds a generation-scoped resolution key.
+4. The in-process L1 cache is checked for that key; a hit returns without touching Dapr/Redis.
+   For resolution keys the answer is exactly as fresh as L2 because the generation token — read
+   from L2 on every call — is part of the key.
+5. On L1 miss, Redis is checked; on Redis miss, the backend loads all published versions and
+   resolves the best match (concurrent misses for the same key share one load).
+6. Loaded definitions are written back to Redis and L1 for future reads.
 
 Write path:
 
 1. Definition publishing/cast handlers call `SetAsync`.
-2. `CacheSet<T>` writes a full-version key, latest key, and artifact-version key.
-3. Other pods can read the new definition from the shared distributed cache.
+2. `CacheSet<T>` writes the immutable full-version body, bumps the component's generation token
+   (making every cached resolution unreachable cluster-wide), and re-warms the common request
+   spellings under the new generation.
+3. Other pods can read the new definition from the shared distributed cache immediately; their
+   L1 entries under the old generation stop being reachable the moment they fetch the new token.
 
 ## Contracts
 
@@ -64,14 +76,19 @@ Write path:
 | `Function` | `Functions` |
 | `View` | `Views` |
 | `Extension` | `Extensions` |
+| `Mapping` | `Mappings` |
 
 Key strategy:
 
 | Key | Shape | Notes |
 | --- | --- | --- |
-| Latest | `{component}:{domain}:{key}:latest` | No TTL; overwritten on publish. |
-| Artifact | `{component}:{domain}:{key}:artifact:{artifactVersion}` | No TTL; maps artifact version to best package version. |
-| Full | `{component}:{domain}:{key}:full:{fullVersion}` | Short TTL; used for exact full-version reads. |
+| Full | `{component}:{domain}:{key}:full:{canonicalFullVersion}` | Immutable body; TTL is a memory bound only. |
+| Resolution | `{component}:{domain}:{key}:res:{generation}:{spelling}` | Answer to a version request (`latest`, `1`, `1.2`); invalidated wholesale by a generation bump. |
+| Generation | `{component}:{domain}:{key}:gen` | Small token; bumped on publish/invalidate. |
+
+The L1 cache stores serialized envelopes under these same keys (`ComponentCache:L1Enabled`,
+default on; `ComponentCache:L1SizeLimitMb`, default 64). Bytes are deserialized per read, so
+every hit returns a fresh instance, and negative answers are never stored in L1.
 
 Version resolution:
 
@@ -91,16 +108,19 @@ Version resolution:
 ## Observability
 
 `CacheActivityHelper` creates `BBT.Workflow.Cache` activities for get, set, remove,
-warmup, and version-index operations. Activities include cache key, component type,
-cache store, hit/miss, item count, and error status. The metrics-aware store records
+warmup, and generation operations. Activities include cache key, component type,
+cache store, hit/miss, `cache.l1.hit` (whether the in-process layer answered),
+generation token, coalescing, item count, and error status. The metrics-aware store records
 cache hit/miss counts and approximate cache size/entry gauges by component type.
 
 ## Change Safety
 
 - Add a new definition component by extending `IDomainCacheContext`, `DomainCacheContext`,
   DI backend registration, component cast handlers, validators, and `IComponentCacheStore`.
-- Keep cache keys stable; changing key shape invalidates existing Redis entries.
-- Do not introduce per-pod in-memory state unless invalidation is designed first.
+- Keep cache keys stable; changing key shape invalidates existing Redis entries and breaks the
+  L1 layer's freshness argument, which depends on resolution keys embedding the generation.
+- Per-pod in-memory state is allowed only behind `IComponentL1Cache`, where invalidation is
+  carried by the key scheme. Do not add other in-memory definition state.
 - Keep cache miss fallback read-only. Publishing remains the write path that populates cache.
 - Do not use `DomainCacheContext` for instance data; instance state belongs to repositories
   and `InstanceData` versioning.
@@ -111,6 +131,9 @@ cache hit/miss counts and approximate cache size/entry gauges by component type.
 - `src/BBT.Workflow.Application/Caching/IDomainCacheContext.cs`
 - `src/BBT.Workflow.Application/Caching/CacheSet.cs`
 - `src/BBT.Workflow.Application/Caching/ICacheSet.cs`
+- `src/BBT.Workflow.Application/Caching/ComponentL1Cache.cs`
+- `src/BBT.Workflow.Application/Caching/ComponentGenerationProvider.cs`
+- `src/BBT.Workflow.Application/Caching/ComponentCacheOptions.cs`
 - `src/BBT.Workflow.Application/Caching/RuntimeCacheBackend.cs`
 - `src/BBT.Workflow.Application/Caching/ComponentCacheStore.cs`
 - `src/BBT.Workflow.Application/Caching/MetricsAwareComponentCacheStore.cs`
