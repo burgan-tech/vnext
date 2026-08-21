@@ -114,8 +114,16 @@ public sealed class FanOutTask : WorkflowTask
     public string ResultKey { get; private set; } = DefaultResultKey;
 
     /// <summary>
-    /// When true (default) the result list preserves item index order.
+    /// Accepted for forward compatibility with a future durable mode; currently a no-op.
     /// </summary>
+    /// <remarks>
+    /// In inline mode (Phase 1, the only mode this executor runs) results are ALWAYS returned
+    /// sorted by item index, regardless of this value — <c>FanOutTaskExecutor.RunBatchAsync</c>
+    /// never reads it. The field exists so a later durable mode, which may stream results in
+    /// completion order, is not a breaking schema change. Do not "fix" the executor to honor this
+    /// flag for inline mode — that was never the intent; see
+    /// <c>docs/domain/fan-out-task.md</c> § Author-beware.
+    /// </remarks>
     public bool Ordered { get; private set; } = true;
 
     /// <summary>

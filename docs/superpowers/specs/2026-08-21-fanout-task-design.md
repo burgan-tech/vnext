@@ -342,3 +342,16 @@ Detaylar `docs/superpowers/plans/2026-08-21-fanout-task.md` başındaki "Spec Am
 4. `TaskExecutorContext`'e `Origin` (TaskExecutionOrigin) eklenir — item'lar parent origin'ini miras alır.
 5. Mapping yokken default input binding: item değeri branch context'e `SetBody(item.Value)` ile
    verilir; task config mutasyonu gerektiren inner türler `ItemInputHandler` yazmalıdır.
+6. `OutputHandler` opsiyonel hale geldi: spec (§5, satır 162) `Task<ScriptResponse> OutputHandler(...)`
+   imzasını zorunlu ve non-nullable olarak tasarlamıştı. İmplementasyonda `Task<ScriptResponse?>
+   OutputHandler(ScriptContext context, FanOutResult result) => Task.FromResult<ScriptResponse?>(null);`
+   olarak, `null` döndüren bir default gövdeyle opsiyonel şekilde sevk edildi (commit `4bd8941b`).
+   Executor, `null` yanıtını "override edilmedi" sinyali sayıp default paketlemeye düşer — bu da
+   yalnızca `ItemInputHandler` yazan bir mapping'in default output'u byte-for-byte script'te yeniden
+   üretmek zorunda kalmasını önler.
+7. `join.ordered` fonksiyonel değil, kabul edilen bir no-op olarak sevk edildi: spec (§3 satır 74,
+   §4 satır 127/169, §14 satır 328) `ordered`'ı sonuç sıralamasını kontrol eden ve büyük batch
+   ölçeğinde bir maliyeti olan bir davranış olarak tartışıyordu. Gerçekte inline modda sonuçlar HER
+   ZAMAN item-index sırasına göre döner (`FanOutTaskExecutor.RunBatchAsync`); `Ordered` alanı
+   executor tarafından hiç okunmaz. Alan, ileride sonuçları tamamlanma sırasında akıtabilecek bir
+   durable moda ileriye dönük şema uyumluluğu için kalır — bugün gözlemlenebilir hiçbir etkisi yok.

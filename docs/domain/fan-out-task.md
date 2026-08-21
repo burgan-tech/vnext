@@ -76,7 +76,7 @@ FanOut only when the item count comes from data, not from the workflow definitio
 |---|---|---|
 | `mode` | `"inline"` | Only `"inline"` is accepted in this phase. Any other value fails task parsing with `ArgumentException` ("not supported yet"). Present now so a future `"durable"` mode is not a breaking schema change. |
 | `itemsPath` | none | A `"$."`-rooted **dot-path subset** of JSONPath into instance data (property navigation only — no filters, wildcards, indices or slices; see `FanOutItemsResolver`). Must start with `"$."` or parsing fails. Mutually exclusive with the mapping's `ItemSelector` — configuring both, or neither, is a runtime execution error (checked by the executor, not the JSON-schema validator; see [§ Validation](#validation)). A missing path (or any intermediate segment absent) resolves to an empty batch, not an error; a path that resolves to a non-array value throws. |
-| `itemAlias` | none | Accepted and stored on the task (round-trips through `Clone`/`Reset`), documented as "used in default input binding and log readability" — **but the current executor does not read it anywhere.** The default binding (below) sets the branch context's raw `Body` regardless of this value, and no log statement includes it. Treat it as reserved/aspirational until the executor is updated; do not rely on it to shape the default binding or logs today. |
+| `itemAlias` | none | A readability label for one item (e.g. `"document"`, `"payment"`). Surfaced as a structured field on the `FanOutBatchStarted` log line and as the `vnext.fanout.item.alias` tag on every item span; when unset, the executor substitutes the neutral label `"item"` for reporting purposes. It plays **no role in input binding** — the default binding (below) sets the branch context's raw `Body` regardless of this value. |
 | `task` | required | Reference to the inner task: `key`, `domain`, `flow`, `version` — all four required. Resolved once per batch via the component cache/task factory and cloned per item (not re-resolved per item). If the referenced task's type is `21` (FanOut itself), the executor rejects the batch before running anything — see [§ Nested fan-out](#author-beware). |
 | `execution.maxDegreeOfParallelism` | `4` | Batch-local concurrency cap (`SemaphoreSlim`). Must be `>= 1`. Deliberately low by default: an unbounded fan-out DDoSes whatever the inner task calls. |
 | `execution.itemTimeoutSeconds` | `30` | Per-item deadline. Must be `>= 1` and `<= batchTimeoutSeconds`. |
@@ -378,7 +378,8 @@ round trip's latency on every single item.
 ## Observability
 
 - **Logs** (`WorkflowLogs.cs`, EventId block 101xx): `FanOutBatchStarted` (Information — task key,
-  item count, `maxDegreeOfParallelism`, join policy, instance id), `FanOutItemFailed` (Warning,
+  item count, `itemAlias` (or the neutral substitute `"item"` when unset), `maxDegreeOfParallelism`,
+  join policy, instance id), `FanOutItemFailed` (Warning,
   one per failed item — item key, index, error code; a failed item is a recoverable outcome the
   join policy decides on, so it is not `Error`), `FanOutBatchCompleted` (Information — total /
   succeeded / failed / duration), `FanOutBatchTimedOut` (Warning — how many items had settled
@@ -400,11 +401,12 @@ round trip's latency on every single item.
   through a metric you can graph continuously.
 - **Spans** (`ActivitySource("BBT.Workflow.Tasks")`, only emitted when verbose tracing is on —
   `AetherTracingRuntime.IsVerbose`): each item gets its own `FanOut.Item` child span, opened
-  **before** it waits for either concurrency gate, tagged `vnext.fanout.item.key` and
-  `vnext.fanout.item.index` immediately, and `vnext.fanout.item.queue_wait_ms` once its slots are
-  acquired — so the trace distinguishes "queued behind the bulkhead" from "the item itself is
-  slow". The span's display name is rewritten to `FanOut.Item[{index}] {itemKey}` after the
-  inner engine call renames `Activity.Current` in place, so N sibling items do not all end up
+  **before** it waits for either concurrency gate, tagged `vnext.fanout.item.key`,
+  `vnext.fanout.item.index` and `vnext.fanout.item.alias` (the configured `itemAlias`, or the
+  neutral substitute `"item"` when unset) immediately, and `vnext.fanout.item.queue_wait_ms` once
+  its slots are acquired — so the trace distinguishes "queued behind the bulkhead" from "the item
+  itself is slow". The span's display name is rewritten to `FanOut.Item[{index}] {itemKey}` after
+  the inner engine call renames `Activity.Current` in place, so N sibling items do not all end up
   showing the same generic task name in the trace.
 - **Straggler detection**: there is no built-in metric that computes it, but the pattern the
   design intends is `max(item duration) / p50(item duration)` read off the per-item spans under
@@ -447,9 +449,11 @@ Split across two layers:
 - **`mode: "durable"` is reserved and rejected.** Only `"inline"` parses today; the field exists
   in the schema now specifically so introducing durable mode later is not a breaking schema
   change.
-- **`itemAlias` currently does nothing at runtime.** It is parsed, stored, cloned and reset like
-  any other config field, but the executor's default input binding and its log statements do not
-  read it. Do not rely on it to change either.
+- **`itemAlias` is a reporting label only — it never touches input binding.** It is a structured
+  field on the `FanOutBatchStarted` log line and the `vnext.fanout.item.alias` span tag on every
+  item, but the default input binding always sets the branch context's raw `Body` from
+  `item.Value` regardless of this value. Renaming it can change what an operator reads; it can
+  never change what the inner task's script receives.
 
 ## Key implementation files
 
