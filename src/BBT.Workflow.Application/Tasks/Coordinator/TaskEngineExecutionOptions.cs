@@ -35,6 +35,15 @@ public sealed record TaskEngineExecutionOptions
     /// Pre-built task instance to execute; bypasses the task factory load.
     /// Used when the caller already cloned and bound the task (FanOut binds the inner task per item).
     /// </summary>
+    /// <remarks>
+    /// IMPORTANT — retry lifetime. The engine's error-aware retry loop re-invokes the core execution
+    /// once per attempt. On the factory path that yields a FRESH task instance per attempt; with a
+    /// prepared task the very SAME instance is re-executed on every attempt, so any mutation an
+    /// executor or mapping applies to it is carried into the next attempt. Callers must ensure the
+    /// instance they supply is safe to re-execute — either free of execution-time mutation, or
+    /// bound such that re-running it reproduces the same input (the FanOut item semantics: a retry
+    /// of the same item with the same input).
+    /// </remarks>
     public WorkflowTask? PreparedTask { get; init; }
 
     /// <summary>

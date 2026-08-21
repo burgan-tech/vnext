@@ -161,7 +161,7 @@ public sealed class CacheAsideTaskExecutorTests
                 .SetInstance(instance)
                 .Build();
             var onExecute = OnExecuteTask.Create(1, _task, ScriptCode.FromNative(string.Empty));
-            var context = new TaskExecutorContext(_task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
+            var context = new TaskExecutorContext(_task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
             return Executor.ExecuteAsync(context, CancellationToken.None);
         }
     }

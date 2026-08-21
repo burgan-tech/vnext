@@ -359,6 +359,10 @@ public sealed class TaskExecutionEngineTests
     /// The executor sees the real origin. Before Origin was threaded onto TaskExecutorContext the
     /// executor had no way to tell a Flow execution from an Extension/Function one.
     /// </summary>
+    /// <remarks>
+    /// Deliberately asserts a NON-Flow origin. Flow is what an un-passed Origin would fall back to,
+    /// so a Flow-based assertion would stay green even if the engine stopped forwarding the value.
+    /// </remarks>
     [Fact]
     public async Task ExecuteAsync_Should_Pass_Origin_To_ExecutorContext()
     {
@@ -367,12 +371,68 @@ public sealed class TaskExecutionEngineTests
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
 
         await CreateEngine().ExecuteAsync(
-            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            onExecute, null, TaskTrigger.Extension, TaskExecutionOrigin.Extension,
             CreateScriptContext(), CancellationToken.None);
 
         await executor.Received(1).ExecuteAsync(
-            Arg.Is<TaskExecutorContext>(c => c.Origin == TaskExecutionOrigin.Flow),
+            Arg.Is<TaskExecutorContext>(c => c.Origin == TaskExecutionOrigin.Extension),
             Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Pins the PreparedTask retry lifetime documented on
+    /// <see cref="TaskEngineExecutionOptions.PreparedTask"/>: the retry loop re-executes the very
+    /// same instance on every attempt (the factory path would hand out a fresh one per attempt),
+    /// and the factory stays out of the picture entirely across all attempts.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WithPreparedTask_Should_Reuse_Same_Instance_Across_Retries()
+    {
+        var definitionTask = WorkflowTaskFactory.CreateHttpTask("fan-out-docs");
+        var prepared = WorkflowTaskFactory.CreateHttpTask("inner-http-task");
+
+        var seenTasks = new List<WorkflowTask>();
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                seenTasks.Add(callInfo.Arg<TaskExecutorContext>().Task);
+                return Result<StandardTaskResponse>.Fail(new Error("500", "transient boom"));
+            });
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
+
+        // Wildcard Retry rule with a zero delay: exactly one retry, so two attempts in total.
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Retry,
+            ErrorCodes = ["*"],
+            Priority = 1,
+            RetryPolicy = new RetryPolicy
+            {
+                MaxRetries = 1,
+                UseJitter = false,
+                InitialDelay = TimeSpan.Zero
+            }
+        });
+
+        var onExecute = OnExecuteTask.Create(1, definitionTask, ScriptCode.FromNative(string.Empty), errorBoundary);
+        var options = new TaskEngineExecutionOptions
+        {
+            PreparedTask = prepared,
+            JournalTaskKey = "fan-out-docs#0",
+            SuppressDataApply = true
+        };
+
+        await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        seenTasks.Count.ShouldBe(2, "the wildcard Retry rule should produce one retry (two attempts)");
+        seenTasks.ShouldAllBe(t => ReferenceEquals(t, prepared));
+        await _taskFactory.DidNotReceiveWithAnyArgs().CreateExecutionTaskAsync(default!, default);
     }
 
     /// <summary>

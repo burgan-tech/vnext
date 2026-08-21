@@ -19,7 +19,7 @@ public sealed record TaskExecutorContext(
     ScriptContext ScriptContext,
     Guid? InstanceTransitionId,
     TaskTrigger TaskTrigger,
-    TaskExecutionOrigin Origin = TaskExecutionOrigin.Flow)
+    TaskExecutionOrigin Origin)
 {
     /// <summary>
     /// Gets the task type from the workflow task.

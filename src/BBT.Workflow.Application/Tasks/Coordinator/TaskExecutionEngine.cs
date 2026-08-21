@@ -705,7 +705,9 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 var noBoundaryResult = TasksExecutionResult.SuccessWithFailedTasks(
                     [failureSummary], stopwatch.ElapsedMilliseconds);
                 if (options.CaptureResponse)
+                {
                     noBoundaryResult = noBoundaryResult with { Response = response };
+                }
 
                 return Result<TasksExecutionResult>.Ok(noBoundaryResult);
             }
@@ -738,7 +740,9 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         var executionResult = TasksExecutionResult.Success([summary], stopwatch.ElapsedMilliseconds);
         if (options.CaptureResponse)
+        {
             executionResult = executionResult with { Response = response };
+        }
 
         return Result<TasksExecutionResult>.Ok(executionResult);
     }

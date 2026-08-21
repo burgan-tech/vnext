@@ -32,7 +32,7 @@ public sealed class GetInstanceTaskExecutorTests
             .SetInstance(instance)
             .Build();
 
-        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
+        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
     }
 
     private static GetInstanceTaskExecutor CreateExecutor(

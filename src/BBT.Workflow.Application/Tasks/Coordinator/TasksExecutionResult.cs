@@ -63,8 +63,16 @@ public sealed record TasksExecutionResult
     /// <summary>
     /// The final StandardTaskResponse of the executed task. Populated only when the caller
     /// requested capture via <see cref="TaskEngineExecutionOptions.CaptureResponse"/>
-    /// (FanOut item collection). Null on infrastructure-error paths, where no response was produced.
+    /// (FanOut item collection).
     /// </summary>
+    /// <remarks>
+    /// Set only on results returned directly by the core execution: business success, and business
+    /// failure (both the no-boundary and the pre-resolution paths). It is null whenever no response
+    /// was produced (infrastructure errors — factory load, executor lookup, execution failure) AND
+    /// on boundary-handled failures, where the resolved action replaces the core result with a
+    /// freshly built one that does not carry the response forward. Callers must treat null as
+    /// expected rather than exceptional.
+    /// </remarks>
     public StandardTaskResponse? Response { get; init; }
 
     /// <summary>
