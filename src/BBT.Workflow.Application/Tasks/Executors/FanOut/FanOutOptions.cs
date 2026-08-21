@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace BBT.Workflow.Tasks.Executors.FanOut;
+namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Process-level fan-out settings. Bound from configuration section "Workflow:FanOut".

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Tasks.Executors.FanOut;
+using BBT.Workflow.Tasks.Executors;
 using Shouldly;
 using Xunit;
 

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Dynamic;
 using System.Linq;
 using System.Text.Json;
-using BBT.Workflow.Tasks.Executors.FanOut;
+using BBT.Workflow.Tasks.Executors;
 using Shouldly;
 using Xunit;
 

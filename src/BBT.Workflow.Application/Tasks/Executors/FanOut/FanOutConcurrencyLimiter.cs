@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 
-namespace BBT.Workflow.Tasks.Executors.FanOut;
+namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Process-wide bulkhead for fan-out item execution. Singleton: every fan-out batch in the

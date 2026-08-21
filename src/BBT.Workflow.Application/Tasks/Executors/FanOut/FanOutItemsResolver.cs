@@ -1,7 +1,7 @@
 using System.Text.Json;
 using BBT.Workflow.Scripting;
 
-namespace BBT.Workflow.Tasks.Executors.FanOut;
+namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Resolves a <c>FanOutTask</c>'s configured <c>itemsPath</c> against instance data into the

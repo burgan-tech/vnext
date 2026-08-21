@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Workflow.Tasks.Executors.FanOut;
+using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Options;
 using Shouldly;
 using Xunit;

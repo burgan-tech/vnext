@@ -1,7 +1,7 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
 
-namespace BBT.Workflow.Tasks.Executors.FanOut;
+namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>Join outcome of a fan-out batch: whether the batch as a whole succeeded.</summary>
 /// <param name="IsSuccess">Whether the join policy considers the batch successful.</param>

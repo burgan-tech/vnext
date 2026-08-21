@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
@@ -8,7 +7,7 @@ using BBT.Workflow.Tasks.Factory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace BBT.Workflow.Tasks.Executors.FanOut;
+namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Executor for FanOut tasks: resolves a collection at runtime and runs the referenced inner task
@@ -33,11 +32,6 @@ namespace BBT.Workflow.Tasks.Executors.FanOut;
 /// </remarks>
 public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
 {
-    private const string ItemTimeoutErrorCode = "FanOut:ItemTimeout";
-    private const string BatchTimeoutErrorCode = "FanOut:BatchTimeout";
-    private const string EarlyStopErrorCode = "FanOut:Cancelled";
-    private const string ItemFailedErrorCode = "FanOut:ItemFailed";
-
     private readonly IScriptEngine _scriptEngine;
     private readonly ITaskFactory _taskFactory;
     private readonly IServiceScopeFactory _serviceScopeFactory;
@@ -194,6 +188,15 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
+        // The selector runs BEFORE the itemsPath branch, unconditionally, and that costs a
+        // discarded script call on every itemsPath batch that also ships a mapping — the normal
+        // case. It is deliberate: IFanOutMapping.ItemSelector has a default implementation
+        // returning null, so there is no static way to ask whether the author overrode it, and
+        // "returned null" is the only signal that distinguishes "no selector" from "empty
+        // selection". The consequence to be aware of: on the ambiguous-config path below, the
+        // author's selector has already run, side effects included, before the error is returned.
+        // A selector is documented as a pure projection, so that is acceptable — but it is a
+        // trade-off, not an oversight.
         var selectorResult = mapping is null
             ? Result<IEnumerable<dynamic>?>.Ok(null)
             : await ResultExtensions.TryAsync<IEnumerable<dynamic>?>(
@@ -259,14 +262,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         IReadOnlyList<FanOutItem> items,
         CancellationToken cancellationToken)
     {
-        // Three distinct cancellation sources, kept separate on purpose so a settled item can say
-        // WHY it was cut short: the caller's token, the batch deadline, and the early-stop signal.
-        // Folding them into one CTS would make "the batch timed out" indistinguishable from
-        // "the join policy stopped early", and TimedOut would then lie.
-        using var batchTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(task.BatchTimeoutSeconds));
-        using var earlyStopCts = new CancellationTokenSource();
-        using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, batchTimeoutCts.Token, earlyStopCts.Token);
+        using var cancellation = FanOutBatchCancellation.Start(task, cancellationToken);
         using var degreeGate = new SemaphoreSlim(task.MaxDegreeOfParallelism, task.MaxDegreeOfParallelism);
 
         var settled = await Task.WhenAll(items.Select(item => ExecuteSingleItemAsync(
@@ -276,10 +272,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             context,
             item,
             degreeGate,
-            batchTimeoutCts,
-            earlyStopCts,
-            batchCts.Token,
-            cancellationToken)));
+            cancellation)));
 
         // Results are ALWAYS returned in item-index order. The task's 'ordered' flag is accepted
         // by the schema for forward compatibility with durable mode (which may stream results in
@@ -293,7 +286,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         // as timed out, and join policy 'all' would then fail a fully successful batch. An item
         // carries the batch-timeout code only if it was genuinely cut short by the deadline, so
         // early stop still yields false and a real timeout still yields true.
-        var timedOut = ordered.Any(result => result.ErrorCode == BatchTimeoutErrorCode);
+        var timedOut = ordered.Any(result => result.ErrorCode == FanOutErrorCodes.BatchTimeout);
 
         return (ordered, timedOut);
     }
@@ -311,39 +304,30 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         TaskExecutorContext context,
         FanOutItem item,
         SemaphoreSlim degreeGate,
-        CancellationTokenSource batchTimeoutCts,
-        CancellationTokenSource earlyStopCts,
-        CancellationToken batchToken,
-        CancellationToken callerToken)
+        FanOutBatchCancellation cancellation)
     {
         var stopwatch = Stopwatch.StartNew();
         var degreeSlotHeld = false;
         var globalSlotHeld = false;
-        CancellationTokenSource? itemDeadlineCts = null;
-        CancellationTokenSource? itemCts = null;
+        FanOutBatchCancellation.ItemWindow? window = null;
         FanOutItemResult settled;
 
         try
         {
             // Local gate first, then the global bulkhead: a batch can only ever hold
             // maxDegreeOfParallelism global slots, so one large batch cannot starve the process.
-            await degreeGate.WaitAsync(batchToken);
+            await degreeGate.WaitAsync(cancellation.Token);
             degreeSlotHeld = true;
-            await _concurrencyLimiter.WaitAsync(batchToken);
+            await _concurrencyLimiter.WaitAsync(cancellation.Token);
             globalSlotHeld = true;
 
-            // The per-item deadline starts when the item starts RUNNING, not when it was queued —
-            // otherwise a wide batch would time items out for waiting their turn. It lives in its
-            // OWN source rather than a CancelAfter on the linked one, for the same reason the
-            // batch deadline does: only then can the item say its own deadline is what stopped it,
-            // instead of inheriting the batch's or another item's explanation.
-            itemDeadlineCts = new CancellationTokenSource(TimeSpan.FromSeconds(task.ItemTimeoutSeconds));
-            itemCts = CancellationTokenSource.CreateLinkedTokenSource(batchToken, itemDeadlineCts.Token);
+            // Opened only now that the slots are held: the per-item deadline measures execution,
+            // not time spent queueing behind other items.
+            window = cancellation.OpenItemWindow();
 
-            var outcome = await RunItemAsync(task, template, mapping, context, item, itemCts.Token);
-            settled = outcome with { Duration = stopwatch.Elapsed };
+            settled = await RunItemAsync(task, template, mapping, context, item, window.Token, stopwatch);
         }
-        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellation.CallerCancelled)
         {
             // Tearing the transition down must propagate, not be reported as N failed items.
             // This clause exists because an exception filter only skips ITS OWN handler: without
@@ -354,19 +338,18 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         }
         catch (OperationCanceledException)
         {
-            var (code, message) = ClassifyCancellation(task, item, itemDeadlineCts, batchTimeoutCts, earlyStopCts);
+            var (code, message) = cancellation.Classify(item, window);
             settled = new FanOutItemResult(item.Index, item.ItemKey, false, null, code, message, stopwatch.Elapsed);
         }
         catch (Exception ex)
         {
             settled = new FanOutItemResult(
-                item.Index, item.ItemKey, false, null, ItemFailedErrorCode,
+                item.Index, item.ItemKey, false, null, FanOutErrorCodes.ItemFailed,
                 $"FanOut item {item.ItemKey} threw: {ScriptDiagnostics.Explain(ex)}", stopwatch.Elapsed);
         }
         finally
         {
-            itemCts?.Dispose();
-            itemDeadlineCts?.Dispose();
+            window?.Dispose();
             if (globalSlotHeld)
             {
                 _concurrencyLimiter.Release();
@@ -378,20 +361,25 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             }
         }
 
-        SignalEarlyStop(task.JoinPolicy, settled.IsSuccess, earlyStopCts);
+        cancellation.SignalEarlyStop(settled.IsSuccess);
         return settled;
     }
 
     /// <summary>
     /// Runs the inner task for one item on an isolated branch context and DI scope.
     /// </summary>
+    /// <remarks>
+    /// Takes the item's running stopwatch (<c>elapsed</c>) so it can stamp the duration itself and
+    /// return a COMPLETE result, instead of returning a half-built one for the caller to finish.
+    /// </remarks>
     private async Task<FanOutItemResult> RunItemAsync(
         FanOutTask task,
         WorkflowTask template,
         IFanOutMapping? mapping,
         TaskExecutorContext context,
         FanOutItem item,
-        CancellationToken itemToken)
+        CancellationToken itemToken,
+        Stopwatch elapsed)
     {
         // The branch is DISCARDED, never merged back. MergeParallelBranch would collide N item
         // responses on the single inner task key (MergeDictionary throws on a duplicate), and the
@@ -442,28 +430,30 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             options,
             itemToken);
 
-        return MapEngineOutcome(item, engineResult);
+        return MapEngineOutcome(item, engineResult, elapsed.Elapsed);
     }
 
     /// <summary>
-    /// Maps one engine outcome onto a <see cref="FanOutItemResult"/>. Duration is stamped by the
-    /// caller, which owns the item's stopwatch.
+    /// Maps one engine outcome onto a complete <see cref="FanOutItemResult"/>.
     /// </summary>
-    private static FanOutItemResult MapEngineOutcome(FanOutItem item, Result<TasksExecutionResult> engineResult)
+    private static FanOutItemResult MapEngineOutcome(
+        FanOutItem item,
+        Result<TasksExecutionResult> engineResult,
+        TimeSpan duration)
     {
         if (!engineResult.IsSuccess)
         {
             return new FanOutItemResult(
                 item.Index, item.ItemKey, false, null,
-                engineResult.Error.Code ?? ItemFailedErrorCode,
-                engineResult.Error.Message, TimeSpan.Zero);
+                engineResult.Error.Code ?? FanOutErrorCodes.ItemFailed,
+                engineResult.Error.Message, duration);
         }
 
         var execution = engineResult.Value!;
         if (execution.IsSuccess)
         {
             return new FanOutItemResult(
-                item.Index, item.ItemKey, true, execution.Response?.Data, null, null, TimeSpan.Zero);
+                item.Index, item.ItemKey, true, execution.Response?.Data, null, null, duration);
         }
 
         // A business failure keeps its payload: under allSettled — the expected common policy — the
@@ -471,75 +461,11 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         // do about it, and dropping it would leave them only a message.
         return new FanOutItemResult(
             item.Index, item.ItemKey, false, execution.Response?.Data,
-            execution.TaskError?.NormalizedError.Code ?? ItemFailedErrorCode,
+            execution.TaskError?.NormalizedError.Code ?? FanOutErrorCodes.ItemFailed,
             execution.TaskError?.ErrorMessage
             ?? execution.Response?.ErrorMessage
             ?? $"FanOut item {item.ItemKey} failed.",
-            TimeSpan.Zero);
-    }
-
-    /// <summary>
-    /// Names the reason an item's execution was cancelled, narrowest cause first.
-    /// </summary>
-    /// <remarks>
-    /// The item's own deadline wins: a slow item that blew its <c>itemTimeoutSeconds</c> at the
-    /// same moment a sibling triggered the join policy's early stop was stopped by its own
-    /// deadline, and reporting it as "cancelled by early stop" would hide the item that is
-    /// actually misbehaving. The batch deadline is checked before early stop for the same reason —
-    /// it cancels the early-stop-linked token too, so order is what keeps the two apart.
-    /// </remarks>
-    private static (string Code, string Message) ClassifyCancellation(
-        FanOutTask task,
-        FanOutItem item,
-        CancellationTokenSource? itemDeadlineCts,
-        CancellationTokenSource batchTimeoutCts,
-        CancellationTokenSource earlyStopCts)
-    {
-        if (itemDeadlineCts?.IsCancellationRequested == true)
-        {
-            return (ItemTimeoutErrorCode,
-                $"FanOut item {item.ItemKey} exceeded the item timeout ({task.ItemTimeoutSeconds}s).");
-        }
-
-        if (batchTimeoutCts.IsCancellationRequested)
-        {
-            return (BatchTimeoutErrorCode,
-                $"FanOut item {item.ItemKey} was cut short by the batch timeout ({task.BatchTimeoutSeconds}s).");
-        }
-
-        if (earlyStopCts.IsCancellationRequested)
-        {
-            return (EarlyStopErrorCode,
-                $"FanOut item {item.ItemKey} was cancelled by the '{task.JoinPolicy}' join policy's early stop.");
-        }
-
-        // The item was cancelled before its own deadline source existed — i.e. while queueing for
-        // a concurrency slot — and neither batch cause is set. Rare, but not impossible.
-        return (EarlyStopErrorCode,
-            $"FanOut item {item.ItemKey} was cancelled before it started executing.");
-    }
-
-    /// <summary>
-    /// Cancels the remaining items once the join policy's verdict can no longer change:
-    /// <c>firstSuccess</c> on the first success, <c>all</c> on the first failure. The other
-    /// policies need every item's outcome and never stop early.
-    /// </summary>
-    private static void SignalEarlyStop(
-        FanOutJoinPolicy policy,
-        bool itemSucceeded,
-        CancellationTokenSource earlyStopCts)
-    {
-        var decided = policy switch
-        {
-            FanOutJoinPolicy.FirstSuccess => itemSucceeded,
-            FanOutJoinPolicy.All => !itemSucceeded,
-            _ => false
-        };
-
-        if (decided && !earlyStopCts.IsCancellationRequested)
-        {
-            earlyStopCts.Cancel();
-        }
+            duration);
     }
 
     /// <summary>
