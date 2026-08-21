@@ -64,6 +64,10 @@ public class FanOutTaskTests
     [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "join": { "policy": "quorum" } }""")]
     [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "execution": { "maxDegreeOfParallelism": 0 } }""")]
     [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "execution": { "itemTimeoutSeconds": 300, "batchTimeoutSeconds": 120 } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f" } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "" } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "execution": { "itemTimeoutSeconds": 0 } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "join": { "policy": "bogus" } }""")]
     public void Configure_Should_Reject_Invalid_Config(string json)
     {
         Should.Throw<ArgumentException>(() => FanOutTask.Create(Parse(json)));
