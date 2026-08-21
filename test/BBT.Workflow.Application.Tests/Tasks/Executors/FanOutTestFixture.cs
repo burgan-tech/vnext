@@ -240,6 +240,7 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
     private readonly ConcurrentQueue<EngineCall> _calls = new();
     private int _active;
     private int _peak;
+    private int _completed;
 
     /// <summary>Orders (item indexes) whose execution should report a business failure.</summary>
     public HashSet<int> FailOrders { get; } = [];
@@ -259,6 +260,18 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
     public IReadOnlyList<EngineCall> Calls => _calls.ToArray();
 
     public int PeakConcurrency => Volatile.Read(ref _peak);
+
+    /// <summary>
+    /// Calls whose simulated work ran to its programmed end — i.e. were NOT cut short by
+    /// cancellation.
+    /// </summary>
+    /// <remarks>
+    /// The observable measure of WORK AVOIDED. <see cref="Calls"/> is recorded as a call begins, so
+    /// it cannot distinguish "started and was cancelled a microsecond later" from "ran to
+    /// completion"; an early-stop or deadline test needs exactly that distinction, and needs it
+    /// without timing the wall clock.
+    /// </remarks>
+    public int CompletedCalls => Volatile.Read(ref _completed);
 
     public Task<Result<TasksExecutionResult>> ExecuteAsync(
         OnExecuteTask onExecuteTask,
@@ -305,6 +318,11 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
             {
                 await Task.Yield();
             }
+
+            // Past the delay without an OperationCanceledException: this item's work was not cut
+            // short. Counted before the failure hooks below, because a business failure or a throw
+            // is still work that RAN — only cancellation is work avoided.
+            Interlocked.Increment(ref _completed);
 
             if (ThrowOrders.Contains(order))
             {
