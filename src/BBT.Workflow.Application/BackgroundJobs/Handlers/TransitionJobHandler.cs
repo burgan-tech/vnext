@@ -35,8 +35,18 @@ public sealed class TransitionJobHandler(
 
     public async Task HandleAsync(TransitionJobPayload args, CancellationToken cancellationToken)
     {
+        // Establish the trace lane BEFORE the span, so everything this hop spawns — the next hop's
+        // enqueue, post-commit jobs, subflow handoffs — reads the same anchor and lands as a sibling
+        // rather than nesting inside this hop. Reset (not Use): the ambient lane here belongs to the
+        // Dapr scheduler callback, which is transport, not the originating business request.
+        using var lane = WorkflowTraceLane.Reset(args.TraceRoot, args.ParentTraceRoot, args.LaneSeq);
+
         // Restore trace context from the original request for distributed tracing correlation
-        using var activity = BackgroundJobActivityHelper.StartActivityContinuingTrace("TransitionJob.Execute", args);
+        using var activity = BackgroundJobActivityHelper.StartFlatLaneActivity("TransitionJob.Execute", args);
+
+        // Payload from a build that predates the lane: make THIS hop the anchor for its own
+        // descendants, which reproduces the pre-lane nesting exactly instead of half-flattening.
+        using var legacyLane = args.TraceRoot is null ? WorkflowTraceLane.Use(activity?.Id) : null;
         // The Dapr scheduler callback is a fresh HTTP request, so the client's X-Request-Id is not
         // ambient here — restore it from the captured request headers so log scopes and downstream
         // calls (Execution invoke, cross-domain) keep correlating to the originating request.

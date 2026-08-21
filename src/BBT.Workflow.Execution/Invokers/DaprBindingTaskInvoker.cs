@@ -69,6 +69,9 @@ public sealed class DaprBindingTaskInvoker(
             // Bindings bypass HttpClient's DiagnosticsHandler, so propagate the live W3C trace
             // context explicitly. Always the LIVE context — a traceparent copied into the task
             // definition would detach the downstream component from the current trace.
+            // Kept inline rather than shared with BBT.Workflow.Logging.DaprTraceMetadata (used by
+            // the Application-layer notification dispatchers): the Execution service deliberately
+            // does not reference BBT.Workflow.Domain, and a layering edge is not worth six lines.
             var currentActivity = Activity.Current;
             if (currentActivity is not null)
             {

@@ -1,10 +1,11 @@
+using BBT.Aether.BackgroundJob;
 using BBT.Workflow.BackgroundJobs.Payloads;
 
 namespace BBT.Workflow.BackgroundJobs;
 
 /// <summary>
 /// Enqueues a <c>flow.transition</c> Dapr background job from a fully-built payload. Centralizes
-/// the schedule (+5ms one-shot), failure policy, and metadata so every caller — the async
+/// the schedule (immediate one-shot), failure policy, and metadata so every caller — the async
 /// transition strategy, the auto-chain continuation strategy (direct mode), and the Orchestration
 /// continuation-enqueue endpoint (outbox mode) — enqueues identically. The Inbox never calls this;
 /// transition jobs are enqueued only in the Orchestration process.
@@ -18,4 +19,15 @@ public interface ITransitionJobEnqueuer
     /// (no placeholder) and cancellation-by-id remains reliable.
     /// </summary>
     Task EnqueueAsync(TransitionJobPayload payload, Guid jobId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Records the job WITHOUT calling the scheduler and returns the handle that arms it. The caller
+    /// invokes <see cref="IBackgroundJobArmHandle.ArmAsync"/> once it is safe to make an external call.
+    /// <para>
+    /// For the accept path, which runs inside the instance status lock. The row has to commit under
+    /// that lock so the duplicate-job guard's next reader can see it; the scheduler round-trip does
+    /// not, and leaving it there made the external call the dominant term of the lock hold under load.
+    /// </para>
+    /// </summary>
+    Task<IBackgroundJobArmHandle> EnqueueWithDeferredArmAsync(TransitionJobPayload payload, Guid jobId, CancellationToken cancellationToken = default);
 }

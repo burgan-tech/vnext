@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Security;
 
 namespace BBT.Workflow.Definitions;
@@ -68,61 +69,47 @@ public static class PostgreSqlJsonFilterService
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
-        // Process JSON Data filters
+        // Process JSON Data filters. Parse failures propagate: dropping a condition here left the
+        // query broader than the caller asked for, and the logger is null on the hot path so it
+        // happened silently.
         foreach (var filterItem in jsonFilters)
         {
-            try
-            {
-                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filterItem);
+            var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filterItem);
 
-                var (condition, filterParameters) = BuildPostgreSqlCondition(
-                    field, operatorType, operatorValue, jsonColumnName, ref parameterIndex);
+            var (condition, filterParameters) = BuildPostgreSqlCondition(
+                field, operatorType, operatorValue, jsonColumnName, ref parameterIndex);
 
-                if (!string.IsNullOrEmpty(condition))
-                {
-                    jsonWhereConditions.Add(condition);
-                    parameters.AddRange(filterParameters);
-                }
-            }
-            catch (ArgumentException ex)
+            if (!string.IsNullOrEmpty(condition))
             {
-                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filterItem);
-            }
-            catch (FormatException ex)
-            {
-                logger?.LogWarning(ex, "Error parsing JSON filter: {Filter}", filterItem);
+                jsonWhereConditions.Add(condition);
+                parameters.AddRange(filterParameters);
             }
         }
 
         // Process Instance column filters
         foreach (var filterItem in instanceFilters)
         {
-            try
-            {
-                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filterItem);
+            var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filterItem);
 
-                var (condition, filterParameters) = InstanceColumnConditionBuilder.BuildCondition(
-                    field, operatorType, operatorValue, ref parameterIndex);
+            var (condition, filterParameters) = InstanceColumnConditionBuilder.BuildCondition(
+                field, operatorType, operatorValue, ref parameterIndex);
 
-                if (!string.IsNullOrEmpty(condition))
-                {
-                    instanceWhereConditions.Add(condition);
-                    parameters.AddRange(filterParameters);
-                }
-            }
-            catch (ArgumentException ex)
+            if (!string.IsNullOrEmpty(condition))
             {
-                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filterItem);
-            }
-            catch (FormatException ex)
-            {
-                logger?.LogWarning(ex, "Error parsing Instance filter: {Filter}", filterItem);
+                instanceWhereConditions.Add(condition);
+                parameters.AddRange(filterParameters);
             }
         }
 
-        // If no conditions at all, return unfiltered
+        // A non-blank filter that compiled to nothing means the caller's conditions were dropped.
+        // Returning the unfiltered set here would answer every row to a narrowing query — the same
+        // hole GraphQLJsonFilterService guards against.
         if (!jsonWhereConditions.Any() && !instanceWhereConditions.Any())
-            return dbSet;
+        {
+            throw new FilterCompilationException(
+                "Filter could not be translated into any condition. No results can be returned safely; " +
+                "check the filter's operators and field names.");
+        }
 
         // Get table name if not provided
         if (string.IsNullOrEmpty(tableName))
@@ -196,30 +183,19 @@ public static class PostgreSqlJsonFilterService
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
+        // Parse failures propagate. Silently skipping an invalid filter produced a query broader
+        // than the caller authored, with no signal that anything was discarded.
         foreach (var filter in filters)
         {
-            try
+            var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filter);
+
+            var (condition, filterParameters) = BuildPostgreSqlCondition(
+                field, operatorType, operatorValue, jsonColumnName, ref parameterIndex);
+
+            if (!string.IsNullOrEmpty(condition))
             {
-                var (field, operatorType, operatorValue) = FilterOperatorParser.ParseOperator(filter);
-                
-                var (condition, filterParameters) = BuildPostgreSqlCondition(
-                    field, operatorType, operatorValue, jsonColumnName, ref parameterIndex);
-                
-                if (!string.IsNullOrEmpty(condition))
-                {
-                    whereConditions.Add(condition);
-                    parameters.AddRange(filterParameters);
-                }
-            }
-            catch (ArgumentException)
-            {
-                // Silently skip invalid filters in BuildFilteredQuery
-                // Caller should handle validation before calling this method
-            }
-            catch (FormatException)
-            {
-                // Silently skip invalid filters in BuildFilteredQuery
-                // Caller should handle validation before calling this method
+                whereConditions.Add(condition);
+                parameters.AddRange(filterParameters);
             }
         }
 

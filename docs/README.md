@@ -23,7 +23,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 1. Read [System Overview](architecture/system-overview.md) to understand the two-host runtime.
 2. Read [Workflow Execution Pipeline](architecture/workflow-execution-pipeline.md) before changing transition behavior.
 3. Read [Async Transition Execution Modes](architecture/async-transition-execution-modes.md) before changing the `WorkflowExecution` flags (outbox / transition-per-job / chain-token gate / reaper).
-4. Read [Domain Cache Context](domain/domain-cache-context.md) before changing definition cache behavior.
+4. Read [Domain Cache Context](domain/domain-cache-context.md) before changing definition cache behavior, and [Component Cache Generation Memo](runtime/component-cache-generation-memo.md) before enabling `GenerationMemoSeconds` or editing the CD propagation window.
 5. Read [Task Executors and Invokers](runtime/task-executors-and-invokers.md) before adding a task type.
 6. Read [API and Service Contracts](contracts/api-and-service-contracts.md) before changing HTTP or Dapr-facing contracts.
 7. Read [JSON Validation](contracts/json-validation.md) before changing schema validation errors.
@@ -38,7 +38,9 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 16. Read [Well-Known Transitions](domain/well-known-transitions.md) before changing `cancel` / `updateData` / `exit` behavior, what `availableTransitions` contains, or the `kind` discriminator clients switch on.
 17. Read [Role Grant Authorization](domain/role-grant-authorization.md) before touching any role check — `roles`, `queryRoles`, schema `x-roles` — or adding an authorization decision point. Covers the single-evaluator rule, batching, and why discovery must pass the same request context as enforcement.
 18. Read [Function Contract Resolution](runtime/function-contract-resolution.md) before authoring or changing a function's `inputSchema` / `outputSchema` / `inputView` / `outputView`, or the `/info` discovery endpoint. Covers the rule-based wire shapes, first-match-wins semantics, and why "no match" is not an error.
-19. Read [Correlation and Tracing](monitoring/correlation-and-tracing.md) before changing telemetry configuration, background-job trace restoration, `X-Request-Id` propagation, or task-binding header handling. Covers the gateway (APISIX) contract, trace-continuation semantics per job type, and the reserved-header rule for task authors.
+19. Read [Instance Query Validation Breaking Changes](contracts/instance-query-validation-breaking-changes.md) before upgrading past 0.0.79, or before changing instance-query `filter` / `sort` / `groupBy` / `aggregations` handling. Instance queries moved from fail-open to fail-closed: silently ignored parameters now return HTTP 400, and a `GetInstancesTask` carrying the old `-field` sort shorthand fails its transition.
+20. Read [Correlation and Tracing](monitoring/correlation-and-tracing.md) before changing telemetry configuration, background-job trace restoration, `X-Request-Id` propagation, or task-binding header handling. Covers the gateway (APISIX) contract, trace-continuation semantics per job type, and the reserved-header rule for task authors.
+21. Read [Trace Lanes](runtime/trace-lanes.md) before changing how transition, post-commit or subflow spans are parented, or before adding a span that represents a top-level operation. Covers the anchor-vs-predecessor split that keeps chained hops siblings, the one-lane-per-instance model, and why the lane never travels in a request header.
 
 ## Documentation Rules
 

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 
 namespace BBT.Workflow.BackgroundJobs.Handlers;
 
@@ -87,6 +88,26 @@ public static class BackgroundJobActivityHelper
     }
 
     /// <summary>
+    /// Starts the job's span as a <em>flat-lane</em> item: parented to the payload's trace lane
+    /// anchor so that every hop of the same instance is a SIBLING, with the enqueue-time
+    /// <c>TraceParent</c> attached as an <see cref="ActivityLink"/> instead of as the parent.
+    /// <para>
+    /// This is what removes the old "nesting depth == chain depth" behaviour. Kind stays
+    /// <see cref="ActivityKind.Consumer"/> so Elastic APM keeps treating the job as a transaction.
+    /// When the payload carries no anchor (older build, or a deliberately lane-free deferred job)
+    /// this degrades to <see cref="StartActivityContinuingTrace"/>'s parenting exactly.
+    /// </para>
+    /// </summary>
+    public static Activity? StartFlatLaneActivity(string activityName, ITraceableJobPayload payload)
+        => FlatLaneActivity.Start(
+            ActivitySource,
+            activityName,
+            ActivityKind.Consumer,
+            anchorTraceParent: payload.TraceRoot,
+            predecessorTraceParent: payload.TraceParent,
+            traceState: payload.TraceState);
+
+    /// <summary>
     /// Enriches the activity with common job-specific tags for observability.
     /// </summary>
     /// <param name="activity">The activity to enrich.</param>
@@ -102,6 +123,15 @@ public static class BackgroundJobActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.JobName, payload.JobName);
         activity.SetTag("messaging.system", "dapr");
         activity.SetTag("messaging.operation", "process");
+
+        // Lane ordering/searchability. Siblings are sorted visually by @timestamp, so these exist
+        // for querying and for reconstructing a lane programmatically. LaneSeq is the reliable
+        // ordinal: ChainDepth resets to 0 at every resume/timeout/retry boundary.
+        if (payload is TransitionJobPayload transitionPayload)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.ChainDepth, transitionPayload.ChainDepth);
+            activity.SetTag(TelemetryConstants.TagNames.LaneSeq, transitionPayload.LaneSeq);
+        }
     }
 
     /// <summary>

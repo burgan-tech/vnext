@@ -54,7 +54,8 @@ public static class WorkflowTaskFactory
         var filterJson = !string.IsNullOrWhiteSpace(filter)
             ? $@"""filter"": ""{filter.Replace("\"", "\\\"")}"","
             : "";
-        var sortJson = sort != null ? $@"""sort"": ""{sort}""," : "";
+        // Escaped like filter above: sort is itself JSON, so its quotes must not close the string.
+        var sortJson = sort != null ? $@"""sort"": ""{sort.Replace("\"", "\\\"")}""," : "";
 
         var config = $@"{{
             ""key"": ""{name}"",

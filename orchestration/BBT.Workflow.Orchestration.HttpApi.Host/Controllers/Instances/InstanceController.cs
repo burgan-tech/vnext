@@ -21,6 +21,7 @@ using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Orchestration.Controllers.Instances;
 
@@ -154,6 +155,11 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default
     )
     {
+        // Adopt the completing subflow's lane, overriding the anchor the request middleware set to
+        // this relay endpoint's server span. ParentTraceRoot is what puts the resume back at the
+        // parent instance's level in the originating request's trace.
+        using var lane = WorkflowTraceLane.Reset(request.TraceRoot, request.ParentTraceRoot);
+
         await subflowCompletionService.CompletionAsync(request, cancellationToken);
         return Ok();
     }
@@ -190,6 +196,10 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default
     )
     {
+        // Adopt the faulting subflow's lane so the parent resume lands at the parent instance's
+        // level, not nested under this relay endpoint's server span.
+        using var lane = WorkflowTraceLane.Reset(request.TraceRoot, request.ParentTraceRoot);
+
         await subflowFaultService.FaultAsync(request, cancellationToken);
         return Ok();
     }
@@ -289,6 +299,11 @@ public sealed class InstanceController(
             transitionInput.Headers = httpContext.Request.Headers
                 .ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());
         }
+
+        // Adopt the forwarding parent's lane for this relay, overriding the anchor the request
+        // middleware set to THIS endpoint's server span. Without it the subflow's hops would anchor
+        // on the relay endpoint and detach from the originating request's trace tree.
+        using var lane = WorkflowTraceLane.Reset(input.TraceRoot, input.ParentTraceRoot);
 
         var result = await commandAppService.TransitionAsync(
             instance.ToString(),
@@ -478,6 +493,13 @@ public sealed class InstanceController(
             CallerSync = false,
             TraceParent = continuation.TraceParent,
             TraceState = continuation.TraceState,
+            // Pure transport hop: relay the lane verbatim, never re-anchor. Re-anchoring here would
+            // make this endpoint's server span the parent and pull the hop out of the originating
+            // request's lane.
+            TraceRoot = continuation.TraceRoot,
+            ParentTraceRoot = continuation.ParentTraceRoot,
+            ChainDepth = continuation.ChainDepth,
+            LaneSeq = continuation.LaneSeq,
             CorrelationId = continuation.CorrelationId
         };
 

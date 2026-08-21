@@ -59,6 +59,16 @@
         "POST {domain}/workflows/{workflow}/internal/related-data/batch"
       ]
     },
+    "scriptSecretCache": {
+      "since": "0.0.80",
+      "status": "stable",
+      "configFlag": "Scripting:SecretCache:Enabled",
+      "description": "Script secret functions (GetSecret/GetSecretAsync/GetSecrets/GetSecretsAsync on ScriptBase) read through a process-wide, short-TTL, in-memory cache of Dapr secret bundles instead of hitting the vault on every call. The cache key is the (storeName, secretStore) pair and the cached value is the whole bundle, so one vault round-trip serves every key in the bundle for the TTL window (default 30 seconds). Concurrent readers of the same bundle collapse into a single vault fetch (single-flight); a failed fetch is never cached, so the next call retries immediately. The cache is deliberately in-process rather than distributed: secret material never transits Redis or the wire. Enabled by default; Scripting:SecretCache:Enabled=false or TtlSeconds<=0 bypasses it entirely. After a secret rotation a process may serve the previous value for at most TtlSeconds seconds.",
+      "relatedConfig": [
+        "Scripting:SecretCache:Enabled",
+        "Scripting:SecretCache:TtlSeconds"
+      ]
+    },
     "stateStoreTask": {
       "since": "0.0.64",
       "status": "stable",

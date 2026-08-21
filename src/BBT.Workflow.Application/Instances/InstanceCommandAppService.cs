@@ -479,12 +479,18 @@ public sealed class InstanceCommandAppService(
             };
 
             // Enqueue the timeout job
+            // directly: true arms the scheduler as part of the enqueue, like every other job type in
+            // this codebase. Omitting it persisted the row as Pending and called nobody, leaving the
+            // timeout to the background-job arming poller — which is disabled
+            // (BackgroundJob:WithHostedService = false), so workflow timeouts were never armed and
+            // never fired: no error, no log, the row just sat there.
             var jobId = await backgroundJobService.EnqueueAsync(
                 FlowTimeoutJobHandler.HandlerName,
                 jobName.Value,
                 payload,
                 schedule,
                 metadata,
+                directly: true,
                 cancellationToken: cancellationToken);
 
             // Track the job in the database

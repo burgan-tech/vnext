@@ -283,6 +283,14 @@ public static class TaskServiceCollectionExtensions
                 sp.GetRequiredService<IEvaluator>(),
                 sp.GetRequiredService<ScriptSandboxOptions>()));
 
+        // Secret bundle cache options — module-local, BindSection pattern like Sandbox/Helpers.
+        services.TryAddSingleton(sp => BindSection<SecretCacheOptions>(sp, SecretCacheOptions.SectionName));
+        // Defensive: normally registered by the application module already.
+        services.TryAddSingleton(TimeProvider.System);
+        // Singleton on purpose: ScriptServices is scoped, but the cache must outlive request scopes.
+        // In-process on purpose: secret material stays off Redis (see ScriptSecretCache docs).
+        services.TryAddSingleton<IScriptSecretCache, ScriptSecretCache>();
+
         // Script services - scoped for per-request isolation (requires DaprClient to be registered)
         services.TryAddScoped<IScriptServices, ScriptServices>();
 

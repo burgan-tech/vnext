@@ -24,14 +24,17 @@ public sealed class CacheSetTestHarness
     public const string TestKey = "account-type-selection-view";
     public const string ComponentType = "sys-views";
 
-    public CacheSetTestHarness()
+    public CacheSetTestHarness(Action<ComponentCacheOptions>? configure = null)
     {
         Time = new AdjustableTimeProvider(new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero));
         Cache = new FakeDistributedCacheService(Time);
         Backend = new FakeCacheBackend();
         Options = new ComponentCacheOptions();
+        configure?.Invoke(Options);
 
         var optionsAccessor = new StaticOptions(Options);
+
+        L1 = new ComponentL1Cache(optionsAccessor, Time, NullLogger<ComponentL1Cache>.Instance);
 
         Generations = new ComponentGenerationProvider(
             Cache,
@@ -46,13 +49,15 @@ public sealed class CacheSetTestHarness
             Generations,
             optionsAccessor,
             Time,
-            NullLogger<CacheSet<View>>.Instance);
+            NullLogger<CacheSet<View>>.Instance,
+            L1);
     }
 
     public AdjustableTimeProvider Time { get; }
     public FakeDistributedCacheService Cache { get; }
     public FakeCacheBackend Backend { get; }
     public ComponentCacheOptions Options { get; }
+    public ComponentL1Cache L1 { get; }
     public ComponentGenerationProvider Generations { get; }
     public CacheSet<View> Sut { get; }
 

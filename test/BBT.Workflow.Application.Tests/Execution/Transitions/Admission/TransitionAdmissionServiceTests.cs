@@ -95,6 +95,14 @@ public class TransitionAdmissionServiceTests
         CreateService().Classify(context).ShouldBe(AdmissionKind.OwnerReentry);
     }
 
+    [Fact]
+    public void Classify_ErrorBoundaryTransition_ReturnsOwnerReentry()
+    {
+        var context = CreateContext(isErrorBoundaryTransition: true);
+
+        CreateService().Classify(context).ShouldBe(AdmissionKind.OwnerReentry);
+    }
+
     #endregion
 
     #region CheckAdmission
@@ -125,6 +133,15 @@ public class TransitionAdmissionServiceTests
         var context = CreateContext();
         context.Instance.Busy();
         context.IsPreReserved = true;
+
+        CreateService().CheckAdmission(context).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void CheckAdmission_ErrorBoundaryTransitionOnBusyInstance_Succeeds()
+    {
+        var context = CreateContext(isErrorBoundaryTransition: true);
+        context.Instance.Busy();
 
         CreateService().CheckAdmission(context).IsSuccess.ShouldBeTrue();
     }
@@ -578,7 +595,9 @@ public class TransitionAdmissionServiceTests
 
     #endregion
 
-    private static TransitionExecutionContext CreateContext(string transitionKey = "regular-transition")
+    private static TransitionExecutionContext CreateContext(
+        string transitionKey = "regular-transition",
+        bool isErrorBoundaryTransition = false)
     {
         var instanceId = Guid.NewGuid();
         const string workflowKey = "test-workflow";
@@ -603,6 +622,7 @@ public class TransitionAdmissionServiceTests
             Current = workflow.GetState("state1").Value!,
             Transition = transition,
             Instance = instance,
+            IsErrorBoundaryTransition = isErrorBoundaryTransition,
             Data = null,
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]

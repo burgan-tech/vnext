@@ -593,15 +593,26 @@ public class GraphQLFilterParserTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void ParseOrderBy_ShouldReturnNull_WhenInvalidJson()
+    public void ParseOrderBy_ShouldThrow_WhenInvalidJson()
     {
-        var result = GraphQLFilterParser.ParseOrderBy("not valid json");
-        Assert.Null(result);
+        // Returning null here fell back to the default CreatedAt DESC ordering, answering HTTP 200
+        // with results in an order the caller never asked for.
+        Assert.Throws<ArgumentException>(() => GraphQLFilterParser.ParseOrderBy("not valid json"));
+    }
+
+    [Fact]
+    public void ParseOrderBy_ShouldThrow_WhenUnmappedMemberPresent()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            GraphQLFilterParser.ParseOrderBy("""{"fld":"createdAt","direction":"desc"}"""));
     }
 
     [Fact]
     public void ParseOrderBy_ShouldReturnNull_WhenEmptyField()
     {
+        // Structurally valid but names no field. The boundary validator reports this as
+        // sort.emptyField; the parser itself stays permissive so callers can distinguish
+        // "no sort requested" from "malformed sort".
         var result = GraphQLFilterParser.ParseOrderBy("""{"field":"","direction":"asc"}""");
         Assert.Null(result);
     }

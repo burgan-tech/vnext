@@ -31,7 +31,8 @@ public class DomainCacheContextTests
         Substitute.For<IComponentGenerationProvider>(),
         Options.Create(new ComponentCacheOptions()),
         TimeProvider.System,
-        NullLoggerFactory.Instance);
+        NullLoggerFactory.Instance,
+        Substitute.For<IComponentL1Cache>());
 
     [Fact]
     public void Set_ByComponentTypeKey_ShouldResolveEveryCachedComponentType()

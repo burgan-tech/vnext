@@ -28,5 +28,11 @@ public interface IScriptServices
     /// Provides access to configuration values and connection strings.
     /// </summary>
     IConfiguration Configuration { get; }
+
+    /// <summary>
+    /// Short-TTL, in-process cache over Dapr secret bundle reads.
+    /// <c>null</c> means uncached direct Dapr access (legacy implementations and bare mocks).
+    /// </summary>
+    IScriptSecretCache? SecretCache => null;
 }
 

@@ -9,6 +9,13 @@ These rules are authoritative for all work in this repo. Read them before writin
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, domain-event dual processing, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
 - [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
 
+### Personal, machine-local overrides
+
+@CLAUDE.local.md
+
+Optional and never committed (git-ignored). Create a `CLAUDE.local.md` in the repo root for your own
+environment notes and working preferences; if the file is absent this import is simply ignored.
+
 ## Project Skills
 
 On-demand skills live under `.claude/skills/`. Invoke via the `Skill` tool when the trigger phrase matches:

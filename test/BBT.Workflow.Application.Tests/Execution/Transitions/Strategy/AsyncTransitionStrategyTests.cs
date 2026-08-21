@@ -9,6 +9,8 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
+using BBT.Aether.BackgroundJob;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -35,6 +37,10 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<IUnitOfWorkManager> _uowManager = new();
     private readonly Mock<ITransitionAdmissionService> _mockAdmissionService = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
+    private readonly Mock<IBackgroundJobArmHandle> _mockArmHandle = new();
+
+    /// <summary>True while the faked admission holds its status lock (i.e. during the callback).</summary>
+    private bool _lockHeld;
     private readonly Mock<ILogger<AsyncTransitionStrategy>> _mockLogger = new();
     private readonly AsyncTransitionStrategy _strategy;
 
@@ -61,8 +67,9 @@ public class AsyncTransitionStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(() => new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct, _mockArmHandle.Object));
 
         _mockJobRepository
             .Setup(x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
@@ -97,6 +104,7 @@ public class AsyncTransitionStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -126,9 +134,10 @@ public class AsyncTransitionStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .Callback(() => enqueuedAfterAdmission = admitted)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(() => new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct, _mockArmHandle.Object));
 
         var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
@@ -160,6 +169,7 @@ public class AsyncTransitionStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -183,6 +193,7 @@ public class AsyncTransitionStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
 
@@ -206,6 +217,7 @@ public class AsyncTransitionStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Gateway unavailable"));
 
@@ -291,6 +303,7 @@ public class AsyncTransitionStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -318,6 +331,7 @@ public class AsyncTransitionStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -390,7 +404,20 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
                 It.IsAny<CancellationToken>()))
             .Returns<TransitionExecutionContext, Func<AcceptFlip, CancellationToken, Task<Result>>, CancellationToken>(
-                (_, underLock, ct) => underLock(_acceptFlip, ct));
+                async (_, underLock, ct) =>
+                {
+                    // Mirror the real lock lifetime: held for the callback only. Lets a test observe
+                    // whether work happened inside the critical section or after it.
+                    _lockHeld = true;
+                    try
+                    {
+                        return await underLock(_acceptFlip, ct);
+                    }
+                    finally
+                    {
+                        _lockHeld = false;
+                    }
+                });
     }
 
     /// <summary>
@@ -415,10 +442,11 @@ public class AsyncTransitionStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
-                (p, e, _) => { payload = p; outboxEvent = e; })
-            .Returns(Task.CompletedTask);
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (p, e, _, _) => { payload = p; outboxEvent = e; })
+            .ReturnsAsync(() => new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct, _mockArmHandle.Object));
 
         return (() => payload, () => outboxEvent);
     }
@@ -514,4 +542,61 @@ public class AsyncTransitionStrategyTests
     }
 
     #endregion
+
+    [Fact]
+    public async Task Accept_ShouldDeferArmingSoTheSchedulerIsNotCalledUnderTheStatusLock()
+    {
+        // The point of the change: the durable row commits under the lock (the duplicate-job guard
+        // needs the next reader to see it) but the Dapr round-trip does not. Measured, that call WAS
+        // the lock hold under load, serializing every other request on the same instance behind it.
+        var (wfCtx, _) = SetupSuccessfulContext();
+
+        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                true,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Accept_ShouldArmAfterTheLockIsReleased_OnTheDirectPath()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+
+        var armedWhileLockHeld = false;
+        _mockArmHandle
+            .Setup(x => x.ArmAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => armedWhileLockHeld = _lockHeld)
+            .Returns(Task.CompletedTask);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockArmHandle.Verify(x => x.ArmAsync(It.IsAny<CancellationToken>()), Times.Once);
+        armedWhileLockHeld.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Accept_ShouldNotArm_WhenTheGatewayFellBackToTheOutbox()
+    {
+        // The outbox relay owns delivery AND arming for its own job; arming here would either find
+        // no row or race the relay.
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Outbox));
+
+        var (wfCtx, _) = SetupSuccessfulContext();
+
+        await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        _mockArmHandle.Verify(x => x.ArmAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
 }
