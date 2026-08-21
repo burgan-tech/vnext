@@ -898,17 +898,21 @@ public static partial class WorkflowLogs
     /// Logs a single failed fan-out item. Warning, not Error: one failed item is a recoverable
     /// outcome the join policy decides on — only the batch's verdict can fault the transition.
     /// This is the log line that names WHICH item among N went wrong.
+    /// It carries the error MESSAGE as well as the code: the message is otherwise only attached to
+    /// the item span, and item spans are emitted at Verbose tracing detail only — so at the default
+    /// level the reason a fan-out item failed would be unrecoverable from logs.
     /// </summary>
     [LoggerMessage(
         EventId = 10151,
         Level = LogLevel.Warning,
-        Message = "FanOut item failed. TaskKey={TaskKey}, ItemKey={ItemKey}, Index={ItemIndex}, ErrorCode={ErrorCode}, InstanceId={InstanceId}")]
+        Message = "FanOut item failed. TaskKey={TaskKey}, ItemKey={ItemKey}, Index={ItemIndex}, ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}, InstanceId={InstanceId}")]
     public static partial void FanOutItemFailed(
         this ILogger logger,
         string taskKey,
         string itemKey,
         int itemIndex,
         string errorCode,
+        string? errorMessage,
         Guid instanceId);
 
     /// <summary>

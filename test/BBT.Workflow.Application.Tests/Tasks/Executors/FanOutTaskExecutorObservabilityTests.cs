@@ -37,6 +37,38 @@ public sealed class FanOutTaskExecutorObservabilityTests
     /// <summary>EventId of <c>WorkflowLogs.FanOutBatchStarted</c>.</summary>
     private const int FanOutBatchStartedEventId = 10150;
 
+    /// <summary>EventId of <c>WorkflowLogs.FanOutItemFailed</c>.</summary>
+    private const int FanOutItemFailedEventId = 10151;
+
+    /// <summary>
+    /// The per-item failure log must carry the failure MESSAGE, not just its code.
+    /// </summary>
+    /// <remarks>
+    /// The message is otherwise attached only to the item span, and item spans are emitted at
+    /// Verbose tracing detail only — so at the default level the reason an item failed was
+    /// unrecoverable. That cost a real incident: a fan-out over a SubProcess launch failed every
+    /// item with nothing in the logs but an error code.
+    /// </remarks>
+    [Fact]
+    public async Task AFailedItem_LogsTheFailureMessage_NotJustItsCode()
+    {
+        var harness = new FanOutHarness(
+            instanceData: FanOutHarness.Documents(3),
+            joinPolicy: FanOutJoinPolicy.AllSettled,
+            maxDop: 1);
+        harness.Engine.FailOrders.Add(1);
+
+        await harness.ExecuteAsync();
+
+        var fields = harness.LoggedFields(FanOutItemFailedEventId);
+        fields["ErrorMessage"].ShouldBe("item 1 failed");
+
+        // Its own structured field: a backend must be able to facet on the code and read the
+        // message as free text, so the message is never spliced into ErrorCode.
+        fields["ErrorCode"].ShouldBe("Item:Failed");
+        fields["ItemIndex"].ShouldBe(1);
+    }
+
     [Fact]
     public async Task ASettledBatch_RecordsExactlyOneBatchMetric_WithTheBatchsOwnCounters()
     {

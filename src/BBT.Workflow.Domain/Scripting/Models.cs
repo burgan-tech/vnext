@@ -1,3 +1,4 @@
+using System.Dynamic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
@@ -655,9 +656,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         var branch = new ScriptContext(logger)
         {
             Body = CloneDynamic(Body),
-            Headers = CloneDynamic(Headers),
-            RouteValues = CloneDynamic(RouteValues),
-            QueryParameters = CloneDynamic(QueryParameters),
+            // Headers/RouteValues/QueryParameters are transport metadata, NOT user payload — they
+            // are cloned type-preservingly, deliberately not through CloneDynamic. See
+            // CloneTransportMetadata for why collapsing these back into CloneDynamic breaks scripts.
+            Headers = CloneTransportMetadata(Headers),
+            RouteValues = CloneTransportMetadata(RouteValues),
+            QueryParameters = CloneTransportMetadata(QueryParameters),
             EventPayload = CloneDynamic(EventPayload),
             RawBody = RawBody,
             Instance = Instance?.CreateSnapshot(),
@@ -781,6 +785,59 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     private static dynamic? CloneDynamic(object? value) => value == null
         ? null
         : ToDynamic(value, JsonScriptBodyOptions);
+
+    /// <summary>
+    /// Clones <see cref="Headers"/> / <see cref="RouteValues"/> / <see cref="QueryParameters"/> for a
+    /// parallel branch while PRESERVING the source's runtime type (and, for dictionaries, its key
+    /// comparer). Falls back to <see cref="CloneDynamic"/> for anything that is not a string-keyed
+    /// dictionary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is deliberately NOT <see cref="CloneDynamic"/>, and must not be "simplified" back into it.
+    /// These three properties are declared <c>dynamic?</c> but in production carry a real
+    /// <c>Dictionary&lt;string, string&gt;</c>. <c>CloneDynamic</c> is a JSON round-trip, which turns
+    /// that into an <c>ExpandoObject</c> — and <c>ExpandoObject</c> implements <c>ContainsKey</c> only
+    /// as an EXPLICIT <c>IDictionary&lt;string, object&gt;</c> member, which the C# runtime binder
+    /// cannot see. The pervasive domain-mapping idiom
+    /// <c>if (context.Headers.ContainsKey("clientid"))</c> therefore throws
+    /// <c>Microsoft.CSharp.RuntimeBinder.RuntimeBinderException</c> on a branch context while binding
+    /// fine on the serial path — a failure mode that stayed invisible until fan-out and
+    /// <c>TaskCoordinator</c>'s same-order parallel group started running mappings on branches.
+    /// </para>
+    /// <para>
+    /// The comparer is carried over on purpose: header lookups are case-insensitive by contract, and a
+    /// clone that silently downgraded to the ordinal default would make <c>Accept-Language</c> stop
+    /// resolving <c>accept-language</c>.
+    /// </para>
+    /// <para>
+    /// <see cref="Body"/> and <see cref="EventPayload"/> are genuine dynamic user payloads and keep
+    /// <see cref="CloneDynamic"/> — scripts reach into them by member access, which needs the
+    /// <c>ExpandoObject</c> shape. Same reason a dynamic source (anonymous object, <c>ExpandoObject</c>,
+    /// JSON) still falls through to <see cref="CloneDynamic"/> here: shape preservation cuts both ways.
+    /// </para>
+    /// </remarks>
+    private static dynamic? CloneTransportMetadata(object? value) => value switch
+    {
+        null => null,
+        // A dynamic provider (ExpandoObject and friends) is read by member access, so keep it on the
+        // round-trip that reproduces that shape rather than flattening it into a Dictionary.
+        IDynamicMetaObjectProvider => CloneDynamic(value),
+        IDictionary<string, string> stringMap =>
+            new Dictionary<string, string>(stringMap, ComparerOf(stringMap)),
+        IDictionary<string, object?> objectMap =>
+            new Dictionary<string, object?>(objectMap, ComparerOf(objectMap)),
+        _ => CloneDynamic(value)
+    };
+
+    /// <summary>
+    /// Recovers the key comparer of a string-keyed dictionary so a clone keeps the source's
+    /// case sensitivity; anything that does not expose one gets the framework default.
+    /// </summary>
+    private static IEqualityComparer<string> ComparerOf<TValue>(IDictionary<string, TValue> source) =>
+        source is Dictionary<string, TValue> concrete
+            ? concrete.Comparer
+            : EqualityComparer<string>.Default;
 
     private static bool JsonEquivalent(object? left, object? right) =>
         JsonSerializer.Serialize(left, JsonScriptBodyOptions) ==

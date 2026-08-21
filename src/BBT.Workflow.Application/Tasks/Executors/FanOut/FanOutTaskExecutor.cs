@@ -463,7 +463,13 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         }
 
         var errorCode = settled.ErrorCode ?? FanOutErrorCodes.ItemFailed;
-        Logger.FanOutItemFailed(task.Key, item.ItemKey, item.Index, errorCode, InstanceIdOf(context));
+        Logger.FanOutItemFailed(
+            task.Key,
+            item.ItemKey,
+            item.Index,
+            errorCode,
+            settled.ErrorMessage,
+            InstanceIdOf(context));
         TaskExecutionActivityHelper.SetError(activity, settled.ErrorMessage, errorCode);
     }
 
