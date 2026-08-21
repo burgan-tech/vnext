@@ -174,6 +174,10 @@ public sealed class NotificationTaskExecutor(
             foreach (var kvp in message.Metadata)
                 bindingRequest.Metadata.TryAdd(kvp.Key, kvp.Value);
 
+            // Output bindings bypass HttpClient's DiagnosticsHandler — stamp the live trace context
+            // so the notification channel shows up under this task in the trace.
+            DaprTraceMetadata.StampBinding(bindingRequest.Metadata);
+
             await daprClient.InvokeBindingAsync(bindingRequest, cancellationToken);
 
             Logger.NotificationChannelDispatched(task.Key, channel, bindingName,
