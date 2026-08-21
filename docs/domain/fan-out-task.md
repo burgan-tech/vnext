@@ -83,7 +83,7 @@ FanOut only when the item count comes from data, not from the workflow definitio
 | `execution.batchTimeoutSeconds` | `120` | Whole-batch deadline; items still running when it fires are cancelled and counted as `FanOut:BatchTimeout` failures, and `FanOutResult.TimedOut` becomes `true`. Must be `>= 1`. |
 | `join.policy` | `"allSettled"` | One of `all` / `allSettled` / `quorum` / `firstSuccess` — see [§ Join Policy](#join-policy). |
 | `join.minSuccess` | none | Required (`>= 1`) when `policy` is `quorum`; parsing fails otherwise. Ignored (with no warning today) for other policies. |
-| `join.resultKey` | `"fanOutResults"` | Instance-data key the **default** output packaging writes item results under, when the task ships no mapping (or the mapping's `OutputHandler` is not what you want to key off). |
+| `join.resultKey` | `"fanOutResults"` | Instance-data key the **default** output packaging writes item results under. Applies whenever the default packaging is in play: the task ships no mapping, **or** its mapping does not override `OutputHandler`. Ignored once a mapping overrides `OutputHandler` — that handler's data is the output, keys and all. |
 | `join.ordered` | `true` | Accepted for forward compatibility with a future durable mode that may stream results in completion order. **In inline mode it is a no-op** — item results are always returned sorted by `Index`, and the executor deliberately never reads this flag to decide otherwise. |
 | `errorBoundary` | none | A normal `ErrorBoundary` (`onError` rules: `action`, `errorCodes`/`errorTypes`, `priority`, `retryPolicy`, `logOnly`) applied **independently to every item** through the same engine machinery a state or transition error boundary uses. A retry-exhausted item becomes one `Failed` entry in the result set; it does not, by itself, stop the batch — the join policy decides that. |
 
@@ -119,23 +119,80 @@ as any other mapping — a `.csx` script compiled by the runtime and referenced 
 ```csharp
 public interface IFanOutMapping
 {
-    // Only implement this when NOT using itemsPath. Default returns null ("use itemsPath").
+    // OPTIONAL. Only implement this when NOT using itemsPath. Default returns null ("use itemsPath").
     Task<IEnumerable<dynamic>?> ItemSelector(ScriptContext context)
         => Task.FromResult<IEnumerable<dynamic>?>(null);
 
-    // Called once per item, on that item's own isolated branch context.
-    // Mutates the CLONED inner task directly — this is how you shape a per-item
-    // HTTP URL/body, a SOAP envelope, etc. The returned ScriptResponse is audit
-    // data only (visible in the item's InstanceTask journal row); it is NOT merged
-    // into instance data.
+    // REQUIRED — the only abstract member. Called once per item, on that item's own
+    // isolated branch context. Mutates the CLONED inner task directly — this is how you
+    // shape a per-item HTTP URL/body, a SOAP envelope, etc. The returned ScriptResponse
+    // is audit data only (visible in the item's InstanceTask journal row); it is NOT
+    // merged into instance data.
     Task<ScriptResponse> ItemInputHandler(WorkflowTask task, ScriptContext context, FanOutItem item);
 
-    // Called EXACTLY ONCE per batch, after every item has settled. This is the
-    // batch's single write point: the returned ScriptResponse.Data becomes the
-    // FanOutTask's own output and is merged into instance data as one patch.
-    Task<ScriptResponse> OutputHandler(ScriptContext context, FanOutResult result);
+    // OPTIONAL. Called EXACTLY ONCE per batch, after every item has settled. This is the
+    // batch's single write point: the returned ScriptResponse.Data becomes the FanOutTask's
+    // own output and is merged into instance data as one patch. Default returns null
+    // ("use the runtime's default output packaging").
+    Task<ScriptResponse?> OutputHandler(ScriptContext context, FanOutResult result)
+        => Task.FromResult<ScriptResponse?>(null);
 }
 ```
+
+### Override only what you need
+
+Two of the three members carry a default implementation, and in both the `null` return means
+*"I did not override this — use the runtime's behaviour"*:
+
+| Member | Omit it and you get | Override it when |
+|---|---|---|
+| `ItemSelector` | the task's `itemsPath` | the collection is computed, not read from a fixed path |
+| `ItemInputHandler` | *(cannot be omitted)* | always — see below |
+| `OutputHandler` | the **default output packaging**, byte-for-byte the shape a task shipping no mapping at all produces | you want your own output shape (a summary, failed keys, a domain-specific projection) |
+
+The combinations are free: bind input only, select items only, both, or all three. In particular
+**overriding input binding does not cost you the default output** — the common case (a fan-out over
+an HTTP inner task, which *requires* an `ItemInputHandler` because only a mapping can mutate the
+cloned task's URL/body) is a mapping with exactly one member:
+
+```csharp
+public class BindOnlyMapping : IFanOutMapping
+{
+    public Task<ScriptResponse> ItemInputHandler(WorkflowTask task, ScriptContext context, FanOutItem item)
+    {
+        if (task is HttpTask http)
+        {
+            http.SetUrl($"{http.Url}/{item.ItemKey}");
+            http.SetBody(new { documentId = item.ItemKey, payload = item.Value });
+        }
+
+        return Task.FromResult(new ScriptResponse { Data = new { itemKey = item.ItemKey } });
+    }
+}
+```
+
+That batch writes the default shape — item results under `join.resultKey` plus
+`{resultKey}Summary` — exactly as documented in [§ The zero-script path](#the-zero-script-path).
+There is one packaging implementation in the runtime and both routes reach it, so a mapping never
+needs to reproduce the default shape in script to keep it.
+
+Two details worth knowing:
+
+- **The fallback signal is a `null` *response*, not a null `Data`.** An overriding handler that runs
+  and deliberately returns `new ScriptResponse { Data = null }` still replaces the default with
+  nothing. Only *not overriding* (or explicitly returning `null`) reaches the default packaging.
+- **A handler that THROWS does not fall back.** The batch fails with
+  `FanOut task output handler failed: …` and no data. Substituting the default there would hand the
+  flow a shape its author never wrote and its downstream mappings do not expect.
+
+`ItemInputHandler` is deliberately the odd one out. It has no return channel that could signal
+"not overridden" — the executor discards the response it returns — so a default would have to
+*silently perform* the flat `SetBody(item.Value)` binding. An author who mistypes the member name
+or signature in a `.csx` would then get a batch that compiles, runs, and fires N identical unbound
+requests at the inner task's authored endpoint. Keeping it abstract turns that mistake into a
+compile error. If you genuinely want body-only binding, ship no mapping at all (see
+[§ The zero-script path](#the-zero-script-path)) — or write the one-line
+`context.SetBody(item.Value)` and mean it.
 
 Example — fan out over `$.documents`, call an HTTP inner task per document (mutating its URL and
 body per item), and branch-friendly output:
@@ -155,11 +212,12 @@ public class ProcessDocumentsMapping : IFanOutMapping
         return Task.FromResult(new ScriptResponse { Data = new { itemKey = item.ItemKey } });
     }
 
-    public Task<ScriptResponse> OutputHandler(ScriptContext context, FanOutResult result)
+    // Optional — omit this whole member to keep the runtime's default output packaging.
+    public Task<ScriptResponse?> OutputHandler(ScriptContext context, FanOutResult result)
     {
         var failedKeys = result.Items.Where(i => !i.IsSuccess).Select(i => i.ItemKey).ToList();
 
-        return Task.FromResult(new ScriptResponse
+        return Task.FromResult<ScriptResponse?>(new ScriptResponse
         {
             Data = new
             {
@@ -182,6 +240,10 @@ public class ProcessDocumentsMapping : IFanOutMapping
 > `ItemInputHandler(ScriptContext context, FanOutItem item)` (no `task` parameter), it predates
 > the implemented contract. The shipped interface always passes the cloned `WorkflowTask` as the
 > first parameter — that is how input binding actually mutates the inner task.
+>
+> Existing mappings that declare `Task<ScriptResponse> OutputHandler(...)` (the pre-nullable
+> signature) keep working untouched: script bodies are compiled with nullable annotations off, and
+> an annotation mismatch is at worst a warning, never a compile error. There is nothing to migrate.
 
 Supporting types (`src/BBT.Workflow.Domain/Scripting/Contracts/IFanOutMapping.cs`):
 
@@ -222,7 +284,9 @@ With no mapping, the executor:
 - **Input**: sets the per-item branch context's body directly — `branch.SetBody(item.Value)` — and nothing else. It does **not** wrap the value under `Data.{itemAlias}` or any other alias-qualified path, regardless of whether `itemAlias` is configured (see the `itemAlias` row above).
 - **Output**: writes item results under `join.resultKey` as a list of
   `{ index, itemKey, isSuccess, data, errorCode, errorMessage, durationMs }`, plus a
-  `{resultKey}Summary` object `{ total, succeeded, failed, timedOut }`.
+  `{resultKey}Summary` object `{ total, succeeded, failed, timedOut }`. This is the **default
+  packaging**, and it is not exclusive to the zero-script path — a mapping that leaves
+  `OutputHandler` unoverridden gets the identical shape from the identical code.
 
 **The real limitation**: `SetBody` only reaches inner tasks that read the branch body directly.
 Task types whose *own config* needs to change per item — an `HttpTask`'s URL or templated body,
@@ -230,6 +294,11 @@ a `SoapTask`'s envelope, a `DaprServiceTask`'s method — are not shaped by `Set
 because those fields live on the cloned task instance, not on the script context body. Any inner
 task needing that kind of per-item config mutation **requires** an `ItemInputHandler` that
 mutates the cloned `WorkflowTask` directly, as in the HTTP example above.
+
+Needing a mapping for that reason costs you nothing on the output side: the **Output** bullet above
+describes the packaging you keep as long as the mapping does not override `OutputHandler` — same
+implementation, same shape, same `join.resultKey`. See
+[§ Override only what you need](#override-only-what-you-need).
 
 ## Single-write invariant and why item handlers must be pure
 
@@ -252,7 +321,9 @@ This is why `ItemInputHandler` **must be pure with respect to instance data**: i
 concurrently, each on a context that is thrown away, so any write it attempted would either be
 lost or race against its siblings. `OutputHandler` is the only call in the whole batch whose
 returned `ScriptResponse.Data` becomes the FanOut task's real output — merged into instance data
-exactly once, through the same standard task-output path every other task uses. **One fan-out
+exactly once, through the same standard task-output path every other task uses. (Leaving it
+unoverridden does not weaken that: the default packaging takes its place at the same single point,
+after every item has settled.) **One fan-out
 task execution ⇒ one `InstanceData` patch**, no matter the batch size — the per-item journal rows
 give you the audit trail without multiplying the write.
 

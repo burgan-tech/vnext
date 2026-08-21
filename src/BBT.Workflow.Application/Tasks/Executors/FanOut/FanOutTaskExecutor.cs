@@ -651,9 +651,23 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     }
 
     /// <summary>
-    /// Produces the batch's single output: the mapping's <c>OutputHandler</c> when one is
-    /// configured, otherwise the default packaging.
+    /// Produces the batch's single output: the mapping's <c>OutputHandler</c> when one overrode it,
+    /// otherwise the default packaging.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// "No mapping at all" and "a mapping that did not override <c>OutputHandler</c>" are ONE case
+    /// here, deciding on one <c>null</c> and falling through to one <see cref="BuildDefaultOutput"/>
+    /// call. Branching to the default early for the mapping-less path would leave two routes to the
+    /// same documented shape that can drift apart — and overriding input binding must not cost an
+    /// author the default output, which is exactly what forced them to reimplement it byte-for-byte
+    /// in a script.
+    /// </para>
+    /// <para>
+    /// The signal is a null <see cref="ScriptResponse"/>, not a null <c>Data</c>: a handler that ran
+    /// and deliberately produced nothing still replaces the default with nothing.
+    /// </para>
+    /// </remarks>
     private static async Task<Result<object?>> BuildOutputAsync(
         FanOutTask task,
         IFanOutMapping? mapping,
@@ -661,25 +675,29 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutResult result,
         CancellationToken cancellationToken)
     {
-        if (mapping is null)
+        var handled = mapping is null
+            ? Result<ScriptResponse?>.Ok(null)
+            : await ResultExtensions.TryAsync<ScriptResponse?>(
+                async _ => await mapping.OutputHandler(context.ScriptContext, result),
+                cancellationToken,
+                ex => Error.Failure(
+                    WorkflowErrorCodes.TaskExecution,
+                    $"FanOut task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+
+        if (!handled.IsSuccess)
         {
-            return Result<object?>.Ok(BuildDefaultOutput(task, result));
+            return Result<object?>.Fail(handled.Error);
         }
 
-        return await ResultExtensions.TryAsync<object?>(async _ =>
-            {
-                var response = await mapping.OutputHandler(context.ScriptContext, result);
-                return response?.Data;
-            },
-            cancellationToken,
-            ex => Error.Failure(
-                WorkflowErrorCodes.TaskExecution,
-                $"FanOut task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        return Result<object?>.Ok(handled.Value is { } response
+            ? response.Data
+            : BuildDefaultOutput(task, result));
     }
 
     /// <summary>
-    /// The default output shape when the task ships no mapping: the per-item results under the
-    /// configured result key, and the batch counters under <c>{resultKey}Summary</c>.
+    /// The default output shape, used both when the task ships no mapping and when its mapping
+    /// leaves <c>OutputHandler</c> unoverridden: the per-item results under the configured result
+    /// key, and the batch counters under <c>{resultKey}Summary</c>.
     /// </summary>
     private static object BuildDefaultOutput(FanOutTask task, FanOutResult result) =>
         new Dictionary<string, object?>

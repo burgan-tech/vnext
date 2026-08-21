@@ -22,6 +22,14 @@ namespace BBT.Workflow.Scripting;
 /// the only place in the whole batch where data is merged into the instance; this is precisely what
 /// makes N parallel item handlers safe instead of a data race.
 /// </para>
+/// <para>
+/// <strong>Override only what you need.</strong> <see cref="ItemSelector"/> and
+/// <see cref="OutputHandler"/> both carry a default implementation whose <c>null</c> return means
+/// "I did not override this — use the runtime's behaviour" (<c>itemsPath</c> and the default output
+/// packaging respectively). Only <see cref="ItemInputHandler"/> is abstract, because that is the one
+/// decision the runtime cannot make for a mapping that exists: a mapping is authored precisely
+/// because the flat <c>SetBody(item.Value)</c> binding is not what the inner task needs.
+/// </para>
 /// </remarks>
 public interface IFanOutMapping
 {
@@ -46,6 +54,14 @@ public interface IFanOutMapping
     /// <param name="context">The isolated per-item branch script context.</param>
     /// <param name="item">The item being bound: its index, value and stable key.</param>
     /// <returns>Audit data for this item's input binding; not merged into instance data.</returns>
+    /// <remarks>
+    /// Deliberately the ONLY abstract member. Unlike its two siblings, input binding has no return
+    /// channel that could signal "not overridden" — the returned response is audit data the executor
+    /// discards — so a default would have to silently perform the flat <c>SetBody(item.Value)</c>
+    /// binding. An author who mistypes this member's name or signature in a <c>.csx</c> would then get
+    /// a batch that compiles, runs, and sends N identical unbound requests to the inner task's
+    /// authored endpoint. Keeping it abstract turns that mistake into a compile error.
+    /// </remarks>
     Task<ScriptResponse> ItemInputHandler(WorkflowTask task, ScriptContext context, FanOutItem item);
 
     /// <summary>
@@ -55,7 +71,17 @@ public interface IFanOutMapping
     /// </summary>
     /// <param name="context">The batch-level script context (not an item branch).</param>
     /// <param name="result">The aggregated outcome of every item in the batch.</param>
-    Task<ScriptResponse> OutputHandler(ScriptContext context, FanOutResult result);
+    /// <returns>
+    /// The default implementation returns <c>null</c>, meaning "use the runtime's default output
+    /// packaging" — the same shape a task shipping no mapping at all produces (item results under
+    /// <c>join.resultKey</c> plus a <c>{resultKey}Summary</c> of
+    /// <c>{total, succeeded, failed, timedOut}</c>). Mirrors <see cref="ItemSelector"/>: a mapping
+    /// authored only to bind per-item input never has to reimplement the default output shape to keep
+    /// it. Note the signal is a <c>null</c> RESPONSE, not a null <see cref="ScriptResponse.Data"/> —
+    /// an overriding handler that deliberately produces no data still replaces the default.
+    /// </returns>
+    Task<ScriptResponse?> OutputHandler(ScriptContext context, FanOutResult result)
+        => Task.FromResult<ScriptResponse?>(null);
 }
 
 /// <summary>A single fan-out item handed to <see cref="IFanOutMapping.ItemInputHandler"/>: its position, value and stable key.</summary>

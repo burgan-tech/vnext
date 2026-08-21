@@ -43,7 +43,7 @@ internal sealed class FanOutHarness
     public FanOutHarness(
         string? itemsPath = "$.documents",
         object? instanceData = null,
-        StubFanOutMapping? mapping = null,
+        IFanOutMapping? mapping = null,
         FanOutJoinPolicy joinPolicy = FanOutJoinPolicy.AllSettled,
         int? minSuccess = null,
         int maxDop = 4,
@@ -210,7 +210,7 @@ internal sealed class FanOutHarness
 
     public WorkflowTask Template { get; }
 
-    public StubFanOutMapping? Mapping { get; }
+    public IFanOutMapping? Mapping { get; }
 
     public string ResultKey { get; }
 
@@ -565,7 +565,7 @@ internal sealed class StubFanOutMapping : IFanOutMapping
         return Task.FromResult(new ScriptResponse { Data = item.Value });
     }
 
-    public Task<ScriptResponse> OutputHandler(ScriptContext context, FanOutResult result)
+    public Task<ScriptResponse?> OutputHandler(ScriptContext context, FanOutResult result)
     {
         lock (_lock)
         {
@@ -578,7 +578,7 @@ internal sealed class StubFanOutMapping : IFanOutMapping
             throw OutputHandlerThrows;
         }
 
-        return Task.FromResult(new ScriptResponse
+        return Task.FromResult<ScriptResponse?>(new ScriptResponse
         {
             Data = OutputData ?? new Dictionary<string, object?>
             {
@@ -586,5 +586,39 @@ internal sealed class StubFanOutMapping : IFanOutMapping
                 ["succeeded"] = result.Succeeded
             }
         });
+    }
+}
+
+/// <summary>
+/// A mapping that overrides <see cref="IFanOutMapping.ItemInputHandler"/> and NOTHING else — the
+/// shape every real fan-out over an HTTP inner task has, since per-item binding must mutate the
+/// cloned task's URL/body while the output shape is fine as the runtime packages it.
+/// </summary>
+/// <remarks>
+/// A separate type rather than a flag on <see cref="StubFanOutMapping"/> on purpose: what is under
+/// test is that the interface is SATISFIABLE without an <c>OutputHandler</c> member at all. A stub
+/// that declares the member and returns null would pass the executor's runtime check while saying
+/// nothing about the compile-time obligation that forced authors to reimplement the default shape.
+/// </remarks>
+internal sealed class InputOnlyFanOutMapping : IFanOutMapping
+{
+    private readonly Lock _lock = new();
+
+    /// <summary>Optional per-item mutation of the cloned inner task, as a real .csx binding would do.</summary>
+    public Action<WorkflowTask, ScriptContext, FanOutItem>? BindItem { get; init; }
+
+    public List<FanOutItem> BoundItems { get; } = [];
+
+    public Task<ScriptResponse> ItemInputHandler(WorkflowTask task, ScriptContext context, FanOutItem item)
+    {
+        lock (_lock)
+        {
+            BoundItems.Add(item);
+        }
+
+        BindItem?.Invoke(task, context, item);
+
+        context.SetBody(item.Value);
+        return Task.FromResult(new ScriptResponse { Data = item.Value });
     }
 }

@@ -10,12 +10,15 @@ namespace BBT.Workflow.Domain.Tests.Scripting;
 
 public class FanOutMappingContractTests
 {
+    /// <summary>
+    /// The smallest mapping the contract admits. It implements ONLY <c>ItemInputHandler</c> — that
+    /// this compiles at all is the point: the primary use case (a fan-out over an HTTP inner task)
+    /// needs per-item binding and nothing else, and must not be forced to reimplement the runtime's
+    /// default output packaging to get it.
+    /// </summary>
     private sealed class MinimalMapping : IFanOutMapping
     {
         public Task<ScriptResponse> ItemInputHandler(WorkflowTask task, ScriptContext context, FanOutItem item)
-            => Task.FromResult(new ScriptResponse());
-
-        public Task<ScriptResponse> OutputHandler(ScriptContext context, FanOutResult result)
             => Task.FromResult(new ScriptResponse());
     }
 
@@ -25,6 +28,17 @@ public class FanOutMappingContractTests
         IFanOutMapping mapping = new MinimalMapping();
         var items = await mapping.ItemSelector(null!);
         items.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Default_OutputHandler_Should_Return_Null_Meaning_Use_Default_Packaging()
+    {
+        // Null is the "I did not override this" signal the executor keys the default packaging off,
+        // mirroring ItemSelector's "use itemsPath". A default returning an empty ScriptResponse
+        // instead would be indistinguishable from an author deliberately writing nothing.
+        IFanOutMapping mapping = new MinimalMapping();
+        var response = await mapping.OutputHandler(null!, new FanOutResult(0, 0, 0, false, []));
+        response.ShouldBeNull();
     }
 
     [Fact]

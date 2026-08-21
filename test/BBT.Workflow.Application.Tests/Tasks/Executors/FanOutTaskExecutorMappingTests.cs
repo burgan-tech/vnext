@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
@@ -29,9 +31,10 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 /// decision table (<c>FanOutTaskExecutorTests</c> / <c>FanOutTaskExecutorPolicyTests</c>), and the
 /// item-key extraction rules per value shape (<c>FanOutItemsResolverTests</c> covers those
 /// exhaustively at unit level). What is tested here is the WIRING between the mapping and the
-/// executor. Note that when a mapping is present the default packaging is replaced, so per-item
-/// outcomes are asserted through <c>OutputCalls[0]</c> — what the author's handler actually sees —
-/// rather than through the harness's <c>ItemResults</c> helper.
+/// executor. Note that when a mapping OVERRIDES <c>OutputHandler</c> the default packaging is
+/// replaced, so per-item outcomes are asserted through <c>OutputCalls[0]</c> — what the author's
+/// handler actually sees — rather than through the harness's <c>ItemResults</c> helper. A mapping
+/// that leaves <c>OutputHandler</c> unoverridden keeps the default shape, which is its own test.
 /// </para>
 /// </remarks>
 public sealed class FanOutTaskExecutorMappingTests
@@ -161,6 +164,68 @@ public sealed class FanOutTaskExecutorMappingTests
         // an author who returns their own summary must not also get the raw result array.
         output.TryGetProperty(harness.ResultKey, out _).ShouldBeFalse();
         output.TryGetProperty($"{harness.ResultKey}Summary", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task MappingWithoutAnOutputHandler_GetsTheDefaultPackaging_ByteEquivalentToTheNoMappingCase()
+    {
+        // The defect this pins: a fan-out over an HTTP inner task REQUIRES an ItemInputHandler
+        // (only a mapping can mutate the cloned task's URL/body), and supplying one used to opt the
+        // author out of default output packaging — with OutputHandler abstract, they then had to
+        // reimplement the documented default shape byte-for-byte in their .csx just to keep it.
+        // Overriding input binding must cost nothing on the output side.
+        var mapping = new InputOnlyFanOutMapping
+        {
+            BindItem = (task, _, item) => ((HttpTask)task).SetUrl($"https://items.test/{item.ItemKey}")
+        };
+        var mapped = new FanOutHarness(
+            instanceData: FanOutHarness.Documents(4),
+            mapping: mapping,
+            joinPolicy: FanOutJoinPolicy.AllSettled);
+        mapped.Engine.FailOrders.Add(2);
+
+        var mappedResponse = await mapped.ExecuteAsync();
+
+        // The same batch with NO mapping at all — the reference shape.
+        var bare = new FanOutHarness(
+            instanceData: FanOutHarness.Documents(4),
+            joinPolicy: FanOutJoinPolicy.AllSettled);
+        bare.Engine.FailOrders.Add(2);
+
+        var bareResponse = await bare.ExecuteAsync();
+
+        mapping.BoundItems.Count.ShouldBe(4);
+        mapped.Engine.Calls.Count.ShouldBe(4);
+
+        // The binding really happened — this is not the zero-script path in disguise.
+        mapped.Engine.Calls.Select(c => ((HttpTask)c.PreparedTask!).Url).Distinct().Count().ShouldBe(4);
+
+        // Byte-equivalent output, which is the actual guarantee: not "some default-looking shape",
+        // but THE default shape, produced by the single packaging implementation both paths reach.
+        // Only the wall-clock durations are normalised away.
+        Normalize(mapped.OutputAsJson((object?)mappedResponse.Value!.Data), mapped.ResultKey)
+            .ShouldBe(Normalize(bare.OutputAsJson((object?)bareResponse.Value!.Data), bare.ResultKey));
+
+        // And it is the real packaging, not two empty objects compared to each other.
+        var output = mapped.OutputAsJson((object?)mappedResponse.Value!.Data);
+        output.GetProperty(mapped.ResultKey).GetArrayLength().ShouldBe(4);
+        output.GetProperty($"{mapped.ResultKey}Summary").GetProperty("succeeded").GetInt32().ShouldBe(3);
+        output.GetProperty($"{mapped.ResultKey}Summary").GetProperty("failed").GetInt32().ShouldBe(1);
+    }
+
+    /// <summary>
+    /// Renders the default packaging as text with the per-item <c>durationMs</c> zeroed, so two runs
+    /// of the same batch can be compared exactly rather than field by field.
+    /// </summary>
+    private static string Normalize(JsonElement output, string resultKey)
+    {
+        var node = JsonNode.Parse(output.GetRawText())!.AsObject();
+        foreach (var item in node[resultKey]!.AsArray())
+        {
+            item!["durationMs"] = 0;
+        }
+
+        return node.ToJsonString();
     }
 
     [Fact]
