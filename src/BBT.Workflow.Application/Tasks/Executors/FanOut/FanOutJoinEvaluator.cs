@@ -23,13 +23,13 @@ public sealed record FanOutJoinOutcome(bool IsSuccess, string? ErrorMessage);
 /// rest once one does). Used for redundant sources / failover lookups; judges purely on the success
 /// count, regardless of <c>timedOut</c>.</para>
 /// <para>
-/// <strong>Empty batch:</strong> succeeds for <c>All</c>, <c>AllSettled</c> and <c>Quorum</c> — a
-/// no-op batch is not a failure. For <c>Quorum</c> this is an explicit carve-out, not a fallout of
-/// the threshold comparison: a validly configured quorum always has <c>minSuccess &gt;= 1</c>
-/// (enforced by <c>FanOutTask.Configure</c>), so <c>succeeded (0) &gt;= minSuccess</c> would be
-/// false on an empty batch and the naive rule would fail it. <c>FirstSuccess</c> is the one policy
-/// that does NOT get the carve-out: it is defined as "at least one success", and zero items cannot
-/// produce one, so it FAILS on an empty batch.
+/// <strong>Empty batch:</strong> succeeds for <c>All</c> (vacuously — every item succeeded because
+/// there were none) and <c>AllSettled</c> (always succeeds). It FAILS for the threshold policies,
+/// <c>Quorum</c> and <c>FirstSuccess</c> — neither is a special case, both fall straight out of
+/// <c>succeeded &gt;= threshold</c>: with zero items <c>succeeded</c> is 0, and a threshold of at
+/// least 1 (guaranteed for <c>Quorum</c> by <c>FanOutTask.Configure</c>; definitionally 1 for
+/// <c>FirstSuccess</c>) can never be met by zero. <c>FirstSuccess</c> is exactly <c>Quorum</c> with
+/// <c>minSuccess = 1</c> — the two must never diverge on the same input, empty batch included.
 /// </para>
 /// </remarks>
 public static class FanOutJoinEvaluator
@@ -67,11 +67,9 @@ public static class FanOutJoinEvaluator
             FanOutJoinPolicy.All => new FanOutJoinOutcome(true, null),
 
             // Quorum/FirstSuccess judge purely on the success count - timedOut carries no
-            // independent weight for them, unlike for All.
-            // Empty-batch carve-out: a validly configured quorum has minSuccess >= 1, so the
-            // threshold comparison alone would fail an empty batch. The table treats "no items to
-            // judge" as a no-op success for quorum (unlike firstSuccess) - special-case it here.
-            FanOutJoinPolicy.Quorum when items.Count == 0 => new FanOutJoinOutcome(true, null),
+            // independent weight for them, unlike for All. No empty-batch special case: with zero
+            // items succeeded is 0, which never clears a threshold >= 1, so both policies fail an
+            // empty batch as a direct consequence of the same comparison FirstSuccess uses below.
             FanOutJoinPolicy.Quorum when succeeded >= (minSuccess ?? 1) => new FanOutJoinOutcome(true, null),
             FanOutJoinPolicy.Quorum => new FanOutJoinOutcome(false,
                 $"FanOut join policy 'quorum' not met: {succeeded}/{items.Count} succeeded, minSuccess={minSuccess?.ToString() ?? "1 (default)"}."),

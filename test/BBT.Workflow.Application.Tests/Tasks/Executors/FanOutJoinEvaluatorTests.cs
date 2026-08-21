@@ -41,11 +41,14 @@ public class FanOutJoinEvaluatorTests
     }
 
     [Fact]
-    public void Evaluate_Empty_Batch_Should_Succeed_For_All_Policies_Except_FirstSuccess()
+    public void Evaluate_Empty_Batch_Should_Succeed_Only_For_All_And_AllSettled()
     {
+        // All / AllSettled succeed vacuously on an empty batch. Quorum and FirstSuccess are both
+        // threshold policies (FirstSuccess is Quorum with minSuccess=1) and neither can be satisfied
+        // by zero successes, so both fail - the two must agree here since they're the same rule.
         FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.All, null, [], false).IsSuccess.ShouldBeTrue();
         FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.AllSettled, null, [], false).IsSuccess.ShouldBeTrue();
-        FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.Quorum, null, [], false).IsSuccess.ShouldBeTrue();
+        FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.Quorum, 1, [], false).IsSuccess.ShouldBeFalse();
         FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.FirstSuccess, null, [], false).IsSuccess.ShouldBeFalse();
     }
 
