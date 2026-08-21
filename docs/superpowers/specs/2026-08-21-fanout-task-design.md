@@ -248,21 +248,43 @@ task yürütme yolunda hiç üretilmiyor** (yalnız EF migration'larda mevcut). 
 
 ## 10. Validation
 
-Yeni `FanOutTaskValidator` (`src/BBT.Workflow.Domain/Definitions/Validators/`) +
-`WorkflowValidator`'dan çağrı (mevcut `ErrorBoundaryValidator`/`ScriptCodeValidator` deseni).
-Ek olarak `FanOutTask.Configure()` içinde fail-fast parse.
+> **SEVK EDİLEN HAL — bu bölüm implementasyon sırasında değişti.** İlk taslak, kuralların
+> tümünü `WorkflowValidator`'dan çağrılan yeni bir `FanOutTaskValidator` ile **tanım zamanında**
+> reddetmeyi öngörüyordu. Öyle olmadı ve `FanOutTaskValidator` **yok**: fan-out config'i workflow
+> dokümanında değil **task component'inde** yaşıyor, dolayısıyla `WorkflowValidator`'ın göreceği
+> bir yerde durmuyor. Bkz. plan amendment #3
+> (`docs/superpowers/plans/2026-08-21-fanout-task.md`). Doğrulama iki yere bölündü:
 
-1. Kaynak **XOR**: `itemsPath` ve mapping'de `ItemSelector` override'ı — ikisi birden ya da
-   hiçbiri ⇒ hata. (Script tarafı tanım zamanında tespit edilemiyorsa: `itemsPath` yokken
-   mapping da yoksa ⇒ hata; runtime'da `ItemSelector` null dönerse ⇒ item kaynağı yok hatası.)
-2. Inner task referansı zorunlu (`key/domain/flow/version`) ve çözülebilir olmalı.
-3. **Nested yasak:** inner task type `21` ⇒ tanım zamanında red (derinlik 1).
-4. `mode` yalnız `"inline"` — `"durable"` ⇒ "not yet supported".
-5. `policy = quorum` ⇒ `minSuccess >= 1` zorunlu; diğer policy'lerde `minSuccess` varsa uyarı.
-6. `maxDegreeOfParallelism >= 1`; `itemTimeoutSeconds`/`batchTimeoutSeconds` pozitif;
-   `itemTimeoutSeconds <= batchTimeoutSeconds`.
-7. Inner task türü için **ek kısıt yok** (karar #2) — Human/Timer gibi türlerin inline
-   fan-out'ta anlamlı olmadığı developer dokümantasyonunda uyarı olarak yazılır.
+**A. Tanım zamanı — `FanOutTask.Configure()` içinde fail-fast `ArgumentException`.** Task
+component'i parse edilirken görülebilen her şey:
+
+1. Inner task referansı zorunlu (`key/domain/flow/version`, dördü de dolu).
+2. `itemsPath` varsa `$.` ile başlamalı.
+3. `mode` yalnız `"inline"` — `"durable"` reddedilir (rezerve).
+4. `policy = quorum` ⇒ `minSuccess >= 1` zorunlu.
+5. `maxDegreeOfParallelism >= 1`; timeout'lar pozitif; `itemTimeoutSeconds <= batchTimeoutSeconds`.
+6. `join.policy` tanımlı bir enum değeri olmalı — sayısal string'ler dahil reddedilir
+   (`Enum.IsDefined` ile; `TryParse` tek başına `"0"`/`"99"`'u kabul ediyordu).
+
+**B. Runtime — `FanOutTaskExecutor` preflight'ı.** Tek bir component'e bakarak karar
+verilemeyen, cross-component olan iki kural:
+
+7. **Kaynak XOR:** `itemsPath` ile mapping'in `ItemSelector`'ı. Mapping ayrı bir component
+   olduğu ve `ItemSelector`'ın default implementasyonu bulunduğu için "override edilmiş mi"
+   sorusu tanım zamanında **statik olarak cevaplanamaz**; ikisi birden ⇒ "ambiguous item
+   source", hiçbiri ⇒ "no item source".
+8. **Nested yasak:** inner task type `21` ⇒ runtime'da red (derinlik 1, bulkhead deadlock'u).
+   Inner task referansı ancak çözüldüğünde tipi bilinebiliyor.
+
+9. Inner task türü için **başka kısıt yok** (karar #2) — Human/Timer gibi türlerin inline
+   fan-out'ta anlamlı olmadığı developer dokümantasyonunda uyarı olarak yazıldı.
+10. `minSuccess`, non-quorum policy'lerde **sessizce yok sayılır** — ilk taslak uyarı
+    öngörüyordu, ancak `Configure` içinde uyarı kanalı yok ve throw etmek spec'ten daha katı
+    olurdu. Bilinçli olarak dokümante edilen bir authoring tuzağı.
+
+**Forge Studio için sonuç:** 7 ve 8 numaralı kurallar publish'te yakalanmaz. Designer bunları
+kendisi enforce etmelidir — `docs/integration/forge-fanout-task-implementation.md` bunu
+temel gerekçe olarak işliyor.
 
 ## 11. Dokunulacak Yerler (keşif çıktısı)
 

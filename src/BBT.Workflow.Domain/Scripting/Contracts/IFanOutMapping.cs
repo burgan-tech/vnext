@@ -3,11 +3,20 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Scripting;
 
 /// <summary>
-/// Mapping contract for <c>FanOutTask</c>. Domain teams author the implementation as a C# script
-/// and ship it in the task's <c>mapping</c> field; the runtime compiles it and drives one item
-/// handler invocation per item of the resolved collection, in parallel, then a single output handler
-/// for the whole batch.
+/// Mapping contract for <c>FanOutTask</c>. Domain teams author the implementation as a C# script;
+/// the runtime compiles it and drives one item handler invocation per item of the resolved
+/// collection, in parallel, then a single output handler for the whole batch.
 /// </summary>
+/// <remarks>
+/// WHERE THE SCRIPT IS ATTACHED — not on the task component. A type-21 task component carries only
+/// <c>type</c> and <c>config</c>; the mapping rides the WORKFLOW's task binding, the same
+/// <c>{ order, task, mapping: { location, code } }</c> slot every other task type uses
+/// (<c>OnExecuteTask.Mapping</c>, which the executor reads as
+/// <c>context.OnExecuteTask.Mapping</c>). One task component can therefore be bound with different
+/// mappings at different call sites. Stated explicitly because the natural assumption — that a
+/// task-level contract lives in the task's own JSON — is wrong here and sends authors looking for
+/// a <c>mapping</c> field on the component that does not exist.
+/// </remarks>
 /// <remarks>
 /// <para>
 /// Mirrors <see cref="IMapping"/> conventions: input binding mutates the (cloned) inner task and the
