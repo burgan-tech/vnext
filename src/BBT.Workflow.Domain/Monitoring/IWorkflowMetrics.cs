@@ -567,6 +567,34 @@ public interface IWorkflowMetrics
 
     #endregion
 
+    #region Fan-Out Metrics
+
+    /// <summary>
+    /// Records one settled fan-out batch: its size, its outcome counters and its wall-clock
+    /// duration.
+    /// </summary>
+    /// <remarks>
+    /// Batch-level ONLY, deliberately. Per-item duration is not recorded here because every
+    /// fan-out item IS a full task execution through <c>ITaskExecutionEngine</c>, which already
+    /// records it via <see cref="RecordTaskDuration"/> / <see cref="RecordTaskCompleted"/>;
+    /// emitting a second per-item timing would double-count the same work.
+    /// </remarks>
+    /// <param name="taskKey">Key of the fan-out task.</param>
+    /// <param name="workflowKey">Workflow identifier the batch ran in.</param>
+    /// <param name="total">Number of items in the batch.</param>
+    /// <param name="succeeded">Number of items that succeeded.</param>
+    /// <param name="failed">Number of items that failed.</param>
+    /// <param name="durationSeconds">Wall-clock duration of the whole batch in seconds.</param>
+    void RecordFanOutBatch(
+        string taskKey,
+        string workflowKey,
+        int total,
+        int succeeded,
+        int failed,
+        double durationSeconds);
+
+    #endregion
+
     #region Error Boundary Metrics
 
     /// <summary>

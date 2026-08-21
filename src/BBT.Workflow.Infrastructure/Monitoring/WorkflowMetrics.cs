@@ -716,4 +716,45 @@ public static class WorkflowMetrics
         .CreateCounter("workflow_subflow_error_propagation_total",
             "SubFlow error propagation events",
             new[] { "parent_workflow", "child_workflow", "propagated" });
+
+    // Fan-Out Metrics
+    //
+    // Batch level ONLY. A fan-out item is a full task execution through ITaskExecutionEngine, so
+    // its duration is already observed by workflow_task_duration_seconds; a per-item fan-out
+    // timing would double-count exactly the same work under a second name.
+
+    /// <summary>
+    /// Fan-out batch size histogram (logical name <c>fanout.batch.size</c>) with task_key and
+    /// workflow labels.
+    /// </summary>
+    public static readonly Histogram FanOutBatchSize = Metrics
+        .CreateHistogram("workflow_fanout_batch_size",
+            "Number of items in a fan-out batch",
+            new[] { "task_key", "workflow" },
+            new HistogramConfiguration
+            {
+                Buckets = new[] { 1d, 2, 5, 10, 25, 50, 100, 250, 500, 1000 }
+            });
+
+    /// <summary>
+    /// Fan-out batch wall-clock duration histogram (logical name <c>fanout.batch.duration</c>)
+    /// with task_key and workflow labels. Measures the whole batch, queueing included.
+    /// </summary>
+    public static readonly Histogram FanOutBatchDuration = Metrics
+        .CreateHistogram("workflow_fanout_batch_duration_seconds",
+            "Fan-out batch duration",
+            new[] { "task_key", "workflow" },
+            new HistogramConfiguration
+            {
+                Buckets = new[] { 0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300 }
+            });
+
+    /// <summary>
+    /// Failed fan-out items counter (logical name <c>fanout.item.failures</c>) with task_key and
+    /// workflow labels.
+    /// </summary>
+    public static readonly Counter FanOutItemFailures = Metrics
+        .CreateCounter("workflow_fanout_item_failures_total",
+            "Failed fan-out items",
+            new[] { "task_key", "workflow" });
 }

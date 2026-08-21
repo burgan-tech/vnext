@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Factory;
@@ -36,6 +38,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     private readonly ITaskFactory _taskFactory;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly FanOutConcurrencyLimiter _concurrencyLimiter;
+    private readonly IWorkflowMetrics _metrics;
 
     /// <summary>
     /// Initializes a new instance of <see cref="FanOutTaskExecutor"/>.
@@ -45,6 +48,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         ITaskFactory taskFactory,
         IServiceScopeFactory serviceScopeFactory,
         FanOutConcurrencyLimiter concurrencyLimiter,
+        IWorkflowMetrics metrics,
         ILogger<FanOutTaskExecutor> logger)
         : base(logger)
     {
@@ -52,6 +56,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         _taskFactory = taskFactory;
         _serviceScopeFactory = serviceScopeFactory;
         _concurrencyLimiter = concurrencyLimiter;
+        _metrics = metrics;
     }
 
     /// <inheritdoc />
@@ -107,6 +112,13 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
                 "nesting fan-out is not supported because nested batches deadlock against the global item bulkhead.");
         }
 
+        Logger.FanOutBatchStarted(
+            task.Key,
+            items.Count,
+            task.MaxDegreeOfParallelism,
+            task.JoinPolicy.ToString(),
+            InstanceIdOf(context));
+
         // An empty batch is NOT short-circuited to success: it runs through the same join
         // evaluation as a non-empty one, and the threshold policies (quorum, firstSuccess) fail
         // it because zero successes cannot clear a threshold of at least one.
@@ -121,6 +133,11 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             itemResults.Count - succeeded,
             batchTimedOut,
             itemResults);
+
+        // Recorded HERE — as soon as the batch has settled and its counters are final — rather
+        // than on the return paths below. The output handler is author code that can fail, and a
+        // batch that ran must still be counted exactly once whatever the handler does with it.
+        ObserveBatchOutcome(task, context, fanOutResult, stopwatch.Elapsed);
 
         var outputResult = await BuildOutputAsync(task, mapping, context, fanOutResult, cancellationToken);
         if (!outputResult.IsSuccess)
@@ -264,6 +281,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     {
         using var cancellation = FanOutBatchCancellation.Start(task, cancellationToken);
         using var degreeGate = new SemaphoreSlim(task.MaxDegreeOfParallelism, task.MaxDegreeOfParallelism);
+        var saturationLatch = new OnceLatch();
 
         var settled = await Task.WhenAll(items.Select(item => ExecuteSingleItemAsync(
             task,
@@ -272,7 +290,8 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             context,
             item,
             degreeGate,
-            cancellation)));
+            cancellation,
+            saturationLatch)));
 
         // Results are ALWAYS returned in item-index order. The task's 'ordered' flag is accepted
         // by the schema for forward compatibility with durable mode (which may stream results in
@@ -304,7 +323,8 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         TaskExecutorContext context,
         FanOutItem item,
         SemaphoreSlim degreeGate,
-        FanOutBatchCancellation cancellation)
+        FanOutBatchCancellation cancellation,
+        OnceLatch saturationLatch)
     {
         var stopwatch = Stopwatch.StartNew();
         var degreeSlotHeld = false;
@@ -312,14 +332,28 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutBatchCancellation.ItemWindow? window = null;
         FanOutItemResult settled;
 
+        // One span per item, opened BEFORE the slot waits so the trace separates "queued behind
+        // the bulkhead" from "the item itself is slow" — the first question an operator asks about
+        // a slow batch. It is also what stops the N items from fighting over one ambient span:
+        // TaskExecutionEngine renames Activity.Current in place, so without a span of its own each
+        // item would rename the batch's.
+        using var activity = TaskExecutionActivityHelper.StartActivity(
+            TaskExecutionActivityHelper.OperationFanOutItem, task.Key, TaskType.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.FanOutItemKey, item.ItemKey);
+        activity?.SetTag(TelemetryConstants.TagNames.FanOutItemIndex, item.Index);
+
         try
         {
             // Local gate first, then the global bulkhead: a batch can only ever hold
             // maxDegreeOfParallelism global slots, so one large batch cannot starve the process.
             await degreeGate.WaitAsync(cancellation.Token);
             degreeSlotHeld = true;
-            await _concurrencyLimiter.WaitAsync(cancellation.Token);
+            await AcquireGlobalSlotAsync(task, saturationLatch, cancellation.Token);
             globalSlotHeld = true;
+
+            activity?.SetTag(
+                TelemetryConstants.TagNames.FanOutItemQueueWaitMs,
+                (long)stopwatch.Elapsed.TotalMilliseconds);
 
             // Opened only now that the slots are held: the per-item deadline measures execution,
             // not time spent queueing behind other items.
@@ -361,8 +395,131 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             }
         }
 
+        // Early stop stays FIRST, ahead of the reporting: it is the only statement here that
+        // affects the other items in flight, and observation must not stand between a decided
+        // verdict and the siblings it cancels.
         cancellation.SignalEarlyStop(settled.IsSuccess);
+
+        ObserveItemOutcome(task, context, item, settled, activity);
         return settled;
+    }
+
+    /// <summary>
+    /// Takes one process-wide bulkhead slot, reporting the FIRST time this batch has to queue for
+    /// one.
+    /// </summary>
+    /// <remarks>
+    /// Contention is detected from the returned task's <see cref="Task.IsCompleted"/>:
+    /// <see cref="SemaphoreSlim.WaitAsync(CancellationToken)"/> hands back an already-completed
+    /// task when it could take the count synchronously, and a real waiter otherwise. That is a
+    /// pure observation of the wait that is happening anyway — unlike a <c>Wait(0)</c> fast path,
+    /// it takes no second acquisition attempt, so it cannot barge ahead of already-queued waiters
+    /// and cannot leak a slot if the log call throws.
+    /// <para>
+    /// The latch keeps this to once per batch: with a batch far larger than the bulkhead, every
+    /// item after the first N would report the same saturation, which is volume, not information.
+    /// </para>
+    /// </remarks>
+    private async Task AcquireGlobalSlotAsync(
+        FanOutTask task,
+        OnceLatch saturationLatch,
+        CancellationToken cancellationToken)
+    {
+        var slot = _concurrencyLimiter.WaitAsync(cancellationToken);
+
+        if (!slot.IsCompleted && saturationLatch.TryFire())
+        {
+            Logger.FanOutBulkheadSaturated(task.Key, _concurrencyLimiter.ActiveCount, _concurrencyLimiter.Capacity);
+        }
+
+        await slot;
+    }
+
+    /// <summary>
+    /// Reports one settled item: names it in the log when it failed, and finishes its span.
+    /// </summary>
+    private void ObserveItemOutcome(
+        FanOutTask task,
+        TaskExecutorContext context,
+        FanOutItem item,
+        FanOutItemResult settled,
+        Activity? activity)
+    {
+        // The inner execution renamed this span (TaskExecutionEngine sets the display name of
+        // Activity.Current rather than starting its own), so the fan-out identity is re-asserted
+        // here — a trace of N identically named siblings does not tell an operator which item
+        // is the straggler.
+        if (activity is not null)
+        {
+            activity.DisplayName =
+                $"{TaskExecutionActivityHelper.OperationFanOutItem}[{item.Index}] {item.ItemKey}";
+        }
+
+        if (settled.IsSuccess)
+        {
+            return;
+        }
+
+        var errorCode = settled.ErrorCode ?? FanOutErrorCodes.ItemFailed;
+        Logger.FanOutItemFailed(task.Key, item.ItemKey, item.Index, errorCode, InstanceIdOf(context));
+        TaskExecutionActivityHelper.SetError(activity, settled.ErrorMessage, errorCode);
+    }
+
+    /// <summary>
+    /// Reports one settled batch: its counters, its duration, and — when the deadline fired — how
+    /// much of it had settled on its own before being cut short.
+    /// </summary>
+    private void ObserveBatchOutcome(
+        FanOutTask task,
+        TaskExecutorContext context,
+        FanOutResult result,
+        TimeSpan elapsed)
+    {
+        var instanceId = InstanceIdOf(context);
+
+        if (result.TimedOut)
+        {
+            var settledCount = result.Items.Count(item => item.ErrorCode != FanOutErrorCodes.BatchTimeout);
+            Logger.FanOutBatchTimedOut(
+                task.Key, settledCount, result.Total, task.BatchTimeoutSeconds, instanceId);
+        }
+
+        Logger.FanOutBatchCompleted(
+            task.Key,
+            result.Total,
+            result.Succeeded,
+            result.Failed,
+            (long)elapsed.TotalMilliseconds,
+            instanceId);
+
+        _metrics.RecordFanOutBatch(
+            task.Key,
+            context.ScriptContext.Workflow?.Key ?? UnknownWorkflow,
+            result.Total,
+            result.Succeeded,
+            result.Failed,
+            elapsed.TotalSeconds);
+    }
+
+    private static Guid InstanceIdOf(TaskExecutorContext context) =>
+        context.ScriptContext.Instance?.Id ?? Guid.Empty;
+
+    /// <summary>
+    /// Metric label used when a fan-out task runs outside a flow (function/extension origin), where
+    /// there is no workflow to attribute the batch to. A literal keeps the label cardinality closed
+    /// instead of emitting an empty series.
+    /// </summary>
+    private const string UnknownWorkflow = "unknown";
+
+    /// <summary>
+    /// One-shot, thread-safe latch. Exists so a condition observed by many items in flight is
+    /// reported once per batch rather than once per item.
+    /// </summary>
+    private sealed class OnceLatch
+    {
+        private int _fired;
+
+        public bool TryFire() => Interlocked.Exchange(ref _fired, 1) == 0;
     }
 
     /// <summary>

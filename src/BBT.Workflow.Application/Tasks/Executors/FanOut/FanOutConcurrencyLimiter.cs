@@ -34,6 +34,12 @@ public sealed class FanOutConcurrencyLimiter
     public int ActiveCount => _capacity - _semaphore.CurrentCount;
 
     /// <summary>
+    /// The configured process-wide ceiling on concurrently executing fan-out items — the
+    /// denominator <see cref="ActiveCount"/> is read against. Constant for the process lifetime.
+    /// </summary>
+    public int Capacity => _capacity;
+
+    /// <summary>
     /// Waits for a global fan-out item slot to become available. Callers MUST pair every
     /// successful wait with exactly one <see cref="Release"/>, typically in a
     /// <c>try</c>/<c>finally</c> around the item's execution.

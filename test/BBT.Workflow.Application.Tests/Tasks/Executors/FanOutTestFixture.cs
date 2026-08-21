@@ -8,6 +8,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -139,8 +140,16 @@ internal sealed class FanOutHarness
             TaskFactory,
             ScopeFactory,
             Limiter,
+            Metrics,
             NullLogger<FanOutTaskExecutor>.Instance);
     }
+
+    /// <summary>
+    /// The metrics sink the executor records batch outcomes to. A substitute rather than the real
+    /// Prometheus implementation: the assertion of interest is that ONE batch recording happens
+    /// with the right counters, not what a collector does with it afterwards.
+    /// </summary>
+    public IWorkflowMetrics Metrics { get; } = Substitute.For<IWorkflowMetrics>();
 
     public ITaskFactory TaskFactory { get; } = Substitute.For<ITaskFactory>();
 

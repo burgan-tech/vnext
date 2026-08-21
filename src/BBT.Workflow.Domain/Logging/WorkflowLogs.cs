@@ -869,6 +869,93 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Fan-Out Execution
+
+    /// <summary>
+    /// Logs when a fan-out batch begins dispatching its items. Paired with
+    /// <see cref="FanOutBatchCompleted"/>: the two together bracket the batch and give the
+    /// operator its size and bounds before anything runs.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10150,
+        Level = LogLevel.Information,
+        Message = "FanOut batch started. TaskKey={TaskKey}, Items={ItemCount}, MaxDop={MaxDegreeOfParallelism}, JoinPolicy={JoinPolicy}, InstanceId={InstanceId}")]
+    public static partial void FanOutBatchStarted(
+        this ILogger logger,
+        string taskKey,
+        int itemCount,
+        int maxDegreeOfParallelism,
+        string joinPolicy,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs a single failed fan-out item. Warning, not Error: one failed item is a recoverable
+    /// outcome the join policy decides on — only the batch's verdict can fault the transition.
+    /// This is the log line that names WHICH item among N went wrong.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10151,
+        Level = LogLevel.Warning,
+        Message = "FanOut item failed. TaskKey={TaskKey}, ItemKey={ItemKey}, Index={ItemIndex}, ErrorCode={ErrorCode}, InstanceId={InstanceId}")]
+    public static partial void FanOutItemFailed(
+        this ILogger logger,
+        string taskKey,
+        string itemKey,
+        int itemIndex,
+        string errorCode,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs the settled counters of a fan-out batch, including the wall-clock duration of the
+    /// whole batch (queueing included).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10152,
+        Level = LogLevel.Information,
+        Message = "FanOut batch completed. TaskKey={TaskKey}, Total={Total}, Succeeded={Succeeded}, Failed={Failed}, DurationMs={DurationMs}, InstanceId={InstanceId}")]
+    public static partial void FanOutBatchCompleted(
+        this ILogger logger,
+        string taskKey,
+        int total,
+        int succeeded,
+        int failed,
+        long durationMs,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a fan-out batch hit its <c>batchTimeoutSeconds</c> deadline, reporting how many
+    /// items had settled on their own before the deadline cut the rest short.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10153,
+        Level = LogLevel.Warning,
+        Message = "FanOut batch timed out. TaskKey={TaskKey}, Settled={SettledCount}/{Total}, BatchTimeout={BatchTimeoutSeconds}s, InstanceId={InstanceId}")]
+    public static partial void FanOutBatchTimedOut(
+        this ILogger logger,
+        string taskKey,
+        int settledCount,
+        int total,
+        int batchTimeoutSeconds,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a fan-out batch had to queue behind the process-wide item bulkhead — i.e. the
+    /// configured ceiling, not the batch's own <c>maxDegreeOfParallelism</c>, is what is now
+    /// limiting throughput. Emitted at most ONCE per batch: every queued item observing the same
+    /// saturation would be noise, not signal.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10154,
+        Level = LogLevel.Warning,
+        Message = "FanOut global item bulkhead saturated. TaskKey={TaskKey}, Active={ActiveItems}/{MaxConcurrentItems}")]
+    public static partial void FanOutBulkheadSaturated(
+        this ILogger logger,
+        string taskKey,
+        int activeItems,
+        int maxConcurrentItems);
+
+    #endregion
+
     #region SubFlow
 
     /// <summary>
