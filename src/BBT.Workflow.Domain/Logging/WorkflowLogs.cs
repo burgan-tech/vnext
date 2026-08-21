@@ -119,6 +119,19 @@ public static partial class WorkflowLogs
     /// Logs when the direct Dapr enqueue of a chained continuation fails and the strategy
     /// falls back to publishing the continuation through the transactional outbox.
     /// </summary>
+    /// <summary>
+    /// Logs that a persisted transition job was armed in the scheduler after the instance status lock
+    /// was released. Debug: one line per accepted async transition, useful when verifying that the
+    /// scheduler call really left the critical section.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10098,
+        Level = LogLevel.Debug,
+        Message = "Transition job {JobId} armed after lock release")]
+    public static partial void TransitionJobArmedAfterLock(
+        this ILogger logger,
+        Guid jobId);
+
     [LoggerMessage(
         EventId = 10127,
         Level = LogLevel.Warning,

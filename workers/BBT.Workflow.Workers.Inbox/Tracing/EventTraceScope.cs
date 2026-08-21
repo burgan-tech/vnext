@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.Tracing;
 using BBT.Workflow.Events;
+using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Workers.Inbox.Tracing;
 
@@ -22,11 +23,13 @@ internal sealed class EventTraceScope : IDisposable
 
     private readonly Activity? _activity;
     private readonly IDisposable? _correlationChange;
+    private readonly IDisposable? _laneScope;
 
-    private EventTraceScope(Activity? activity, IDisposable? correlationChange)
+    private EventTraceScope(Activity? activity, IDisposable? correlationChange, IDisposable? laneScope)
     {
         _activity = activity;
         _correlationChange = correlationChange;
+        _laneScope = laneScope;
     }
 
     /// <summary>
@@ -73,11 +76,20 @@ internal sealed class EventTraceScope : IDisposable
             correlationChange = correlationIdProvider.Change(evt.RequestId);
         }
 
-        return new EventTraceScope(activity, correlationChange);
+        // Establish the trace lane for the handler body. Lane-aware events carry the publisher's
+        // anchor; everything else anchors on this handler span. Without this, work started inside a
+        // handler (a relayed transition, a republished event) would anchor on the pub/sub delivery
+        // span and detach from the originating request's trace tree.
+        var laneScope = evt is ILaneAwareDistributedEvent laneAware
+            ? WorkflowTraceLane.Reset(laneAware.TraceRoot, laneAware.ParentTraceRoot)
+            : WorkflowTraceLane.Reset(activity?.Id);
+
+        return new EventTraceScope(activity, correlationChange, laneScope);
     }
 
     public void Dispose()
     {
+        _laneScope?.Dispose();
         _activity?.Dispose();
         _correlationChange?.Dispose();
     }

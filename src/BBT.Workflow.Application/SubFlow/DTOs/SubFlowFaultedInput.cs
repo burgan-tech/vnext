@@ -140,4 +140,14 @@ public record SubFlowFaultedInput
     /// (sync=true). The parent error-boundary resume keeps the chain synchronous when set.
     /// </summary>
     public bool Sync { get; init; }
+
+    /// <summary>
+    /// Trace lane anchor (W3C traceparent) of the faulting subflow, so the parent resume the receiving
+    /// side runs lands at the parent instance's level instead of nesting under the relay endpoint.
+    /// Internal-only body, same posture as <c>SubflowForwardInput</c>.
+    /// </summary>
+    public string? TraceRoot { get; init; }
+
+    /// <summary>The enclosing lane's anchor — where the parent resume belongs.</summary>
+    public string? ParentTraceRoot { get; init; }
 }

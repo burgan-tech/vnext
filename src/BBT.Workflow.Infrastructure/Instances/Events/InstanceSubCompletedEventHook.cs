@@ -113,7 +113,11 @@ public sealed class InstanceSubCompletedEventHook(
             SubInstanceId = eventData.SubInstanceId,
             InstanceData = eventData.InstanceData,
             Version = eventData.Version,
-            Sync = eventData.Sync
+            Sync = eventData.Sync,
+            // Carry the subflow's lane so the parent resume on the other side lands in the parent's
+            // lane (ParentTraceRoot) instead of nesting under the completion relay endpoint.
+            TraceRoot = eventData.TraceRoot,
+            ParentTraceRoot = eventData.ParentTraceRoot
         };
     }
 }

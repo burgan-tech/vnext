@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -7,6 +8,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Moq;
 using Shouldly;
@@ -35,8 +37,9 @@ public class EnqueueContinuationStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
     }
 
     private EnqueueContinuationStrategy CreateStrategy() =>
@@ -61,6 +64,7 @@ public class EnqueueContinuationStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -77,10 +81,11 @@ public class EnqueueContinuationStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
-                (payload, evt, _) => { capturedPayload = payload; capturedEvent = evt; })
-            .Returns(Task.CompletedTask);
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (payload, evt, _, _) => { capturedPayload = payload; capturedEvent = evt; })
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 
@@ -112,10 +117,11 @@ public class EnqueueContinuationStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
-                (_, evt, _) => capturedEvent = evt)
-            .Returns(Task.CompletedTask);
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (_, evt, _, _) => capturedEvent = evt)
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 
@@ -140,10 +146,11 @@ public class EnqueueContinuationStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
-                (payload, evt, _) => { capturedPayload = payload; capturedEvent = evt; })
-            .Returns(Task.CompletedTask);
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (payload, evt, _, _) => { capturedPayload = payload; capturedEvent = evt; })
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
 
         var activity = new System.Diagnostics.Activity("pipeline");
         activity.SetIdFormat(System.Diagnostics.ActivityIdFormat.W3C);
@@ -180,10 +187,11 @@ public class EnqueueContinuationStrategyTests
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, CancellationToken>(
-                (payload, evt, _) => { capturedPayload = payload; capturedEvent = evt; })
-            .Returns(Task.CompletedTask);
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (payload, evt, _, _) => { capturedPayload = payload; capturedEvent = evt; })
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 
@@ -212,6 +220,7 @@ public class EnqueueContinuationStrategyTests
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
                 It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -285,5 +294,81 @@ public class EnqueueContinuationStrategyTests
         var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
         workflow.SetReference(new Reference(key, domain, "sys-flows", "1.0.0"));
         return workflow;
+    }
+
+    [Fact]
+    public async Task WhenALaneIsEstablished_ShouldStampAnchorAsTraceRootAndCurrentSpanAsPredecessor()
+    {
+        // The whole point of the flat-lane work: the anchor and the predecessor are DIFFERENT
+        // values. TraceRoot (anchor) becomes the next hop's PARENT, so hop N+1 is a sibling of
+        // hop N; TraceParent (predecessor) is only linked. Before this, TraceParent was the parent
+        // and nesting depth grew with every chained hop.
+        const string laneAnchor = "00-cccccccccccccccccccccccccccccccc-cccccccccccccccc-01";
+
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        TransitionJobPayload? capturedPayload = null;
+        TransitionContinuationRequested? capturedEvent = null;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (p, e, _, _) => { capturedPayload = p; capturedEvent = e; })
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+
+        var ambient = new Activity("transition/previous-hop");
+        ambient.SetIdFormat(ActivityIdFormat.W3C);
+        ambient.Start();
+        try
+        {
+            using (WorkflowTraceLane.Use(laneAnchor, parentAnchor: null, seq: 3))
+            {
+                await strategy.DispatchAsync(context, CancellationToken.None);
+            }
+        }
+        finally
+        {
+            ambient.Stop();
+            Activity.Current = null;
+        }
+
+        capturedPayload.ShouldNotBeNull();
+        capturedPayload!.TraceRoot.ShouldBe(laneAnchor);
+        capturedPayload.TraceParent.ShouldBe(ambient.Id);
+        capturedPayload.TraceRoot.ShouldNotBe(capturedPayload.TraceParent);
+        capturedPayload.LaneSeq.ShouldBe(4);
+
+        // Both enqueue paths must agree: the gateway may fall back from one to the other.
+        capturedEvent.ShouldNotBeNull();
+        capturedEvent!.TraceRoot.ShouldBe(laneAnchor);
+        capturedEvent.TraceParent.ShouldBe(ambient.Id);
+        capturedEvent.LaneSeq.ShouldBe(capturedPayload.LaneSeq);
+    }
+
+    [Fact]
+    public async Task WhenNoLaneIsEstablished_ShouldLeaveTraceRootNullSoTheHopKeepsLegacyNesting()
+    {
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        TransitionJobPayload? capturedPayload = null;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+                (p, _, _, _) => capturedPayload = p)
+            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+
+        await strategy.DispatchAsync(context, CancellationToken.None);
+
+        capturedPayload.ShouldNotBeNull();
+        capturedPayload!.TraceRoot.ShouldBeNull();
     }
 }

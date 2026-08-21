@@ -406,19 +406,21 @@ public class TransitionPipelineTests
         enqueueGateway.EnqueueAsync(
                 Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
                 Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct)));
         var enqueueStrategy = new EnqueueContinuationStrategy(jobRepository, enqueueGateway);
 
         var jobsVisibleDuringEnqueue = false;
         enqueueGateway.EnqueueAsync(
                 Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
                 Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 jobsVisibleDuringEnqueue = context.Directives.PostCommitJobs.Single() == postCommitJob;
-                return Task.CompletedTask;
+                return Task.FromResult(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
             });
 
         SetupContextFactory(context);
@@ -439,6 +441,7 @@ public class TransitionPipelineTests
         await enqueueGateway.Received(1).EnqueueAsync(
             Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
             Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+            Arg.Any<bool>(),
             Arg.Any<CancellationToken>());
         result.Value!.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
         result.Value.Directives.NextTransition.ShouldBeNull();

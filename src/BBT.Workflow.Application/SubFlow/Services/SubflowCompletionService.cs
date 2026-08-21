@@ -312,6 +312,18 @@ public sealed class SubflowCompletionService(
     {
         try
         {
+            // The resume is a PARENT-instance operation: it runs after the completion commits, in its
+            // own scope and UoW. So it belongs in the parent's lane, at the same level as the
+            // parent's other transition hops — not nested inside the subflow's span, which is where
+            // the old nesting accumulated. Falls back to the current lane when there is no parent
+            // lane (a resume outside a subflow handoff), which is the pre-lane behaviour.
+            using var resumeActivity = SubFlowActivityHelper.StartFlatLaneActivity(
+                $"SubFlow.Resume/{parentWorkflow.Domain}/{parentWorkflow.Key}",
+                WorkflowTraceLane.ParentLane ?? WorkflowTraceLane.Current);
+            resumeActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+            resumeActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, parentInstance.Id.ToString());
+            resumeActivity?.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subInstanceId.ToString());
+
             var input = new WorkflowExecutionContext
             {
                 Domain = parentWorkflow.Domain,

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -31,6 +32,28 @@ public static class SubFlowActivityHelper
             kind,
             parentContext);
     }
+
+    /// <summary>
+    /// Starts a <em>flat-lane</em> SubFlow span: parented to the supplied lane anchor rather than to
+    /// whatever span happens to be ambient.
+    /// <para>
+    /// Used for the parent resume. A resume is a <b>parent-instance</b> operation — it runs after the
+    /// completion commits, in its own scope and UoW — so it belongs in the parent's lane
+    /// (<c>WorkflowTraceLane.ParentLane</c>), not nested inside the subflow's completion span where
+    /// the old nesting used to pile up.
+    /// </para>
+    /// </summary>
+    public static Activity? StartFlatLaneActivity(
+        string operationName,
+        string? anchorTraceParent,
+        ActivityKind kind = ActivityKind.Internal)
+        => FlatLaneActivity.Start(
+            ActivitySource,
+            operationName,
+            kind,
+            anchorTraceParent: anchorTraceParent,
+            predecessorTraceParent: Activity.Current?.Id,
+            traceState: Activity.Current?.TraceStateString);
 
     /// <summary>
     /// Enriches the activity with SubFlow completion context.

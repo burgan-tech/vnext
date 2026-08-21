@@ -15,6 +15,13 @@ namespace BBT.Workflow.Middlewares;
 /// so that traces and logs for subflow/subprocess requests are searchable by parent and root instance ID.
 /// It also tags the ASP.NET Core server span with the originating request id.
 /// Must be registered after UseCorrelationId() and before controllers.
+/// <para>
+/// It additionally establishes the request's <see cref="WorkflowTraceLane"/> anchor. This middleware
+/// is the right place because it already runs while <c>Activity.Current</c> IS the ASP.NET Core
+/// server span — the span that must become the common parent of every top-level operation of the
+/// request (each transition hop, each post-commit job), so they render as siblings under the APM
+/// transaction instead of nesting one inside the other.
+/// </para>
 /// </summary>
 public sealed class ParentInstanceIdEnrichmentMiddleware(
     RequestDelegate next,
@@ -56,6 +63,12 @@ public sealed class ParentInstanceIdEnrichmentMiddleware(
             activity?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootInstanceId);
             scopeProperties[TelemetryConstants.TagNames.RootInstanceId] = rootInstanceId;
         }
+
+        // Anchor the trace lane on the server span for the whole request. Deliberately NOT read
+        // from a request header: a caller-supplied anchor would let anyone graft their spans onto an
+        // unrelated trace. Cross-service lane hand-off travels in internal-only request bodies
+        // (SubflowForwardInput, FlowCompletedInput) and job payloads instead.
+        using var lane = WorkflowTraceLane.UseCurrentActivity();
 
         if (scopeProperties.Count == 0)
         {
