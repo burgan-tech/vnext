@@ -197,6 +197,12 @@ uygulanır (engine'in mevcut `ExecuteWithErrorAwareRetryAsync` makinesi). Retry 
 | `quorum` | `Succeeded >= minSuccess` ⇒ success; aksi halde fail | Skorlama, çoklu kaynak |
 | `firstSuccess` | İlk başarılı sonuçta kalanlar iptal, o tek sonuç döner; hiçbiri başaramazsa fail | Yedekli kaynak / failover lookup |
 
+- **Boş koleksiyon (0 item):** `all` ve `allSettled` başarılı (vacuously true / her zaman
+  başarılı). `quorum` ve `firstSuccess` **başarısız** — ikisi de eşik politikasıdır
+  (`succeeded >= threshold`) ve boş bir batch hiçbir eşiği karşılayamaz. `firstSuccess`
+  tanımı gereği `quorum(minSuccess=1)`'dir; ikisinin boş batch'te farklı davranması tutarsız
+  olurdu. (Bu kural implementasyon sırasında düzeltildi: ilk taslak "boş batch quorum'da
+  başarılı" diyordu, bu `firstSuccess` ile çelişiyordu.)
 - FanOut task fail olursa workflow'un **kendi** Task→State→Global error boundary zinciri
   normal şekilde devreye girer; fan-out bu zincire yeni kavram eklemez.
 - **Batch timeout:** `batchTimeoutSeconds` dolarsa koşan item'lar iptal edilir, başlamamışlar

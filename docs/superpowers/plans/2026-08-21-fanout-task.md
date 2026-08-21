@@ -1048,10 +1048,14 @@ public class FanOutJoinEvaluatorTests
     }
 
     [Fact]
-    public void Evaluate_Empty_Batch_Should_Succeed_For_All_Policies_Except_FirstSuccess()
+    public void Evaluate_Empty_Batch_Should_Fail_Only_For_Threshold_Policies()
     {
+        // all/allSettled: vacuously true. quorum/firstSuccess are threshold policies
+        // (succeeded >= threshold) and an empty batch satisfies no threshold —
+        // firstSuccess IS quorum(1), so the two must agree.
         FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.All, null, [], false).IsSuccess.ShouldBeTrue();
         FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.AllSettled, null, [], false).IsSuccess.ShouldBeTrue();
+        FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.Quorum, 2, [], false).IsSuccess.ShouldBeFalse();
         FanOutJoinEvaluator.Evaluate(FanOutJoinPolicy.FirstSuccess, null, [], false).IsSuccess.ShouldBeFalse();
     }
 }
