@@ -21,6 +21,18 @@ public class FanOutTaskTests
     }
     """;
 
+    private const string FullConfig = """
+    {
+      "mode": "inline",
+      "itemsPath": "$.documents",
+      "itemAlias": "document",
+      "task": { "key": "process-doc", "domain": "core", "flow": "sys-tasks", "version": "1.0.0" },
+      "execution": { "maxDegreeOfParallelism": 5, "itemTimeoutSeconds": 30, "batchTimeoutSeconds": 120 },
+      "join": { "policy": "quorum", "minSuccess": 2, "resultKey": "documentResults", "ordered": true },
+      "errorBoundary": { "onError": [ { "action": "ignore", "priority": 1 } ] }
+    }
+    """;
+
     [Fact]
     public void Configure_Should_Parse_Valid_Config()
     {
@@ -68,26 +80,84 @@ public class FanOutTaskTests
     [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "" } }""")]
     [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "execution": { "itemTimeoutSeconds": 0 } }""")]
     [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "join": { "policy": "bogus" } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "join": { "policy": "0" } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "join": { "policy": "99" } }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": "oops" }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "execution": [] }""")]
+    [InlineData("""{ "itemsPath": "$.x", "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" }, "join": [] }""")]
     public void Configure_Should_Reject_Invalid_Config(string json)
     {
         Should.Throw<ArgumentException>(() => FanOutTask.Create(Parse(json)));
     }
 
     [Fact]
+    public void Configure_Should_Accept_Valid_Quorum_Policy()
+    {
+        var task = FanOutTask.Create(Parse("""
+        { "itemsPath": "$.x",
+          "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" },
+          "join": { "policy": "quorum", "minSuccess": 3 } }
+        """));
+
+        task.JoinPolicy.ShouldBe(FanOutJoinPolicy.Quorum);
+        task.MinSuccess.ShouldBe(3);
+    }
+
+    [Fact]
+    public void Configure_Should_Parse_ErrorBoundary_When_Present()
+    {
+        var task = FanOutTask.Create(Parse("""
+        { "itemsPath": "$.x",
+          "task": { "key": "t", "domain": "d", "flow": "f", "version": "1" },
+          "errorBoundary": { "onError": [ { "action": "ignore", "priority": 1 } ] } }
+        """));
+
+        task.ItemErrorBoundary.ShouldNotBeNull();
+        task.ItemErrorBoundary!.OnError.Count.ShouldBe(1);
+        task.ItemErrorBoundary.OnError[0].Action.ShouldBe(ErrorAction.Ignore);
+        task.ItemErrorBoundary.OnError[0].Priority.ShouldBe(1);
+    }
+
+    [Fact]
     public void Clone_Should_Copy_All_Properties_And_Reset_Should_Clear()
     {
-        var task = FanOutTask.Create(Parse(ValidConfig));
+        var task = FanOutTask.Create(Parse(FullConfig));
         task.SetReference(new Reference("fan-out-task", "core", "sys-tasks", "1.0.0"));
 
         var clone = (FanOutTask)task.Clone();
+
+        clone.Mode.ShouldBe(task.Mode);
         clone.ItemsPath.ShouldBe(task.ItemsPath);
-        clone.ItemTask!.Key.ShouldBe("process-doc");
+        clone.ItemAlias.ShouldBe(task.ItemAlias);
+        clone.ItemTask.ShouldNotBeNull();
+        clone.ItemTask!.Key.ShouldBe(task.ItemTask!.Key);
+        clone.ItemTask.Domain.ShouldBe(task.ItemTask.Domain);
+        clone.ItemTask.Flow.ShouldBe(task.ItemTask.Flow);
+        clone.ItemTask.Version.ShouldBe(task.ItemTask.Version);
+        clone.MaxDegreeOfParallelism.ShouldBe(task.MaxDegreeOfParallelism);
+        clone.ItemTimeoutSeconds.ShouldBe(task.ItemTimeoutSeconds);
+        clone.BatchTimeoutSeconds.ShouldBe(task.BatchTimeoutSeconds);
         clone.JoinPolicy.ShouldBe(task.JoinPolicy);
+        clone.MinSuccess.ShouldBe(task.MinSuccess);
+        clone.ResultKey.ShouldBe(task.ResultKey);
+        clone.Ordered.ShouldBe(task.Ordered);
+        clone.ItemErrorBoundary.ShouldNotBeNull();
+        clone.ItemErrorBoundary!.OnError.Count.ShouldBe(task.ItemErrorBoundary!.OnError.Count);
 
         clone.Reset();
+
+        clone.Mode.ShouldBe(FanOutTask.InlineMode);
         clone.ItemsPath.ShouldBeNull();
+        clone.ItemAlias.ShouldBeNull();
         clone.ItemTask.ShouldBeNull();
-        clone.MaxDegreeOfParallelism.ShouldBe(4);
+        clone.MaxDegreeOfParallelism.ShouldBe(FanOutTask.DefaultMaxDegreeOfParallelism);
+        clone.ItemTimeoutSeconds.ShouldBe(FanOutTask.DefaultItemTimeoutSeconds);
+        clone.BatchTimeoutSeconds.ShouldBe(FanOutTask.DefaultBatchTimeoutSeconds);
+        clone.JoinPolicy.ShouldBe(FanOutJoinPolicy.AllSettled);
+        clone.MinSuccess.ShouldBeNull();
+        clone.ResultKey.ShouldBe(FanOutTask.DefaultResultKey);
+        clone.Ordered.ShouldBeTrue();
+        clone.ItemErrorBoundary.ShouldBeNull();
     }
 
     [Fact]

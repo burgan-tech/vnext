@@ -23,10 +23,19 @@ public enum FanOutJoinPolicy
 /// </summary>
 public sealed class FanOutTask : WorkflowTask
 {
+    /// <summary>The only supported value of <see cref="Mode"/> in Phase 1.</summary>
     public const string InlineMode = "inline";
+
+    /// <summary>Default value of <see cref="MaxDegreeOfParallelism"/> when not configured.</summary>
     public const int DefaultMaxDegreeOfParallelism = 4;
+
+    /// <summary>Default value of <see cref="ItemTimeoutSeconds"/> when not configured.</summary>
     public const int DefaultItemTimeoutSeconds = 30;
+
+    /// <summary>Default value of <see cref="BatchTimeoutSeconds"/> when not configured.</summary>
     public const int DefaultBatchTimeoutSeconds = 120;
+
+    /// <summary>Default value of <see cref="ResultKey"/> when not configured.</summary>
     public const string DefaultResultKey = "fanOutResults";
 
     private FanOutTask()
@@ -128,6 +137,8 @@ public sealed class FanOutTask : WorkflowTask
 
         if (!config.TryGetProperty("task", out var taskEl))
             throw new ArgumentException($"Property 'task' is required for FanOutTask (Key={Key}).", nameof(config));
+        if (taskEl.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException($"Property 'task' must be an object for FanOutTask (Key={Key}).", nameof(config));
 
         string RequiredTaskProp(string name) =>
             taskEl.TryGetProperty(name, out var el) && el.GetString() is { Length: > 0 } v
@@ -143,6 +154,9 @@ public sealed class FanOutTask : WorkflowTask
 
         if (config.TryGetProperty("execution", out var execEl))
         {
+            if (execEl.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException($"Property 'execution' must be an object for FanOutTask (Key={Key}).", nameof(config));
+
             if (execEl.TryGetProperty("maxDegreeOfParallelism", out var dopEl))
                 MaxDegreeOfParallelism = dopEl.GetInt32();
             if (execEl.TryGetProperty("itemTimeoutSeconds", out var itemToEl))
@@ -162,10 +176,14 @@ public sealed class FanOutTask : WorkflowTask
 
         if (config.TryGetProperty("join", out var joinEl))
         {
+            if (joinEl.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException($"Property 'join' must be an object for FanOutTask (Key={Key}).", nameof(config));
+
             if (joinEl.TryGetProperty("policy", out var policyEl))
             {
                 var policyStr = policyEl.GetString();
-                if (!Enum.TryParse<FanOutJoinPolicy>(policyStr, ignoreCase: true, out var policy))
+                if (!Enum.TryParse<FanOutJoinPolicy>(policyStr, ignoreCase: true, out var policy) ||
+                    !Enum.IsDefined(policy))
                     throw new ArgumentException(
                         $"FanOutTask join.policy '{policyStr}' is invalid. Expected one of: all, allSettled, quorum, firstSuccess (Key={Key}).",
                         nameof(config));
