@@ -403,6 +403,10 @@ internal sealed record EngineCall(
     TaskTrigger TaskTrigger,
     TaskExecutionOrigin Origin);
 
+/// <summary>One recorded <c>ItemInputHandler</c> invocation: the task it was given to mutate, the
+/// context it ran on, and the item it was binding.</summary>
+internal sealed record FanOutBinding(WorkflowTask Task, ScriptContext Context, FanOutItem Item);
+
 /// <summary>Scope factory that counts scopes and resolves the recording engine from every one.</summary>
 internal sealed class RecordingScopeFactory(ITaskExecutionEngine engine)
     : IServiceScopeFactory, IServiceScope, IServiceProvider
@@ -450,12 +454,36 @@ internal sealed class StubFanOutMapping : IFanOutMapping
     /// <summary>When set, <see cref="OutputHandler"/> returns this data instead of the default shape.</summary>
     public object? OutputData { get; init; }
 
+    /// <summary>
+    /// Invoked inside <see cref="ItemInputHandler"/> — the seam a test uses to mutate the cloned
+    /// inner task the way a real .csx binding would, so the mutation can be traced to the engine.
+    /// </summary>
+    public Action<WorkflowTask, ScriptContext, FanOutItem>? BindItem { get; init; }
+
     public List<FanOutItem> BoundItems { get; } = [];
+
+    /// <summary>
+    /// Every (task, context, item) triple the item handler was handed. Recorded in full — not just
+    /// the item — because the CLONE and the BRANCH CONTEXT are the two things that make N parallel
+    /// bindings safe, and neither is observable from <see cref="BoundItems"/> alone.
+    /// </summary>
+    public List<FanOutBinding> Bindings { get; } = [];
 
     public List<FanOutResult> OutputCalls { get; } = [];
 
+    /// <summary>The contexts <see cref="OutputHandler"/> was invoked on, one per call.</summary>
+    public List<ScriptContext> OutputContexts { get; } = [];
+
+    /// <summary>The contexts <see cref="ItemSelector"/> was invoked on, one per call.</summary>
+    public List<ScriptContext> SelectorContexts { get; } = [];
+
     public Task<IEnumerable<dynamic>?> ItemSelector(ScriptContext context)
     {
+        lock (_lock)
+        {
+            SelectorContexts.Add(context);
+        }
+
         if (ItemSelectorThrows is not null)
         {
             throw ItemSelectorThrows;
@@ -469,12 +497,15 @@ internal sealed class StubFanOutMapping : IFanOutMapping
         lock (_lock)
         {
             BoundItems.Add(item);
+            Bindings.Add(new FanOutBinding(task, context, item));
         }
 
         if (ItemInputHandlerThrows?.Invoke(item) is { } failure)
         {
             throw failure;
         }
+
+        BindItem?.Invoke(task, context, item);
 
         context.SetBody(item.Value);
         return Task.FromResult(new ScriptResponse { Data = item.Value });
@@ -485,6 +516,7 @@ internal sealed class StubFanOutMapping : IFanOutMapping
         lock (_lock)
         {
             OutputCalls.Add(result);
+            OutputContexts.Add(context);
         }
 
         if (OutputHandlerThrows is not null)
