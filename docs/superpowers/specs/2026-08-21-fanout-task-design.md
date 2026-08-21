@@ -321,3 +321,18 @@ primitif ekleyen major geliştirme):
 | Nested fan-out | Yasak, derinlik 1, validator reddeder |
 | `ordered` maliyeti | Default true; 10-100 item ölçeğinde sorun değil, çok büyük batch'ler durable modun konusu |
 | Durable cross-domain decrement | Faz 2'nin konusu; mailbox cross-domain stratejisiyle birlikte çözülecek |
+
+## 15. Amendments (plan aşamasında netleşen sapmalar)
+
+Detaylar `docs/superpowers/plans/2026-08-21-fanout-task.md` başındaki "Spec Amendments" bölümünde:
+
+1. `ItemInputHandler(WorkflowTask task, ScriptContext context, FanOutItem item)` — IMapping
+   konvansiyonu gereği input binding klonlanmış inner task'ın mutasyonudur; ScriptResponse audit'tir.
+2. `FanOutItemResult.Attempts` kaldırıldı — engine retry sayısını sonuç üzerinden dışarı vermiyor;
+   attempt görünürlüğü item journal kaydı ve retry span event'lerinde.
+3. Validasyon bölünmesi: yapısal kurallar `FanOutTask.Configure()` (fail-fast), cross-component
+   kurallar (nested, kaynak belirsizliği) executor preflight'ında. `WorkflowValidator` dokunulmaz —
+   FanOut config'i workflow dokümanında değil task component'inde yaşar.
+4. `TaskExecutorContext`'e `Origin` (TaskExecutionOrigin) eklenir — item'lar parent origin'ini miras alır.
+5. Mapping yokken default input binding: item değeri branch context'e `SetBody(item.Value)` ile
+   verilir; task config mutasyonu gerektiren inner türler `ItemInputHandler` yazmalıdır.
