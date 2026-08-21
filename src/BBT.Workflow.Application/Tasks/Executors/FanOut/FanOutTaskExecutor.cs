@@ -281,16 +281,21 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             batchCts.Token,
             cancellationToken)));
 
-        // Disarm the deadline before reading it: without this a timer that fires in the instant
-        // between the last item settling and this line would report a batch that completed in
-        // time as timed out.
-        batchTimeoutCts.CancelAfter(Timeout.InfiniteTimeSpan);
-
         // Results are ALWAYS returned in item-index order. The task's 'ordered' flag is accepted
         // by the schema for forward compatibility with durable mode (which may stream results in
         // completion order); in inline mode it has no observable effect, and it is deliberately
         // not read here rather than silently honoured in some other ordering.
-        return (settled.OrderBy(r => r.Index).ToList(), batchTimeoutCts.IsCancellationRequested);
+        var ordered = settled.OrderBy(result => result.Index).ToList();
+
+        // TimedOut is derived from what actually happened to items, NOT from the deadline CTS.
+        // Reading the CTS is racy in a way no disarm can close: a timer firing in the instant
+        // between the last item settling and the read would report a batch that finished in time
+        // as timed out, and join policy 'all' would then fail a fully successful batch. An item
+        // carries the batch-timeout code only if it was genuinely cut short by the deadline, so
+        // early stop still yields false and a real timeout still yields true.
+        var timedOut = ordered.Any(result => result.ErrorCode == BatchTimeoutErrorCode);
+
+        return (ordered, timedOut);
     }
 
     /// <summary>
@@ -314,6 +319,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         var stopwatch = Stopwatch.StartNew();
         var degreeSlotHeld = false;
         var globalSlotHeld = false;
+        CancellationTokenSource? itemDeadlineCts = null;
         CancellationTokenSource? itemCts = null;
         FanOutItemResult settled;
 
@@ -327,18 +333,28 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             globalSlotHeld = true;
 
             // The per-item deadline starts when the item starts RUNNING, not when it was queued —
-            // otherwise a wide batch would time items out for waiting their turn.
-            itemCts = CancellationTokenSource.CreateLinkedTokenSource(batchToken);
-            itemCts.CancelAfter(TimeSpan.FromSeconds(task.ItemTimeoutSeconds));
+            // otherwise a wide batch would time items out for waiting their turn. It lives in its
+            // OWN source rather than a CancelAfter on the linked one, for the same reason the
+            // batch deadline does: only then can the item say its own deadline is what stopped it,
+            // instead of inheriting the batch's or another item's explanation.
+            itemDeadlineCts = new CancellationTokenSource(TimeSpan.FromSeconds(task.ItemTimeoutSeconds));
+            itemCts = CancellationTokenSource.CreateLinkedTokenSource(batchToken, itemDeadlineCts.Token);
 
             var outcome = await RunItemAsync(task, template, mapping, context, item, itemCts.Token);
             settled = outcome with { Duration = stopwatch.Elapsed };
         }
-        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
-            // Caller cancellation is NOT caught (the filter excludes it): tearing the transition
-            // down must propagate, not be reported as N cancelled items.
-            var (code, message) = ClassifyCancellation(task, item, batchTimeoutCts, earlyStopCts);
+            // Tearing the transition down must propagate, not be reported as N failed items.
+            // This clause exists because an exception filter only skips ITS OWN handler: without
+            // it, a caller-cancelled OCE would fall through to the general catch below and be
+            // recorded as an item failure, turning an aborted transition into a business-failure
+            // result that the error boundary could then retry.
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            var (code, message) = ClassifyCancellation(task, item, itemDeadlineCts, batchTimeoutCts, earlyStopCts);
             settled = new FanOutItemResult(item.Index, item.ItemKey, false, null, code, message, stopwatch.Elapsed);
         }
         catch (Exception ex)
@@ -350,6 +366,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         finally
         {
             itemCts?.Dispose();
+            itemDeadlineCts?.Dispose();
             if (globalSlotHeld)
             {
                 _concurrencyLimiter.Release();
@@ -449,8 +466,11 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
                 item.Index, item.ItemKey, true, execution.Response?.Data, null, null, TimeSpan.Zero);
         }
 
+        // A business failure keeps its payload: under allSettled — the expected common policy — the
+        // failed item's response body is exactly what a workflow author inspects to decide what to
+        // do about it, and dropping it would leave them only a message.
         return new FanOutItemResult(
-            item.Index, item.ItemKey, false, null,
+            item.Index, item.ItemKey, false, execution.Response?.Data,
             execution.TaskError?.NormalizedError.Code ?? ItemFailedErrorCode,
             execution.TaskError?.ErrorMessage
             ?? execution.Response?.ErrorMessage
@@ -459,16 +479,28 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     }
 
     /// <summary>
-    /// Names the reason an item's execution was cancelled. Ordered from the widest cause to the
-    /// narrowest: the batch deadline cancels the early-stop-linked token too, so checking the
-    /// deadline first is what keeps the two apart.
+    /// Names the reason an item's execution was cancelled, narrowest cause first.
     /// </summary>
+    /// <remarks>
+    /// The item's own deadline wins: a slow item that blew its <c>itemTimeoutSeconds</c> at the
+    /// same moment a sibling triggered the join policy's early stop was stopped by its own
+    /// deadline, and reporting it as "cancelled by early stop" would hide the item that is
+    /// actually misbehaving. The batch deadline is checked before early stop for the same reason —
+    /// it cancels the early-stop-linked token too, so order is what keeps the two apart.
+    /// </remarks>
     private static (string Code, string Message) ClassifyCancellation(
         FanOutTask task,
         FanOutItem item,
+        CancellationTokenSource? itemDeadlineCts,
         CancellationTokenSource batchTimeoutCts,
         CancellationTokenSource earlyStopCts)
     {
+        if (itemDeadlineCts?.IsCancellationRequested == true)
+        {
+            return (ItemTimeoutErrorCode,
+                $"FanOut item {item.ItemKey} exceeded the item timeout ({task.ItemTimeoutSeconds}s).");
+        }
+
         if (batchTimeoutCts.IsCancellationRequested)
         {
             return (BatchTimeoutErrorCode,
@@ -481,8 +513,10 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
                 $"FanOut item {item.ItemKey} was cancelled by the '{task.JoinPolicy}' join policy's early stop.");
         }
 
-        return (ItemTimeoutErrorCode,
-            $"FanOut item {item.ItemKey} exceeded the item timeout ({task.ItemTimeoutSeconds}s).");
+        // The item was cancelled before its own deadline source existed — i.e. while queueing for
+        // a concurrency slot — and neither batch cause is set. Rare, but not impossible.
+        return (EarlyStopErrorCode,
+            $"FanOut item {item.ItemKey} was cancelled before it started executing.");
     }
 
     /// <summary>

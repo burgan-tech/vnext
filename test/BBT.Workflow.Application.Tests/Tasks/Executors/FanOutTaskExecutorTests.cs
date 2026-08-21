@@ -154,6 +154,52 @@ public sealed class FanOutTaskExecutorTests
     }
 
     [Fact]
+    public async Task Execute_WhenCallerCancelsMidBatch_PropagatesCancellation_InsteadOfABusinessFailure()
+    {
+        // A torn-down transition must not come back as a 500 business failure that the error
+        // boundary could then retry — the cancellation has to escape the executor.
+        using var cts = new CancellationTokenSource();
+        var harness = new FanOutHarness(
+            itemsPath: "$.documents",
+            instanceData: new
+            {
+                documents = new[] { new { id = "a" }, new { id = "b" }, new { id = "c" } }
+            },
+            maxDop: 1);
+        harness.Engine.DelayPerCall = _ => TimeSpan.FromMilliseconds(50);
+        harness.Engine.OnCallStarted = call =>
+        {
+            if (call.Order == 0)
+            {
+                cts.Cancel();
+            }
+        };
+
+        await Should.ThrowAsync<OperationCanceledException>(() => harness.ExecuteAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task Execute_FailedItem_KeepsItsResponsePayload()
+    {
+        var harness = new FanOutHarness(
+            itemsPath: "$.documents",
+            instanceData: new { documents = new[] { new { id = "ok" }, new { id = "bad" } } });
+        harness.Engine.FailOrders.Add(1);
+
+        var response = await harness.ExecuteAsync();
+
+        // Under allSettled the author inspects the failed item's body to decide what to do —
+        // the payload must survive the failure, not just the message.
+        var failed = harness.OutputAsJson((object?)response.Value!.Data)
+            .GetProperty("fanOutResults")
+            .EnumerateArray()
+            .Single(r => !r.GetProperty("isSuccess").GetBoolean());
+
+        failed.GetProperty("data").GetProperty("order").GetInt32().ShouldBe(1);
+        failed.GetProperty("errorMessage").GetString().ShouldNotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
     public async Task Execute_WhenInnerTaskIsItselfFanOut_Fails_WithoutRunningAnyItem()
     {
         var harness = new FanOutHarness(
@@ -367,12 +413,12 @@ internal sealed class FanOutHarness
 
     public FanOutTaskExecutor Executor { get; }
 
-    public Task<Result<StandardTaskResponse>> ExecuteAsync()
+    public Task<Result<StandardTaskResponse>> ExecuteAsync(CancellationToken cancellationToken = default)
     {
         var onExecute = OnExecuteTask.Create(1, _task, _mappingCode);
         var context = new TaskExecutorContext(
             _task, onExecute, ScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
-        return Executor.ExecuteAsync(context, CancellationToken.None);
+        return Executor.ExecuteAsync(context, cancellationToken);
     }
 
     /// <summary>Round-trips the executor's output data through JSON for structural assertions.</summary>
@@ -409,6 +455,9 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
     /// <summary>Optional per-call delay, keyed by the item's order, to shape completion timing.</summary>
     public Func<int, TimeSpan>? DelayPerCall { get; set; }
 
+    /// <summary>Invoked as a call begins, before its delay — lets a test act mid-batch.</summary>
+    public Action<EngineCall>? OnCallStarted { get; set; }
+
     public IReadOnlyList<EngineCall> Calls => _calls.ToArray();
 
     public int PeakConcurrency => Volatile.Read(ref _peak);
@@ -436,7 +485,7 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
         UpdatePeak(active);
         try
         {
-            _calls.Enqueue(new EngineCall(
+            var call = new EngineCall(
                 onExecuteTask.Order,
                 options.JournalTaskKey,
                 options.SuppressDataApply,
@@ -444,7 +493,9 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
                 options.PreparedTask,
                 context,
                 taskTrigger,
-                origin));
+                origin);
+            _calls.Enqueue(call);
+            OnCallStarted?.Invoke(call);
 
             var delay = DelayPerCall?.Invoke(onExecuteTask.Order) ?? TimeSpan.Zero;
             if (delay > TimeSpan.Zero)
@@ -469,6 +520,13 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
                         TaskType = "Http",
                         ErrorMessage = $"item {onExecuteTask.Order} failed",
                         NormalizedError = new NormalizedError { Code = "Item:Failed", Message = "boom" }
+                    },
+                    Response = new StandardTaskResponse
+                    {
+                        IsSuccess = false,
+                        StatusCode = 502,
+                        ErrorMessage = $"item {onExecuteTask.Order} failed",
+                        Data = new Dictionary<string, object?> { ["order"] = onExecuteTask.Order }
                     }
                 });
             }

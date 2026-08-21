@@ -129,9 +129,11 @@ public static class FanOutItemsResolver
         JsonElement element => ExtractItemKey(element, index),
         IDictionary<string, object?> map =>
             AsNonEmptyString(map, "id") ?? AsNonEmptyString(map, "key") ?? index.ToString(),
-        // A mapping's ItemSelector commonly returns anonymous or typed objects rather than
-        // dictionaries, so the same id/key rule is applied over their properties. Without this
-        // the rule would silently degrade to "index" for the most natural thing a script returns.
+        // NOT dead code, and unreachable only from the itemsPath source: a .csx ItemSelector
+        // writing `return new[] { new { id = "a" }, new { id = "b" } };` — the most natural
+        // authoring shape there is — yields anonymous CLR objects, which are neither JsonElement
+        // nor IDictionary. Without this branch the documented id/key rule would silently degrade
+        // to "index" for exactly that case. Pinned by FanOutItemsResolverTests.
         _ => ReadPropertyAsString(value, "id") ?? ReadPropertyAsString(value, "key") ?? index.ToString()
     };
 
