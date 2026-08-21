@@ -77,6 +77,26 @@ public static class FanOutItemsResolver
     }
 
     /// <summary>
+    /// Projects an already-materialised collection — the one a mapping's <c>ItemSelector</c>
+    /// returned — into <see cref="FanOutItem"/>s. The alternative to <see cref="Resolve"/>: the
+    /// two item sources differ only in where the values come from, so the index assignment and
+    /// the stable-key rule are shared rather than duplicated per source.
+    /// </summary>
+    /// <param name="values">The selected item values, in the order the mapping produced them.</param>
+    public static IReadOnlyList<FanOutItem> Project(IEnumerable<dynamic?> values)
+    {
+        var items = new List<FanOutItem>();
+        var index = 0;
+        foreach (var value in values)
+        {
+            items.Add(new FanOutItem(index, value, ExtractItemKey((object?)value, index)));
+            index++;
+        }
+
+        return items;
+    }
+
+    /// <summary>
     /// Derives an item's stable key: its <c>id</c> string property if present, else its <c>key</c>
     /// string property, else its zero-based index as a string.
     /// </summary>
@@ -84,17 +104,67 @@ public static class FanOutItemsResolver
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
-            if (element.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
+            if (TryReadString(element, "id", out var id))
             {
-                return idEl.GetString()!;
+                return id;
             }
 
-            if (element.TryGetProperty("key", out var keyEl) && keyEl.ValueKind == JsonValueKind.String)
+            if (TryReadString(element, "key", out var key))
             {
-                return keyEl.GetString()!;
+                return key;
             }
         }
 
         return index.ToString();
+    }
+
+    /// <summary>
+    /// The same rule as the <see cref="JsonElement"/> overload, over a value that has already been
+    /// converted to dynamic (an <c>ExpandoObject</c>, i.e. an <c>IDictionary&lt;string, object?&gt;</c>)
+    /// or that is some other CLR object a mapping produced.
+    /// </summary>
+    private static string ExtractItemKey(object? value, int index) => value switch
+    {
+        null => index.ToString(),
+        JsonElement element => ExtractItemKey(element, index),
+        IDictionary<string, object?> map =>
+            AsNonEmptyString(map, "id") ?? AsNonEmptyString(map, "key") ?? index.ToString(),
+        // A mapping's ItemSelector commonly returns anonymous or typed objects rather than
+        // dictionaries, so the same id/key rule is applied over their properties. Without this
+        // the rule would silently degrade to "index" for the most natural thing a script returns.
+        _ => ReadPropertyAsString(value, "id") ?? ReadPropertyAsString(value, "key") ?? index.ToString()
+    };
+
+    private static bool TryReadString(JsonElement element, string property, out string value)
+    {
+        if (element.TryGetProperty(property, out var el) &&
+            el.ValueKind == JsonValueKind.String &&
+            el.GetString() is { Length: > 0 } text)
+        {
+            value = text;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static string? AsNonEmptyString(IDictionary<string, object?> map, string property) =>
+        map.TryGetValue(property, out var raw) && raw is string { Length: > 0 } text ? text : null;
+
+    /// <summary>
+    /// Reads a public instance property by name, case-insensitively. Enumerated rather than looked
+    /// up with <c>BindingFlags.IgnoreCase</c> so a type declaring both <c>id</c> and <c>Id</c>
+    /// picks the first match instead of throwing <see cref="System.Reflection.AmbiguousMatchException"/>.
+    /// </summary>
+    private static string? ReadPropertyAsString(object value, string property)
+    {
+        var propertyInfo = value.GetType()
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .FirstOrDefault(p =>
+                p.GetIndexParameters().Length == 0 &&
+                string.Equals(p.Name, property, StringComparison.OrdinalIgnoreCase));
+
+        return propertyInfo?.GetValue(value) is string { Length: > 0 } text ? text : null;
     }
 }

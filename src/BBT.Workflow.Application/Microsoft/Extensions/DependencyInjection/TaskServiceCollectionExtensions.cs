@@ -129,6 +129,10 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<GetInstancesTaskExecutor>();
         services.AddTaskExecutor<GetInstanceTaskExecutor>();
 
+        // FanOut executor: runs the referenced inner task once per resolved item, in parallel,
+        // and joins the outcomes into a single output (one instance-data write per batch).
+        services.AddTaskExecutor<FanOutTaskExecutor>();
+
         return services;
     }
 
