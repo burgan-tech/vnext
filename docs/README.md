@@ -40,6 +40,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 18. Read [Function Contract Resolution](runtime/function-contract-resolution.md) before authoring or changing a function's `inputSchema` / `outputSchema` / `inputView` / `outputView`, or the `/info` discovery endpoint. Covers the rule-based wire shapes, first-match-wins semantics, and why "no match" is not an error.
 19. Read [Instance Query Validation Breaking Changes](contracts/instance-query-validation-breaking-changes.md) before upgrading past 0.0.79, or before changing instance-query `filter` / `sort` / `groupBy` / `aggregations` handling. Instance queries moved from fail-open to fail-closed: silently ignored parameters now return HTTP 400, and a `GetInstancesTask` carrying the old `-field` sort shorthand fails its transition.
 20. Read [Correlation and Tracing](monitoring/correlation-and-tracing.md) before changing telemetry configuration, background-job trace restoration, `X-Request-Id` propagation, or task-binding header handling. Covers the gateway (APISIX) contract, trace-continuation semantics per job type, and the reserved-header rule for task authors.
+21. Read [Trace Lanes](runtime/trace-lanes.md) before changing how transition, post-commit or subflow spans are parented, or before adding a span that represents a top-level operation. Covers the anchor-vs-predecessor split that keeps chained hops siblings, the one-lane-per-instance model, and why the lane never travels in a request header.
 
 ## Documentation Rules
 

@@ -82,7 +82,11 @@ internal sealed class InstanceSubCompletedEventHandler(
                 // At-least-once async retry path: the sync caller (if any) was already answered
                 // by the synchronous hook. Force async here so a retried resume never blocks the
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.
-                Sync = false
+                Sync = false,
+                // Relay the lane so the parent resume on the receiving side lands at the parent
+                // instance's level rather than nesting under the relay endpoint.
+                TraceRoot = eventData.TraceRoot,
+                ParentTraceRoot = eventData.ParentTraceRoot
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";

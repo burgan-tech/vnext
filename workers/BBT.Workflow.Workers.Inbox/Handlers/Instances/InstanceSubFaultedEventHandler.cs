@@ -101,7 +101,9 @@ internal sealed class InstanceSubFaultedEventHandler(
                 // At-least-once async retry path: the sync caller (if any) was already answered
                 // by the synchronous hook. Force async here so a retried resume never blocks the
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.
-                Sync = false
+                Sync = false,
+                TraceRoot = eventData.TraceRoot,
+                ParentTraceRoot = eventData.ParentTraceRoot
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/fault";

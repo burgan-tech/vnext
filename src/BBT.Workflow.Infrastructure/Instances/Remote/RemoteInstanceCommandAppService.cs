@@ -8,6 +8,7 @@ using BBT.Workflow.Discovery;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Remote;
 using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.SubFlow;
@@ -225,7 +226,13 @@ public sealed class RemoteInstanceCommandAppService(
                 Sync = input.Sync,
                 ChainReserved = input.ChainReserved,
                 CorrelationId = input.CorrelationId,
-                RouteValues = input.RouteValues
+                RouteValues = input.RouteValues,
+                // Hand the subflow's lane across the domain boundary. The caller
+                // (ForwardToSubflowJobHandler) has already opened the child lane, so Current is the
+                // forward span the subflow's hops must anchor on. Body, not header: a public
+                // endpoint must never let a caller inject a lane.
+                TraceRoot = WorkflowTraceLane.Current,
+                ParentTraceRoot = WorkflowTraceLane.ParentLane
             };
 
             var jsonContent = JsonSerializer.Serialize(forwardInput, JsonSerializerConstants.JsonOptions);

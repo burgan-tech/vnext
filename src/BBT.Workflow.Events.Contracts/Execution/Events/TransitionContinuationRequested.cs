@@ -18,7 +18,7 @@ namespace BBT.Workflow.Execution.Events;
 /// exactly the desired distributed delivery for a continuation.
 /// </remarks>
 [EventName("transition.continuation.requested")]
-public sealed class TransitionContinuationRequested : IDistributedEvent, ITraceableDistributedEvent
+public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAwareDistributedEvent
 {
     /// <summary>The instance the transition belongs to.</summary>
     [EventSubject]
@@ -94,4 +94,19 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ITracea
 
     public override string ToString() =>
         $"{nameof(TransitionContinuationRequested)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} TransitionKey={TransitionKey} JobName={JobName} ChainDepth={ChainDepth}";
+
+    /// <summary>
+    /// Trace lane anchor of the publishing instance — the PARENT for the async transition hop this event will start, so it sits at the
+    /// right depth instead of nesting under its predecessor. See <c>WorkflowTraceLane</c>.
+    /// </summary>
+    public string? TraceRoot { get; set; }
+
+    /// <summary>W3C traceparent of the enclosing lane, so a subflow resume returns to the parent instance's lane.</summary>
+    public string? ParentTraceRoot { get; set; }
+
+    /// <summary>
+    /// Ordinal of this hop within its trace lane. Carried alongside the direct payload's copy so
+    /// both enqueue paths agree; see <c>WorkflowTraceLane.NextSeq</c>.
+    /// </summary>
+    public int LaneSeq { get; set; }
 }

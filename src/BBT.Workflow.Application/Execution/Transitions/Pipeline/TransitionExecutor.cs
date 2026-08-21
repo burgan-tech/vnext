@@ -167,7 +167,7 @@ public sealed class TransitionExecutor
             activity.SetTag(TelemetryConstants.TagNames.TriggerType, context.Transition.TriggerType.ToString());
         }
 
-        activity.SetTag("vnext.chain.depth", context.ChainDepth);
+        activity.SetTag(TelemetryConstants.TagNames.ChainDepth, context.ChainDepth);
         activity.SetTag("vnext.pipeline.profile", context.Profile?.Name ?? "unknown");
         activity.SetTag("vnext.chain.id", context.ExecutionChainId);
 
@@ -186,10 +186,12 @@ public sealed class TransitionExecutor
         activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId,
             context.InstanceId.ToString("D").ToLowerInvariant());
 
+        // Stamped unconditionally, not only for subflows: with hops spread across sibling lanes,
+        // the root instance id is the single filter that selects a whole business request in APM.
         var rootId = context.Instance.GetRootInstanceId();
+        activity.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
         if (rootId != context.InstanceId)
         {
-            activity.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
             activity.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
         }
 

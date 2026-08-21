@@ -236,7 +236,10 @@ services:
       - type: tmpfs
         target: /data
         tmpfs:
-          size: "64m"
+          # etcd preallocates a 64 MB WAL segment and keeps snapshots + member data alongside it,
+          # so a 64 MB tmpfs cannot hold a running store: the scheduler dies with
+          # "no space left on device" and every Dapr job arm then fails, leaving jobs Pending.
+          size: "512m"
           mode: 1777
     networks:
       - bbt-development

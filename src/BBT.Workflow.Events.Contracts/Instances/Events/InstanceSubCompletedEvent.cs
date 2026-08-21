@@ -17,7 +17,7 @@ namespace BBT.Workflow.Instances.Events;
 /// </remarks>
 [EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.completed")]
-public class InstanceSubCompletedEvent : IDistributedEvent, ITraceableDistributedEvent
+public class InstanceSubCompletedEvent : IDistributedEvent, ILaneAwareDistributedEvent
 {
     /// <summary>
     /// The ID of the Parent instance
@@ -91,4 +91,13 @@ public class InstanceSubCompletedEvent : IDistributedEvent, ITraceableDistribute
     {
         return $"{nameof(InstanceSubCompletedEvent)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} SubInstanceId={SubInstanceId} CompletedState={CompletedState}";
     }
+
+    /// <summary>
+    /// Trace lane anchor of the publishing instance — the PARENT for the parent resume this completion will trigger, so it sits at the
+    /// right depth instead of nesting under its predecessor. See <c>WorkflowTraceLane</c>.
+    /// </summary>
+    public string? TraceRoot { get; set; }
+
+    /// <summary>W3C traceparent of the enclosing lane, so a subflow resume returns to the parent instance's lane.</summary>
+    public string? ParentTraceRoot { get; set; }
 }

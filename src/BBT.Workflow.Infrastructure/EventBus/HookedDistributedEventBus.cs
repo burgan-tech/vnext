@@ -6,6 +6,7 @@ using BBT.Aether.Events;
 using BBT.Aether.Tracing;
 using BBT.Aether.Uow;
 using BBT.Workflow.Events;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Events.Hooks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -88,6 +89,15 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         }
 
         traceable.RequestId ??= _correlationIdProvider?.Get();
+
+        // Lane-aware events additionally carry the anchor the CONSUMER must parent its top-level
+        // operation to (a transition hop, a parent resume). Same never-overwrite policy: a raise
+        // site that already knows the right lane — a subflow terminal event, say — wins.
+        if (payload is ILaneAwareDistributedEvent laneAware)
+        {
+            laneAware.TraceRoot ??= WorkflowTraceLane.Current;
+            laneAware.ParentTraceRoot ??= WorkflowTraceLane.ParentLane;
+        }
     }
 
     /// <summary>

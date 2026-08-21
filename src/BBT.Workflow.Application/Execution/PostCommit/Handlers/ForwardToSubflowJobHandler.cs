@@ -39,6 +39,14 @@ public sealed class ForwardToSubflowJobHandler(
             // Reconstruct TransitionInput from job's primitive values (includes parent instance id header for trace correlation)
             var input = CreateTransitionInput(job, context.CallerMode);
 
+            // Open the subflow's own trace lane. Activity.Current here is the enclosing
+            // PostCommit.ForwardToSubflowJob span, so it becomes the anchor for every hop the
+            // subflow runs: those hops render flat UNDERNEATH this forward instead of nesting into
+            // each other, and the lane being left is remembered as ParentLane so the eventual
+            // resume returns to the parent instance's level. Nested subflows recurse the same way,
+            // which is what bounds trace depth by subflow nesting rather than chain length.
+            using var childLane = WorkflowTraceLane.EnterChildLane();
+
             // Perform the forward operation (remote call, now outside lock)
             var result = await subflowForwardingService.ForwardTransitionAsync(
                 job.SubflowInstanceId,

@@ -48,6 +48,10 @@ internal sealed class StateNotificationDispatcher(
             foreach (var kvp in message.Metadata)
                 bindingRequest.Metadata.TryAdd(kvp.Key, kvp.Value);
 
+            // Output bindings bypass HttpClient's DiagnosticsHandler, so the remote leg only stays
+            // attached to this trace if we hand the component the trace context ourselves.
+            DaprTraceMetadata.StampBinding(bindingRequest.Metadata);
+
             await daprClient.InvokeBindingAsync(bindingRequest, cancellationToken);
 
             logger.StateNotificationDispatched(instanceId, bindingName);

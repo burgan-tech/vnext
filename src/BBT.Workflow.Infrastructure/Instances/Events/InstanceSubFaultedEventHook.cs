@@ -124,7 +124,9 @@ public sealed class InstanceSubFaultedEventHook(
                     eventData.InitiatorInstanceId.Value,
                     eventData.CascadeId.Value)
                 : null,
-            Sync = eventData.Sync
+            Sync = eventData.Sync,
+            TraceRoot = eventData.TraceRoot,
+            ParentTraceRoot = eventData.ParentTraceRoot
         };
     }
 }

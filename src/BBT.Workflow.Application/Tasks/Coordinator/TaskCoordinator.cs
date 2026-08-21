@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Timer;
@@ -129,7 +128,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     }
 
     /// <inheritdoc />
-    [Trace]
     public async Task<Result<TasksExecutionResult>> ExecuteWithDetailsAsync(
         IEnumerable<OnExecuteTask> onExecuteTasks,
         Guid? instanceTransitionId,
@@ -139,22 +137,16 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         IEnumerable<string> completedTaskIds,
         CancellationToken cancellationToken = default)
     {
-        Activity.Current?.SetDisplayName("TaskCoordinator.Execute");
-
+        // No span of its own: the coordinator is a pure fan-out wrapper. Its former
+        // "TaskCoordinator.Execute" span added a level between transition/{key} and
+        // Task.Execute.{key} without carrying information neither of those already has.
+        // Tags are deliberately NOT re-stamped onto Activity.Current either — that would write
+        // per-coordinator values (vnext.task.count) onto the transition span and have OnExecute,
+        // OnExit and OnEntry overwrite each other.
         var tasks = onExecuteTasks.ToList();
         var completedSet = completedTaskIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var executedTasks = new List<TaskExecutionSummary>();
         var totalStopwatch = Stopwatch.StartNew();
-
-        var activity = Activity.Current;
-        if (activity != null)
-        {
-            activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.Instance?.Id.ToString());
-            activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
-            activity.SetTag("vnext.task.count", tasks.Count);
-            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
-            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
-        }
 
         if (!tasks.Any())
         {
