@@ -275,6 +275,79 @@ public sealed class FanOutTaskExecutorPolicyTests
         response.Value!.ErrorMessage.ShouldBeNull();
     }
 
+    [Fact]
+    public async Task EarlyStop_ItemsAlreadyInsideTheEngine_CarryItemCancelled_NotTheInnerExceptionCode()
+    {
+        // The regression this pins: the task engine absorbs an item's TaskCanceledException and hands
+        // back `Task:Unknown:{itemTaskKey}:TaskCanceledException`. Accepted verbatim, one batch
+        // reported TWO codes for one cause — the item cancelled while still queueing behind the
+        // degree gate got FanOut:ItemCancelled, its siblings already inside the engine got the
+        // exception name. maxDop 3 over 5 items reproduces exactly that split: items 1-2 are in
+        // flight when item 0 decides the batch, items 3-4 are still queueing.
+        var harness = new FanOutHarness(
+            instanceData: FanOutHarness.Documents(5),
+            joinPolicy: FanOutJoinPolicy.FirstSuccess,
+            maxDop: 3);
+        harness.Engine.DelayPerCall = order => order == 0 ? TimeSpan.Zero : NeverFinishes;
+
+        var response = await harness.ExecuteAsync();
+
+        response.Value!.IsSuccess.ShouldBeTrue();
+        ItemAt(harness, response, 0).GetProperty("isSuccess").GetBoolean().ShouldBeTrue();
+
+        // Every cancelled item — in flight or still queueing — reports the SAME documented code.
+        // FanOutErrorCodes values are public contract; authors branch on them.
+        foreach (var index in new[] { 1, 2, 3, 4 })
+        {
+            var cancelled = ItemAt(harness, response, index);
+            var code = cancelled.GetProperty("errorCode").GetString();
+
+            cancelled.GetProperty("isSuccess").GetBoolean().ShouldBeFalse();
+            code.ShouldBe(FanOutErrorCodes.ItemCancelled, $"item {index} leaked a non-contract code");
+
+            // Stated separately from the equality above so a future leak reads as what it is: the
+            // inner task's exception name, and the inner task's KEY, escaping into the contract.
+            code!.ShouldNotContain(nameof(TaskCanceledException));
+            code!.ShouldNotContain("process-document");
+        }
+    }
+
+    [Fact]
+    public async Task ItemFailingOnItsOwnTerms_WhileTheBatchIsStopping_KeepsItsOwnErrorCode()
+    {
+        // The other half of the re-attribution rule. Item 1 fails immediately, which under 'all'
+        // stops the batch; item 0 is already in flight, ignores the cancellation, and settles with
+        // its OWN business failure a moment later. Its window token is cancelled by then, so a
+        // token-only rule would relabel a genuine 502 as "cancelled by the join policy" and hide the
+        // item that actually misbehaved.
+        //
+        // Item 0 is the slow one on purpose: the batch's items are started by enumerating a
+        // projection, so item 0 runs inline as far as its first real await — it is inside the engine
+        // before item 1 exists. The reverse arrangement races item 1 against its own concurrency
+        // slot and intermittently never enters the engine at all.
+        var harness = new FanOutHarness(
+            instanceData: FanOutHarness.Documents(2),
+            joinPolicy: FanOutJoinPolicy.All,
+            maxDop: 2);
+        harness.Engine.FailOrders.Add(0);
+        harness.Engine.FailOrders.Add(1);
+        harness.Engine.IgnoreCancellationOrders.Add(0);
+        harness.Engine.DelayPerCall = order => order == 0 ? TimeSpan.FromMilliseconds(120) : TimeSpan.Zero;
+
+        var response = await harness.ExecuteAsync();
+
+        // Both ran to their own end; neither was cut short.
+        harness.Engine.CompletedCalls.ShouldBe(2);
+
+        foreach (var index in new[] { 0, 1 })
+        {
+            var failed = ItemAt(harness, response, index);
+            failed.GetProperty("errorCode").GetString().ShouldBe("Item:Failed");
+            // The payload an author inspects survives, which a cancellation classification discards.
+            failed.GetProperty("data").GetProperty("order").GetInt32().ShouldBe(index);
+        }
+    }
+
     /// <summary>The default packaging's result entry for one item index.</summary>
     private static JsonElement ItemAt(FanOutHarness harness, Result<StandardTaskResponse> response, int index) =>
         harness.ItemResults(response).EnumerateArray()

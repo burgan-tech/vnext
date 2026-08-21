@@ -59,6 +59,32 @@ internal sealed class FanOutBatchCancellation : IDisposable
     public ItemWindow OpenItemWindow() => new(_task.ItemTimeoutSeconds, Token);
 
     /// <summary>
+    /// Whether one of THIS batch's own causes — the item's deadline, the batch deadline, or the
+    /// early stop — closed the given item's execution window.
+    /// </summary>
+    /// <remarks>
+    /// The tokens are the truth about whether we cancelled an item, so this is what a caller asks
+    /// instead of pattern-matching the text of whatever error the inner task's cancellation
+    /// normalized into. The caller's own cancellation is deliberately excluded: it is not one of the
+    /// batch's causes, it is the transition being torn down, and it must propagate (see
+    /// <see cref="ThrowIfCallerCancelled"/>) rather than be recorded as a classified item outcome.
+    /// </remarks>
+    public bool StoppedItem(ItemWindow window) =>
+        !CallerCancelled && window.Token.IsCancellationRequested;
+
+    /// <summary>
+    /// Rethrows the caller's cancellation, so a torn-down transition escapes the executor even when
+    /// the inner task engine already absorbed the <see cref="OperationCanceledException"/> into a
+    /// failed result.
+    /// </summary>
+    /// <remarks>
+    /// Routed through the exception rather than a second return shape on purpose: it lands in
+    /// <c>ExecuteSingleItemAsync</c>'s existing <c>when (cancellation.CallerCancelled)</c> filter, so
+    /// there stays exactly ONE place that decides what a caller cancellation does to a batch.
+    /// </remarks>
+    public void ThrowIfCallerCancelled() => _callerToken.ThrowIfCancellationRequested();
+
+    /// <summary>
     /// Names the reason an item's execution was cancelled, narrowest cause first.
     /// </summary>
     /// <param name="item">The item whose execution was cancelled.</param>

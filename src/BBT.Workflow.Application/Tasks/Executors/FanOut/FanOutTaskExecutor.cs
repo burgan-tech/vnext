@@ -361,7 +361,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             // not time spent queueing behind other items.
             window = cancellation.OpenItemWindow();
 
-            settled = await RunItemAsync(task, template, mapping, context, item, window.Token, stopwatch);
+            settled = await RunItemAsync(task, template, mapping, context, item, cancellation, window, stopwatch);
         }
         catch (OperationCanceledException) when (cancellation.CallerCancelled)
         {
@@ -566,7 +566,8 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         IFanOutMapping? mapping,
         TaskExecutorContext context,
         FanOutItem item,
-        CancellationToken itemToken,
+        FanOutBatchCancellation cancellation,
+        FanOutBatchCancellation.ItemWindow window,
         Stopwatch elapsed)
     {
         // The branch is DISCARDED, never merged back. MergeParallelBranch would collide N item
@@ -616,21 +617,59 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             context.Origin,
             branch,
             options,
-            itemToken);
+            window.Token);
 
-        return MapEngineOutcome(item, engineResult, elapsed.Elapsed);
+        return MapEngineOutcome(item, engineResult, elapsed.Elapsed, cancellation, window);
     }
 
     /// <summary>
-    /// Maps one engine outcome onto a complete <see cref="FanOutItemResult"/>.
+    /// Maps one engine outcome onto a complete <see cref="FanOutItemResult"/>, re-attributing to the
+    /// batch's own cancellation causes the outcomes that only LOOK like the inner task's failures.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>Why the re-attribution exists — do not "simplify" it away.</strong> The task engine
+    /// observes an item's cancellation before the fan-out layer ever can: its catch-all absorbs the
+    /// inner <c>TaskCanceledException</c> and hands back
+    /// <c>Task:Unknown:{itemTaskKey}:TaskCanceledException</c>. Accepted verbatim, that made a single
+    /// batch report two different codes for one cause — an item cancelled while still queueing got
+    /// the documented <see cref="FanOutErrorCodes.ItemCancelled"/>, while its sibling cancelled a
+    /// moment later, already inside the engine, got the exception name. The leaked string is not part
+    /// of the fan-out contract and even embeds the inner task's key, so it is not stable to match on;
+    /// <see cref="FanOutErrorCodes"/> values ARE contract and authors branch on them.
+    /// </para>
+    /// <para>
+    /// The decision asks the cancellation context — its tokens are the truth about whether WE stopped
+    /// this item — rather than pattern-matching the error text. The two failure shapes are then
+    /// treated differently on purpose: an engine that did not complete was interrupted, so our
+    /// cancellation explains it; an engine that COMPLETED and reported a task failure produced the
+    /// item's own outcome, which keeps its own code even while the batch is stopping, unless the
+    /// failure is itself explicitly cancellation-typed.
+    /// </para>
+    /// </remarks>
     private static FanOutItemResult MapEngineOutcome(
         FanOutItem item,
         Result<TasksExecutionResult> engineResult,
-        TimeSpan duration)
+        TimeSpan duration,
+        FanOutBatchCancellation cancellation,
+        FanOutBatchCancellation.ItemWindow window)
     {
+        var stoppedByBatch = cancellation.StoppedItem(window);
+
         if (!engineResult.IsSuccess)
         {
+            // The engine unwound instead of completing. If the CALLER is what cancelled, the
+            // transition is being torn down and that must escape the executor — the engine having
+            // absorbed the exception into a result must not quietly turn it into a failed item.
+            cancellation.ThrowIfCallerCancelled();
+
+            if (stoppedByBatch)
+            {
+                var (cancelledCode, cancelledMessage) = cancellation.Classify(item, window);
+                return new FanOutItemResult(
+                    item.Index, item.ItemKey, false, null, cancelledCode, cancelledMessage, duration);
+            }
+
             return new FanOutItemResult(
                 item.Index, item.ItemKey, false, null,
                 engineResult.Error.Code ?? FanOutErrorCodes.ItemFailed,
@@ -647,14 +686,41 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         // A business failure keeps its payload: under allSettled — the expected common policy — the
         // failed item's response body is exactly what a workflow author inspects to decide what to
         // do about it, and dropping it would leave them only a message.
+        var data = execution.Response?.Data;
+
+        // The engine completed, so this is the item's OWN verdict and it keeps its own code — unless
+        // the failure it reported is itself a cancellation, which only the structured ExceptionType
+        // can say (an executor that catches the cancellation and reports it as a task failure rather
+        // than letting it escape). Deliberately narrower than the branch above: here a real 5xx from
+        // an item that was unlucky enough to fail in the instant a sibling triggered the early stop
+        // must NOT be relabelled as cancelled.
+        if (stoppedByBatch && IsCancellationException(execution.TaskError?.NormalizedError.ExceptionType))
+        {
+            var (cancelledCode, cancelledMessage) = cancellation.Classify(item, window);
+            return new FanOutItemResult(
+                item.Index, item.ItemKey, false, data, cancelledCode, cancelledMessage, duration);
+        }
+
         return new FanOutItemResult(
-            item.Index, item.ItemKey, false, execution.Response?.Data,
+            item.Index, item.ItemKey, false, data,
             execution.TaskError?.NormalizedError.Code ?? FanOutErrorCodes.ItemFailed,
             execution.TaskError?.ErrorMessage
             ?? execution.Response?.ErrorMessage
             ?? $"FanOut item {item.ItemKey} failed.",
             duration);
     }
+
+    /// <summary>
+    /// Whether a normalized error's exception type names a cancellation.
+    /// </summary>
+    /// <remarks>
+    /// <c>NormalizedError.ExceptionType</c> carries the type's NAME, not the type, so a name
+    /// comparison is the only comparison available — but it is a comparison against a dedicated
+    /// structured field, not a substring hunt through a composed error code. The same two names are
+    /// what <c>ErrorNormalizer</c> already keys its transient classification on.
+    /// </remarks>
+    private static bool IsCancellationException(string? exceptionType) =>
+        exceptionType is nameof(OperationCanceledException) or nameof(TaskCanceledException);
 
     /// <summary>
     /// Produces the batch's single output: the mapping's <c>OutputHandler</c> when one overrode it,

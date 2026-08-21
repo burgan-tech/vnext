@@ -305,6 +305,17 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
     /// <summary>Orders whose execution should report an infrastructure (Result-level) failure.</summary>
     public HashSet<int> InfrastructureFailureOrders { get; } = [];
 
+    /// <summary>
+    /// Orders whose simulated work ignores the cancellation token and runs to its programmed end.
+    /// </summary>
+    /// <remarks>
+    /// Models an inner task that settles on its OWN terms in a batch that is already stopping — the
+    /// case where the fan-out layer must NOT relabel the item's verdict as a cancellation. Without
+    /// this seam every item that outlives an early stop is cancellation-shaped and the "keeps its own
+    /// code" rule is untestable.
+    /// </remarks>
+    public HashSet<int> IgnoreCancellationOrders { get; } = [];
+
     /// <summary>Optional per-call delay, keyed by the item's order, to shape completion timing.</summary>
     public Func<int, TimeSpan>? DelayPerCall { get; set; }
 
@@ -364,13 +375,29 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
             OnCallStarted?.Invoke(call);
 
             var delay = DelayPerCall?.Invoke(order) ?? TimeSpan.Zero;
-            if (delay > TimeSpan.Zero)
+            var observesCancellation = !IgnoreCancellationOrders.Contains(order);
+            try
             {
-                await Task.Delay(delay, cancellationToken);
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, observesCancellation ? cancellationToken : CancellationToken.None);
+                }
+                else
+                {
+                    await Task.Yield();
+                }
             }
-            else
+            catch (OperationCanceledException)
             {
-                await Task.Yield();
+                // The REAL TaskExecutionEngine never lets a cancellation escape: its catch-all turns
+                // the inner task's TaskCanceledException into a Result-level failure whose code is
+                // Task:{type}:{key}[:{status}]:{exceptionType} (ExecutionError.ToError). Letting the
+                // OperationCanceledException escape here instead — as this fake used to — is the
+                // fidelity gap that kept the fan-out suite green while production leaked
+                // `Task:Unknown:{key}:TaskCanceledException` in place of FanOut:ItemCancelled.
+                return Result<TasksExecutionResult>.Fail(Error.Failure(
+                    $"Task:Unknown:{onExecuteTask.Task.Key}:{nameof(TaskCanceledException)}",
+                    "A task was canceled."));
             }
 
             // Past the delay without an OperationCanceledException: this item's work was not cut
