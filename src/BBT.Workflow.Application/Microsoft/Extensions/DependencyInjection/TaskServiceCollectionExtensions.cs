@@ -12,6 +12,7 @@ using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
+using BBT.Workflow.Tasks.Executors.FanOut;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
@@ -80,6 +81,15 @@ public static class TaskServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddTaskExecutors(this IServiceCollection services)
     {
+        // FanOut global bulkhead (process-level ceiling across all fan-out batches). A
+        // misconfigured MaxConcurrentItems <= 0 would deadlock every fan-out batch in the
+        // process on its first item, so validate at startup instead of at first use.
+        services.AddOptions<FanOutOptions>()
+            .BindConfiguration(FanOutOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.TryAddSingleton<FanOutConcurrencyLimiter>();
+
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
 
