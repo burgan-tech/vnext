@@ -12,12 +12,14 @@ namespace BBT.Workflow.Tasks.Executors;
 /// <param name="ScriptContext">The script context for variable resolution and script execution.</param>
 /// <param name="InstanceTransitionId">The instance transition ID for tracking (optional).</param>
 /// <param name="TaskTrigger">The trigger that initiated this task execution.</param>
+/// <param name="Origin">The component that initiated this execution (Flow, Extension, Function, ...).</param>
 public sealed record TaskExecutorContext(
     WorkflowTask Task,
     OnExecuteTask OnExecuteTask,
     ScriptContext ScriptContext,
     Guid? InstanceTransitionId,
-    TaskTrigger TaskTrigger)
+    TaskTrigger TaskTrigger,
+    TaskExecutionOrigin Origin = TaskExecutionOrigin.Flow)
 {
     /// <summary>
     /// Gets the task type from the workflow task.

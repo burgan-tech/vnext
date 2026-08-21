@@ -65,6 +65,18 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     }
 
     /// <inheritdoc />
+    public Task<Result<TasksExecutionResult>> ExecuteAsync(
+        OnExecuteTask onExecuteTask,
+        Guid? instanceTransitionId,
+        TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
+        ScriptContext context,
+        CancellationToken cancellationToken)
+        => ExecuteAsync(
+            onExecuteTask, instanceTransitionId, taskTrigger, origin, context,
+            TaskEngineExecutionOptions.Default, cancellationToken);
+
+    /// <inheritdoc />
     [Trace]
     public async Task<Result<TasksExecutionResult>> ExecuteAsync(
         OnExecuteTask onExecuteTask,
@@ -72,6 +84,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         TaskTrigger taskTrigger,
         TaskExecutionOrigin origin,
         ScriptContext context,
+        TaskEngineExecutionOptions options,
         CancellationToken cancellationToken)
     {
         if (origin == TaskExecutionOrigin.Flow && instanceTransitionId is null)
@@ -105,7 +118,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // 2. Execute with error-aware retry (retry policy resolved per failure from matching rule)
         return await ExecuteWithErrorAwareRetryAsync(
             onExecuteTask, instanceTransitionId, taskTrigger, origin, context,
-            boundaryChain, cancellationToken);
+            boundaryChain, options, cancellationToken);
     }
 
     /// <summary>
@@ -118,6 +131,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <param name="taskTrigger">The trigger type for persistence strategy selection.</param>
     /// <param name="context">The script context containing workflow and instance data.</param>
     /// <param name="boundaryChain">The compiled boundary chain for resolution and fallback.</param>
+    /// <param name="options">Per-call execution options, forwarded to each attempt.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The execution result with boundary action if applicable.</returns>
     private async Task<Result<TasksExecutionResult>> ExecuteWithErrorAwareRetryAsync(
@@ -127,6 +141,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         TaskExecutionOrigin origin,
         ScriptContext context,
         CompiledBoundaryChain boundaryChain,
+        TaskEngineExecutionOptions options,
         CancellationToken cancellationToken)
     {
         var taskKey = onExecuteTask.Task.Key;
@@ -139,7 +154,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
             while (true)
             {
-                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, origin, context, boundaryChain, cancellationToken);
+                result = await ExecuteCoreAsync(onExecuteTask, instanceTransitionId, taskTrigger, origin, context, boundaryChain, options, cancellationToken);
 
                 // Success - return directly
                 if (result is { IsSuccess: true, Value.IsSuccess: true })
@@ -517,38 +532,50 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         TaskExecutionOrigin origin,
         ScriptContext context,
         CompiledBoundaryChain boundaryChain,
+        TaskEngineExecutionOptions options,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
 
-        // 1. Load task from factory
-        var taskResult = await _taskFactory.CreateExecutionTaskAsync(onExecuteTask.Task, cancellationToken);
-        if (!taskResult.IsSuccess)
+        // 1. Load task from factory — skipped when the caller supplied an already prepared
+        //    (cloned + bound) task instance, e.g. a FanOut item.
+        WorkflowTask task;
+        if (options.PreparedTask is not null)
         {
-            stopwatch.Stop();
-            var error = _errorFactory.CreateFromException(
-                new InvalidOperationException(taskResult.Error.Message ?? "Failed to create task"),
-                onExecuteTask.Task.Key,
-                "Unknown",
-                stopwatch.ElapsedMilliseconds);
+            task = options.PreparedTask;
+        }
+        else
+        {
+            var taskResult = await _taskFactory.CreateExecutionTaskAsync(onExecuteTask.Task, cancellationToken);
+            if (!taskResult.IsSuccess)
+            {
+                stopwatch.Stop();
+                var error = _errorFactory.CreateFromException(
+                    new InvalidOperationException(taskResult.Error.Message ?? "Failed to create task"),
+                    onExecuteTask.Task.Key,
+                    "Unknown",
+                    stopwatch.ElapsedMilliseconds);
 
-            TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, error.ErrorMessage, "TaskFactoryError");
+                TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, error.ErrorMessage, "TaskFactoryError");
 
-            return Result<TasksExecutionResult>.Fail(error.ToError());
+                return Result<TasksExecutionResult>.Fail(error.ToError());
+            }
+
+            task = taskResult.Value!;
         }
 
-        var task = taskResult.Value!;
         var taskType = task.GetTaskType();
         var taskTypeStr = taskType.ToString();
         var workflowKey = context.Workflow?.Key ?? "N/A";
 
         Activity.Current?.SetTag(TelemetryConstants.TagNames.TaskType, taskTypeStr);
 
-        // 2. Create instance task for tracking
+        // 2. Create instance task for tracking. The journal key may be overridden so sibling
+        //    executions of the same inner task (FanOut items) get distinct journal identities.
         var instanceTask = new InstanceTask(
             _guidGenerator.Create(),
             instanceTransitionId ?? Guid.Empty,
-            task.Key);
+            options.JournalTaskKey ?? task.Key);
 
         // 3. Get persistence strategy
         var persistenceStrategy = GetPersistenceStrategy(origin);
@@ -584,7 +611,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // 7. Create executor context
         var executorContext = new TaskExecutorContext(
-            task, onExecuteTask, context, instanceTransitionId, taskTrigger);
+            task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin);
 
         // 8. Execute task
         var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
@@ -625,8 +652,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var response = executeResult.Value!;
         var responseJson = new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
 
-        // ALWAYS apply output to context (Flow origin: persisted immediately under the row lock)
-        await ApplyOutputToContextAsync(response, taskTrigger, origin, context, cancellationToken);
+        // Apply output to context (Flow origin: persisted immediately under the row lock).
+        // Collect-only callers (FanOut items) suppress this: the batch has a single write point.
+        if (!options.SuppressDataApply)
+        {
+            await ApplyOutputToContextAsync(response, taskTrigger, origin, context, cancellationToken);
+        }
 
         // Mark task completed with business status
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);
@@ -671,9 +702,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                     response.StatusCode, stopwatch.ElapsedMilliseconds);
 
                 // Return success to let pipeline continue (auto-transitions will handle routing)
-                return Result<TasksExecutionResult>.Ok(
-                    TasksExecutionResult.SuccessWithFailedTasks(
-                        [failureSummary], stopwatch.ElapsedMilliseconds));
+                var noBoundaryResult = TasksExecutionResult.SuccessWithFailedTasks(
+                    [failureSummary], stopwatch.ElapsedMilliseconds);
+                if (options.CaptureResponse)
+                    noBoundaryResult = noBoundaryResult with { Response = response };
+
+                return Result<TasksExecutionResult>.Ok(noBoundaryResult);
             }
 
             // ErrorBoundary exists - return failure for retry evaluation
@@ -693,7 +727,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 TaskError = executionError,
                 BoundaryAction = null, // No boundary action yet - raw result for retry
                 ExecutedTasks = [],
-                TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds,
+                Response = options.CaptureResponse ? response : null
             });
         }
 
@@ -701,7 +736,10 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var summary = TaskExecutionSummary.Success(
             task.Key, taskTypeStr, response.StatusCode, stopwatch.ElapsedMilliseconds);
 
-        return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Success(
-            [summary], stopwatch.ElapsedMilliseconds));
+        var executionResult = TasksExecutionResult.Success([summary], stopwatch.ElapsedMilliseconds);
+        if (options.CaptureResponse)
+            executionResult = executionResult with { Response = response };
+
+        return Result<TasksExecutionResult>.Ok(executionResult);
     }
 }

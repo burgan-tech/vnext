@@ -1,5 +1,6 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Scripting;
 
 namespace BBT.Workflow.Tasks.Coordinator;
 
@@ -58,6 +59,13 @@ public sealed record TasksExecutionResult
     /// Gets the total execution duration in milliseconds.
     /// </summary>
     public long TotalExecutionDurationMs { get; init; }
+
+    /// <summary>
+    /// The final StandardTaskResponse of the executed task. Populated only when the caller
+    /// requested capture via <see cref="TaskEngineExecutionOptions.CaptureResponse"/>
+    /// (FanOut item collection). Null on infrastructure-error paths, where no response was produced.
+    /// </summary>
+    public StandardTaskResponse? Response { get; init; }
 
     /// <summary>
     /// Creates a successful result with no errors.

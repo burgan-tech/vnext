@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Guids;
@@ -34,6 +35,7 @@ public sealed class TaskExecutionEngineTests
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory = Substitute.For<ITaskPersistenceStrategyFactory>();
     private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
     private readonly IWorkflowMetrics _workflowMetrics = Substitute.For<IWorkflowMetrics>();
+    private readonly IInstanceDataWriteService _instanceDataWriteService = Substitute.For<IInstanceDataWriteService>();
 
     // Real error-handling collaborators so boundary resolution is authentic.
     private readonly IErrorBoundaryResolver _boundaryResolver = new ErrorBoundaryResolver(NullLogger<ErrorBoundaryResolver>.Instance);
@@ -54,7 +56,7 @@ public sealed class TaskExecutionEngineTests
         _boundaryResolver,
         _actionExecutor,
         _errorFactory,
-        Substitute.For<BBT.Workflow.Instances.IInstanceDataWriteService>(),
+        _instanceDataWriteService,
         NullLogger<TaskExecutionEngine>.Instance);
 
     private static ScriptContext CreateScriptContext()
@@ -210,6 +212,167 @@ public sealed class TaskExecutionEngineTests
         result.Value.ShouldNotBeNull();
         result.Value!.HasFailedTasks.ShouldBeTrue();
         await executor.Received(1).ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Arranges a fully successful execution: the factory yields <paramref name="factoryTask"/> and the
+    /// executor returns a business-success response carrying data (so the data-apply path is reachable).
+    /// </summary>
+    private ITaskExecutor ArrangeSuccessfulExecution(WorkflowTask factoryTask)
+    {
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(factoryTask));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+            {
+                IsSuccess = true,
+                StatusCode = 200,
+                Data = new Dictionary<string, object> { ["result"] = "ok" }
+            }));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
+        return executor;
+    }
+
+    /// <summary>
+    /// Additive guarantee: the options-less overload keeps writing instance data exactly as before.
+    /// This is the control for <see cref="ExecuteAsync_WithSuppressDataApply_Should_Not_Write_Instance_Data"/> —
+    /// without it, that test would also pass if the data-apply path were simply unreachable.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WithoutOptions_Should_Still_Write_Instance_Data()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceDataWriteService.ReceivedWithAnyArgs(1)
+            .AppendAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithSuppressDataApply_Should_Not_Write_Instance_Data()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+        var options = new TaskEngineExecutionOptions { SuppressDataApply = true };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceDataWriteService.DidNotReceiveWithAnyArgs()
+            .AppendAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithPreparedTask_Should_Bypass_Factory_And_Use_JournalTaskKey()
+    {
+        // The definition-side task differs from the prepared instance, so a factory load would be visible.
+        var definitionTask = WorkflowTaskFactory.CreateHttpTask("fan-out-docs");
+        var prepared = WorkflowTaskFactory.CreateHttpTask("inner-http-task");
+
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+            {
+                IsSuccess = true,
+                StatusCode = 200,
+                Data = new Dictionary<string, object> { ["result"] = "ok" }
+            }));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        var strategy = Substitute.For<ITaskPersistenceStrategy>();
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => callInfo.Arg<InstanceTask>());
+        UsePersistenceStrategy(strategy);
+
+        var onExecute = OnExecuteTask.Create(1, definitionTask, ScriptCode.FromNative(string.Empty));
+        var options = new TaskEngineExecutionOptions
+        {
+            PreparedTask = prepared,
+            JournalTaskKey = "fan-out-docs#3",
+            SuppressDataApply = true
+        };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _taskFactory.DidNotReceiveWithAnyArgs().CreateExecutionTaskAsync(default!, default);
+        await strategy.Received().HandleCreationAsync(
+            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"), Arg.Any<CancellationToken>());
+
+        // The prepared instance — not a factory-loaded one — is what actually reached the executor.
+        await executor.Received(1).ExecuteAsync(
+            Arg.Is<TaskExecutorContext>(c => ReferenceEquals(c.Task, prepared)), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithCaptureResponse_Should_Return_StandardTaskResponse()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+        var options = new TaskEngineExecutionOptions { CaptureResponse = true, SuppressDataApply = true };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Response.ShouldNotBeNull();
+        result.Value.Response!.StatusCode.ShouldBe(200);
+    }
+
+    /// <summary>
+    /// Without CaptureResponse the response is not surfaced — the capture is strictly opt-in.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WithoutCaptureResponse_Should_Not_Expose_Response()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.Value!.Response.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The executor sees the real origin. Before Origin was threaded onto TaskExecutorContext the
+    /// executor had no way to tell a Flow execution from an Extension/Function one.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Should_Pass_Origin_To_ExecutorContext()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        var executor = ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        await executor.Received(1).ExecuteAsync(
+            Arg.Is<TaskExecutorContext>(c => c.Origin == TaskExecutionOrigin.Flow),
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>

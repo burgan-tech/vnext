@@ -1,0 +1,46 @@
+using BBT.Workflow.Definitions;
+
+namespace BBT.Workflow.Tasks.Coordinator;
+
+/// <summary>
+/// Per-call execution options for <see cref="ITaskExecutionEngine"/>. Introduced for FanOutTask:
+/// items run through the full engine lifecycle (retry, boundary, journal, metrics) but must not
+/// each write instance data, and need distinct journal identities.
+/// </summary>
+/// <remarks>
+/// <see cref="Default"/> reproduces the engine's historical behavior in every respect; the
+/// options-less <c>ExecuteAsync</c> overload forwards with it, so existing callers are unaffected.
+/// </remarks>
+public sealed record TaskEngineExecutionOptions
+{
+    /// <summary>
+    /// The default options: no suppression, no journal-key override, no prepared task, no capture.
+    /// Equivalent to the behavior of the options-less overload.
+    /// </summary>
+    public static readonly TaskEngineExecutionOptions Default = new();
+
+    /// <summary>
+    /// When true, the task output is NOT appended to instance data (collect-only execution).
+    /// FanOut items use this so the batch has a single write point at the end instead of N racing writes.
+    /// </summary>
+    public bool SuppressDataApply { get; init; }
+
+    /// <summary>
+    /// Overrides the <c>InstanceTask</c> journal key (e.g. <c>"fan-out-docs#3"</c>).
+    /// Null means the executed task's own key is used.
+    /// </summary>
+    public string? JournalTaskKey { get; init; }
+
+    /// <summary>
+    /// Pre-built task instance to execute; bypasses the task factory load.
+    /// Used when the caller already cloned and bound the task (FanOut binds the inner task per item).
+    /// </summary>
+    public WorkflowTask? PreparedTask { get; init; }
+
+    /// <summary>
+    /// When true, the final <c>StandardTaskResponse</c> is exposed on
+    /// <see cref="TasksExecutionResult.Response"/>. Only populated on paths where a response
+    /// actually exists; infrastructure failures leave it null.
+    /// </summary>
+    public bool CaptureResponse { get; init; }
+}
