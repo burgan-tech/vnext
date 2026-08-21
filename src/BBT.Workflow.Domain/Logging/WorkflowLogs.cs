@@ -876,14 +876,20 @@ public static partial class WorkflowLogs
     /// <see cref="FanOutBatchCompleted"/>: the two together bracket the batch and give the
     /// operator its size and bounds before anything runs.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="itemAlias"/> is the task's readability label for one item, or a neutral
+    /// substitute when it declares none — it is a separate structured field rather than being
+    /// folded into the count so a log backend can still facet on it.
+    /// </remarks>
     [LoggerMessage(
         EventId = 10150,
         Level = LogLevel.Information,
-        Message = "FanOut batch started. TaskKey={TaskKey}, Items={ItemCount}, MaxDop={MaxDegreeOfParallelism}, JoinPolicy={JoinPolicy}, InstanceId={InstanceId}")]
+        Message = "FanOut batch started. TaskKey={TaskKey}, Items={ItemCount} '{ItemAlias}', MaxDop={MaxDegreeOfParallelism}, JoinPolicy={JoinPolicy}, InstanceId={InstanceId}")]
     public static partial void FanOutBatchStarted(
         this ILogger logger,
         string taskKey,
         int itemCount,
+        string itemAlias,
         int maxDegreeOfParallelism,
         string joinPolicy,
         Guid instanceId);

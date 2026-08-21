@@ -59,8 +59,22 @@ public sealed class FanOutTask : WorkflowTask
     public string? ItemsPath { get; private set; }
 
     /// <summary>
-    /// Optional readable alias for a single item (used in default input binding and logs).
+    /// Optional human-readable noun for ONE item of this batch — <c>"document"</c>, <c>"payment"</c>
+    /// — surfaced in the batch's log lines and on each item's trace span.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Purely a readability label. It does <strong>not</strong> take part in input binding: the
+    /// default binding is a flat <c>SetBody(item.Value)</c>, so the inner task's script sees the
+    /// item value itself under no alias, whatever this is set to. Renaming it can never change what
+    /// a script reads — only what an operator reads.
+    /// </para>
+    /// <para>
+    /// Optional, and left null rather than defaulted here: the runtime substitutes a neutral label
+    /// when it is absent, and a default stored on the definition would be indistinguishable from an
+    /// author who really did type <c>"item"</c>.
+    /// </para>
+    /// </remarks>
     public string? ItemAlias { get; private set; }
 
     /// <summary>

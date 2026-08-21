@@ -48,6 +48,13 @@ public static class TelemetryConstants
         public const string FanOutItemIndex = "vnext.fanout.item.index";
 
         /// <summary>
+        /// The batch's readability label for one item (<c>FanOutTask.ItemAlias</c>), or a neutral
+        /// substitute when the task declares none. Always present, so a trace query can group on it
+        /// without having to handle a missing attribute.
+        /// </summary>
+        public const string FanOutItemAlias = "vnext.fanout.item.alias";
+
+        /// <summary>
         /// Milliseconds a fan-out item spent queueing for its concurrency slots before execution
         /// began. Separates "the batch is slow because it is throttled" from "the batch is slow
         /// because one item is slow" without correlating two spans.

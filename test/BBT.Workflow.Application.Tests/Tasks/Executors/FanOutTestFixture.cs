@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,9 +18,11 @@ using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Shouldly;
 
 namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
@@ -47,6 +50,7 @@ internal sealed class FanOutHarness
         int itemTimeoutSeconds = 5,
         int batchTimeoutSeconds = 30,
         string resultKey = "fanOutResults",
+        string? itemAlias = null,
         WorkflowTask? innerTemplate = null,
         FanOutOptions? fanOutOptions = null,
         Reference? itemTaskReference = null,
@@ -113,6 +117,11 @@ internal sealed class FanOutHarness
             config["itemsPath"] = itemsPath;
         }
 
+        if (itemAlias is not null)
+        {
+            config["itemAlias"] = itemAlias;
+        }
+
         // taskOverride exists for the shapes JSON cannot express — notably a FanOutTask with no
         // 'task' reference, which Configure rejects but the executor still guards against.
         _task = taskOverride ?? FanOutTask.Create(JsonSerializer.SerializeToElement(config));
@@ -135,13 +144,18 @@ internal sealed class FanOutHarness
         // task's own maxDegreeOfParallelism and observe which of the two actually binds.
         Limiter = new FanOutConcurrencyLimiter(Options.Create(fanOutOptions ?? new FanOutOptions()));
 
+        // IsEnabled must be stubbed true: every WorkflowLogs extension is source-generated with an
+        // IsEnabled guard, and a substitute's default bool is FALSE — leaving it would make the
+        // executor's logging silently unreachable and every log assertion vacuously fail.
+        Logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+
         Executor = new FanOutTaskExecutor(
             ScriptEngine,
             TaskFactory,
             ScopeFactory,
             Limiter,
             Metrics,
-            NullLogger<FanOutTaskExecutor>.Instance);
+            Logger);
     }
 
     /// <summary>
@@ -150,6 +164,37 @@ internal sealed class FanOutHarness
     /// with the right counters, not what a collector does with it afterwards.
     /// </summary>
     public IWorkflowMetrics Metrics { get; } = Substitute.For<IWorkflowMetrics>();
+
+    /// <summary>
+    /// The executor's logger, recording rather than discarding, so a test can read back the
+    /// STRUCTURED fields of a log line.
+    /// </summary>
+    public ILogger<FanOutTaskExecutor> Logger { get; } = Substitute.For<ILogger<FanOutTaskExecutor>>();
+
+    /// <summary>
+    /// Reads the structured fields of the single logged entry carrying <paramref name="eventId"/>.
+    /// </summary>
+    /// <remarks>
+    /// Goes through the state object — which every <c>LoggerMessage</c>-generated entry exposes as
+    /// an <c>IReadOnlyList&lt;KeyValuePair&lt;string, object?&gt;&gt;</c> — rather than the rendered
+    /// message, so an assertion pins the VALUE a log backend will index and stays indifferent to
+    /// the wording of the message template.
+    /// </remarks>
+    public IReadOnlyDictionary<string, object?> LoggedFields(int eventId)
+    {
+        var matches = Logger.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ILogger.Log)
+                           && call.GetArguments()[1] is EventId id
+                           && id.Id == eventId)
+            .ToList();
+
+        matches.Count.ShouldBe(1, $"expected exactly one log entry with EventId {eventId}");
+
+        var state = (IReadOnlyList<KeyValuePair<string, object?>>)matches[0].GetArguments()[2]!;
+        return state
+            .Where(field => field.Key != "{OriginalFormat}")
+            .ToDictionary(field => field.Key, field => field.Value);
+    }
 
     public ITaskFactory TaskFactory { get; } = Substitute.For<ITaskFactory>();
 

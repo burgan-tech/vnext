@@ -115,6 +115,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         Logger.FanOutBatchStarted(
             task.Key,
             items.Count,
+            AliasOf(task),
             task.MaxDegreeOfParallelism,
             task.JoinPolicy.ToString(),
             InstanceIdOf(context));
@@ -341,6 +342,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             TaskExecutionActivityHelper.OperationFanOutItem, task.Key, TaskType.ToString());
         activity?.SetTag(TelemetryConstants.TagNames.FanOutItemKey, item.ItemKey);
         activity?.SetTag(TelemetryConstants.TagNames.FanOutItemIndex, item.Index);
+        activity?.SetTag(TelemetryConstants.TagNames.FanOutItemAlias, AliasOf(task));
 
         try
         {
@@ -503,6 +505,29 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
 
     private static Guid InstanceIdOf(TaskExecutorContext context) =>
         context.ScriptContext.Instance?.Id ?? Guid.Empty;
+
+    /// <summary>
+    /// The task's readability label for one item, or <see cref="DefaultItemAlias"/> when it
+    /// declares none.
+    /// </summary>
+    /// <remarks>
+    /// <c>ItemAlias</c> is a REPORTING label and nothing else — resolving it here, at the two places
+    /// that report, is what keeps it that way. It must never reach the item's input binding, which
+    /// stays a flat <c>SetBody(item.Value)</c>: giving the alias a role in binding would change the
+    /// shape every inner-task script sees, keyed on a field authors set for readability.
+    /// <para>
+    /// Whitespace counts as absent, so an author who wrote <c>"itemAlias": ""</c> gets a log line
+    /// that still reads as a sentence rather than <c>Items=12 ''</c>.
+    /// </para>
+    /// </remarks>
+    private static string AliasOf(FanOutTask task) =>
+        string.IsNullOrWhiteSpace(task.ItemAlias) ? DefaultItemAlias : task.ItemAlias;
+
+    /// <summary>
+    /// Neutral stand-in for an unset <c>itemAlias</c>. Lives here rather than on the definition so
+    /// an authored <c>"item"</c> stays distinguishable from an absent alias.
+    /// </summary>
+    private const string DefaultItemAlias = "item";
 
     /// <summary>
     /// Metric label used when a fan-out task runs outside a flow (function/extension origin), where
