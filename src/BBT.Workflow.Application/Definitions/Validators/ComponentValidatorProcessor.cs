@@ -23,7 +23,7 @@ public sealed class ComponentValidatorProcessor(IEnumerable<IComponentValidator>
         if (validator == null)
             throw new NotSupportedException($"No validator found for component type '{componentType}'.");
 
-        return validator.Validate(attributes);
+        return Invoke(validator, componentType, attributes);
     }
 
     /// <summary>
@@ -42,7 +42,66 @@ public sealed class ComponentValidatorProcessor(IEnumerable<IComponentValidator>
             return false;
         }
 
-        result = validator.Validate(attributes);
+        result = Invoke(validator, componentType, attributes);
         return true;
     }
+
+    /// <summary>
+    /// Runs one validator, turning an authoring error raised while the definition is being
+    /// MATERIALISED into a validation error instead of letting it escape as an unhandled exception.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every validator materialises the component from its JSON before it can inspect it
+    /// (<c>attributes.Deserialize&lt;WorkflowTask&gt;()</c>, <c>…&lt;Workflow&gt;()</c>, …), and a
+    /// definition's own <c>Configure</c> reports a bad shape by throwing: <c>FanOutTask</c> rejects
+    /// the reserved <c>mode: "durable"</c>, an <c>itemsPath</c> that is not <c>$.</c>-rooted, a
+    /// <c>maxDegreeOfParallelism</c> below 1; <c>HttpTask</c> rejects a missing <c>url</c>;
+    /// <c>SubProcessTask</c> and <c>GetInstancesTask</c> reject a missing trigger domain/flow. Only
+    /// <see cref="JsonException"/> was ever caught, so every one of those authoring mistakes reached
+    /// the publish endpoint's generic handler and came back as an opaque HTTP 500 — with the
+    /// exception's message, which already names the offending field AND the supported values,
+    /// discarded. The author was told only that something broke on the server.
+    /// </para>
+    /// <para>
+    /// Caught HERE, around the single validator invocation, rather than around the publish operation:
+    /// the blast radius is one validator call whose entire job is to materialise a definition and
+    /// look at it, so an <see cref="ArgumentException"/> raised inside it is by construction about
+    /// the definition's shape. Everything else — a database failure, a cache failure, the
+    /// <see cref="NotSupportedException"/> above — is untouched and still surfaces as a 500, which is
+    /// what a genuine infrastructure fault must stay.
+    /// </para>
+    /// <para>
+    /// <see cref="ArgumentNullException"/> and <see cref="ArgumentOutOfRangeException"/> are included
+    /// deliberately, being <see cref="ArgumentException"/> subtypes: <c>HttpTask.Configure</c> reports
+    /// its missing <c>url</c> as the former, and an author cannot tell the two apart from the outside.
+    /// </para>
+    /// </remarks>
+    private static ComponentValidationResult Invoke(
+        IComponentValidator validator,
+        string componentType,
+        JsonElement attributes)
+    {
+        try
+        {
+            return validator.Validate(attributes);
+        }
+        catch (ArgumentException ex)
+        {
+            var result = new ComponentValidationResult();
+
+            // Keyed by component type + the rejected parameter ('config' for a task's own
+            // Configure), so the errors dictionary locates the mistake the way a flow's
+            // 'workflow.ErrorBoundary.OnError[0].Transition' does rather than reporting a bare
+            // message with no field.
+            result.AddError(ex.Message, $"{componentType}.{ex.ParamName ?? DefaultMemberName}");
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Member name used when an authoring exception names no parameter — the component's attributes
+    /// as a whole are then the only thing that can be pointed at.
+    /// </summary>
+    private const string DefaultMemberName = "attributes";
 }
