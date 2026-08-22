@@ -42,7 +42,7 @@ Katman 0 hiçbir optimizasyon içermez; yalnız ölçüm üretir.
 | `script_compilations_total` | counter | `ScriptEngine` | `result=hit\|miss`, `status=success\|error` | **YENİ** |
 | `script_execution_duration_seconds` | histogram | Huni noktaları | `scriptType` | **YENİ** — ölü `RecordScriptExecutionDuration` bağlanır; `_count` serisi gerçek çalıştırma sayacı olarak da kullanılır (ayrı counter'a gerek yok, `script_executions_total` adı deprecated olarak dolu kaldığı için yeniden kullanılamaz) |
 | `script_runtime_errors_total` | counter | Huni catch'leri | `scriptType` | **YENİ** — ölü `RecordScriptRuntimeError` bağlanır |
-| `script_cache_entries` | gauge | Evaluator `_typeCache` boyutu | — | **YENİ** |
+| `workflow_cache_entries{cache_name="script-types"}` | gauge | Evaluator `_typeCache` boyutu (`CachedTypeCount`), ScriptEngine'den beslenir | `cache_name` | **Mevcut gauge yeniden kullanılır** (component cache ile aynı desen — `SetCacheEntries`); yeni metrik adı açılmaz |
 
 `scriptType` değerleri: `transition-mapping`, `task-input`, `task-output`, `condition`, `function`.
 
