@@ -11,6 +11,23 @@
 **Spec:** `docs/superpowers/specs/2026-08-23-script-perf-katman0-design.md`
 **Branch:** `feature/script-perf-katman0` (mevcut, spec commit'leri üzerinde)
 
+## Yürütme durumu (2026-08-23, subagent-driven)
+
+| Task | Durum | Commit(ler) | Not |
+|---|---|---|---|
+| 1 Evaluator outcome | ✅ spec+kalite onaylı | `19020dcb` | +CSharpEvaluatorConcurrencyTests mekanik `.Instance` uyarlaması |
+| 2 Metrik yüzeyi | ✅ | `e8c165c0`, `2f6527ff` | counter stili dosya konvansiyonuna hizalandı |
+| 3 ScriptEngine wiring | ✅ | `69b7ec73`, `7e880cf9` | gauge yalnız miss'te (sapma notu Task 3 altında) |
+| 4 Huniler | ✅ | `e2fcbaca`, `ce92aade` | gate: `OnExecuteTask.Mapping.HasMappingCode`; OCE runtime-error sayılmaz; 21 executor + 7 test dosyası |
+| 5 Dashboard | ✅ | `73d16c67`, `7a8ac1a6` | hit-ratio paydası `status="success"` |
+| 6 vnext-meta | ✅ (validator koşuldu) | `eae47ec` | type=`behavior` (repo emsali); pre-existing drift ayrı işlere çıkarıldı |
+| 7 Benchmarks | ✅ | `da360c9e`, `2d12fbb7` | +`[GcServer(true)]`, ParseJsonElement memoization-bağımlılık notu |
+| 8 Mikro baseline | ✅ 5/5 suite | `d73d3d87` | Server GC konsol-doğrulamalı; LOH varyans notu baseline'da |
+| 9 Kapanış | ✅ | — | Build temiz; Domain+Infra isim-diff'i master worktree'e karşı BOŞ (yeni failure yok); App.Tests Task 4'te stash-diff'le doğrulandı |
+
+**Baseline özet (2026-08-23, tam sonuç: `test/BBT.Workflow.Benchmarks/baselines/2026-08-23-master.md`):**
+CompileHit 16KB: 12.5µs/98.8KB · Expando 200KB: 2.24ms/2.85MB · Branch 50KB: 1.29ms/1.72MB · NormalizeFresh 200KB: 6.15ms/8.43MB · Audit 50KB: 87.5µs/100.6KB
+
 **Çalışma kuralları:**
 - Her görev sonunda commit. Test komutlarında `--filter` ile hedefli koş; full suite'te master'da ~191 pre-existing failure var (çoğu AmbientServiceProvider paralel-koleksiyon sızması) — sayı değil, **isim bazlı** karşılaştır.
 - `dotnet build` uyarı üretmemeli (yeni kod için).
