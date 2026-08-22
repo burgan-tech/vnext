@@ -116,7 +116,7 @@ public class SandboxedScriptingTests
         var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
             code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(7);
+        instance.Instance.Calc().ShouldBe(7);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class SandboxedScriptingTests
         var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
             code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(42);
+        instance.Instance.Calc().ShouldBe(42);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class SandboxedScriptingTests
         var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
             code, extraReferences: refs, usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(5);
+        instance.Instance.Calc().ShouldBe(5);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class SandboxedScriptingTests
             extraReferences: [ContractRef, MetadataReference.CreateFromFile(typeof(System.Uri).Assembly.Location)],
             usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(5); // "a%20b"
+        instance.Instance.Calc().ShouldBe(5); // "a%20b"
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class SandboxedScriptingTests
             extraReferences: [ContractRef, SoapTaskRef, XmlImplRef, ResolveFacade("System.Xml.ReaderWriter")],
             usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(4);
+        instance.Instance.Calc().ShouldBe(4);
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class SandboxedScriptingTests
             extraReferences: [ContractRef, SoapTaskRef, XmlImplRef, ResolveFacade("System.Xml.ReaderWriter")],
             usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(4);
+        instance.Instance.Calc().ShouldBe(4);
     }
 
     [Fact]
@@ -318,7 +318,7 @@ public class SandboxedScriptingTests
             usingDirectives: set.Namespaces.Append("BBT.Workflow.Scripting"),
             loadContext: set.LoadContext);
 
-        instance.Calc().ShouldBe(10);
+        instance.Instance.Calc().ShouldBe(10);
     }
 
     [Fact]
@@ -443,7 +443,9 @@ public class SandboxedScriptingTests
 
         public int Attempts { get; protected set; }
 
-        public Task<T> CompileToInstanceAsync<T>(
+        public int CachedTypeCount => Inner.CachedTypeCount;
+
+        public Task<EvaluatorCompilation<T>> CompileToInstanceAsync<T>(
             string code,
             IScriptServices? services = null,
             IEnumerable<MetadataReference>? extraReferences = null,

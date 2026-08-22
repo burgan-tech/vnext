@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -111,7 +112,7 @@ public class CSharpEvaluator : IEvaluator
     internal long CompileInvocationCount => Interlocked.Read(ref _compileInvocationCount);
 
     /// <inheritdoc />
-    public Task<T> CompileToInstanceAsync<T>(
+    public Task<EvaluatorCompilation<T>> CompileToInstanceAsync<T>(
         string code,
         IScriptServices? services = null,
         IEnumerable<MetadataReference>? extraReferences = null,
@@ -141,11 +142,26 @@ public class CSharpEvaluator : IEvaluator
         // allocated on every cache hit. Mirrors ScriptHelperRegistry.GetOrBuildHelpers.
         if (_typeCache.TryGetValue(cacheKey, out var existing) && existing.IsValueCreated)
         {
-            return Task.FromResult(CreateAndInjectServices<T>(existing.Value.CompiledType, services));
+            return Task.FromResult(new EvaluatorCompilation<T>(
+                CreateAndInjectServices<T>(existing.Value.CompiledType, services), false, TimeSpan.Zero));
         }
 
+        // The flag/duration live in this call's closure: the factory body runs at most once per cache
+        // key (Lazy ExecutionAndPublication), and only the call whose lambda actually created the
+        // stored Lazy has its locals written — so exactly one caller reports Compiled=true per emit,
+        // no matter which thread triggers materialisation.
+        var compiledHere = false;
+        var compileDuration = TimeSpan.Zero;
         var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<CompiledScript>(
-            () => CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext),
+            () =>
+            {
+                var compileTimer = Stopwatch.StartNew();
+                var result = CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext);
+                compileTimer.Stop();
+                compiledHere = true;
+                compileDuration = compileTimer.Elapsed;
+                return result;
+            },
             LazyThreadSafetyMode.ExecutionAndPublication));
 
         CompiledScript compiled;
@@ -162,7 +178,8 @@ public class CSharpEvaluator : IEvaluator
             throw;
         }
 
-        return Task.FromResult(CreateAndInjectServices<T>(compiled.CompiledType, services));
+        return Task.FromResult(new EvaluatorCompilation<T>(
+            CreateAndInjectServices<T>(compiled.CompiledType, services), compiledHere, compileDuration));
     }
 
     /// <inheritdoc />

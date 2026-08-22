@@ -373,7 +373,7 @@ public sealed class ScriptEngine(
                 .Distinct();
 
             // Pass script services to the evaluator for injection into ScriptBase instances
-            var result = await _evaluator.CompileToInstanceAsync<T>(
+            var compilation = await _evaluator.CompileToInstanceAsync<T>(
                 code,
                 _scriptServices,
                 mergedReferences,
@@ -389,7 +389,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptExecution(scriptType, language, "success");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds);
 
-            return result;
+            return compilation.Instance;
         }
         catch (CompilationErrorException ex)
         {

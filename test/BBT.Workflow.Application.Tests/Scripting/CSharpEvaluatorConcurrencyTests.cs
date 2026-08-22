@@ -67,8 +67,8 @@ public sealed class CSharpEvaluatorConcurrencyTests
 
         var results = await Task.WhenAll(tasks);
 
-        results.ShouldAllBe(r => r != null);
-        results.Select(r => r.GetType()).Distinct().Count().ShouldBe(1);
+        results.ShouldAllBe(r => r.Instance != null);
+        results.Select(r => r.Instance.GetType()).Distinct().Count().ShouldBe(1);
         evaluator.CachedTypeCount.ShouldBe(1);
 
         // The assertions above pass even if the Lazy de-duplication regressed away: the assembly-reuse
@@ -85,9 +85,9 @@ public sealed class CSharpEvaluatorConcurrencyTests
     {
         var evaluator = new CSharpEvaluator();
 
-        var instance = await evaluator.CompileToInstanceAsync<object>(SampleScript);
+        var outcome = await evaluator.CompileToInstanceAsync<object>(SampleScript);
 
-        var name = instance.GetType().Assembly.GetName().Name;
+        var name = outcome.Instance.GetType().Assembly.GetName().Name;
         name.ShouldNotBeNull();
         name.ShouldStartWith("Script_");
         // SHA-256 rendered as hex. A truncated name would make the reuse rule probabilistic.
@@ -123,7 +123,7 @@ public sealed class CSharpEvaluatorConcurrencyTests
 
         var result = await second.CompileToInstanceAsync<object>(SampleScript, loadContext: context);
 
-        result.ShouldNotBeNull();
+        result.Instance.ShouldNotBeNull();
         second.CachedTypeCount.ShouldBe(1);
     }
 
@@ -150,8 +150,8 @@ public sealed class CSharpEvaluatorConcurrencyTests
         var b = await evaluator.CompileToInstanceAsync<object>(SampleScript, loadContext: contextB);
 
         evaluator.CachedTypeCount.ShouldBe(2);
-        AssemblyLoadContext.GetLoadContext(a.GetType().Assembly).ShouldBeSameAs(contextA);
-        AssemblyLoadContext.GetLoadContext(b.GetType().Assembly).ShouldBeSameAs(contextB);
+        AssemblyLoadContext.GetLoadContext(a.Instance.GetType().Assembly).ShouldBeSameAs(contextA);
+        AssemblyLoadContext.GetLoadContext(b.Instance.GetType().Assembly).ShouldBeSameAs(contextB);
     }
 
     [Fact]

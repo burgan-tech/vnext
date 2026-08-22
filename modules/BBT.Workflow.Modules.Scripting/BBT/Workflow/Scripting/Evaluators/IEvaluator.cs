@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.Loader;
 using System.Threading;
@@ -14,6 +15,18 @@ namespace BBT.Workflow.Scripting.Evaluators;
 /// <param name="Reference">Metadata reference to the compiled helper assembly.</param>
 /// <param name="Namespaces">Public namespaces exported by the helper assembly.</param>
 public sealed record CompiledHelpers(MetadataReference Reference, string[] Namespaces);
+
+/// <summary>
+/// The result of a compile-or-fetch call: the instantiated script plus whether THIS call performed
+/// the actual Roslyn compile (<see cref="Compiled"/> = cache miss) and how long that compile took.
+/// Exactly one caller per cache key observes <c>Compiled == true</c>; every other caller —
+/// including waiters that blocked on the same in-flight compile — observes a hit.
+/// </summary>
+/// <typeparam name="T">The compiled instance type.</typeparam>
+/// <param name="Instance">The compiled and service-injected instance.</param>
+/// <param name="Compiled">True only for the single call whose factory ran the Roslyn emit.</param>
+/// <param name="CompileDuration">Wall time of the Roslyn emit; <see cref="TimeSpan.Zero"/> on hits.</param>
+public sealed record EvaluatorCompilation<T>(T Instance, bool Compiled, TimeSpan CompileDuration);
 
 /// <summary>
 /// Provides script compilation and instantiation capabilities.
@@ -49,8 +62,12 @@ public interface IEvaluator
     /// Optional per-compile assembly grant merged on top of the sandbox baseline (effective only when
     /// the sandbox is enabled).
     /// </param>
-    /// <returns>A task containing the compiled instance of type T</returns>
-    Task<T> CompileToInstanceAsync<T>(
+    /// <returns>
+    /// A task containing the compile outcome: the compiled instance of type T, whether this call
+    /// performed the Roslyn compile (cache miss) or hit an already-compiled entry, and the compile
+    /// duration (zero on a hit).
+    /// </returns>
+    Task<EvaluatorCompilation<T>> CompileToInstanceAsync<T>(
         string code,
         IScriptServices? services = null,
         IEnumerable<MetadataReference>? extraReferences = null,
@@ -58,6 +75,11 @@ public interface IEvaluator
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
         IReadOnlyList<string>? sandboxGrant = null);
+
+    /// <summary>
+    /// Gets the number of cached compiled script types (unique compilation identities).
+    /// </summary>
+    int CachedTypeCount { get; }
 
     /// <summary>
     /// Compiles a set of helper component sources into a single assembly loaded into the supplied
