@@ -384,10 +384,14 @@ public sealed class ScriptEngine(
 
             stopwatch.Stop();
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var cache = compilation.Compiled ? "miss" : "hit";
 
-            // Record successful script compilation
+            // DEPRECATED (vnext-meta/deprecations.json): script_executions_total keeps its historical
+            // compile-path semantics until consumers migrate — do not remove or repurpose here.
             workflowMetrics.RecordScriptExecution(scriptType, language, "success");
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds);
+            workflowMetrics.RecordScriptCompilation(cache, "success");
+            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
+            workflowMetrics.SetCacheEntries("script-types", _evaluator.CachedTypeCount);
 
             return compilation.Instance;
         }
@@ -398,8 +402,9 @@ public sealed class ScriptEngine(
 
             // Record compilation error
             workflowMetrics.RecordScriptExecution(scriptType, language, "compilation_error");
+            workflowMetrics.RecordScriptCompilation("miss", "compilation_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds);
+            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds, "miss");
 
             throw;
         }
@@ -410,8 +415,9 @@ public sealed class ScriptEngine(
 
             // Record invalid operation as compilation error
             workflowMetrics.RecordScriptExecution(scriptType, language, "invalid_operation");
+            workflowMetrics.RecordScriptCompilation("miss", "invalid_operation");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds);
+            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds, "miss");
 
             throw;
         }
@@ -422,7 +428,10 @@ public sealed class ScriptEngine(
 
             // Record cancelled compilation
             workflowMetrics.RecordScriptExecution(scriptType, language, "cancelled");
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds);
+            // A failing call by definition did not come from the cache; OperationCanceledException can
+            // fire before lookup, but counting it as a miss is an accepted simplification.
+            workflowMetrics.RecordScriptCompilation("miss", "cancelled");
+            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds, "miss");
 
             throw;
         }
@@ -433,8 +442,9 @@ public sealed class ScriptEngine(
 
             // Record unexpected compilation error
             workflowMetrics.RecordScriptExecution(scriptType, language, "unexpected_error");
+            workflowMetrics.RecordScriptCompilation("miss", "unexpected_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds);
+            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds, "miss");
 
             throw;
         }
