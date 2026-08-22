@@ -10,9 +10,14 @@ Katman 0 hiçbir optimizasyon içermez; yalnız ölçüm üretir.
 
 ## Alınan kararlar
 
+> **Politika (kullanıcı direktifi, 2026-08-23): Breaking change YASAK.** Değişiklik zorunluysa eski
+> davranış bir süre paralel desteklenir, `vnext-meta/deprecations.json`'a işlenir; tüketici ekipler
+> birkaç sürümde geçiş yapınca eski davranış ayrı bir sürümde kaldırılır. Bu spec'teki tüm metrik
+> değişiklikleri bu politikaya göre **eklemeli (additive)** tasarlanmıştır.
+
 | Karar | Seçim |
 |---|---|
-| Metrik stratejisi | **Koordineli düzeltme** — semantik düzeltilir, vnext + helm-charts dashboard'ları birlikte güncellenir; deprecation dönemi yok |
+| Metrik stratejisi | **Ekle + deprecate** — mevcut metrikler aynen yayınlanmaya devam eder; doğru semantikli yeni metrikler eklenir; eskiler deprecations.json ile işaretlenir, kaldırma ileriki bir sürümün işi |
 | Kapsam | **Mikro + makro baseline** — BenchmarkDotNet + metrik fix'leri + vnext-example'da yük altında baseline |
 | Makro senaryo | **Yeni `script-perf-lab` akışı** (mevcut senaryolar değil) |
 | Execution ölçüm noktası | **Huni noktaları** (proxy/decorator değil); hit/miss evaluator'dan raporlanır |
@@ -28,18 +33,23 @@ Katman 0 hiçbir optimizasyon içermez; yalnız ölçüm üretir.
 
 ### 1.2 Metrik tablosu
 
-| Metrik | Tip | Kayıt yeri | Label'lar | Not |
+**Eklemeli tasarım — hiçbir mevcut metrik kaldırılmaz, hiçbir mevcut sorgu kırılmaz:**
+
+| Metrik | Tip | Kayıt yeri | Label'lar | Durum |
 |---|---|---|---|---|
-| `script_compilations_total` | counter | `ScriptEngine` | `result=hit\|miss`, `status=success\|error` | Yeni |
-| `script_compilation_duration_seconds` | histogram | `ScriptEngine` | `status` | Mevcut metrik; artık **yalnız gerçek derlemede** (`Compiled=true`) kaydedilir |
-| `script_executions_total` | counter | Huni noktaları | `scriptType`, `status` | **Semantik değişir**: compile path'inden çıkar, gerçek script çalıştırmasını sayar |
-| `script_execution_duration_seconds` | histogram | Huni noktaları | `scriptType` | Ölü `RecordScriptExecutionDuration` bağlanır |
-| `script_runtime_errors_total` | counter | Huni catch'leri | `scriptType` | Ölü `RecordScriptRuntimeError` bağlanır |
-| `script_cache_entries` | gauge | Evaluator `_typeCache` boyutu | — | Yeni; evaluator sayıyı expose eder |
+| `script_executions_total` | counter | `ScriptEngine` (bugünkü gibi compile path) | mevcut label'lar | **DEĞİŞMEZ, DEPRECATED** — aynen yayınlanmaya devam eder; deprecations.json'a hedef kaldırma sürümüyle işlenir |
+| `script_compilation_duration_seconds` | histogram | `ScriptEngine` (bugünkü gibi hit+miss) | mevcut + **yeni `cache=hit\|miss` label'ı** | Label ekleme kırıcı değildir: aggregate sorgular (rate/histogram_quantile) çalışmaya devam eder; temiz compile süresi `cache="miss"` filtresiyle okunur |
+| `script_compilations_total` | counter | `ScriptEngine` | `result=hit\|miss`, `status=success\|error` | **YENİ** |
+| `script_execution_duration_seconds` | histogram | Huni noktaları | `scriptType` | **YENİ** — ölü `RecordScriptExecutionDuration` bağlanır; `_count` serisi gerçek çalıştırma sayacı olarak da kullanılır (ayrı counter'a gerek yok, `script_executions_total` adı deprecated olarak dolu kaldığı için yeniden kullanılamaz) |
+| `script_runtime_errors_total` | counter | Huni catch'leri | `scriptType` | **YENİ** — ölü `RecordScriptRuntimeError` bağlanır |
+| `script_cache_entries` | gauge | Evaluator `_typeCache` boyutu | — | **YENİ** |
 
 `scriptType` değerleri: `transition-mapping`, `task-input`, `task-output`, `condition`, `function`.
 
 **Kardinalite kuralı:** mapping key / workflow key / instance id label olarak KULLANILMAZ. Label seti sabit ve küçüktür.
+
+**Kaldırma planı (bu spec'in işi DEĞİL):** `script_executions_total` (compile-path semantiği) tüketici
+ekipler yeni metriklere geçtikten sonra, deprecations.json'daki hedef sürümde ayrı bir çalışmayla kaldırılır.
 
 ### 1.3 Huni noktaları (execution ölçümü)
 
@@ -54,13 +64,13 @@ Trafiğin ~%90+'ı kapsanır. Kapsanmayan uçlar (StateNotificationDispatcher, S
 
 ### 1.4 Dashboard ve meta güncellemeleri
 
-- vnext: `etc/docker/config/grafana/dashboards/workflow-metrics.json` — mevcut `rate(script_executions_total[5m])` paneli yeni semantiğe göre güncellenir; **cache hit-ratio paneli** eklenir (`script_compilations_total` üzerinden).
-- vnext-helm-charts: `charts/vnext/templates/common/monitoring-config/grafana-dashboard-config.yaml` — aynı güncellemeler (vnext PR merge sonrası ayrı PR).
-- vnext-meta: `migrations.json`'a metrik semantik değişikliği kaydı (eski sorgu → yeni sorgu eşlemesiyle).
+- vnext: `etc/docker/config/grafana/dashboards/workflow-metrics.json` — mevcut panel ÇALIŞMAYA DEVAM EDER (eski metrik akmaya devam ettiği için acil değişiklik yok); panel sorguları yeni metriklere geçirilir ve **cache hit-ratio paneli** eklenir (`script_compilations_total` üzerinden).
+- vnext-helm-charts: `charts/vnext/templates/common/monitoring-config/grafana-dashboard-config.yaml` — aynı güncellemeler; **acele gerektirmez**, eski metrik kaldırılana kadar mevcut dashboard kırılmaz. Ekiplere geçiş duyurusu yapılır.
+- vnext-meta: `deprecations.json`'a `script_executions_total` (compile-path semantiği) kaydı — sebep, yeni karşılığı (`script_execution_duration_seconds_count` / `script_compilations_total`) ve hedef kaldırma sürümü ile. `migrations.json`'a eski sorgu → yeni sorgu eşleme rehberi.
 
 ### 1.5 Unit test kapsamı
 
-- Fake/stub evaluator ile: hit'te `result=hit` sayacı artar ve compile histogramına örnek DÜŞMEZ; miss'te `result=miss` + histogram örneği düşer; compile hatasında `status=error`.
+- Fake/stub evaluator ile: hit'te `result=hit` sayacı artar ve histogram örneği `cache="hit"` label'ıyla düşer; miss'te `result=miss` + `cache="miss"` örneği; compile hatasında `status=error`. Deprecated `script_executions_total` her iki durumda da BUGÜNKÜ davranışıyla artmaya devam eder (regresyon testi — eski dashboard'lar kırılmamalı).
 - Her hunide: başarılı çalıştırmada duration + `script_executions_total` kaydı; exception'da `script_runtime_errors_total` + exception'ın aynen yayılması.
 - Gauge: cache'e ekleme sonrası boyutun yansıması.
 
@@ -123,11 +133,11 @@ Trafiğin ~%90+'ı kapsanır. Kapsanmayan uçlar (StateNotificationDispatcher, S
 | 2 | vnext-example | script-perf-lab + üretici + perf-load.py + README + TEST-SCENARIOS.md + integration test; makro baseline koşumu (1 lokalde çalışırken) | 1 |
 | 3 | vnext-helm-charts | Dashboard config metrik güncellemesi | 1 merge + release |
 
-Adım 3 için kullanıcıya release senkronizasyonu hatırlatılır (runtime'daki metrik değişikliğinin Helm karşılığı — CLAUDE.local.md kuralı).
+Adım 3 acele gerektirmez (eski metrik akmaya devam ettiği için mevcut dashboard kırılmaz); yeni metriklerin Helm dashboard karşılığı bir sonraki uygun release'te eklenir ve ekiplere deprecation duyurusu yapılır (CLAUDE.local.md kuralı).
 
 ## 5. Başarı kriterleri
 
-- [ ] Hit/miss oranı Grafana'da görünür; compile histogramı yalnız gerçek derleme örnekleri içerir.
+- [ ] Hit/miss oranı Grafana'da görünür; temiz compile süresi `cache="miss"` filtresiyle okunabilir; **mevcut dashboard sorguları kırılmadan çalışmaya devam eder**.
 - [ ] `script_execution_duration_seconds` scriptType bazında dolu; `script_runtime_errors_total` çalışır durumda.
 - [ ] 5 benchmark suite koşuyor; mikro baseline md commit'li.
 - [ ] Makro baseline dokümanı: soğuk/sıcak ayrımıyla alloc-rate, GC, LOH, latency p50/p95/p99 ve hit-ratio sayıları kayıtlı.
@@ -135,6 +145,7 @@ Adım 3 için kullanıcıya release senkronizasyonu hatırlatılır (runtime'dak
 
 ## 6. Riskler
 
-- `IEvaluator` imza değişikliğinin bilinmeyen bir çağıranı çıkarsa kapsam genişler → plan aşamasında çağıran taraması ilk görevdir.
-- Metrik isim/semantik değişikliği, vnext ile helm-charts release'i arasındaki pencerede dashboard'ı kısmen boş bırakır → kabul edilen trade-off (Bölüm 1 kararı).
+- `IEvaluator` imza değişikliğinin bilinmeyen bir çağıranı çıkarsa kapsam genişler → plan aşamasında çağıran taraması ilk görevdir. (İmza değişikliği in-process bir iç sözleşmedir; dışa yayınlanan bir yüzey olmadığı için breaking-change politikasına takılmaz.)
+- `script_compilation_duration_seconds`'a `cache` label'ı eklenmesi seri sayısını ikiye katlar → kabul edilebilir; label'sız aggregate sorgular etkilenmez. Plan aşamasında mevcut dashboard sorgularının label-bağımsız olduğu teyit edilir.
+- Deprecated `script_executions_total`'ın kaldırılması unutulabilir → deprecations.json'daki hedef sürüm tek takip noktasıdır; kaldırma bu spec'in kapsamı dışında ayrı iştir.
 - Huni noktasına eklenen Stopwatch/try-finally'nin kendisi maliyet ekler → ihmal edilebilir (çağrı başına ~ns mertebesi, allocation'sız desen kullanılacak); benchmark'lar bunu da yakalar.
