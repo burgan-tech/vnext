@@ -25,6 +25,10 @@
 | 8 Mikro baseline | ✅ 5/5 suite | `d73d3d87` | Server GC konsol-doğrulamalı; LOH varyans notu baseline'da |
 | 9 Kapanış | ✅ | — | Build temiz; Domain+Infra isim-diff'i master worktree'e karşı BOŞ (yeni failure yok); App.Tests Task 4'te stash-diff'le doğrulandı |
 
+**Bilinen ölçüm asimetrileri (final review notu):** `status="failure"` süreleri yalnız task hunilerinde
+üretilir (diğer üç huni yalnız success süresi yazar); exception yolları hiçbir hunide süre yazmaz
+(yalnız `script_runtime_errors_total`). Hata fırtınasında p95 yalnız başarılı çalıştırmaları temsil eder.
+
 **Baseline özet (2026-08-23, tam sonuç: `test/BBT.Workflow.Benchmarks/baselines/2026-08-23-master.md`):**
 CompileHit 16KB: 12.5µs/98.8KB · Expando 200KB: 2.24ms/2.85MB · Branch 50KB: 1.29ms/1.72MB · NormalizeFresh 200KB: 6.15ms/8.43MB · Audit 50KB: 87.5µs/100.6KB
 

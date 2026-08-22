@@ -1554,7 +1554,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(script_compilations_total{result=\"hit\"}[5m])) / sum(rate(script_compilations_total{status=\"success\"}[5m]))",
+          "expr": "sum(rate(script_compilations_total{result=\"hit\",status=\"success\"}[5m])) / sum(rate(script_compilations_total{status=\"success\"}[5m]))",
           "legendFormat": "hit ratio",
           "range": true,
           "refId": "A"
