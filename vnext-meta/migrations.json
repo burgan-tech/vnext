@@ -54,6 +54,17 @@
       "title": "updateData no longer re-runs the state's OnEntry/OnExit or re-arms its timers",
       "description": "updateData previously ran the full pipeline: the current state's OnExit tasks ran, its OnEntry tasks ran a second time, and the state's scheduled transitions were cancelled and re-armed - restarting every timeout from zero. Those four steps (CancelScheduledJobs, OnExit, OnEntry, Schedule) are now excluded for updateData, whose target is fixed to the reserved $self key and which therefore leaves and enters no state. The transition's own onExecute tasks, the data write and the auto-transition evaluation are unchanged. This applies to updateData ONLY. Other transitions declaring target $self - shared transitions in particular - are unaffected and keep running the full state lifecycle, as do transitions naming the current state literally, including self-loops.",
       "action": "If a workflow relied on updateData re-running the current state's OnEntry to refresh something, move that logic into the transition's own onExecutionTasks. If it relied on updateData resetting the state's scheduled-transition timer, model the reset explicitly. Only the workflow-level updateData transition is affected, so no search of state transitions is needed. Note the converse for $self shared transitions, which are unchanged: because they still cancel and re-arm the state's scheduled transitions, a frequently invoked one on a state with a short timeout defers that timeout on every call."
+    },
+    {
+      "id": "script-metrics-hit-miss-and-execution",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "prometheus.script_*",
+      "since": "0.0.81",
+      "severity": "info",
+      "title": "Script metrics: cache hit/miss split and true execution metrics added",
+      "description": "New metrics: script_compilations_total{result=hit|miss,status}; script_execution_duration_seconds{script_type,language,status} and script_runtime_errors_total{script_type,language,error_type} are now recorded at execution funnels (task-input, task-output, condition, transition-mapping, function); script_compilation_duration_seconds gained a 'cache' label (existing aggregate queries unaffected); workflow_cache_entries gained cache_name='script-types'. script_executions_total is deprecated but unchanged.",
+      "action": "Point compile-rate panels at rate(script_compilations_total[5m]); read clean compile latency with {cache=\"miss\"}; use script_execution_duration_seconds_count for true execution counts. No urgent action: old metric still emits."
     }
   ]
 }

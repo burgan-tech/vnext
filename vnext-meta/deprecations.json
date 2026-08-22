@@ -10,6 +10,17 @@
       "replacement": null,
       "severity": "warning",
       "message": "Version is not used for direct trigger tasks"
+    },
+    {
+      "id": "metric-script-executions-total-compile-semantics",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "prometheus.script_executions_total",
+      "deprecatedSince": "0.0.81",
+      "removedAt": null,
+      "replacement": "script_compilations_total (compile-or-fetch calls, result=hit|miss) and script_execution_duration_seconds_count (true script executions by script_type)",
+      "severity": "warning",
+      "message": "script_executions_total has always been incremented on the COMPILE path (cache hits included), not on script execution. It keeps emitting unchanged for backward compatibility; migrate dashboards/alerts to script_compilations_total and script_execution_duration_seconds, then this metric will be removed in a future release."
     }
   ]
 }
