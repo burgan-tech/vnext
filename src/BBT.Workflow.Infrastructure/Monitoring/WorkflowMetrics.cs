@@ -558,13 +558,9 @@ public static class WorkflowMetrics
     /// Compile-or-fetch calls against the script type cache, split by cache outcome.
     /// </summary>
     public static readonly Counter ScriptCompilations = Metrics
-        .CreateCounter(
-            "script_compilations_total",
+        .CreateCounter("script_compilations_total",
             "Compile-or-fetch calls against the script type cache, split by cache outcome",
-            new CounterConfiguration
-            {
-                LabelNames = new[] { "result", "status" }
-            });
+            new[] { "result", "status" });
 
     /// <summary>
     /// Script compilation duration histogram with script_type, language, status, and cache labels.
