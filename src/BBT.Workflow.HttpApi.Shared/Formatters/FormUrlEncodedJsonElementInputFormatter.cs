@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Formatters;
 using Microsoft.Net.Http.Headers;
+using BBT.Workflow.Payloads;
 
 namespace BBT.Workflow.Formatters;
 
@@ -19,7 +20,7 @@ namespace BBT.Workflow.Formatters;
 /// </remarks>
 public sealed class FormUrlEncodedJsonElementInputFormatter : TextInputFormatter
 {
-    private const string PayloadModeHeader = "x-vnext-payload-mode";
+    private const string PayloadModeHeader = PayloadEnvelope.ModeHeaderName;
 
     /// <summary>
     /// Upper bound for a bracket array index. Arrays must use contiguous indices and cannot exceed
@@ -174,20 +175,22 @@ public sealed class FormUrlEncodedJsonElementInputFormatter : TextInputFormatter
 
     private static bool IsStandardPayload(HttpRequest request, IReadOnlyList<ParsedField> fields)
     {
-        if (request.Headers.TryGetValue(PayloadModeHeader, out var mode))
+        if (request.Headers.TryGetValue(PayloadModeHeader, out var mode)
+            && PayloadEnvelope.ResolveModeFromHeader(mode.ToString()) is { } fromHeader)
         {
-            return !string.Equals(mode.ToString(), "raw", StringComparison.OrdinalIgnoreCase);
+            return fromHeader;
         }
 
-        return fields.Any(field =>
-            field.Path[0] is PropertySegment { Name: "attributes" });
+        // Same envelope vocabulary as the JSON path: an `attributes` field means standard, and so
+        // does a form made up solely of envelope metadata (`key=…&tags[]=…`). Keying detection on
+        // `attributes` alone wrapped such a form into the business payload, so the transition or
+        // start schema was validated against `key`/`tags`.
+        return PayloadEnvelope.IsStandardShape(
+            fields.Select(field => field.Path[0] is PropertySegment property ? property.Name : string.Empty));
     }
 
     private static bool IsStandardEnvelopePath(IReadOnlyList<PathSegment> path)
-        => path[0] is PropertySegment property &&
-           (property.Name.Equals("key", StringComparison.OrdinalIgnoreCase) ||
-            property.Name.Equals("stage", StringComparison.OrdinalIgnoreCase) ||
-            property.Name.Equals("tags", StringComparison.OrdinalIgnoreCase));
+        => path[0] is PropertySegment property && PayloadEnvelope.IsMetadataField(property.Name);
 
     private static IReadOnlyList<PathSegment> NormalizeStandardEnvelopePath(
         IReadOnlyList<PathSegment> path)
