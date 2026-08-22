@@ -8,6 +8,7 @@ namespace BBT.Workflow.Benchmarks;
 /// over a growing document → O(n²) profile per transition.
 /// </summary>
 [MemoryDiagnoser]
+[GcServer(true)]
 public class AppendPathBenchmarks
 {
     private BBT.Workflow.JsonData _accumulated = null!;

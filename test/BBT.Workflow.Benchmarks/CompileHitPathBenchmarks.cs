@@ -17,6 +17,7 @@ public interface IBenchScript
 /// Analysis items A1/A3/A4 — ai-docs/script-perf-analysis-2026-08-23.md.
 /// </summary>
 [MemoryDiagnoser]
+[GcServer(true)]
 public class CompileHitPathBenchmarks
 {
     private CSharpEvaluator _evaluator = null!;

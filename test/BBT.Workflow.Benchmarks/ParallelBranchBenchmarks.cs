@@ -9,6 +9,7 @@ namespace BBT.Workflow.Benchmarks;
 /// responses. Paid once per FanOut item; the branch is then discarded, never merged.
 /// </summary>
 [MemoryDiagnoser]
+[GcServer(true)]
 public class ParallelBranchBenchmarks
 {
     private ScriptContext _context = null!;

@@ -8,6 +8,7 @@ namespace BBT.Workflow.Benchmarks;
 /// with JsonSerializerConstants.JsonOptions (IgnoreCycles).
 /// </summary>
 [MemoryDiagnoser]
+[GcServer(true)]
 public class AuditSerializeBenchmarks
 {
     private object _payload = null!;
