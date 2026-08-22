@@ -71,7 +71,7 @@ public sealed class TransitionDataMapper(
                         Stopwatch.GetElapsedTime(executeStart).TotalSeconds);
                     return mapped;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     workflowMetrics.RecordScriptRuntimeError("transition-mapping", "csharp", ex.GetType().Name);
                     throw; // TryAsync continues to apply the existing error mapping (CreateMappingError)

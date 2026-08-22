@@ -64,7 +64,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
             {
                 inputResult = await PrepareInputAsync(task, context, cancellationToken);
             }
-            catch (Exception ex) when (hasMapping)
+            catch (Exception ex) when (hasMapping && ex is not OperationCanceledException)
             {
                 Metrics.RecordScriptRuntimeError("task-input", ScriptLanguage, ex.GetType().Name);
                 throw;
@@ -140,7 +140,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
             {
                 outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
             }
-            catch (Exception ex) when (hasMapping)
+            catch (Exception ex) when (hasMapping && ex is not OperationCanceledException)
             {
                 Metrics.RecordScriptRuntimeError("task-output", ScriptLanguage, ex.GetType().Name);
                 throw;

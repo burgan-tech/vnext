@@ -443,7 +443,10 @@ public sealed class FunctionAppService(
             }
             catch (Exception ex)
             {
-                workflowMetrics.RecordScriptRuntimeError("function", "csharp", ex.GetType().Name);
+                if (ex is not OperationCanceledException)
+                {
+                    workflowMetrics.RecordScriptRuntimeError("function", "csharp", ex.GetType().Name);
+                }
                 Logger.LogError(
                     ex,
                     "Custom function {FunctionKey} output ScriptMapping failed. Domain={Domain}, InstanceId={InstanceId}",

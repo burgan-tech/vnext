@@ -24,13 +24,16 @@ public class TaskExecutorBaseMetricsTests
         : TaskExecutorBase<ScriptTask>(logger, metrics)
     {
         public bool ThrowOnPrepare { get; set; }
+        public bool ThrowOperationCanceledOnPrepare { get; set; }
         public override TaskType TaskType => TaskType.Script;
 
         protected override Task<Result<ScriptResponse?>> PrepareInputAsync(
             ScriptTask task, TaskExecutorContext context, CancellationToken ct)
-            => ThrowOnPrepare
-                ? throw new InvalidOperationException("boom")
-                : Task.FromResult(Result<ScriptResponse?>.Ok(null));
+            => ThrowOperationCanceledOnPrepare
+                ? throw new OperationCanceledException("cancelled")
+                : ThrowOnPrepare
+                    ? throw new InvalidOperationException("boom")
+                    : Task.FromResult(Result<ScriptResponse?>.Ok(null));
 
         protected override Task<Result<TaskInvocationResult>> InvokeAsync(
             ScriptTask task, TaskExecutorContext context, CancellationToken ct)
@@ -77,6 +80,19 @@ public class TaskExecutorBaseMetricsTests
 
         metrics.Verify(m => m.RecordScriptRuntimeError(
             "task-input", "csharp", nameof(InvalidOperationException)), Times.Once);
+    }
+
+    [Fact]
+    public async Task Execute_PrepareThrowsOperationCanceled_PropagatesWithoutRecordingRuntimeError()
+    {
+        var metrics = new Mock<IWorkflowMetrics>();
+        var executor = new ProbeExecutor(NullLogger.Instance, metrics.Object) { ThrowOperationCanceledOnPrepare = true };
+        var context = TestTaskContexts.ScriptTaskWithMapping();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => executor.ExecuteAsync(context));
+
+        metrics.Verify(m => m.RecordScriptRuntimeError(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 }
 

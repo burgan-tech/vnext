@@ -57,7 +57,7 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
                         Stopwatch.GetElapsedTime(executeStart).TotalSeconds);
                     return result;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _metrics.RecordScriptRuntimeError("condition", "csharp", ex.GetType().Name);
                     throw;
