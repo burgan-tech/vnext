@@ -78,7 +78,11 @@ public class JsonSchemaValidatorTests: DomainTestBase<DomainEntryPoint>
         Assert.Equal(WorkflowErrorCodes.ValidationErrors, result.Error.Code);
         Assert.NotNull(result.Error.ValidationErrors);
         Assert.NotEmpty(result.Error.ValidationErrors);
-        Assert.Contains(result.Error.ValidationErrors, vr => vr.MemberNames.Contains("required") || vr.MemberNames.Contains("age"));
+        // The message names the missing property, and the member is the OBJECT that is missing
+        // it. A root-level `required` failure belongs to the root — "required" is the keyword,
+        // not a member path, and a client cannot bind a message to it.
+        Assert.Contains(result.Error.ValidationErrors, vr => vr.ErrorMessage!.Contains("age"));
+        Assert.Contains(result.Error.ValidationErrors, vr => vr.MemberNames.Contains("root"));
     }
 
     [Fact]
