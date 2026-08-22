@@ -4,6 +4,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,9 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     IScriptEngine scriptEngine,
     IRuntimeInfoProvider runtimeInfoProvider,
     IRemoteInvokerService remoteInvoker,
-    ILogger logger)
-    : TaskExecutorBase<TTask>(logger)
+    ILogger logger,
+    IWorkflowMetrics metrics)
+    : TaskExecutorBase<TTask>(logger, metrics)
     where TTask : WorkflowTask
 {
     protected readonly IScriptEngine ScriptEngine = scriptEngine;

@@ -2,6 +2,7 @@ using System.Text;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 
@@ -21,8 +22,9 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
     /// </summary>
     public ScriptTaskExecutor(
         IScriptEngine scriptEngine,
-        ILogger<ScriptTaskExecutor> logger)
-        : base(logger)
+        ILogger<ScriptTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _scriptEngine = scriptEngine;
     }

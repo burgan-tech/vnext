@@ -2,6 +2,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -24,8 +25,9 @@ public sealed class StateStoreTaskExecutor : TaskExecutorBase<StateStoreTask>
     public StateStoreTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
-        ILogger<StateStoreTaskExecutor> logger)
-        : base(logger)
+        ILogger<StateStoreTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;

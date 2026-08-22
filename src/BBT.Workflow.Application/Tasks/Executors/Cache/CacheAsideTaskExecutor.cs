@@ -4,6 +4,7 @@ using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Factory;
@@ -35,8 +36,9 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         IScriptEngine scriptEngine,
         ITaskFactory taskFactory,
         IDynamicExpressoValueEvaluator expressoEvaluator,
-        ILogger<CacheAsideTaskExecutor> logger)
-        : base(logger)
+        ILogger<CacheAsideTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;

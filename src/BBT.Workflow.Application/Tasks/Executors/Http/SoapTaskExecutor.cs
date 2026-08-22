@@ -1,6 +1,7 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,9 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
     public SoapTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
-        ILogger<SoapTaskExecutor> logger)
-        : base(logger)
+        ILogger<SoapTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;

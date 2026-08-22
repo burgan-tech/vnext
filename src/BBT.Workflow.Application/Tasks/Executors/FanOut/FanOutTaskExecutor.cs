@@ -50,7 +50,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutConcurrencyLimiter concurrencyLimiter,
         IWorkflowMetrics metrics,
         ILogger<FanOutTaskExecutor> logger)
-        : base(logger)
+        : base(logger, metrics)
     {
         _scriptEngine = scriptEngine;
         _taskFactory = taskFactory;

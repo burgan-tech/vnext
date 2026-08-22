@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -24,8 +25,9 @@ public sealed class DaprPubSubTaskExecutor : TaskExecutorBase<DaprPubSubTask>
     public DaprPubSubTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
-        ILogger<DaprPubSubTaskExecutor> logger)
-        : base(logger)
+        ILogger<DaprPubSubTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;
