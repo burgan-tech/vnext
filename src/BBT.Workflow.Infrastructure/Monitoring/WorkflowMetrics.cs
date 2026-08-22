@@ -555,13 +555,25 @@ public static class WorkflowMetrics
             new[] { "script_type", "language", "error_type" });
 
     /// <summary>
-    /// Script compilation duration histogram with script_type, language, and status labels.
+    /// Compile-or-fetch calls against the script type cache, split by cache outcome.
+    /// </summary>
+    public static readonly Counter ScriptCompilations = Metrics
+        .CreateCounter(
+            "script_compilations_total",
+            "Compile-or-fetch calls against the script type cache, split by cache outcome",
+            new CounterConfiguration
+            {
+                LabelNames = new[] { "result", "status" }
+            });
+
+    /// <summary>
+    /// Script compilation duration histogram with script_type, language, status, and cache labels.
     /// Uses custom buckets optimized for script compilation timing.
     /// </summary>
     public static readonly Histogram ScriptCompilationDuration = Metrics
         .CreateHistogram("script_compilation_duration_seconds",
             "Script compilation time",
-            new[] { "script_type", "language", "status" },
+            new[] { "script_type", "language", "status", "cache" },
             new HistogramConfiguration
             {
                 Buckets = new[] { 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 }
