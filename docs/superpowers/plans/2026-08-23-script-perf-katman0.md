@@ -469,6 +469,10 @@ Success yolunu şu hale getir (Task 1 Step 5'teki minimal uyarlamanın üzerine)
             return compilation.Instance;
 ```
 
+> **Uygulama sapması (review bulgusu):** gauge beslemesi `if (compilation.Compiled)` guard'ı ile yalnız
+> miss'te yapılır — type cache hiç evict etmediği için sayı yalnız miss'te değişir; hit'te
+> `ConcurrentDictionary.Count`'un tüm-stripe kilidi hot path'ten çıkarıldı.
+
 Dört catch bloğunda: mevcut kayıtlar AYNEN kalır; her birine bir satır ekle —
 `workflowMetrics.RecordScriptCompilation("miss", "<mevcut status stringi>");` ve mevcut
 `RecordScriptCompilationDuration(...)` çağrısına beşinci argüman `"miss"` ekle. (Hata üreten çağrı

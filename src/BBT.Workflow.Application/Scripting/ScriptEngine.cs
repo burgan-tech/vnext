@@ -391,7 +391,12 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptExecution(scriptType, language, "success");
             workflowMetrics.RecordScriptCompilation(cache, "success");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
-            workflowMetrics.SetCacheEntries("script-types", _evaluator.CachedTypeCount);
+            // The type cache never evicts, so its size only changes on a miss; skipping the gauge on
+            // hits avoids ConcurrentDictionary.Count's all-stripe lock on the hot path.
+            if (compilation.Compiled)
+            {
+                workflowMetrics.SetCacheEntries("script-types", _evaluator.CachedTypeCount);
+            }
 
             return compilation.Instance;
         }
