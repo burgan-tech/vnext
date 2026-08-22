@@ -1,3 +1,13 @@
 {
-
+  "tasks": [
+    {
+      "key": "fanout",
+      "since": "0.0.80",
+      "stable": true,
+      "domains": [],
+      "configSchema": "task.attributes.config (type=21): mode (inline only), itemsPath|ItemSelector (exactly one), itemAlias, task (key/domain/flow/version ref), execution.{maxDegreeOfParallelism,itemTimeoutSeconds,batchTimeoutSeconds}, join.{policy,minSuccess,resultKey,ordered}, errorBoundary"
+    }
+  ],
+  "functions": [],
+  "extensions": []
 }

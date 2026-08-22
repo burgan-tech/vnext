@@ -634,4 +634,36 @@ public sealed class PrometheusWorkflowMetrics : IWorkflowMetrics
     }
 
     #endregion
+
+    #region Fan-Out Metrics
+
+    public void RecordFanOutBatch(
+        string taskKey,
+        string workflowKey,
+        int total,
+        int succeeded,
+        int failed,
+        double durationSeconds)
+    {
+        WorkflowMetrics.FanOutBatchSize
+            .WithLabels(taskKey, workflowKey)
+            .Observe(total);
+
+        WorkflowMetrics.FanOutBatchDuration
+            .WithLabels(taskKey, workflowKey)
+            .Observe(durationSeconds);
+
+        // Per-item duration is NOT recorded here: every item is a full task execution through the
+        // engine, which already observes workflow_task_duration_seconds for it. Only the failure
+        // COUNT is fan-out-specific, and it is incremented in one batch-sized step rather than
+        // per item so the recording stays a single call per batch.
+        if (failed > 0)
+        {
+            WorkflowMetrics.FanOutItemFailures
+                .WithLabels(taskKey, workflowKey)
+                .Inc(failed);
+        }
+    }
+
+    #endregion
 }

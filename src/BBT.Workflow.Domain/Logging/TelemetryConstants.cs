@@ -40,6 +40,26 @@ public static class TelemetryConstants
         public const string HandlerName = "vnext.handler.name";
         public const string TaskKey = "vnext.task.key";
         public const string TaskType = "vnext.task.type";
+
+        /// <summary>Stable identity of one fan-out item within its batch.</summary>
+        public const string FanOutItemKey = "vnext.fanout.item.key";
+
+        /// <summary>Zero-based position of a fan-out item in its batch.</summary>
+        public const string FanOutItemIndex = "vnext.fanout.item.index";
+
+        /// <summary>
+        /// The batch's readability label for one item (<c>FanOutTask.ItemAlias</c>), or a neutral
+        /// substitute when the task declares none. Always present, so a trace query can group on it
+        /// without having to handle a missing attribute.
+        /// </summary>
+        public const string FanOutItemAlias = "vnext.fanout.item.alias";
+
+        /// <summary>
+        /// Milliseconds a fan-out item spent queueing for its concurrency slots before execution
+        /// began. Separates "the batch is slow because it is throttled" from "the batch is slow
+        /// because one item is slow" without correlating two spans.
+        /// </summary>
+        public const string FanOutItemQueueWaitMs = "vnext.fanout.item.queue_wait_ms";
         public const string Layer = "vnext.layer";
         public const string SpanCategory = "vnext.span.category";
         public const string StateFrom = "vnext.state.from";

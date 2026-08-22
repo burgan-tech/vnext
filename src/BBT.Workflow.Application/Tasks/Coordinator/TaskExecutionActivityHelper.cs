@@ -34,6 +34,11 @@ public static class TaskExecutionActivityHelper
     public const string OperationProcessOutput = "Task.ProcessOutput";
 
     /// <summary>
+    /// Operation name for one fan-out item's slot acquisition plus inner-task execution.
+    /// </summary>
+    public const string OperationFanOutItem = "FanOut.Item";
+
+    /// <summary>
     /// Starts a new activity as a child of the current activity for an executor phase.
     /// When taskKey/taskType are provided, enriches the span with standard tags for filtering.
     /// </summary>

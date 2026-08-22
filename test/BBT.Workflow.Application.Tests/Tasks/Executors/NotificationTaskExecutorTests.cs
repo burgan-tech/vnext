@@ -68,7 +68,7 @@ public sealed class NotificationTaskExecutorTests
             .SetWorkflow(workflow)
             .Build();
 
-        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
+        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
     }
 
     private static NotificationTaskExecutor CreateExecutor(

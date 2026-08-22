@@ -51,20 +51,17 @@ public sealed class InstanceDataWriteService(
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorkflowDbContext, SemaphoreSlim>
         ContextGates = new();
 
-    /// <summary>
-    /// Striped per-instance gates taken BEFORE the context is even resolved:
-    /// <c>GetDbContextAsync</c> itself can touch the shared connection (context/schema
-    /// materialization in the ambient UnitOfWork), so two branches of the same instance must
-    /// not enter it concurrently either ("A second operation was started on this context").
-    /// Striping bounds memory; a hash collision merely serializes two unrelated instances
-    /// in-process, which the row lock would have done across processes anyway.
-    /// </summary>
-    private static readonly SemaphoreSlim[] InstanceGates =
-        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
-
-    private static SemaphoreSlim InstanceGate(Guid instanceId) =>
-        InstanceGates[(instanceId.GetHashCode() & int.MaxValue) % InstanceGates.Length];
-
+    // The striped per-instance gate (InstanceWriteGate) is taken BEFORE the context is even
+    // resolved: GetDbContextAsync itself can touch the shared connection (context/schema
+    // materialization in the ambient UnitOfWork), so two branches of the same instance must not
+    // enter it concurrently either ("A second operation was started on this context instance").
+    //
+    // It lives in InstanceWriteGate rather than here because this service is NOT the only writer
+    // of an instance's state: SubProcessTaskExecutor.CreateCorrelationAsync read-modify-writes the
+    // same parent aggregate from a parallel fan-out branch, and a per-item correlation write and
+    // this data append genuinely overlap. Both MUST take the same semaphore — a private gate array
+    // here would serialize this service against itself and against nothing else, and the collision
+    // would come straight back. Splitting it back into two arrays reintroduces the bug.
     /// <inheritdoc />
     public async Task<InstanceData?> AppendAsync(
         Instance instance,
@@ -72,16 +69,8 @@ public sealed class InstanceDataWriteService(
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default)
     {
-        var instanceGate = InstanceGate(instance.Id);
-        await instanceGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
-        }
-        finally
-        {
-            instanceGate.Release();
-        }
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
@@ -124,16 +113,8 @@ public sealed class InstanceDataWriteService(
         JsonData data,
         CancellationToken cancellationToken = default)
     {
-        var instanceGate = InstanceGate(instance.Id);
-        await instanceGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
-        }
-        finally
-        {
-            instanceGate.Release();
-        }
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
     }
 
     private async Task<InstanceData> AppendExplicitCoreAsync(
