@@ -247,6 +247,8 @@ public sealed class ScriptEngine(
     /// forces a full re-resolve through the component store — the token read is the guard, not an
     /// optimization detail. Keyed per (authored refs + grant) string. Outer-keyed by <see cref="IEvaluator"/>
     /// for the same isolation reason as <see cref="BaseProfilesByEvaluator"/>/<see cref="HelperProfilesByEvaluator"/>.
+    /// Bounded by design: entries grow with distinct authored helper-ref-list + grant combinations —
+    /// definition-config bounded, not request-bounded (same reasoning as the sibling profile tables).
     /// </summary>
     private static readonly ConditionalWeakTable<IEvaluator, ConcurrentDictionary<string, ResolvedHelperSet>> HelperSetMemoByEvaluator = new();
 
@@ -394,12 +396,11 @@ public sealed class ScriptEngine(
         var memoKey = string.Join("|", effective.Helpers!.Select(h => h.ToString())) + "||" + GrantKeyOf(grant);
         var generationProvider = _serviceProvider.GetRequiredService<IComponentGenerationProvider>();
 
-        var tokens = new string[effective.Helpers!.Count];
-        for (var i = 0; i < effective.Helpers.Count; i++)
-        {
-            var h = effective.Helpers[i];
-            tokens[i] = await generationProvider.GetAsync(MappingsTypeKey, h.Domain, h.Key, cancellationToken);
-        }
+        // Reads run in parallel: this loop is on EVERY helper'lı compile (hit included), and with
+        // Redis-backed tokens each read is a network round-trip — N sequential RTTs would sit on the
+        // hot path. Positional indexing keeps token order aligned with the authored helper order.
+        var tokens = await Task.WhenAll(effective.Helpers!.Select(h =>
+            generationProvider.GetAsync(MappingsTypeKey, h.Domain, h.Key, cancellationToken)));
 
         var helperSetMemo = HelperSetMemoByEvaluator.GetValue(
             _evaluator, static _ => new ConcurrentDictionary<string, ResolvedHelperSet>());
