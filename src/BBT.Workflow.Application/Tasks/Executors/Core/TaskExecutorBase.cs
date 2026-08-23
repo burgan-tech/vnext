@@ -328,6 +328,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
     /// No lock guards the memo dictionary: a single task execution runs its phases sequentially on
     /// one <see cref="TaskExecutorContext"/> within one thread (the pipeline does not fan phases of
     /// the SAME task out concurrently), so there is no concurrent writer to race against.
+    /// CONSTRAINT: this helper compiles <c>context.OnExecuteTask.Mapping</c> and NOTHING else. A
+    /// call site holding a different <see cref="ScriptCode"/> (e.g. CacheAside's SourceMapping, the
+    /// notification state-channel mapping) must NOT route through here — it would silently compile
+    /// the wrong script; keep such sites on the engine's <c>CompileToInstanceAsync</c> overloads.
     /// </remarks>
     protected static async Task<T> GetOrCompileMappingAsync<T>(
         IScriptEngine scriptEngine,
