@@ -188,7 +188,7 @@ public sealed class ScriptEngine(
     /// request-driven workload.
     /// <para>
     /// Outer-keyed by <see cref="IEvaluator"/> instance (via <see cref="ConditionalWeakTable{TKey,TValue}"/>)
-    /// rather than a single process-wide table: a <see cref="BuildProfile"/> result bakes in that
+    /// rather than a single process-wide table: a <see cref="IEvaluator.BuildProfile"/> result bakes in that
     /// specific evaluator's sandbox flag (<c>sbx:0</c>/<c>sbx:1</c>). Two <see cref="ScriptEngine"/>
     /// instances wrapping differently-configured evaluators in one process must not share entries, or a
     /// profile built against one evaluator's sandbox setting could precompute a key for a compile that
@@ -220,7 +220,7 @@ public sealed class ScriptEngine(
     private static readonly ConditionalWeakTable<IReadOnlyList<string>, IReadOnlyList<string>> MergedGrants = new();
 
     /// <summary>
-    /// Stable string key for a per-compile sandbox grant, used to index <see cref="BaseProfiles"/>.
+    /// Stable string key for a per-compile sandbox grant, used to index <see cref="BaseProfilesByEvaluator"/>.
     /// Order-insensitive, case-insensitive — mirrors <see cref="CSharpEvaluator.BuildProfile"/>'s own
     /// grant ordering so two grant lists that would produce the same profile also share one cache slot.
     /// </summary>
