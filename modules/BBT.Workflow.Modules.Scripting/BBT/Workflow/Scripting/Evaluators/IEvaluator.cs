@@ -98,7 +98,12 @@ public interface IEvaluator
     /// <param name="extraReferences">The extra metadata references that will be passed to compile.</param>
     /// <param name="usingDirectives">The using directives that will be passed to compile.</param>
     /// <param name="sandboxGrant">The sandbox grant that will be passed to compile.</param>
-    /// <param name="loadContext">The load context that will be passed to compile.</param>
+    /// <param name="loadContext">
+    /// The load context that will be passed to compile. The cache scope is derived from this
+    /// instance ITSELF (same disagree-proof rule as compiling): pass the very same context object
+    /// you will pass to <see cref="CompileToInstanceAsync{T}"/> — a profile built against a
+    /// different context yields a key for the wrong compilation identity.
+    /// </param>
     /// <returns>The profile string.</returns>
     string BuildProfile(
         IEnumerable<MetadataReference>? extraReferences,
