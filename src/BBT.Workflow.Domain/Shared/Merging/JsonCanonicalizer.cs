@@ -1,9 +1,32 @@
 using System.Buffers;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
 namespace BBT.Workflow.Shared.Merging;
+
+/// <summary>
+/// Instance-data kanonikleştirmesinde sayı yazım politikası.
+/// </summary>
+public enum JsonNumberPolicy
+{
+    /// <summary>
+    /// Tarihsel davranış: <c>TryGetInt32</c> başarılıysa int, aksi hâlde <c>GetDouble</c>. int64
+    /// aralığındaki tamsayılar ve 15+ haneli ondalıklar hassasiyet kaybeder; bu politika var olan
+    /// satırlarla byte-parite için korunur ve varsayılandır.
+    /// </summary>
+    Legacy = 0,
+
+    /// <summary>
+    /// Kayıpsız yazım: int64'e sığan tamsayılar birebir, aksi hâlde decimal'e sığan değerler düz
+    /// (üstel gösterimsiz, trailing-zero'suz) ondalık olarak yazılır; hiçbirine sığmayan değerler
+    /// <see cref="Legacy"/> gibi double'a düşer. Kanonik form üstel gösterim İÇERMEZ — bu yüzden
+    /// çıktı, hassasiyet kaybı olan değerlerin YANI SIRA bugün E-gösterimiyle yazılan değerlerde de
+    /// <see cref="Legacy"/>'den farklıdır (bilinçli; bkz. spec §1).
+    /// </summary>
+    PreservePrecision = 1
+}
 
 /// <summary>
 /// Merge + kanonikleştirme + veri hash'ini TEK yazım geçişinde üretir (B9). Çıktı, eski
@@ -19,7 +42,11 @@ namespace BBT.Workflow.Shared.Merging;
 /// dokunulmamış değerlere de):
 ///  1. Sayılar <c>ExpandoObjectJsonConverter.ReadValue</c>'nun
 ///     <c>reader.TryGetInt32(out var i) ? i : reader.GetDouble()</c> kuralıyla YENİDEN biçimlenir
-///     — ham lexical metin (1.0, 1e5, -0, 0.10) KORUNMAZ; "1", "100000", "0", "0.1" olur.
+///     — ham lexical metin (1.0, 1e5, -0, 0.10) KORUNMAZ; "1", "100000", "0", "0.1" olur. Bu
+///     merdiven artık <see cref="JsonNumberPolicy.Legacy"/>'ye (varsayılan) bağlıdır;
+///     <see cref="JsonNumberPolicy.PreservePrecision"/> altında sayı yazımı int64/decimal
+///     üzerinden kayıpsızdır (bkz. <see cref="JsonNumberPolicy"/>) — parite garantisi yalnız
+///     <see cref="JsonNumberPolicy.Legacy"/> için geçerlidir.
 ///  2. Obje anahtarları <see cref="JsonNamingPolicy.CamelCase"/> ile dönüştürülür
 ///     (<c>ExpandoObjectJsonConverter.Write</c>'ın <c>DictionaryKeyPolicy</c> önko şulu) —
 ///     çakışma olursa (örn. "Z" ve "z" aynı objede) SON (iterasyon sırasına göre) kazanır, birebir
@@ -54,7 +81,14 @@ public static class JsonCanonicalizer
 {
     public readonly record struct CanonicalResult(string NormalizedJson, string DataHash);
 
-    public static CanonicalResult MergeAndCanonicalize(JsonElement baseDoc, JsonElement delta)
+    /// <summary>
+    /// Merge + kanonikleştirme + hash. <paramref name="numberPolicy"/> yalnız sayı yazımını etkiler;
+    /// varsayılan <see cref="JsonNumberPolicy.Legacy"/> bugünkü byte-parite çıktısını korur.
+    /// </summary>
+    public static CanonicalResult MergeAndCanonicalize(
+        JsonElement baseDoc,
+        JsonElement delta,
+        JsonNumberPolicy numberPolicy = JsonNumberPolicy.Legacy)
     {
         var buffer = new ArrayBufferWriter<byte>(4096);
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
@@ -66,7 +100,7 @@ public static class JsonCanonicalizer
             if (baseDoc.ValueKind == JsonValueKind.Object && delta.ValueKind == JsonValueKind.Object)
             {
                 var merged = MergeObjects(baseDoc, delta);
-                WriteObjectLevel(writer, merged);
+                WriteObjectLevel(writer, merged, numberPolicy);
             }
             else
             {
@@ -160,7 +194,7 @@ public static class JsonCanonicalizer
     // wins, mirroring ExpandoObjectJsonConverter.Write's DictionaryKeyPolicy pre-normalize step),
     // then sort ordinally (mirrors NormalizeJson's final pass) and emit. ----
 
-    private static void WriteObjectLevel(Utf8JsonWriter writer, MergedObject obj)
+    private static void WriteObjectLevel(Utf8JsonWriter writer, MergedObject obj, JsonNumberPolicy policy)
     {
         var byCamelKey = new Dictionary<string, MergedValue>(StringComparer.Ordinal);
         foreach (var (key, value) in obj.Properties)
@@ -173,20 +207,20 @@ public static class JsonCanonicalizer
         foreach (var camelKey in byCamelKey.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
             writer.WritePropertyName(camelKey);
-            WriteMergedValue(writer, byCamelKey[camelKey]);
+            WriteMergedValue(writer, byCamelKey[camelKey], policy);
         }
         writer.WriteEndObject();
     }
 
-    private static void WriteMergedValue(Utf8JsonWriter writer, MergedValue value)
+    private static void WriteMergedValue(Utf8JsonWriter writer, MergedValue value, JsonNumberPolicy policy)
     {
         switch (value)
         {
             case MergedObject nested:
-                WriteObjectLevel(writer, nested);
+                WriteObjectLevel(writer, nested, policy);
                 break;
             case PassThrough passThrough:
-                TransformAndWrite(writer, passThrough.Element);
+                TransformAndWrite(writer, passThrough.Element, policy);
                 break;
         }
     }
@@ -197,28 +231,71 @@ public static class JsonCanonicalizer
     /// array-replace decision handed wholesale to one side). No further merge decisions are made
     /// here — only the two universal side effects of the legacy Expando round-trip: object keys get
     /// camelCased (using the subtree's OWN natural document order for collision resolution) and
-    /// numbers get reformatted via TryGetInt32-else-GetDouble.
+    /// numbers get reformatted according to <paramref name="policy"/> (see
+    /// <see cref="WriteNumber"/>: <see cref="JsonNumberPolicy.Legacy"/> keeps the historical
+    /// TryGetInt32-else-GetDouble ladder, <see cref="JsonNumberPolicy.PreservePrecision"/> writes
+    /// int64/decimal losslessly).
     /// </summary>
-    private static void TransformAndWrite(Utf8JsonWriter writer, JsonElement element)
+    private static void TransformAndWrite(Utf8JsonWriter writer, JsonElement element, JsonNumberPolicy policy)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-                WriteObjectLevel(writer, ToPassThroughObject(element));
+                WriteObjectLevel(writer, ToPassThroughObject(element), policy);
                 break;
             case JsonValueKind.Array:
                 writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray()) TransformAndWrite(writer, item);
+                foreach (var item in element.EnumerateArray()) TransformAndWrite(writer, item, policy);
                 writer.WriteEndArray();
                 break;
             case JsonValueKind.Number:
-                if (element.TryGetInt32(out var intValue)) writer.WriteNumberValue(intValue);
-                else writer.WriteNumberValue(element.GetDouble());
+                WriteNumber(writer, element, policy);
                 break;
             default:
                 element.WriteTo(writer); // string / true / false / null — passthrough
                 break;
         }
+    }
+
+    /// <summary>
+    /// Trailing-zero'suz, üstel gösterimsiz decimal formatı. decimal en fazla 28 ondalık basamak
+    /// taşır, bu yüzden 28 '#' hiçbir hane kaybetmez.
+    /// </summary>
+    private const string PlainDecimalFormat = "0.############################";
+
+    /// <summary>
+    /// Sayı yazımı. <see cref="JsonNumberPolicy.Legacy"/> tarihsel merdiveni birebir korur.
+    /// <see cref="JsonNumberPolicy.PreservePrecision"/> önce int64, sonra decimal dener; decimal'i
+    /// üstel gösterimsiz ve trailing-zero'suz sabit bir formatla yazar (kanonik form), böylece
+    /// 1.0 → 1 ve 2.50 → 2.5 tarihsel çıktıyla aynı kalır. Hiçbirine sığmayan değer (decimal
+    /// aralığı dışı, ör. 1e40) tarihsel double yoluna düşer.
+    /// </summary>
+    private static void WriteNumber(Utf8JsonWriter writer, JsonElement element, JsonNumberPolicy policy)
+    {
+        if (policy == JsonNumberPolicy.Legacy)
+        {
+            if (element.TryGetInt32(out var legacyInt)) writer.WriteNumberValue(legacyInt);
+            else writer.WriteNumberValue(element.GetDouble());
+            return;
+        }
+
+        if (element.TryGetInt64(out var exactInt))
+        {
+            writer.WriteNumberValue(exactInt);
+            return;
+        }
+
+        if (element.TryGetDecimal(out var exactDecimal))
+        {
+            // Trailing zero'lar düşer (2.50 → 2.5), üstel gösterim ASLA kullanılmaz (0.00001 →
+            // 0.00001), kültür sabittir. WriteRawValue: metni sayı token'ı olarak yazar.
+            writer.WriteRawValue(
+                exactDecimal.ToString(PlainDecimalFormat, CultureInfo.InvariantCulture),
+                skipInputValidation: false);
+            return;
+        }
+
+        writer.WriteNumberValue(element.GetDouble());
     }
 
     private static MergedObject ToPassThroughObject(JsonElement obj)
@@ -234,7 +311,9 @@ public static class JsonCanonicalizer
     /// Defensive fallback for a non-object root (never exercised by the domain's real callers):
     /// legacy's JsonElementMergeStrategy hands back the winning side's RAW JsonElement with no
     /// Expando round-trip at all, so only NormalizeJson's later recursive key-sort applies — no
-    /// camelCase, no number reformatting.
+    /// camelCase, no number reformatting. <see cref="JsonNumberPolicy"/> therefore does NOT reach
+    /// this branch: raw number tokens are emitted verbatim under both policies (verbatim is already
+    /// lossless, so PreservePrecision has nothing to fix here).
     /// </summary>
     private static void WriteSortedRaw(Utf8JsonWriter writer, JsonElement element)
     {
