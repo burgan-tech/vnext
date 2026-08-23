@@ -10,8 +10,11 @@ namespace BBT.Workflow.Shared.Merging;
 /// <summary>
 /// PreservePrecision modunun sözleşmesi: (1) hassasiyet kaybı olan değerler DÜZELİR,
 /// (2) E-gösterimli değerler düz gösterime geçer (bilinçli — spec §1 düzeltmesi),
-/// (3) SIRADAN değerlerde çıktı Legacy ile BİREBİR aynıdır (kanonik formu kazara
+/// (3) ondalık noktalı negatif sıfır <c>0</c>'a normalize olur (yine tek-temsil kuralı),
+/// (4) SIRADAN değerlerde çıktı Legacy ile BİREBİR aynıdır (kanonik formu kazara
 /// genişletmediğimizin bekçisi).
+/// (1)-(3) Legacy'den sapan ÜÇ sınıfın tamamıdır; flag açıldığında bir kerelik hash churn'ü
+/// tam bu üç kümeyle sınırlıdır.
 /// </summary>
 public class JsonCanonicalizerNumberPolicyTests
 {
@@ -67,6 +70,51 @@ public class JsonCanonicalizerNumberPolicyTests
         Assert.Equal($$"""{"v":{{expectedNumberText}},"x":1}""", preserved);
     }
 
+    /// <summary>
+    /// ÜÇÜNCÜ sapma sınıfı: ONDALIK NOKTALI negatif sıfır. <see cref="decimal"/>'de negatif sıfır
+    /// YOKTUR, bu yüzden <see cref="JsonNumberPolicy.PreservePrecision"/> <c>-0.0</c>'ı <c>0</c>
+    /// yazar; Legacy'nin double yolu <c>-0</c> olarak bırakır. Bu bir KAYIP DEĞİL, tek-temsil
+    /// kuralıdır (<c>-0.0 == 0</c>) — E-gösterimini düzleştirmekle aynı gerekçe (spec §1).
+    /// TAMSAYI biçimi (<c>-0</c>) etkilenmez: Legacy'de <c>TryGetInt32</c>, PreservePrecision'da
+    /// <c>TryGetInt64</c> onu zaten iki modda da <c>0</c>'a çözer.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"v":-0.0}""", """{"v":-0,"x":1}""", """{"v":0,"x":1}""")]
+    [InlineData("""{"v":-0.00}""", """{"v":-0,"x":1}""", """{"v":0,"x":1}""")]
+    // Tamsayı biçimi: sapma YOK, iki mod da "0".
+    [InlineData("""{"v":-0}""", """{"v":0,"x":1}""", """{"v":0,"x":1}""")]
+    public void PreservePrecision_NormalizesNegativeZero(
+        string baseJson,
+        string expectedLegacy,
+        string expectedPreserved)
+    {
+        Assert.Equal(expectedLegacy, Canonical(baseJson, """{"x":1}""", JsonNumberPolicy.Legacy));
+        Assert.Equal(expectedPreserved, Canonical(baseJson, """{"x":1}""", JsonNumberPolicy.PreservePrecision));
+    }
+
+    /// <summary>
+    /// decimal TAVANI: 28-29 anlamlı haneden fazlasını taşıyan bir girdide <c>TryGetDecimal</c>
+    /// YUVARLAR ve <c>true</c> döner — yani PreservePrecision kaybı AZALTIR, sıfırlamaz. Bu yüzden
+    /// böyle bir değer <see cref="LossyCorpus"/>'a "birebir korunuyor" gibi konmaz. decimal'in
+    /// ARALIĞINI (~7.9e28) aşan değerlerde ise <c>TryGetDecimal</c> false döner ve davranış
+    /// tarihsel double yoluyla birebir aynı kalır.
+    /// </summary>
+    [Fact]
+    public void PreservePrecision_RoundsBeyondDecimalCapacity_AndDefersBeyondItsRange()
+    {
+        // 30 anlamlı hane: decimal 28 ondalık basamağa YUVARLAR (son hane ...5679). Legacy 17 haneye
+        // kırpıyordu — kayıp azaldı, ama sıfırlanmadı.
+        Assert.Equal(
+            """{"v":0.1234567890123456789012345679,"x":1}""",
+            Canonical("""{"v":0.123456789012345678901234567890}""", """{"x":1}""", JsonNumberPolicy.PreservePrecision));
+
+        // decimal aralığı dışı ⇒ TryGetDecimal false ⇒ tarihsel double yolu; iki mod EŞİT.
+        const string outOfRange = """{"v":123456789012345678901234567890.5}""";
+        Assert.Equal(
+            Canonical(outOfRange, """{"x":1}""", JsonNumberPolicy.Legacy),
+            Canonical(outOfRange, """{"x":1}""", JsonNumberPolicy.PreservePrecision));
+    }
+
     /// <summary>SIRADAN değerler: iki mod birebir aynı (asıl invaryant).</summary>
     public static IEnumerable<object[]> OrdinaryCorpus()
     {
@@ -109,7 +157,7 @@ public class JsonCanonicalizerNumberPolicyTests
             // Virgül-ondalıklı kültür: format string InvariantCulture ile sabitlenmemişse kırar.
             CultureInfo.CurrentCulture = new CultureInfo("tr-TR");
             var preserved = Canonical("""{"v":1234567890123456.78}""", """{"x":1}""", JsonNumberPolicy.PreservePrecision);
-            Assert.Contains("\"v\":1234567890123456.78", preserved);
+            Assert.Equal("""{"v":1234567890123456.78,"x":1}""", preserved);
         }
         finally
         {

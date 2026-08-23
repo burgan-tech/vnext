@@ -21,9 +21,24 @@ public enum JsonNumberPolicy
     /// <summary>
     /// Kayıpsız yazım: int64'e sığan tamsayılar birebir, aksi hâlde decimal'e sığan değerler düz
     /// (üstel gösterimsiz, trailing-zero'suz) ondalık olarak yazılır; hiçbirine sığmayan değerler
-    /// <see cref="Legacy"/> gibi double'a düşer. Kanonik form üstel gösterim İÇERMEZ — bu yüzden
-    /// çıktı, hassasiyet kaybı olan değerlerin YANI SIRA bugün E-gösterimiyle yazılan değerlerde de
-    /// <see cref="Legacy"/>'den farklıdır (bilinçli; bkz. spec §1).
+    /// <see cref="Legacy"/> gibi double'a düşer.
+    ///
+    /// <see cref="Legacy"/>'den sapan ÜÇ değer sınıfı vardır (flag açıldığındaki bir kerelik hash
+    /// churn'ü tam bu üçüyle sınırlıdır):
+    ///  1. <b>Hassasiyet kaybı olan değerler</b> — int64 aralığındaki tamsayılar, 2^53'ü aşan
+    ///     tamsayılar ve 15+ haneli ondalıklar artık haneleri korunarak yazılır.
+    ///  2. <b>E-gösterimli değerler</b> — kanonik form üstel gösterim İÇERMEZ, bu yüzden bugün
+    ///     <c>1E-05</c> / <c>1E+18</c> olarak yazılan değerler düz ondalığa geçer. Kayıp yoktur,
+    ///     metin (dolayısıyla hash) değişir (bilinçli; bkz. spec §1).
+    ///  3. <b>Ondalık noktalı negatif sıfır</b> — <see cref="decimal"/>'de negatif sıfır yoktur, bu
+    ///     yüzden <c>-0.0</c> ve <c>-0.00</c> <c>0</c> olarak yazılır (<see cref="Legacy"/>'de
+    ///     <c>-0</c>). Yine tek-temsil kuralı, kayıp değil. TAMSAYI biçimi <c>-0</c> ETKİLENMEZ —
+    ///     her iki politika da onu <c>0</c>'a çözer.
+    ///
+    /// <b>Sınır:</b> decimal 28-29 anlamlı hane taşır ve <c>TryGetDecimal</c> bunu aşan girdide
+    /// YUVARLAYIP <c>true</c> döner. Yani bu politika, çok yüksek hassasiyetli değerler için kaybı
+    /// AZALTIR (17 hane yerine 28), tümüyle ortadan kaldırmaz. decimal'in ARALIĞINI (~7.9e28) aşan
+    /// değerlerde ise davranış <see cref="Legacy"/> ile birebir aynı kalır (double yolu).
     /// </summary>
     PreservePrecision = 1
 }
