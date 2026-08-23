@@ -304,6 +304,13 @@ public static class JsonCanonicalizer
         {
             // Trailing zero'lar düşer (2.50 → 2.5), üstel gösterim ASLA kullanılmaz (0.00001 →
             // 0.00001), kültür sabittir. WriteRawValue: metni sayı token'ı olarak yazar.
+            //
+            // Elle format + WriteRawValue BİLİNÇLİ bir seçim: writer.WriteNumberValue(decimal)
+            // decimal'in SCALE'ini korur (2.50m → "2.50", 1.0m → "1.0"), bu da trailing-zero'suz
+            // kanonik formu bozar ve "sıradan değerlerde Legacy ile birebir aynı" invaryantını
+            // düşürür. Bu satırı o overload'a "sadeleştirmek" kanonik formu sessizce değiştirir.
+            // Tamsayı değerlerde format string ondalık ayırıcıyı düşürür (sonda nokta bırakmaz),
+            // bu yüzden skipInputValidation: false güvenle kullanılabilir.
             writer.WriteRawValue(
                 exactDecimal.ToString(PlainDecimalFormat, CultureInfo.InvariantCulture),
                 skipInputValidation: false);

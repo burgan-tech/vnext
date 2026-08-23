@@ -115,6 +115,28 @@ public class JsonCanonicalizerNumberPolicyTests
             Canonical(outOfRange, """{"x":1}""", JsonNumberPolicy.PreservePrecision));
     }
 
+    /// <summary>
+    /// TAMSAYI değerin decimal dalından geçtiği tek şekil. <c>TryGetInt64</c> her tamsayıyı
+    /// <c>long.MaxValue</c>'ya kadar yakaladığı için decimal dalına ancak o büyüklüğün ÜSTÜNDEKİ
+    /// değerler düşer; oradaki tamsayılarda format string'in ondalık ayırıcıyı düşürdüğünü
+    /// (sonda nokta BIRAKMADIĞINI) doğrulamak şart — aksi hâlde
+    /// <c>WriteRawValue(..., skipInputValidation: false)</c> geçersiz sayı token'ı diye patlar.
+    /// </summary>
+    [Fact]
+    public void PreservePrecision_WritesIntegralDecimals_WithoutTrailingSeparator()
+    {
+        // 26 dokuz: tamsayı, long.MaxValue'dan büyük, decimal aralığının içinde.
+        const string baseJson = """{"v":99999999999999999999999999}""";
+        var legacy = Canonical(baseJson, """{"x":1}""", JsonNumberPolicy.Legacy);
+        var preserved = Canonical(baseJson, """{"x":1}""", JsonNumberPolicy.PreservePrecision);
+
+        // Ondalık ayırıcı DÜŞER — sonda nokta yok, geçerli sayı token'ı.
+        Assert.Equal("""{"v":99999999999999999999999999,"x":1}""", preserved);
+        // Legacy double'a düşüp 26 dokuzun TAMAMINI atıyor (1E+26) ⇒ gerçek bir düzelme vakası,
+        // hem hassasiyet-kaybı hem E-gösterimi sınıfına birlikte giriyor.
+        Assert.Equal("""{"v":1E+26,"x":1}""", legacy);
+    }
+
     /// <summary>SIRADAN değerler: iki mod birebir aynı (asıl invaryant).</summary>
     public static IEnumerable<object[]> OrdinaryCorpus()
     {
