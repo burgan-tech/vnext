@@ -113,9 +113,16 @@ public class InstanceDataWriteServicePipelineTests
         var withoutFlag = InstanceDataWriteService.PlanAppend(head, delta, VersionStrategy.None,
             legacyPipeline: false, preserveNumericPrecision: false);
 
-        withFlag.Content.Json.ShouldContain("1234567890123456.78");
-        withoutFlag.Content.Json.ShouldNotContain("1234567890123456.78"); // today's precision loss
+        // The exact token, not a substring: ShouldContain would also accept a longer wrong number
+        // (1234567890123456.789) or a sign flip, which is precisely what this test must rule out.
+        AmountToken(withFlag).ShouldBe("1234567890123456.78");
+        AmountToken(withoutFlag).ShouldBe("1234567890123456.8"); // today's precision loss, pinned
     }
+
+    /// <summary>Raw JSON text of the merged <c>amount</c> property — key-order independent.</summary>
+    private static string AmountToken(AppendPlan plan) =>
+        System.Text.Json.JsonDocument.Parse(plan.Content.Json)
+            .RootElement.GetProperty("amount").GetRawText();
 
     [Fact]
     public void PlanAppend_LegacyPipeline_IgnoresPrecisionFlag()

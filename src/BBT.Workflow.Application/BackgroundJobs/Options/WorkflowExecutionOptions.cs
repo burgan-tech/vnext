@@ -156,9 +156,13 @@ public sealed class InstanceDataWriteOptions
     /// negative zero (<c>-0.0</c> stays <c>-0.0</c> instead of normalizing to <c>0</c>). Values
     /// beyond <c>decimal</c>'s ~28-29 significant digits still fall back to <c>double</c> and are
     /// still rounded under either setting — this flag narrows, but does not eliminate, that case.
-    /// Enabling it costs one extra hash computation on the write path (the merge still runs
-    /// through <see cref="BBT.Workflow.Shared.Merging.JsonCanonicalizer"/> either way; only the
-    /// number-formatting policy passed into it changes). Default: false.
+    /// Runtime cost is nil — the merge runs through
+    /// <see cref="BBT.Workflow.Shared.Merging.JsonCanonicalizer"/> either way and only the
+    /// number-formatting policy handed to it changes. What flipping this DOES cost is a one-time
+    /// content-hash change, per instance, on that instance's next append: an instance holding a
+    /// value in any of the three classes above hashes differently than it did, which yields one
+    /// extra version row and one phantom diff in Monitor for it. No data is lost and no stored row
+    /// is rewritten; turning the flag back off restores the previous hashes. Default: false.
     /// <para>
     /// <see cref="LegacyAppendPipeline"/> true ⇒ this flag is IGNORED: the kill-switch path
     /// restores historical behavior verbatim and is deliberately untouched by it.
