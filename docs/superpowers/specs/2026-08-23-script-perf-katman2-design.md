@@ -47,6 +47,12 @@ ScriptContext ve instance-data yollarındaki JSON churn'ünü kaldırmak: append
 - Kanıt: eski yol **test-oracle** olarak korunur; kenar-durum korpusu (sayı formatları `1.0/1e5/-0`, unicode, escape'ler, null/boş, derin iç içe, diziler, duplicate-merge senaryoları) + script-perf-lab gerçek payload'ları üzerinde property-parite testleri.
 - `DataHash` tüketicileri audit edilir (satırlar-arası hash karşılaştırması var mı); parite hedefi tüketiciden bağımsız korunur.
 
+> **Implementasyon düzeltmesi (2026-08-23, koddan doğrulandı):** legacy `PlanAppend`'in **head-null
+> (ilk append) dalı `Merge`'i tamamen atlar** — Content = delta olduğu gibi, NormalizedJson yalnız
+> sort uygular (camelCase/sayı-reformat YOK; o dönüşümler Merge'in Expando round-trip'inden gelir).
+> Bu yüzden head-null dalı canonicalizer'dan GEÇİRİLMEZ — iki pipeline'da da birebir aynı kalır;
+> parite testi (`..._WhenHeadIsNull`, PascalCase anahtar + lexical `1.50`) bunu pinler.
+
 ### 2.3 Kill-switch
 
 - `Workflow:InstanceData:LegacyAppendPipeline` (default `false`): `true` → eski çok-geçişli yol aynen çalışır. Persist edilen veri yolu olduğu için ucuz üretim sigortası. COW (B6) bellek-içi olduğundan flag almaz. Flag'ın iki konumu da testlidir; kaldırılması ileriki sürümün işi (deprecations kaydı gerekmez — internal config, dokümante edilir).
