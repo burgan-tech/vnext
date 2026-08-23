@@ -114,6 +114,13 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Wrapper snapshot: copies the scalar row fields (so <see cref="MarkAsNotLatest"/> on either
+    /// side stays isolated — <see cref="IsLatest"/>/<see cref="VersionNo"/> are mutated on the
+    /// row) while SHARING the immutable <see cref="JsonData"/> by reference. The payload is the
+    /// expensive part (parse/normalize memos live on it) and it never changes after construction,
+    /// so per-snapshot re-parsing bought nothing.
+    /// </summary>
     internal InstanceData CreateSnapshot()
     {
         var snapshot = new InstanceData
@@ -125,7 +132,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
             IsLatest = IsLatest,
             ETag = ETag,
             DataHash = DataHash,
-            Data = new JsonData(Data.Json),
+            Data = Data,
             EnteredAt = EnteredAt
         };
 
