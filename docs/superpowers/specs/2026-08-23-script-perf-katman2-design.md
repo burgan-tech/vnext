@@ -94,11 +94,11 @@ ScriptContext ve instance-data yollarındaki JSON churn'ünü kaldırmak: append
 
 ## 7. Başarı kriterleri
 
-- [ ] Parite korpusu yeşil; DataHash audit sonucu kayıtlı.
-- [ ] COW izolasyon + kopyasızlık testleri yeşil; FanOut yolunda klon allocation'ı ~0 (mikro `ParallelBranch` + makro LOH ile kanıtlı).
-- [ ] Mikro/makro önce-sonra tabloları kayıtlı; integration suite'ler (script-perf-lab, chain-busy, fan-out) yeşil.
-- [ ] Davranış kayıtları migrations.json'da (expando görünürlüğü, B8 şekli); kill-switch testli.
-- [ ] Metrik/API yüzeyi değişmedi; isim-diff temiz.
+- [x] Parite korpusu yeşil; DataHash audit sonucu kayıtlı.
+- [x] COW izolasyon + kopyasızlık testleri yeşil; FanOut yolunda klon allocation'ı ~0 (mikro `ParallelBranch` + makro LOH ile kanıtlı).
+- [x] Mikro/makro önce-sonra tabloları kayıtlı; integration suite'ler (script-perf-lab, chain-busy, fan-out) yeşil.
+- [x] Davranış kayıtları migrations.json'da (expando görünürlüğü, B8 şekli); kill-switch testli.
+- [x] Metrik/API yüzeyi değişmedi; isim-diff temiz.
 
 ## 8. Riskler
 
