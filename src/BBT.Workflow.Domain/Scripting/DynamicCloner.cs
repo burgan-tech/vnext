@@ -16,27 +16,52 @@ namespace BBT.Workflow.Scripting;
 /// <c>ExpandoObjectJsonConverter.ReadArray</c> materializes arrays as <c>object?[]</c> when an
 /// expando tree arrives through deserialization instead of <c>ToDynamic</c> — sharing a mutable
 /// array between a parent context and a copy-on-write branch would leak writes.
+/// <para>
+/// Depth guard: JSON-origin trees are acyclic by construction, but a script CAN hand-craft a
+/// self-referencing expando and route it into a clone path. Unbounded recursion there would be a
+/// StackOverflowException — an uncatchable process kill (the legacy JSON round-trip degraded to
+/// silent cycle-dropping via <c>ReferenceHandler.IgnoreCycles</c> instead). The guard converts
+/// that into a diagnosable exception at depth 256, matching the serializer's <c>MaxDepth</c>
+/// convention used elsewhere in the runtime.
+/// </para>
 /// </remarks>
 public static class DynamicCloner
 {
+    private const int MaxDepth = 256;
+
     /// <summary>
     /// Deep-clones the given <c>ToDynamic</c>-shaped value. Containers are copied recursively;
     /// leaves are returned as-is (immutable, safe to share).
     /// </summary>
-    public static object? DeepClone(object? value) => value switch
-    {
-        ExpandoObject expando => CloneExpando(expando),
-        List<object?> list => list.ConvertAll(DeepClone),
-        object?[] array => Array.ConvertAll(array, DeepClone),
-        _ => value // leaf: string / number / bool / null / JsonElement — immutable, share
-    };
+    /// <exception cref="InvalidOperationException">
+    /// The graph nests deeper than 256 levels — almost certainly a script-crafted cycle.
+    /// </exception>
+    public static object? DeepClone(object? value) => DeepClone(value, depth: 0);
 
-    private static ExpandoObject CloneExpando(ExpandoObject source)
+    private static object? DeepClone(object? value, int depth)
+    {
+        if (depth > MaxDepth)
+        {
+            throw new InvalidOperationException(
+                $"DynamicCloner.DeepClone exceeded the maximum depth of {MaxDepth} — the value graph " +
+                "is nested too deeply or contains a cycle (e.g. a script assigned an expando into itself).");
+        }
+
+        return value switch
+        {
+            ExpandoObject expando => CloneExpando(expando, depth + 1),
+            List<object?> list => list.ConvertAll(item => DeepClone(item, depth + 1)),
+            object?[] array => Array.ConvertAll(array, item => DeepClone(item, depth + 1)),
+            _ => value // leaf: string / number / bool / null / JsonElement — immutable, share
+        };
+    }
+
+    private static ExpandoObject CloneExpando(ExpandoObject source, int depth)
     {
         var clone = new ExpandoObject();
         var target = (IDictionary<string, object?>)clone;
         foreach (var (key, value) in (IDictionary<string, object?>)source)
-            target[key] = DeepClone(value);
+            target[key] = DeepClone(value, depth);
         return clone;
     }
 }

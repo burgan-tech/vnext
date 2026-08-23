@@ -130,4 +130,17 @@ public class DynamicClonerTests
         Assert.Equal(42L, DynamicCloner.DeepClone(42L));
         Assert.Equal(true, DynamicCloner.DeepClone(true));
     }
+
+    [Fact]
+    public void DeepClone_CyclicExpando_ThrowsInsteadOfStackOverflow()
+    {
+        // Script-yapımı döngü: legacy JSON round-trip IgnoreCycles ile sessizce düşürüyordu;
+        // yapısal klon sınırsız recursion'da StackOverflow (= process ölümü) yapardı. Bekçi bunu
+        // tanılanabilir bir exception'a çevirir.
+        dynamic cyclic = new System.Dynamic.ExpandoObject();
+        ((IDictionary<string, object?>)cyclic)["self"] = cyclic;
+
+        var ex = Assert.Throws<InvalidOperationException>(() => DynamicCloner.DeepClone(cyclic));
+        Assert.Contains("cycle", ex.Message);
+    }
 }
