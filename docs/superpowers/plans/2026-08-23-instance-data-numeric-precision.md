@@ -347,12 +347,14 @@ ve yeni yardımcı:
     // Ordinary: yalnız stil 0,1,2 (1.50 / 1e2 / 1.0) — iki modda AYNI metin.
     // All: bugünkü 6 stil (parite testleri Legacy modunda bunu kullanmaya devam eder).
     //
-    // DİKKAT (Task 1 bulgusu): stil 0 `{sign}{intPart}.{NN}` işareti "-", intPart'ı 0 ve NN'i "00"
-    // seçebildiği için "-0.00" üretebilir. Ondalıklı negatif sıfır iki modda FARKLI yazılır
+    // DİKKAT (Task 1 bulgusu + spec incelemesi): ondalıklı negatif sıfır iki modda FARKLI yazılır
     // (Legacy "-0", PreservePrecision "0" — decimal negatif sıfır taşımaz; bkz. spec §1 ikinci
-    // sonuç). Bu yüzden Ordinary havuzu negatif sıfırı DIŞLAMAK zorundadır: sign seçimi intPart==0
-    // ve kesir tamamen sıfır olduğunda "+"a zorlanır (ya da intPart 1..99 aralığına çekilir).
-    // Aksi hâlde aşağıdaki invaryant testi tohuma bağlı olarak kırmızıya döner.
+    // sonuç) ve mevcut üreticide DÖRT stille üretilebiliyor: 0 ("-0.00"), 2 ("-0.0"), 1 ("-0e0"),
+    // 4 ("-0E+5"). Ordinary havuzu bu değerlerin HİÇBİRİNİ üretmemelidir; tek noktadan garanti
+    // etmenin en sağlam yolu, negatif işaretin yalnız sıfır-olmayan bir değere uygulanmasıdır
+    // (ör. intPart 1..99'a çekilir ya da tüm basamaklar sıfırken işaret "+"a zorlanır) — üretilen
+    // metnin sayısal değeri sıfırsa işaret asla "-" olmasın. Aksi hâlde aşağıdaki invaryant testi
+    // tohuma bağlı olarak kırmızıya döner (seed 42 / 200 çiftte isabet neredeyse kesin).
 ```
 
 `RandomJson(rng, depth)` → `RandomJson(rng, depth, NumberPool pool)`; mevcut `RandomizedParity_SmallGeneratedDocuments` testi `NumberPool.All` ile **aynen** kalır (Legacy modunda oracle paritesi). Yeni test:
@@ -388,7 +390,7 @@ ve yeni yardımcı:
       "component": "instance",
       "path": "instanceData.attributes (numbers)",
       "title": "Instance data appends reformat every number through int/double, so integers above 2^53 (including values that no longer fit int64) and decimals beyond ~15 significant digits are persisted with reduced precision — and the rewrite touches numbers the append never referenced.",
-      "workaround": "Set WorkflowExecution:InstanceDataWrite:PreserveNumericPrecision=true to canonicalize numbers losslessly (int64 exact, decimal in plain notation). Enabling it changes the content hash once for instances holding affected or exponent-formatted values: one extra version row and one phantom diff for those instances, no data loss. Alternatively carry exact monetary values as strings in the schema.",
+      "workaround": "Set WorkflowExecution:InstanceDataWrite:PreserveNumericPrecision=true to canonicalize numbers losslessly (int64 exact, decimal in plain notation; values beyond decimal's 28-29 significant digits are still rounded). Enabling it changes the content hash once per affected instance — for values that lost precision, for values currently written in exponent notation (0.00001 becomes 0.00001 instead of 1E-05) and for a negative zero with a fraction (-0.0 becomes 0) — costing one extra version row and one phantom diff there, with no data loss. Alternatively carry exact monetary values as strings in the schema.",
       "fixedIn": null
     }
 ```
