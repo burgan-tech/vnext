@@ -50,6 +50,10 @@ public sealed class FakeDistributedCacheService(TimeProvider timeProvider) : IDi
     public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
         where T : class
     {
+        // Real cache services throw OperationCanceledException on a cancelled token; the fake has to
+        // as well, or cancellation-propagation contracts cannot be tested against it.
+        cancellationToken.ThrowIfCancellationRequested();
+
         lock (Reads)
         {
             Reads.Add(key);
@@ -71,6 +75,8 @@ public sealed class FakeDistributedCacheService(TimeProvider timeProvider) : IDi
         CancellationToken cancellationToken = default)
         where T : class
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         lock (Writes)
         {
             Writes.Add(key);
@@ -85,6 +91,8 @@ public sealed class FakeDistributedCacheService(TimeProvider timeProvider) : IDi
 
     public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         lock (Removes)
         {
             Removes.Add(key);
