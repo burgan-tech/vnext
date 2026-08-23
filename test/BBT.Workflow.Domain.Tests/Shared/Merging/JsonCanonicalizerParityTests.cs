@@ -66,6 +66,14 @@ public class JsonCanonicalizerParityTests
         // (4) Unicode object keys, incl. a camelCase-policy interaction check: what does
         // JsonNamingPolicy.CamelCase do to a leading 'İ' (Turkish dotted capital I)?
         yield return new object[] { """{"şğü":1,"ölçü":{"İç":2}}""", """{"İstanbul":3}""" };
+        // (5) Negative zero in every lexical form that carries a fraction or an exponent. The bare
+        // integral `-0` above is NOT enough: it takes the TryGetInt32 branch, while these take the
+        // GetDouble branch, where the sign survives into the output. This is the byte-level pin for
+        // Legacy's negative-zero behavior — the baseline the PreservePrecision policy is documented
+        // as diverging from (it normalizes all of these to 0). Necessary as a fixed case because the
+        // randomized generator's SignFor guard structurally suppresses "-" on zero magnitudes, so
+        // these shapes are no longer reachable there.
+        yield return new object[] { """{"nz1":-0.0,"nz2":-0.00,"nz3":-0e0}""", """{"nz4":-0E+5}""" };
     }
 
     [Theory]
