@@ -63,9 +63,10 @@ public sealed class WorkflowExecutionContext
     public bool IsReentry { get; set; }
 
     /// <summary>
-    /// Gets or sets whether auto-chain continuations should be enqueued as separate background
-    /// jobs (transition-per-job) rather than executed in-process. Set by the job handler when
-    /// the TransitionPerJob feature is enabled. Propagated to <see cref="TransitionExecutionContext"/>.
+    /// Gets or sets whether chained continuations should be enqueued as separate background jobs
+    /// rather than executed in-process. Set by the transition job handler from
+    /// <c>WorkflowExecutionOptions.AutoTransitionMode</c> (true only for
+    /// <c>AutoTransitionMode.Scheduled</c>). Propagated to <see cref="TransitionExecutionContext"/>.
     /// </summary>
     public bool EnqueueContinuations { get; set; }
 

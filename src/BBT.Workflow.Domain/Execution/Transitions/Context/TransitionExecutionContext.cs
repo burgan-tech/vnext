@@ -108,10 +108,11 @@ public sealed class TransitionExecutionContext
     public PipelineExecutionProfile? Profile { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the auto-chain continuation should be enqueued as a separate
-    /// background job (transition-per-job) instead of executed in-process. Set from the
-    /// originating <see cref="WorkflowExecutionContext"/>; selects the continuation strategy
-    /// (Enqueue vs Inline) in <c>TransitionPipeline</c>. Default false (Inline).
+    /// Gets or sets whether the chained continuation should be enqueued as a separate background
+    /// job instead of executed in-process. Set from the originating
+    /// <see cref="WorkflowExecutionContext"/>; selects the continuation strategy (Enqueue vs
+    /// Inline) in <c>TransitionPipeline</c>. Default false (Inline) — which is also the default
+    /// <c>AutoTransitionMode</c>, so the async path is inline unless configured otherwise.
     /// </summary>
     public bool EnqueueContinuations { get; set; }
 

@@ -11,12 +11,19 @@ public sealed class WorkflowExecutionOptions
     public TransitionJobFailurePolicyOptions FailurePolicy { get; set; } = new();
 
     /// <summary>
-    /// When enabled, async transitions execute one transition per background job
-    /// (transition-per-job) rather than running the entire auto-chain inside a single job.
-    /// Each committed transition enqueues the next via <c>ITransitionEnqueueGateway</c>.
-    /// Default: false.
+    /// How an ASYNC transition realizes a chained continuation — the next transition an already
+    /// committed hop asks for. Default: <see cref="Options.AutoTransitionMode.Inline"/>.
+    /// <para>
+    /// Sync transitions are unaffected: they have always continued in-process, and
+    /// <c>SyncTransitionStrategy</c> does not read this setting.
+    /// </para>
+    /// <para>
+    /// This has NOTHING to do with authored <c>triggerType: 2</c> scheduled transitions. Those are
+    /// armed by <c>ScheduleTransitionsStep</c> (order 80) and are always real scheduler jobs,
+    /// whatever this is set to.
+    /// </para>
     /// </summary>
-    public bool TransitionPerJob { get; set; }
+    public AutoTransitionMode AutoTransitionMode { get; set; } = AutoTransitionMode.Inline;
 
     /// <summary>
     /// Governs how <c>EnqueueContinuationStrategy</c> realizes a chained continuation.
@@ -99,6 +106,37 @@ public sealed class WorkflowExecutionOptions
         MaxAttempts = 4,
         BaseDelayMilliseconds = 120
     };
+}
+
+/// <summary>
+/// How an async transition's chained continuation (the next transition a committed hop requested)
+/// is realized.
+/// <para>
+/// "Chained continuation" covers every <c>NextTransition</c> directive, not only the ones
+/// <c>RunAutomaticTransitionsStep</c> produces: an error-boundary rule's replacement transition and
+/// an <c>updateData</c> handoff travel the same seam. There is deliberately ONE decision point.
+/// </para>
+/// </summary>
+public enum AutoTransitionMode
+{
+    /// <summary>
+    /// Run the next transition IN-PROCESS, inside the job that is already executing (default).
+    /// The chain advances at memory speed instead of paying a scheduler round trip per hop, which
+    /// is what a UI client polling the state function actually observes as screen latency.
+    /// <para>
+    /// Trade-off: no durable per-hop checkpoint. A process loss mid-chain leaves the instance Busy
+    /// under the accept's single job row rather than resuming from the last committed hop, and the
+    /// whole chain shares one <c>TransitionJobTimeoutSeconds</c> budget.
+    /// </para>
+    /// </summary>
+    Inline = 0,
+
+    /// <summary>
+    /// Enqueue the next transition as its own scheduler job, so each hop is a separate job, unit of
+    /// work and durable checkpoint. Costs one scheduler round trip per hop — that latency is the gap
+    /// <see cref="Inline"/> exists to remove. Choose this when per-hop durability is worth the gap.
+    /// </summary>
+    Scheduled = 1
 }
 
 public sealed class TransitionJobFailurePolicyOptions

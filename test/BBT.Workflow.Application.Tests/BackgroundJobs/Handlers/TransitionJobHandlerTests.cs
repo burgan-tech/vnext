@@ -56,11 +56,13 @@ public class TransitionJobHandlerTests
 
     private TransitionJobHandler CreateHandler(
         int timeoutSeconds = 300,
-        LockConflictRetryOptions? lockConflictRetry = null)
+        LockConflictRetryOptions? lockConflictRetry = null,
+        AutoTransitionMode autoTransitionMode = AutoTransitionMode.Inline)
     {
         var options = Options.Create(new WorkflowExecutionOptions
         {
             TransitionJobTimeoutSeconds = timeoutSeconds,
+            AutoTransitionMode = autoTransitionMode,
             // 1ms backoff keeps retry tests fast without changing the retry logic under test.
             LockConflictRetry = lockConflictRetry ?? new LockConflictRetryOptions { BaseDelayMilliseconds = 1 }
         });
@@ -473,5 +475,49 @@ public class TransitionJobHandlerTests
         _recoveryService.Verify(
             r => r.FaultInstanceAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    /// <summary>
+    /// Inline mode (the default) must NOT ask the pipeline to enqueue continuations: the chain
+    /// advances in-process inside this job, which is the whole point — one scheduler round trip
+    /// per hop is exactly the gap a polling UI client sees.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_InlineMode_DoesNotEnqueueContinuations()
+    {
+        var handler = CreateHandler(autoTransitionMode: AutoTransitionMode.Inline);
+
+        var captured = await CaptureContextAsync(handler);
+
+        Assert.False(captured.EnqueueContinuations);
+    }
+
+    /// <summary>
+    /// Scheduled mode is the opt-in escape hatch: each hop becomes its own job, so the pipeline
+    /// must be told to hand the continuation to the enqueue gateway instead of looping.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_ScheduledMode_EnqueuesContinuations()
+    {
+        var handler = CreateHandler(autoTransitionMode: AutoTransitionMode.Scheduled);
+
+        var captured = await CaptureContextAsync(handler);
+
+        Assert.True(captured.EnqueueContinuations);
+    }
+
+    private async Task<WorkflowExecutionContext> CaptureContextAsync(TransitionJobHandler handler)
+    {
+        WorkflowExecutionContext? capturedContext = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => capturedContext = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await handler.HandleAsync(CreatePayload(), CancellationToken.None);
+
+        Assert.NotNull(capturedContext);
+        return capturedContext!;
     }
 }

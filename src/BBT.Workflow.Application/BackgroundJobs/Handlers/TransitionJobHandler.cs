@@ -121,10 +121,13 @@ public sealed class TransitionJobHandler(
                     // active SubFlow chain lets the relay claim that reserve at the leaf.
                     context.SubflowChainReserved = args.SubflowChainReserved;
 
-                    // Transition-per-job: this job runs exactly ONE transition; its auto-chain
-                    // continuation is enqueued as the next job via ITransitionEnqueueGateway
-                    // instead of running in-process.
-                    context.EnqueueContinuations = executionOptions.Value.TransitionPerJob;
+                    // Scheduled mode: this job runs exactly ONE transition and enqueues its
+                    // chained continuation as the next job via ITransitionEnqueueGateway. Inline
+                    // mode (default) instead advances the chain in-process inside this job, so a
+                    // client polling the state function does not wait out a scheduler round trip
+                    // per hop.
+                    context.EnqueueContinuations =
+                        executionOptions.Value.AutoTransitionMode == AutoTransitionMode.Scheduled;
 
                     // Use the background-specific method that handles pre-reserved instances.
                     // Lock conflicts are transient (the enqueue accept lock or a finishing chain
