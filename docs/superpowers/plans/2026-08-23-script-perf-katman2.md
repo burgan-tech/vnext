@@ -366,7 +366,7 @@ public static class JsonCanonicalizer
 - Modify: `src/BBT.Workflow.Domain/Instances/InstanceData.cs` (hash'i hazır alan iç ctor yolu)
 - Test: `test/BBT.Workflow.Infrastructure.Tests/Data/InstanceDataWriteServicePipelineTests.cs` (yeni ya da mevcut write-service test dosyasına ekle — önce mevcut testleri bul: `grep -rn "InstanceDataWriteService" test/ --include="*.cs" | head`)
 
-- [ ] **Step 1: Failing testler** — mevcut write-service test kurulumunu kopyalayarak:
+- [x] **Step 1: Failing testler** — mevcut write-service test kurulumunu kopyalayarak:
 
 ```csharp
     [Fact]
@@ -387,7 +387,7 @@ public static class JsonCanonicalizer
 
 (İkinci test bu görevin kalbidir: ESKİ yazılmış satırın hash'i ile YENİ pipeline hash'inin uyuşması = SHA1+byte-parite'nin uçtan uca kanıtı.)
 
-- [ ] **Step 2: Implementasyon**
+- [x] **Step 2: Implementasyon**
 
 1. `InstanceDataWriteOptions`'a (WorkflowExecutionOptions.cs L126-140 sınıfı):
 
@@ -428,9 +428,9 @@ public static class JsonCanonicalizer
 3. `InstanceData` ctor'u: `DataHash = ComputeDataHash(data)` — `FromNormalized` JsonData'sında `NormalizedJson` memo'lu olduğundan bu çağrı zaten ucuz (tek SHA1). Ek iç parametreye GEREK YOKSA ekleme (YAGNI); profil Task 7'de doğrular, gerekirse o zaman.
 4. Schema validation (`ValidateAgainstSchemaAsync` L365): `content.JsonElement` — Task 1 memo'suyla ek parse yok; dokunma.
 
-- [ ] **Step 3: PASS + iki-konum testi** — yeni testler + kill-switch=true ile aynı suite yeniden (iki konfigürasyonda da yeşil); mevcut write-service/instance testleri yeşil.
+- [x] **Step 3: PASS + iki-konum testi** — yeni testler + kill-switch=true ile aynı suite yeniden (iki konfigürasyonda da yeşil); mevcut write-service/instance testleri yeşil.
 
-- [ ] **Step 4: Commit** — `perf(instances): single-pass append pipeline behind LegacyAppendPipeline kill-switch`
+- [x] **Step 4: Commit** — `perf(instances): single-pass append pipeline behind LegacyAppendPipeline kill-switch`
 
 ---
 

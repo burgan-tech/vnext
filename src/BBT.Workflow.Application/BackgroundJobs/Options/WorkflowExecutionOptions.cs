@@ -137,6 +137,15 @@ public sealed class InstanceDataWriteOptions
     /// Default: 10000ms (POC parity).
     /// </summary>
     public int StatementTimeoutMs { get; set; } = 10000;
+
+    /// <summary>
+    /// Kill-switch: true ⇒ append uses the old multi-pass path (<c>JsonData.Merge</c> →
+    /// <c>NormalizedJson</c> → <c>ComputeDataHash</c>). The new default path merges, canonicalizes,
+    /// and hashes in a single <c>Utf8JsonWriter</c> pass via <c>JsonCanonicalizer</c>, byte-parity
+    /// proven against the old path. Flip to true as a rollback safety net if the single-pass path
+    /// ever misbehaves in production. Default: false. Removal is a future version's work.
+    /// </summary>
+    public bool LegacyAppendPipeline { get; set; }
 }
 
 /// <summary>

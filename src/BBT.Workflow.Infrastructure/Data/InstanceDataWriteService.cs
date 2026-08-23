@@ -7,6 +7,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared.Merging;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -84,7 +85,8 @@ public sealed class InstanceDataWriteService(
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var plan = PlanAppend(head, delta, versionStrategy);
+            var plan = PlanAppend(
+                head, delta, versionStrategy, executionOptions.Value.InstanceDataWrite.LegacyAppendPipeline);
 
             if (plan.IsDuplicate)
             {
@@ -166,8 +168,56 @@ public sealed class InstanceDataWriteService(
     /// a delta-only duplicate never matches raw), and the semantic version. Pure so the contract
     /// is unit-testable; <see cref="AppendAsync"/> calls it under the row lock and then assigns
     /// the line-scoped VersionNo from the target version line's current maximum.
+    /// <para>
+    /// <paramref name="legacyPipeline"/> is the <c>InstanceDataWrite:LegacyAppendPipeline</c>
+    /// kill-switch (B9): true routes to the original multi-pass <see cref="PlanAppendLegacy"/>;
+    /// false (default) takes the single-pass <see cref="JsonCanonicalizer.MergeAndCanonicalize"/>
+    /// path, which is byte-parity proven against it (see
+    /// <c>JsonCanonicalizerParityTests</c> and <c>InstanceDataWriteServicePipelineTests</c>).
+    /// </para>
     /// </summary>
     internal static AppendPlan PlanAppend(
+        InstanceDataHeadRow? head,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        bool legacyPipeline)
+    {
+        if (legacyPipeline)
+        {
+            return PlanAppendLegacy(head, delta, versionStrategy);
+        }
+
+        if (head is null)
+        {
+            // Nothing to merge yet — this IS the legacy head-null result already (delta passed
+            // through untouched). Deliberately NOT routed through JsonCanonicalizer: that path
+            // replicates JsonData.Merge's Expando round-trip (camelCase + number reformat), which
+            // the legacy head-null branch never invokes (it skips Merge entirely). Canonicalizing
+            // against an empty base would therefore silently reformat the very first row of every
+            // instance — a real byte-parity break, not a hypothetical one; pinned by
+            // InstanceDataWriteServicePipelineTests.Append_NewPipeline_ProducesSameRow_AsLegacy_WhenHeadIsNull.
+            return new AppendPlan(delta, WorkflowConstants.DefaultVersion, IsDuplicate: false);
+        }
+
+        var baseElement = new JsonData(head.Data).JsonElement;
+        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement);
+
+        // No-change dedup on the MERGED result, same rule as legacy — the canonicalizer's hash
+        // is byte-parity proven equal to ComputeDataHash(legacy merged content), so this compares
+        // correctly even across a duplicate written by the OTHER pipeline.
+        var isDuplicate = string.Equals(result.DataHash, head.DataHash, StringComparison.OrdinalIgnoreCase);
+
+        var content = JsonData.FromNormalized(result.NormalizedJson);
+        var version = InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
+        return new AppendPlan(content, version, isDuplicate);
+    }
+
+    /// <summary>
+    /// Original multi-pass append plan (<c>JsonData.Merge</c> → <c>NormalizedJson</c> →
+    /// <c>ComputeDataHash</c>), preserved verbatim as the kill-switch fallback and as the
+    /// byte-parity oracle's production twin.
+    /// </summary>
+    internal static AppendPlan PlanAppendLegacy(
         InstanceDataHeadRow? head,
         JsonData delta,
         VersionStrategy? versionStrategy)
