@@ -346,6 +346,13 @@ ve yeni yardımcı:
 
     // Ordinary: yalnız stil 0,1,2 (1.50 / 1e2 / 1.0) — iki modda AYNI metin.
     // All: bugünkü 6 stil (parite testleri Legacy modunda bunu kullanmaya devam eder).
+    //
+    // DİKKAT (Task 1 bulgusu): stil 0 `{sign}{intPart}.{NN}` işareti "-", intPart'ı 0 ve NN'i "00"
+    // seçebildiği için "-0.00" üretebilir. Ondalıklı negatif sıfır iki modda FARKLI yazılır
+    // (Legacy "-0", PreservePrecision "0" — decimal negatif sıfır taşımaz; bkz. spec §1 ikinci
+    // sonuç). Bu yüzden Ordinary havuzu negatif sıfırı DIŞLAMAK zorundadır: sign seçimi intPart==0
+    // ve kesir tamamen sıfır olduğunda "+"a zorlanır (ya da intPart 1..99 aralığına çekilir).
+    // Aksi hâlde aşağıdaki invaryant testi tohuma bağlı olarak kırmızıya döner.
 ```
 
 `RandomJson(rng, depth)` → `RandomJson(rng, depth, NumberPool pool)`; mevcut `RandomizedParity_SmallGeneratedDocuments` testi `NumberPool.All` ile **aynen** kalır (Legacy modunda oracle paritesi). Yeni test:

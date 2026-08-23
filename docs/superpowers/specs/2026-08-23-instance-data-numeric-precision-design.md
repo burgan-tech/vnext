@@ -11,7 +11,7 @@ replika). Sonuçlar:
 
 | Girdi | Bugün persist edilen | Kayıp |
 |---|---|---|
-| `9223372036854775807` (`long.MaxValue`) | `9223372036854775808` | **int64'e sığmayan değer — bozulma** |
+| `9223372036854775807` (`long.MaxValue`) | `9.223372036854776E+18` | **değer int64 aralığının dışına çıkıyor — bozulma** (ölçülen gerçek çıktı; `Utf8JsonWriter` double'ı üstel yazıyor) |
 | `9007199254740993` (2^53+1) | `9007199254740992` | sessiz off-by-one |
 | `0.12345678901234567890` | `0.12345678901234568` | 3 hane |
 | `1234567890123456.78` | `1234567890123456.8` | 3 kuruş |
@@ -67,6 +67,12 @@ iki modda **aynı metni** üretir; kanonik formun (aynı değer → aynı hash) 
 > E-gösterimi ancak çok küçük (`<0.0001`) ya da çok büyük yuvarlak sayılarda devreye girer.
 > Reddedilen alternatif: "yalnız kayıp varsa müdahale et" (legacy'nin biçimlendirme tuhaflığını kanonik
 > tanıma kalıcı olarak dondurur + sayı başına çift hesaplama).
+>
+> **Aynı kararın ikinci sonucu (implementasyonda ölçüldü): negatif sıfır.** Ondalık kısmı olan bir
+> negatif sıfır (`-0.0`, `-0.00`) bugün `-0` olarak yazılıyor; `PreservePrecision` altında `decimal`
+> negatif sıfır taşımadığı için `0` yazılır. Bu da kayıp değil, **tek-temsil** kuralının doğal sonucu
+> (`-0.0 == 0`) ve kanonik form tanımıyla tutarlı. Churn kümesine dahildir; `known-issues` kaydı
+> "etkilenen değerler" listesinde anılır. Tamsayı `-0` her iki modda da `0`'dır (davranış değişmez).
 
 ## 2. Flag ve bağlama
 
