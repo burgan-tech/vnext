@@ -222,7 +222,7 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 ### Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly — includes are applied at load time via `WithDetailsAsync()`.
-- Default load: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- Default load: `Include(DataList.Where(IsLatest))` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries. Latest-only is unconditional — the full-merge model makes the latest row self-sufficient, and aggregates loaded this way are marked partially loaded so history reads fail fast.
 - History paths use `AsNoTracking` + explicit filtered includes.
 - **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
 

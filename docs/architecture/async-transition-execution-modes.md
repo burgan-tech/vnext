@@ -2,25 +2,22 @@
 
 ## Purpose
 
-Async transition execution (`sync=false`) is governed by four `WorkflowExecution`
-configuration flags. Together they select how a transition's continuation is enqueued,
-how an auto-chain is split into jobs, how concurrent transitions are gated, and whether a
-watchdog recovers stuck instances. This page documents the end-to-end behavior of each
-flag and the two canonical configurations (all-on and all-off), so operators can choose a
-profile and developers can reason about latency, durability, and failure modes.
+An async transition (`sync=false`) is accepted, enqueued as a scheduler job, and executed
+in the background. When that transition's pipeline finishes, it may ask for another one —
+an automatic transition it satisfied, an error-boundary rule's replacement transition, or
+an `updateData` handoff. This page documents how that **chained continuation** is realized,
+which is the single knob async execution still has.
 
-`sync=true` requests bypass jobs entirely — the pipeline runs in-process and the response
-carries the full instance — so these flags do not apply to synchronous calls.
+`sync=true` bypasses jobs entirely: the pipeline runs in-process and the response carries
+the full instance. Nothing here applies to synchronous calls — they have always chained
+in-process.
 
 ## Configuration
 
 ```jsonc
 "WorkflowExecution": {
   "TransitionJobTimeoutSeconds": 300,
-  "UseOutboxContinuations": true,   // continuation enqueue atomicity model
-  "TransitionPerJob": true,         // one transition per job vs whole chain per job
-  "StrictChainTokenGate": true,     // chain-ownership concurrency gate
-  "EnableChainReaper": true,        // stuck-Busy watchdog
+  "AutoTransitionMode": "Inline",   // Inline (default) | Scheduled
   "FailurePolicy": { "MaxRetries": 5, "IntervalSeconds": 30 }
 }
 ```
@@ -28,175 +25,145 @@ carries the full instance — so these flags do not apply to synchronous calls.
 Source of record:
 `src/BBT.Workflow.Application/BackgroundJobs/Options/WorkflowExecutionOptions.cs`.
 
-| Flag | `true` | `false` (default) |
+| Mode | Behavior |
+| --- | --- |
+| `Inline` (default) | The next transition runs **in-process**, inside the job already executing. The chain advances at memory speed. |
+| `Scheduled` | The next transition is enqueued as **its own scheduler job** — a separate unit of work and a durable per-hop checkpoint — at the cost of one scheduler round trip per hop. |
+
+The default is set in code, not in `appsettings.json`, so a host that never writes the key
+still gets the low-latency path.
+
+### What the setting does NOT affect
+
+- **Authored `triggerType: 2` scheduled transitions.** Those are armed by
+  `ScheduleTransitionsStep` (order 80) and are always real scheduler jobs. The name
+  collision is unfortunate; the two are unrelated.
+- **Sync transitions.** `SyncTransitionStrategy` does not read the setting.
+- **The initial accept.** An async transition is always accepted by enqueuing one job. Only
+  its *continuations* are governed here.
+
+### Scope: every chained continuation, not only automatic ones
+
+The setting is read once, in `TransitionJobHandler`, and projected onto
+`WorkflowExecutionContext.EnqueueContinuations`. That flag drives
+`ContinuationDispatcher`, which every `Directives.NextTransition` goes through — an
+automatic transition from `RunAutomaticTransitionsStep`, an error-boundary rule's
+replacement transition, and an `updateData` handoff alike. There is deliberately ONE
+decision point rather than a second branch to keep in sync.
+
+## Why Inline is the default
+
+In `Scheduled` mode a three-hop auto-chain costs three scheduler round trips before the
+instance reaches a state the client can act on. A UI client long-polling the state function
+observes that as screen latency, and it accumulates with chain length. `Inline` removes it:
+the chain runs to its resting state inside the job that is already executing, and the first
+`200` from the state function carries the settled instance.
+
+## Trade-offs of Inline
+
+`Scheduled` remains available because `Inline` gives up real properties:
+
+| Property | `Inline` | `Scheduled` |
 | --- | --- | --- |
-| `UseOutboxContinuations` | Continuation is enqueued through the transactional **outbox**: the durable `InstanceJob` intent and a `TransitionContinuationRequested` event commit in one unit of work; the Outbox worker publishes it, the Inbox forwards it to Orchestration, which enqueues the Dapr job. Fully transactional, at the cost of the outbox/inbox poll hops. | **Intent-first direct enqueue**: Orchestration commits the `InstanceJob` intent in its own unit of work, then enqueues the Dapr job. A Dapr job can never exist without a tracking intent; a crash in the commit→enqueue window is recovered by the ChainReaper. Lower latency. |
-| `TransitionPerJob` | Each transition runs as its own job/unit of work and enqueues the next continuation per hop — a durable per-transition checkpoint. Effective only when `UseOutboxContinuations` is also `true`. | The whole auto-chain runs inline inside a single job (monolithic). |
-| `StrictChainTokenGate` | While an instance is Busy, a transition that does not carry the matching `ChainToken` and is not a reserved transition (cancel/exit/timeout/subflow-resume/shared) is rejected. | Legacy gate: Busy blocks every non-reserved transition; no token matching. |
-| `EnableChainReaper` | A watchdog (in the Outbox worker) periodically sweeps Busy instances that hold a `ChainToken` but have no active `InstanceJob`, and faults or re-enqueues them. | No backstop; a stuck-Busy instance remains until manual intervention. |
+| Latency per chained hop | in-process | one scheduler round trip |
+| Durable per-hop checkpoint | no — the accept's single `InstanceJob` row covers the whole chain | yes — one row per hop |
+| Crash mid-chain | the instance stays Busy under the accept's row; recovery faults it, and the chain restarts from the accept rather than resuming at the last committed hop | resumes at the next un-run hop |
+| Execution budget | `TransitionJobTimeoutSeconds` covers the WHOLE chain | covers one hop |
+| Transaction granularity | one UoW per post-commit stage, so a chain crossing no post-commit barrier commits as one transaction | one UoW per hop |
 
-> `TransitionPerJob` is gated on `UseOutboxContinuations`
-> (`EnqueueContinuations = TransitionPerJob && UseOutboxContinuations`). The mixed
-> combinations are described in [Mode Combinations](#mode-combinations).
+Two consequences worth planning for:
 
-## Architecture Flow
+- **Long chains and the timeout.** A chain whose total work approaches
+  `TransitionJobTimeoutSeconds` (default 300s) will exhaust the budget and be routed to
+  recovery. Size the budget against the chain, not against a single transition.
+- **The `updateData` Busy probe cannot see an inline chain.**
+  `TransitionPipeline.HasLiveTransitionOwnerAsync` distinguishes "Busy with a live owner"
+  from "Busy parked at an auto-gated rest state" by looking for an active `InstanceJob` row.
+  An inline chain leaves no per-hop row, so it is invisible to that probe and an
+  `updateData` arriving mid-chain is more likely to take over than to drop. That is
+  behaviorally correct — the takeover is an idempotent flip under the same short status
+  lock — but it is a real difference from `Scheduled`.
 
-### Routing decision
+## Delivery: the scheduler, and only the scheduler
 
-```mermaid
-flowchart TD
-    A["Async transition (sync=false)"] --> B{UseOutboxContinuations?}
-    B -->|true| C["Outbox path:<br/>InstanceJob + event in ONE UoW (atomic)"]
-    C --> D["Outbox -> PubSub -> Inbox -> Orchestration enqueue"]
-    B -->|false| E["Direct path:<br/>commit InstanceJob, then Dapr enqueue"]
-    D --> F["flow.transition job runs"]
-    E --> F
-    F --> G{"TransitionPerJob AND UseOutbox?"}
-    G -->|true| H["Run ONE transition"]
-    H --> I{"next transition?"}
-    I -->|yes| C
-    I -->|no| J["finalize / complete"]
-    G -->|false| K["Run the WHOLE chain inline in this job"]
-    K --> J
-    J --> L{"StrictChainTokenGate?"}
-    L -->|true| M["Busy + token mismatch + not reserved -> reject"]
-    L -->|false| N["legacy: Busy blocks non-reserved"]
-```
+When a continuation *is* enqueued (`Scheduled` mode) or an async transition is accepted,
+delivery goes through `ITransitionEnqueueGateway` straight to the scheduler. There is no
+second path.
 
-### Profile A — all flags `true` (outbox + transition-per-job + strict gate + reaper)
+The transactional-outbox alternative — publish a continuation event, let the Outbox worker
+publish it, the Inbox relay forward it, and Orchestration finally enqueue the job — has
+been removed. It bought durability with three extra hops of latency on a path whose whole
+purpose is to be fast, and it was only ever reached as a fallback, which made it a
+rarely-exercised second code path for the same outcome.
 
-```mermaid
-sequenceDiagram
-    actor C as Client
-    participant O as Orchestration API
-    participant DB as PostgreSQL<br/>(Instance+InstanceJob+Outbox)
-    participant OW as Outbox Worker
-    participant PS as Dapr Pub/Sub
-    participant IW as Inbox Worker (thin)
-    participant DJ as Dapr Jobs
-    participant TJ as TransitionJobHandler<br/>(Orchestration)
-    participant CR as ChainReaper<br/>(Outbox Worker)
+### Failure contract
 
-    C->>O: PATCH .../transitions/{key} (sync=false)
-    O->>O: Validate + SetBusy + mint ChainToken
-    O->>DB: InstanceJob intent + TransitionContinuationRequested (ONE UoW, atomic)
-    O-->>C: 202 {id, status=Busy}
-    OW->>DB: poll outbox
-    OW->>PS: publish TransitionContinuationRequested
-    PS->>IW: deliver (domain-match guard, local)
-    IW->>O: forward POST transitions/{key}/enqueue (Dapr svc invocation, carries ChainToken)
-    O->>DJ: enqueue flow.transition job
-    DJ->>TJ: run ONE transition
-    TJ->>DB: steps + commit (ChainToken checked/propagated)
-    alt auto-chain has a next transition
-        TJ->>DB: next TransitionContinuationRequested (outbox)
-        Note over OW,TJ: loop repeats per transition
-    else terminal state
-        TJ->>DB: complete instance, clear ChainToken
-    end
-    Note over CR: every ~60s sweeps stuck Busy<br/>(ChainToken set, no active job) -> fault / re-enqueue
-```
+Because nothing backstops a failed schedule any more, failures are reported rather than
+deferred:
 
-### Profile B — all flags `false` (direct enqueue + monolithic chain, no gate/reaper)
+1. The gateway retries the scheduler briefly — 3 attempts, 50ms then 100ms backoff. A
+   sidecar restart or a reset connection is normal and self-clearing; this absorbs it. The
+   budget is intentionally not configurable, because the accept path calls the gateway
+   while holding the instance status lock.
+2. On exhaustion the gateway returns a failed `Result`, and both callers honour it:
+   - `EnqueueContinuationStrategy` propagates it, so the pipeline faults the instance —
+     visible and retryable — instead of committing a durable intent nothing will ever arm
+     and leaving the instance parked in Busy with no owner.
+   - `AsyncTransitionStrategy` fails the accept and leaves its unit of work uncommitted, so
+     the caller learns the transition was not accepted instead of getting a `202` for work
+     that may never be delivered. Leaving the intent behind would be worse than losing it:
+     the duplicate-job guard would block every later retry of a transition that never ran.
 
-```mermaid
-sequenceDiagram
-    actor C as Client
-    participant O as Orchestration API
-    participant DB as PostgreSQL<br/>(Instance+InstanceJob)
-    participant DJ as Dapr Jobs
-    participant TJ as TransitionJobHandler<br/>(Orchestration)
+## Tracing
 
-    C->>O: PATCH .../transitions/{key} (sync=false)
-    O->>O: Validate + SetBusy
-    O->>DB: commit InstanceJob intent (own UoW) — intent-first
-    O->>DJ: enqueue flow.transition job (direct, post-commit)
-    O-->>C: 202 {id, status=Busy}
-    DJ->>TJ: run job
-    TJ->>TJ: RunChainAsync — WHOLE auto-chain inline (single job)
-    loop each transition (each commits its own UoW)
-        TJ->>DB: transition steps + commit
-    end
-    TJ->>DB: complete instance
-    Note over O,TJ: Inbox is NOT involved in transitions.<br/>No ChainToken gate (legacy Busy). No reaper backstop.
-```
+Both modes produce the **same trace shape**, and that is deliberate — switching modes must
+not move dashboards.
 
-## Execution Mode Matrix
+In `Scheduled` mode each hop is a job and gets a `TransitionJob.Execute` span from
+`BackgroundJobActivityHelper.StartFlatLaneActivity`. In `Inline` mode each continuation gets
+a `Transition.Hop` span from `TransitionHopActivity`. Both go through `FlatLaneActivity`,
+the single home of the lane parenting policy, so both are:
 
-### Profile A vs Profile B
+- **parented to the lane anchor**, with the predecessor hop attached as an `ActivityLink`.
+  Hops are SIBLINGS; parenting hop N+1 under hop N would make trace depth equal chain
+  depth, which is exactly what the lane model exists to prevent.
+- **ordered by `LaneSeq`**, advanced per hop. `ChainDepth` resets to 0 at subflow-resume,
+  long-poll, timeout and retry boundaries, so it cannot order a lane on its own.
+- **`ActivityKind.Consumer`**, so apm-server keeps classifying a chained transition as a
+  transaction. An inline hop is not really a message consumer; the parity is worth more than
+  the purity here, because `Internal` would silently drop every chained transition out of
+  transaction counts and alerts built while those hops were jobs.
 
-| Aspect | A (all `true`) | B (all `false`) |
-| --- | --- | --- |
-| Continuation transport | outbox → pubsub → inbox → orchestration | direct Dapr enqueue |
-| Hops to first execution | ~4 (outbox poll, pubsub, inbox, enqueue) | 1 (direct) |
-| Latency | higher (poll intervals) | low |
-| Atomicity | fully transactional (no orphan) | intent-first + reaper (no orphan) |
-| Chain execution | transition-per-job (many jobs) | one job for the whole chain |
-| Crash granularity | resume from last committed transition | job retry re-runs the chain |
-| Throughput / interleaving | high (jobs interleave across instances) | lower (chain holds one job/lock) |
-| Inbox involved in transitions | yes (continuation forward) | no |
-| Concurrency safety | strict ChainToken gate | legacy Busy gate |
-| Stuck-Busy recovery | ChainReaper, automatic | manual |
-| Lock duration | short (per-job) | chain length |
-| Operational complexity | higher (4 components active) | lower (2 components) |
+Two deliberate differences from the job path:
 
-### Mode Combinations
+- `messaging.*` tags and the job name are absent — there is no broker and no job behind an
+  inline hop.
+- The span is named `Transition.Hop`, **not** `TransitionJob.Execute`, so "how many
+  transition jobs ran" stays answerable from traces.
 
-| `UseOutboxContinuations` | `TransitionPerJob` | Resulting behavior |
-| --- | --- | --- |
-| `true` | `true` | **Profile A**: outbox-routed, transition-per-job (durable, high throughput, higher latency) |
-| `true` | `false` | Single outbox-routed kick, but the chain runs inline in one job (no per-hop continuation) |
-| `false` | `true` | `TransitionPerJob` has **no effect** → direct enqueue + inline chain (behaves like B) |
-| `false` | `false` | **Profile B**: direct enqueue, monolithic inline chain (fast, simple) |
+> **Dashboards:** anything filtering on `TransitionJob.Execute` must add `Transition.Hop`
+> to keep counting chained hops once a domain runs in `Inline` mode.
 
-## Failure Modes
+Hop 0 never gets a span of its own — the caller's span (`TransitionJob.Execute` on the async
+path) already represents it. Sync chains get no hop spans at all: they have always chained
+in-process without them, and adding them would invent transactions that never existed.
 
-| Crash point | A (all `true`) | B (all `false`) |
-| --- | --- | --- |
-| After a transition commit, before the next enqueue | next continuation is committed in the outbox → redelivered at-least-once | not applicable (monolithic — no intermediate enqueue) |
-| Enqueue succeeded, commit failed | impossible (single UoW) | impossible (intent-first: commit precedes enqueue) |
-| Job killed mid-chain | resumes from the last committed transition (per-job) | Dapr job retry re-runs the chain from the job start (active-job guard + idempotency mitigate) |
-| Foreign transition while Busy | rejected by the ChainToken gate | rejected by the Busy gate (reserved transitions exempt) |
-| Stuck Busy (job lost) | ChainReaper faults / re-enqueues | **no recovery** (manual) |
+## Choosing a mode
 
-At-least-once delivery means downstream handlers and the transition job must stay
-idempotent. The active-`InstanceJob` guard (keyed by job name) and the duplicate-key guard
-on the transition record provide that protection in both profiles.
+Stay on `Inline` unless per-hop durability is worth a scheduler round trip per hop. Reach
+for `Scheduled` when:
 
-## Observability
+- a chain's hops each do expensive, non-idempotent work you do not want to redo after a
+  crash, or
+- total chain work approaches `TransitionJobTimeoutSeconds` and splitting the budget per
+  hop is easier than raising it, or
+- you need per-hop `InstanceJob` rows for operational visibility into where a chain is.
 
-- `TransitionEnqueued`, `TransitionJobAlreadyQueued`, `InstanceSetBusyForAsyncTransition`
-  on the enqueue path.
-- `TransitionContinuationReceived` / `TransitionContinuationEnqueued` on the Inbox forwarder
-  (Profile A only).
-- `ForeignChainTransitionRejected` when the strict ChainToken gate denies a transition.
-- ChainReaper sweep logs when stuck-Busy instances are faulted or re-enqueued.
-- Each Dapr job carries the trace context (`TraceParent`/`TraceState`); spans are tagged
-  with domain/flow/version/instance/transition/job for correlation across the hops.
+The setting is per host, applied at the next restart. It changes no schema and no stored
+data, so switching back and forth is safe: in-flight work finishes under the mode it
+started in.
 
-## Change Safety
+## Related
 
-- All four flags are independently switchable and default to `false` — a deployment can
-  enable the outbox/per-job/gate/reaper profile incrementally and roll back per flag.
-- Switching `UseOutboxContinuations` does not require a schema change; both code paths are
-  always compiled. The `ChainToken` / `ChainHeartbeat` / `ResumePoint` columns the gate and
-  reaper rely on are additive (see the migrations note below).
-- Enabling `TransitionPerJob` without `UseOutboxContinuations` is a no-op, not an error.
-- The strict gate is conservative: reserved transitions (cancel/exit/timeout/subflow-resume/
-  shared) are always accepted, so cancellation paths are never blocked by chain ownership.
-
-## References
-
-- `src/BBT.Workflow.Application/Execution/Transitions/Strategy/AsyncTransitionStrategy.cs`
-  — validation, SetBusy, outbox vs intent-first enqueue.
-- `src/BBT.Workflow.Application/BackgroundJobs/Handlers/TransitionJobHandler.cs`
-  — per-job vs inline-chain execution.
-- `src/BBT.Workflow.Application/BackgroundJobs/ITransitionJobEnqueuer.cs`
-  — shared `flow.transition` enqueue.
-- `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/SetBusyStep.cs`,
-  `HandleCancelPreflightStep.cs` — ChainToken mint and gate.
-- `src/BBT.Workflow.Application/BackgroundJobs/Recovery/ChainReaperService.cs`
-  — stuck-Busy watchdog.
-- `workers/BBT.Workflow.Workers.Inbox/Forwarding/` — thin forwarder to Orchestration.
-- [Workflow Execution Pipeline](workflow-execution-pipeline.md) — the per-transition step order.
-- [Async/Durability Refactor — Required EF Core Migrations](../async-durability-refactor-MIGRATIONS.md).
+- [Workflow Execution Pipeline](workflow-execution-pipeline.md) — the step order a single hop runs
+- `.claude/rules/vnext-workflow-developer.md` — locking model and pipeline quick reference

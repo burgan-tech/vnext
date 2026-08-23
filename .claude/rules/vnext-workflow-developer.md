@@ -95,7 +95,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 ## Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly. Includes applied at load time.
-- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` (split queries).
+- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `Include(DataList.Where(IsLatest))` + `Include(ChildCorrelations.Where(!IsCompleted))` (split queries). **Latest-only is unconditional** — there is no flag any more. The aggregate is stamped `MarkDataPartiallyLoaded()`, so history-dependent members fail fast; history readers must use `FindByIdentifierWithFullHistoryAsync` / `...WithFullDataAsync`.
 - `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
 - History paths: `AsNoTracking` + explicit filtered includes.
 - **Rule**: do not add unnecessary includes; reuse data from `TransitionExecutionContext`.
@@ -210,6 +210,37 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 
 - `sync=true`: blocks until pipeline completes; full instance returned.
 - `sync=false` (default): immediate `{ id, status }`; client polls via State function.
+
+## Chained continuations — `AutoTransitionMode`
+
+- **`WorkflowExecution:AutoTransitionMode` = `Inline` (default) | `Scheduled`.** Governs how an
+  **async** transition realizes a chained continuation. `Inline` runs the next transition
+  in-process inside the job already executing; `Scheduled` enqueues it as its own scheduler job.
+  Read once, in `TransitionJobHandler`, and projected onto `EnqueueContinuations`.
+- **It covers EVERY `Directives.NextTransition`**, not only `RunAutomaticTransitionsStep`'s: an
+  error-boundary rule's replacement transition and an `updateData` handoff go through the same
+  `ContinuationDispatcher` seam. One decision point, deliberately — do not add a second branch.
+- **Nothing to do with authored `triggerType: 2` scheduled transitions.** Those are armed by
+  `ScheduleTransitionsStep` (order 80) and are always real scheduler jobs. Same word, unrelated
+  mechanism. Sync is also unaffected — it has always chained in-process.
+- **Inline gives up the durable per-hop checkpoint.** A crash mid-chain leaves the instance Busy
+  under the accept's single `InstanceJob` row, and `TransitionJobTimeoutSeconds` covers the WHOLE
+  chain rather than one hop. `Scheduled` exists for when that trade is wrong.
+- **An inline chain leaves no per-hop job row**, so it is invisible to
+  `HasLiveTransitionOwnerAsync` — the `updateData` handoff probe. A mid-chain `updateData` is
+  therefore more likely to take over (idempotent flip, same short lock) than to drop.
+- **Both modes must keep producing the SAME trace shape.** `Scheduled` hops get
+  `TransitionJob.Execute` (`BackgroundJobActivityHelper`); inline hops get `Transition.Hop`
+  (`TransitionHopActivity`). Both go through `FlatLaneActivity` — anchor-parented, predecessor
+  linked, `LaneSeq` advanced, `ActivityKind.Consumer` so apm-server still counts a transaction.
+  Hop 0 gets no span of its own (the caller's span is it); sync chains get none at all.
+  `TransitionPipelineTests` pins all three cases — if you touch the chain loop, run them.
+- **One delivery path: the scheduler.** The outbox continuation (`TransitionContinuationRequested`
+  + Inbox relay + `transitions/{key}/enqueue`) is GONE. `ITransitionEnqueueGateway` retries the
+  scheduler briefly (3 attempts, non-configurable — the accept calls it under the status lock) and
+  then returns a failed `Result` that both callers MUST honour: the strategy faults the instance,
+  the accept fails and leaves its UoW uncommitted. Swallowing it commits an intent nothing arms.
+- Full guide: `docs/architecture/async-transition-execution-modes.md`.
 
 ## Locking — one lock, at the status change
 

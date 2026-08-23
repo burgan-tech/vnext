@@ -146,4 +146,4 @@ quiesced and stopped before the new replicas can execute workflow or background 
 - `src/BBT.Workflow.Domain/Execution/Transitions/Pipeline/PipelineExecutionProfile.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/PipelineProfileResolver.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`
-- [Async Transition Execution Modes](async-transition-execution-modes.md) — how the `WorkflowExecution` flags route async continuations.
+- [Async Transition Execution Modes](async-transition-execution-modes.md) — how `AutoTransitionMode` realizes an async chained continuation, and the trace shape both modes share.

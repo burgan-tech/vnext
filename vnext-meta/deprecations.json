@@ -10,6 +10,39 @@
       "replacement": null,
       "severity": "warning",
       "message": "Version is not used for direct trigger tasks"
+    },
+    {
+      "id": "workflow-execution-transition-per-job",
+      "type": "config",
+      "component": "runtime",
+      "path": "WorkflowExecution.TransitionPerJob",
+      "deprecatedSince": "0.0.80",
+      "removedAt": "0.0.80",
+      "replacement": "WorkflowExecution.AutoTransitionMode",
+      "severity": "error",
+      "message": "Removed. Its boolean shape could not express the new inline default, and it was gated on an outbox flag that no longer exists. Use AutoTransitionMode: Scheduled for the old true behavior; Inline (the default) is the new one."
+    },
+    {
+      "id": "workflow-execution-direct-enqueue-continuations",
+      "type": "config",
+      "component": "runtime",
+      "path": "WorkflowExecution.DirectEnqueueContinuations",
+      "deprecatedSince": "0.0.80",
+      "removedAt": "0.0.80",
+      "replacement": null,
+      "severity": "error",
+      "message": "Removed with the transactional-outbox continuation path. The scheduler is now the only delivery path; a failed enqueue is retried briefly and then reported instead of being deferred to the Inbox relay."
+    },
+    {
+      "id": "workflow-execution-latest-only-instance-loading",
+      "type": "config",
+      "component": "runtime",
+      "path": "WorkflowExecution.LatestOnlyInstanceLoading",
+      "deprecatedSince": "0.0.80",
+      "removedAt": "0.0.80",
+      "replacement": null,
+      "severity": "error",
+      "message": "Removed. Latest-only instance loading is now unconditional — the canary rollout it gated has completed. History readers must use the repository full-history APIs."
     }
   ]
 }

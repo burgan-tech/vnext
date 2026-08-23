@@ -54,6 +54,39 @@
       "title": "updateData no longer re-runs the state's OnEntry/OnExit or re-arms its timers",
       "description": "updateData previously ran the full pipeline: the current state's OnExit tasks ran, its OnEntry tasks ran a second time, and the state's scheduled transitions were cancelled and re-armed - restarting every timeout from zero. Those four steps (CancelScheduledJobs, OnExit, OnEntry, Schedule) are now excluded for updateData, whose target is fixed to the reserved $self key and which therefore leaves and enters no state. The transition's own onExecute tasks, the data write and the auto-transition evaluation are unchanged. This applies to updateData ONLY. Other transitions declaring target $self - shared transitions in particular - are unaffected and keep running the full state lifecycle, as do transitions naming the current state literally, including self-loops.",
       "action": "If a workflow relied on updateData re-running the current state's OnEntry to refresh something, move that logic into the transition's own onExecutionTasks. If it relied on updateData resetting the state's scheduled-transition timer, model the reset explicitly. Only the workflow-level updateData transition is affected, so no search of state transitions is needed. Note the converse for $self shared transitions, which are unchanged: because they still cancel and re-arm the state's scheduled transitions, a frequently invoked one on a state with a short timeout defers that timeout on every call."
+    },
+    {
+      "id": "async-chained-continuations-inline-by-default",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "WorkflowExecution.AutoTransitionMode",
+      "since": "0.0.80",
+      "severity": "warning",
+      "title": "Async chained transitions now continue in-process by default",
+      "description": "An async transition's chained continuation (an automatic transition, an error-boundary rule's replacement transition, or an updateData handoff) now runs in-process inside the job already executing instead of being enqueued as its own scheduler job. This removes one scheduler round trip per hop. Trade-offs: there is no durable per-hop checkpoint (a crash mid-chain leaves the instance Busy under the accept's single InstanceJob row rather than resuming at the last committed hop), TransitionJobTimeoutSeconds now covers the WHOLE chain rather than one hop, and an inline chain leaves no per-hop job row so a mid-chain updateData is more likely to take over than to drop.",
+      "action": "Review TransitionJobTimeoutSeconds against your longest auto-chain, not against a single transition. Set WorkflowExecution:AutoTransitionMode to \"Scheduled\" to keep the previous per-hop-job behavior. Replaces the removed TransitionPerJob flag. See docs/architecture/async-transition-execution-modes.md."
+    },
+    {
+      "id": "inline-chain-hop-span-name",
+      "type": "behavior",
+      "component": "telemetry",
+      "path": "span.Transition.Hop",
+      "since": "0.0.80",
+      "severity": "warning",
+      "title": "Inline chain hops emit Transition.Hop instead of TransitionJob.Execute",
+      "description": "A chained hop running inline emits a Transition.Hop span rather than the TransitionJob.Execute span it emitted when each hop was its own job. The lane shape is unchanged — anchor-parented, predecessor linked, LaneSeq ordered, ActivityKind.Consumer so apm-server still classifies it as a transaction — but the span NAME differs, deliberately, so \"how many transition jobs ran\" stays answerable from traces.",
+      "action": "Add Transition.Hop to any dashboard, alert or trace query that filters on TransitionJob.Execute and needs to keep counting chained hops. See docs/architecture/async-transition-execution-modes.md."
+    },
+    {
+      "id": "outbox-continuation-path-removed",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "WorkflowExecution.DirectEnqueueContinuations",
+      "since": "0.0.80",
+      "severity": "warning",
+      "title": "Transactional-outbox continuation path removed",
+      "description": "The TransitionContinuationRequested contract, its Inbox relay handler and the internal POST .../transitions/{key}/enqueue endpoint are gone. The scheduler is the only delivery path. A failed enqueue is retried briefly (3 attempts) and then reported: the chained continuation faults the instance, and an async accept fails instead of returning 202 for work that may never be delivered.",
+      "action": "Before upgrading, verify no TransitionContinuationRequested rows are pending in the outbox — nothing consumes them afterwards. Such rows only ever appeared as a direct-enqueue fallback, so the table is normally empty. See docs/architecture/async-transition-execution-modes.md."
     }
   ]
 }
