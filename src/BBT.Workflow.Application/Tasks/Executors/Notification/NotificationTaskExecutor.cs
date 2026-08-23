@@ -60,8 +60,7 @@ public sealed class NotificationTaskExecutor(
         if (mappingScript is not null && mappingScript.HasMappingCode)
         {
             if (hasNonStateChannels)
-                mapping = await scriptEngine.CompileToInstanceAsync<INotificationMapping>(
-                    mappingScript, flowScripts: flowScripts, cancellationToken: cancellationToken);
+                mapping = await GetOrCompileMappingAsync<INotificationMapping>(scriptEngine, context, cancellationToken);
 
             if (hasStateChannel)
                 stateMapping = await TryCompileStateMappingAsync(mappingScript, flowScripts, cancellationToken);

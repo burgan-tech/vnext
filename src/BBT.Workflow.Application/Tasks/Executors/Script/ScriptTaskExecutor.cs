@@ -47,10 +47,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
 
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
@@ -86,10 +83,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
 
         var result = await ResultExtensions.TryAsync<TaskInvocationResult>(async ct =>
         {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
 

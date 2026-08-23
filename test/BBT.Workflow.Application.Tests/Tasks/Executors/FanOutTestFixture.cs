@@ -68,6 +68,9 @@ internal sealed class FanOutHarness
 
         if (mapping is not null)
         {
+            // The executor now goes through GetOrCompileMappingAsync -> CompileToFactoryAsync (Task 5,
+            // Katman 1): the engine is asked for a FACTORY, not a single instance. Stub both so a
+            // harness user who reaches for either surface still gets the configured mapping.
             ScriptEngine.CompileToInstanceAsync<IFanOutMapping>(
                     Arg.Any<ScriptCode>(),
                     Arg.Any<ScriptSettings?>(),
@@ -75,6 +78,12 @@ internal sealed class FanOutHarness
                     Arg.Any<IEnumerable<string>?>(),
                     Arg.Any<CancellationToken>())
                 .Returns(mapping);
+
+            ScriptEngine.CompileToFactoryAsync<IFanOutMapping>(
+                    Arg.Any<ScriptCode>(),
+                    Arg.Any<ScriptSettings?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns((Func<IFanOutMapping>)(() => mapping));
         }
 
         var join = new Dictionary<string, object?>

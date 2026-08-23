@@ -136,6 +136,12 @@ public sealed class NotificationTaskExecutorTests
                 Arg.Any<CancellationToken>())
             .Returns(mapping);
 
+        // The non-state-channel path now goes through GetOrCompileMappingAsync -> CompileToFactoryAsync
+        // (Task 5, Katman 1) instead of CompileToInstanceAsync directly.
+        engine.CompileToFactoryAsync<INotificationMapping>(
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings?>(), Arg.Any<CancellationToken>())
+            .Returns((Func<INotificationMapping>)(() => mapping));
+
         if (stateMapping is not null)
         {
             engine.CompileToInstanceAsync<IStateNotificationMapping>(
@@ -465,6 +471,9 @@ public sealed class NotificationTaskExecutorTests
                 Arg.Any<IEnumerable<string>?>(),
                 Arg.Any<CancellationToken>())
             .Returns(mapping);
+        scriptEngine.CompileToFactoryAsync<INotificationMapping>(
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings?>(), Arg.Any<CancellationToken>())
+            .Returns((Func<INotificationMapping>)(() => mapping));
 
         var task = CreateTask(channels: ["sms", "email"], includeStateChannel: false);
         var context = CreateContext(task, mappingCode: "// non-state script");

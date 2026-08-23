@@ -185,11 +185,8 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             return Result<IFanOutMapping?>.Ok(null);
         }
 
-        return await ResultExtensions.TryAsync<IFanOutMapping?>(async ct =>
-                await _scriptEngine.CompileToInstanceAsync<IFanOutMapping>(
-                    mapping,
-                    flowScripts: context.ScriptContext.Workflow?.Scripts,
-                    cancellationToken: ct),
+        return await ResultExtensions.TryAsync<IFanOutMapping?>(
+            async ct => await GetOrCompileMappingAsync<IFanOutMapping>(_scriptEngine, context, ct),
             cancellationToken,
             ex => Error.Failure(
                 WorkflowErrorCodes.TaskExecution,

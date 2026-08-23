@@ -317,6 +317,38 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
     }
 
     /// <summary>
+    /// Compiles the task's mapping once per task execution and hands out a FRESH instance per call.
+    /// The compiled factory is memoized on the <see cref="TaskExecutorContext"/> (keyed by mapping +
+    /// target type), so PrepareInput and ProcessOutput/Invoke asking for the same mapping share a
+    /// single engine call instead of each paying their own compile-cache lookup; instance-per-phase
+    /// semantics are unchanged — a user script holding instance fields observes exactly today's
+    /// behaviour, one fresh instance per phase.
+    /// </summary>
+    /// <remarks>
+    /// No lock guards the memo dictionary: a single task execution runs its phases sequentially on
+    /// one <see cref="TaskExecutorContext"/> within one thread (the pipeline does not fan phases of
+    /// the SAME task out concurrently), so there is no concurrent writer to race against.
+    /// </remarks>
+    protected static async Task<T> GetOrCompileMappingAsync<T>(
+        IScriptEngine scriptEngine,
+        TaskExecutorContext context,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var mapping = context.OnExecuteTask.Mapping;
+        var key = (mapping, typeof(T));
+        context.CompiledMappingFactories ??= new Dictionary<(ScriptCode, Type), object>();
+        if (!context.CompiledMappingFactories.TryGetValue(key, out var boxed))
+        {
+            boxed = await scriptEngine.CompileToFactoryAsync<T>(
+                mapping, context.ScriptContext.Workflow?.Scripts, cancellationToken);
+            context.CompiledMappingFactories[key] = boxed;
+        }
+
+        return ((Func<T>)boxed)();
+    }
+
+    /// <summary>
     /// Updates script context with response data for output handler processing.
     /// Sets the standard response on the context and optionally sets output response for extension triggers.
     /// </summary>

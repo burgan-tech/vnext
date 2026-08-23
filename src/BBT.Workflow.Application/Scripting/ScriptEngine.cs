@@ -469,6 +469,24 @@ public sealed class ScriptEngine(
             body, refs, usings, helperSet.LoadContext, grant, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<Func<T>> CompileToFactoryAsync<T>(
+        ScriptCode scriptCode,
+        ScriptSettings? flowScripts = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Compiles through the exact same ScriptCode overload/path as CompileToInstanceAsync — same
+        // profile memo, same precomputed-key eligibility, same metrics. The first instance produced by
+        // that compile is NOT wasted: it becomes the factory's first delivered instance (consumedFirst
+        // guards against handing it out twice under concurrent first callers).
+        var first = await CompileToInstanceAsync<T>(scriptCode, flowScripts, cancellationToken: cancellationToken);
+        var compiledType = first!.GetType();
+        var consumedFirst = 0;
+        return () => Interlocked.Exchange(ref consumedFirst, 1) == 0
+            ? first
+            : ScriptActivator.Create<T>(compiledType, _scriptServices);
+    }
+
     /// <summary>
     /// Resolves a <c>REF</c>-encoded mapping body from the sys-mappings component store. The referenced
     /// component is plain (Native/Base64) — no REF chaining.
