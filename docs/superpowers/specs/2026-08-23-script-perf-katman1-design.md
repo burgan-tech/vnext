@@ -34,6 +34,13 @@ Benign-race yazım yeterli (iki thread aynı değeri üretir); `Lazy<T>` veya nu
 - `CompileToInstanceAsync<T>`'ye opsiyonel `string? precomputedCacheKey = null` parametresi: verildiğinde anahtar üretimi (StringBuilder + tam-kaynak SHA256 + OrderBy'lar) tamamen atlanır; verilmediğinde bugünkü yol aynen. Ham-string API sözleşmesi değişmez.
 - Fast-path/`GetOrAdd`/`Lazy`/eviction yapısı (#888) BYTE-BYTE korunur; yalnız anahtarın nereden geldiği değişir.
 
+> **Plan-aşaması rafinesi (2026-08-23):** L1 cache'in objeleri her okuyuşta taze deserialize ettiği
+> teyit edildi — `ScriptCode` objeleri süreç-paylaşımlı olmayabilir; bu yüzden §1.3'ün CWT
+> final-anahtar memo'su yerine eşdeğer-daha-sağlam mekanizma uygulanır: anahtar = `ComputeCacheKey(
+> sourceHash, T, profile)`; `sourceHash` inline'da `ScriptCode.ContentHash` (obje-başına bir kez),
+> `profile` helper-set/grant başına bir kez memoize edilir. Aynı "mapping başına bir kez" hedefi,
+> obje paylaşımından bağımsız olarak sağlanır. Ayrıntı: plan Task 2-3.
+
 ### 1.3 Engine — kimlik memo'su
 
 - `ScriptEngine`'de süreç-geneli statik memo: `ConditionalWeakTable<ScriptCode, ConcurrentDictionary<CacheKeyDiscriminator, string>>`; discriminator = (targetType, loadContext-scope kimliği, grant kimliği). Final evaluator anahtarı mapping başına bir kez `ComputeCacheKey` ile hesaplanır, sonra memo'dan okunur.
