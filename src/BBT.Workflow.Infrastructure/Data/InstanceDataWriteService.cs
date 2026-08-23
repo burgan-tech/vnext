@@ -85,8 +85,9 @@ public sealed class InstanceDataWriteService(
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
+            var writeOptions = executionOptions.Value.InstanceDataWrite;
             var plan = PlanAppend(
-                head, delta, versionStrategy, executionOptions.Value.InstanceDataWrite.LegacyAppendPipeline);
+                head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
 
             if (plan.IsDuplicate)
             {
@@ -175,12 +176,19 @@ public sealed class InstanceDataWriteService(
     /// path, which is byte-parity proven against it (see
     /// <c>JsonCanonicalizerParityTests</c> and <c>InstanceDataWriteServicePipelineTests</c>).
     /// </para>
+    /// <para>
+    /// <paramref name="preserveNumericPrecision"/> is the <c>InstanceDataWrite:PreserveNumericPrecision</c>
+    /// opt-in (see <see cref="BBT.Workflow.BackgroundJobs.Options.InstanceDataWriteOptions"/>):
+    /// it only selects the <see cref="JsonNumberPolicy"/> passed into the canonicalizer on this
+    /// (non-legacy) path, and is ignored whenever <paramref name="legacyPipeline"/> is true.
+    /// </para>
     /// </summary>
     internal static AppendPlan PlanAppend(
         InstanceDataHeadRow? head,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        bool legacyPipeline)
+        bool legacyPipeline,
+        bool preserveNumericPrecision = false)
     {
         if (legacyPipeline)
         {
@@ -199,8 +207,11 @@ public sealed class InstanceDataWriteService(
             return new AppendPlan(delta, WorkflowConstants.DefaultVersion, IsDuplicate: false);
         }
 
+        var numberPolicy = preserveNumericPrecision
+            ? JsonNumberPolicy.PreservePrecision
+            : JsonNumberPolicy.Legacy;
         var baseElement = new JsonData(head.Data).JsonElement;
-        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement);
+        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement, numberPolicy);
 
         // No-change dedup on the MERGED result, same rule as legacy — the canonicalizer's hash
         // is byte-parity proven equal to ComputeDataHash(legacy merged content), so this compares

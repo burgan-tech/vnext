@@ -101,4 +101,33 @@ public class InstanceDataWriteServicePipelineTests
             DataHash = InstanceData.ComputeDataHash(data)
         };
     }
+
+    [Fact]
+    public void PlanAppend_WithPrecisionFlag_PreservesLosslessNumbers()
+    {
+        var head = CreateHeadRow("{\"v\":1}", "1.0.0");
+        var delta = new JsonData("""{"amount":1234567890123456.78}""");
+
+        var withFlag = InstanceDataWriteService.PlanAppend(head, delta, VersionStrategy.None,
+            legacyPipeline: false, preserveNumericPrecision: true);
+        var withoutFlag = InstanceDataWriteService.PlanAppend(head, delta, VersionStrategy.None,
+            legacyPipeline: false, preserveNumericPrecision: false);
+
+        withFlag.Content.Json.ShouldContain("1234567890123456.78");
+        withoutFlag.Content.Json.ShouldNotContain("1234567890123456.78"); // today's precision loss
+    }
+
+    [Fact]
+    public void PlanAppend_LegacyPipeline_IgnoresPrecisionFlag()
+    {
+        var head = CreateHeadRow("{\"v\":1}", "1.0.0");
+        var delta = new JsonData("""{"amount":1234567890123456.78}""");
+
+        var legacyWithFlag = InstanceDataWriteService.PlanAppend(head, delta, VersionStrategy.None,
+            legacyPipeline: true, preserveNumericPrecision: true);
+        var legacyWithoutFlag = InstanceDataWriteService.PlanAppend(head, delta, VersionStrategy.None,
+            legacyPipeline: true, preserveNumericPrecision: false);
+
+        legacyWithFlag.Content.NormalizedJson.ShouldBe(legacyWithoutFlag.Content.NormalizedJson);
+    }
 }
