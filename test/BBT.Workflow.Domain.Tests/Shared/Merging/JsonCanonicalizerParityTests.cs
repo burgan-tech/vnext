@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -51,6 +52,20 @@ public class JsonCanonicalizerParityTests
         // short-circuits on `source == null` and returns the target unchanged. Only a null delta on
         // a key absent from base (covered above) actually writes null.
         yield return new object[] { """{"keep":{"x":1},"lit":5}""", """{"keep":null,"lit":null}""" };
+        // Coordinator-requested additions (spec review, before Task 3 wires persistence):
+        // (1) Long-integral beyond int32 — 3000000000 exceeds Int32.MaxValue but fits Int64/double
+        // exactly; 9007199254740993 is 2^53+1, beyond double's exact-integer range, so it exercises
+        // double-rounding on top of the TryGetInt32-else-GetDouble reformat. Oracle decides the
+        // exact digits.
+        yield return new object[] { """{"big1":3000000000,"lit":1}""", """{"big2":9007199254740993}""" };
+        // (2) Signed/uppercase exponents + fraction-exponent lexical forms.
+        yield return new object[] { """{"e1":1e-5,"e2":1E+5,"e3":1.5e3}""", """{"x":1}""" };
+        // (3) High-precision decimal beyond double's ~15-17 significant digits — precision loss is
+        // expected; oracle's actual output (whatever double rounds it to) is what must be matched.
+        yield return new object[] { """{"hp":1.2345678901234567890123}""", """{"x":1}""" };
+        // (4) Unicode object keys, incl. a camelCase-policy interaction check: what does
+        // JsonNamingPolicy.CamelCase do to a leading 'İ' (Turkish dotted capital I)?
+        yield return new object[] { """{"şğü":1,"ölçü":{"İç":2}}""", """{"İstanbul":3}""" };
     }
 
     [Theory]
@@ -174,17 +189,26 @@ public class JsonCanonicalizerParityTests
     /// <summary>
     /// Decimal-lexical sayı metni üretir — TEXT olarak yazılır ("1.50", "1e2", "-0.0" gibi) ki
     /// ham lexical biçimler (object serialize edilseydi kaybolacak biçimler) gerçekten oluşsun.
+    /// Coordinator eklentisi: bazen int32 sınırını aşan tamsayılar, negatif/büyük-harf üstel
+    /// biçimler ve 18+ hane hassasiyetli ondalıklar da üretilir (aynı tohum 42 ile) — tohum yeni
+    /// bir sapma üretirse bu bir FIND'dir ve canonicalizer oracle'a göre uyarlanır.
     /// </summary>
     private static string RandomDecimalLexical(Random rng)
     {
         var sign = rng.Next(0, 2) == 0 ? "" : "-";
         var intPart = rng.Next(0, 100);
-        var style = rng.Next(0, 3);
+        var style = rng.Next(0, 6);
         return style switch
         {
             0 => $"{sign}{intPart}.{rng.Next(0, 100):D2}", // "1.50"
             1 => $"{sign}{intPart}e{rng.Next(0, 3)}",       // "1e2"
-            _ => $"{sign}{intPart}.0",                       // "1.0"
+            2 => $"{sign}{intPart}.0",                       // "1.0"
+            // int32'yi aşan tamsayı (fits Int64/double exactly or not, depending on magnitude).
+            3 => $"{sign}{rng.NextInt64(3_000_000_000L, 9_007_199_254_740_995L)}",
+            // negatif / büyük-harf üstel biçim: "1e-5" / "1E+7" tarzı.
+            4 => $"{sign}{intPart}{(rng.Next(0, 2) == 0 ? "e" : "E")}{(rng.Next(0, 2) == 0 ? "-" : "+")}{rng.Next(1, 10)}",
+            // 18+ hane hassasiyetli ondalık — double hassasiyetini aşar (kayıp beklenir, oracle karar verir).
+            _ => $"{sign}{intPart}.{string.Concat(Enumerable.Range(0, 20).Select(_ => (char)('0' + rng.Next(0, 10))))}",
         };
     }
 
