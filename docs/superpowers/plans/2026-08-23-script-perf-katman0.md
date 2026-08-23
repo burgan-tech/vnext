@@ -24,6 +24,7 @@
 | 7 Benchmarks | ✅ | `da360c9e`, `2d12fbb7` | +`[GcServer(true)]`, ParseJsonElement memoization-bağımlılık notu |
 | 8 Mikro baseline | ✅ 5/5 suite | `d73d3d87` | Server GC konsol-doğrulamalı; LOH varyans notu baseline'da |
 | 9 Kapanış | ✅ | — | Build temiz; Domain+Infra isim-diff'i master worktree'e karşı BOŞ (yeni failure yok); App.Tests Task 4'te stash-diff'le doğrulandı |
+| **Faz A (makro baseline)** | ✅ | vnext-example `feature/script-perf-lab` @ `b897518` (worktree `.worktrees/script-perf-lab`) | script-perf-lab akışı + perf-load + integration 1/1; DI smoke 4/4; cold 1.62s; sıcak p95 5.93s(4KB)/8.02s(16KB), miss=+0; Orch 8.1GB alloc/~70s. CS0012 fixture kök-neden düzeltmesi `013189a`. Spec §5 makro maddesi karşılandı. |
 
 **Bilinen ölçüm asimetrileri (final review notu):** `status="failure"` süreleri yalnız task hunilerinde
 üretilir (diğer üç huni yalnız success süresi yazar); exception yolları hiçbir hunide süre yazmaz
