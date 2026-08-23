@@ -52,8 +52,20 @@ public class JsonData : ValueObject
         }
     }
     
+    private JsonElement? _jsonElement;
+
     public JsonElement JsonElement =>
-        JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!;
+        _jsonElement ??= JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!;
+
+    /// <summary>
+    /// Canonicalizer çıktısı için: json ZATEN kanonik/normalize — NormalizedJson yeniden hesaplanmaz.
+    /// </summary>
+    internal static JsonData FromNormalized(string normalizedJson)
+    {
+        var data = new JsonData(normalizedJson);
+        data._normalizedJson = normalizedJson;
+        return data;
+    }
 
     public JsonData Merge(JsonData newData)
     {

@@ -261,6 +261,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// </summary>
     public IReadOnlyCollection<InstanceData> DataList => _dataList.AsReadOnly();
 
+    private int _dataMemoCount = -1;
+    private InstanceData? _latestRowMemo;
+
     /// <summary>
     /// Latest data
     /// </summary>
@@ -270,8 +273,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         {
             lock (_dataListLock)
             {
-                return _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault()
-                    ?.Attributes;
+                return LatestRowLocked()?.Attributes;
             }
         }
     }
@@ -282,9 +284,24 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         {
             lock (_dataListLock)
             {
-                return _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
+                return LatestRowLocked();
             }
         }
+    }
+
+    /// <summary>
+    /// _dataList append-only'dir (Add yalnız ctor/CreateSnapshot/AcceptPersistedData'da; Remove yok —
+    /// keşifle doğrulandı), bu yüzden liste SAYISI değişmediyse latest satır da değişmemiştir:
+    /// sıralama+Attributes maliyeti erişim başına değil, append başına ödenir.
+    /// </summary>
+    private InstanceData? LatestRowLocked()
+    {
+        if (_dataMemoCount != _dataList.Count)
+        {
+            _latestRowMemo = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
+            _dataMemoCount = _dataList.Count;
+        }
+        return _latestRowMemo;
     }
 
     private readonly List<InstanceCorrelation> _childCorrelations = new();

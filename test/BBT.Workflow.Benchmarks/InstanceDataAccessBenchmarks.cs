@@ -11,20 +11,22 @@ namespace BBT.Workflow.Benchmarks;
 [GcServer(true)]
 public class InstanceDataAccessBenchmarks
 {
-    private BBT.Workflow.JsonData _data = null!;
+    private string _json = null!;
 
     [Params(10, 50, 200)]
     public int DocKb { get; set; }
 
     [GlobalSetup]
-    public void Setup() => _data = new BBT.Workflow.JsonData(PayloadFactory.Json(DocKb));
+    public void Setup() => _json = PayloadFactory.Json(DocKb);
 
-    // Validity depends on JsonData.JsonElement staying UNMEMOIZED (it re-parses per access today).
-    // If a caching backing field is ever added there (Katman 2+), this benchmark silently starts
-    // measuring the cached path — switch to a fresh JsonData per invocation in the same change.
+    // Katman 2 / Task 1 landed a JsonElement memo on JsonData (JsonElement ??= parse-once). A
+    // shared _data field would now measure the cached path after the first invocation, hiding the
+    // parse cost this benchmark exists to track. Each invocation below constructs a fresh JsonData
+    // from the setup-produced _json string by design, so ParseJsonElement/ParseAndBuildExpando keep
+    // measuring the cold parse/build cost regardless of the memo.
     [Benchmark]
-    public System.Text.Json.JsonElement ParseJsonElement() => _data.JsonElement;
+    public System.Text.Json.JsonElement ParseJsonElement() => new BBT.Workflow.JsonData(_json).JsonElement;
 
     [Benchmark]
-    public object? ParseAndBuildExpando() => _data.JsonElement.ToDynamic();
+    public object? ParseAndBuildExpando() => new BBT.Workflow.JsonData(_json).JsonElement.ToDynamic();
 }

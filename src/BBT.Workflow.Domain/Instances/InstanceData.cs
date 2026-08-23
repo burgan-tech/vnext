@@ -81,7 +81,13 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     /// </summary>
     public DateTime EnteredAt { get; private set; }
 
-    public dynamic? Attributes => Data.JsonElement.ToDynamic();
+    private dynamic? _attributes;
+
+    /// <summary>
+    /// Row-scoped memo: this row is immutable once constructed, so its dynamic attribute tree is
+    /// materialized at most once and shared across every subsequent read.
+    /// </summary>
+    public dynamic? Attributes => _attributes ??= Data.JsonElement.ToDynamic();
 
     private void SetVersion(string version)
     {
