@@ -180,24 +180,37 @@ public sealed class ScriptEngine(
     };
 
     /// <summary>
-    /// Profile for the no-helper compile path, keyed by effective-grant identity (see
-    /// <see cref="GrantKeyOf"/>). Every no-helper compile with the same grant shares one profile —
-    /// the reference/using set the engine itself builds never varies otherwise.
+    /// Per-evaluator table of no-helper compile profiles, keyed by effective-grant identity (see
+    /// <see cref="GrantKeyOf"/>). Every no-helper compile with the same grant shares one profile — the
+    /// reference/using set the engine itself builds never varies otherwise. Bounded by design: the set
+    /// of distinct authored <c>AllowedAssemblies</c> grant lists is definition-config bounded (workflow
+    /// and task definitions), not request-bounded, so this dictionary cannot grow unbounded under a
+    /// request-driven workload.
+    /// <para>
+    /// Outer-keyed by <see cref="IEvaluator"/> instance (via <see cref="ConditionalWeakTable{TKey,TValue}"/>)
+    /// rather than a single process-wide table: a <see cref="BuildProfile"/> result bakes in that
+    /// specific evaluator's sandbox flag (<c>sbx:0</c>/<c>sbx:1</c>). Two <see cref="ScriptEngine"/>
+    /// instances wrapping differently-configured evaluators in one process must not share entries, or a
+    /// profile built against one evaluator's sandbox setting could precompute a key for a compile that
+    /// actually runs against the other's — this also keeps test instances (each with their own evaluator)
+    /// from leaking state into one another.
+    /// </para>
     /// </summary>
-    private static readonly ConcurrentDictionary<string, string> BaseProfiles = new();
+    private static readonly ConditionalWeakTable<IEvaluator, ConcurrentDictionary<string, string>> BaseProfilesByEvaluator = new();
 
     /// <summary>
-    /// Profile per helper-set's compiled <see cref="MetadataReference"/> identity. Keyed on the
-    /// reference rather than the owning <see cref="HelperSet"/> record: <see cref="ScriptHelperRegistry"/>
-    /// returns a fresh <c>with { FromCache = true }</c> copy on every cache hit, which would defeat a
-    /// <see cref="HelperSet"/>-keyed <see cref="ConditionalWeakTable{TKey,TValue}"/> on every hit — the
-    /// <see cref="MetadataReference"/> instance itself is never copied, so it is the stable identity.
-    /// Safe against a same-reference/different-grant collision: the registry's own cache key already
-    /// folds the grant into (helpers + allowedAssemblies), so the same <see cref="HelperSet.Reference"/>
-    /// object can only ever have been built for one grant; the profile also includes the grant again
-    /// as a second, independent guard.
+    /// Per-evaluator table of helper-set compile profiles, keyed by the helper set's compiled
+    /// <see cref="MetadataReference"/> identity. Keyed on the reference rather than the owning
+    /// <see cref="HelperSet"/> record: <see cref="ScriptHelperRegistry"/> returns a fresh
+    /// <c>with { FromCache = true }</c> copy on every cache hit, which would defeat a
+    /// <see cref="HelperSet"/>-keyed table on every hit — the <see cref="MetadataReference"/> instance
+    /// itself is never copied, so it is the stable identity. Safe against a same-reference/different-grant
+    /// collision: the registry's own cache key already folds the grant into (helpers + allowedAssemblies),
+    /// so the same <see cref="HelperSet.Reference"/> object can only ever have been built for one grant;
+    /// the profile also includes the grant again as a second, independent guard. Outer-keyed by
+    /// <see cref="IEvaluator"/> for the same reason as <see cref="BaseProfilesByEvaluator"/>.
     /// </summary>
-    private static readonly ConditionalWeakTable<MetadataReference, string> HelperProfiles = new();
+    private static readonly ConditionalWeakTable<IEvaluator, ConditionalWeakTable<MetadataReference, string>> HelperProfilesByEvaluator = new();
 
     /// <summary>
     /// <see cref="MergeDefaultGrant"/> result memoized per authored grant-list object. Definition
@@ -241,6 +254,17 @@ public sealed class ScriptEngine(
         => (usingDirectives ?? []).Concat(DefaultUsings).Distinct();
 
     /// <summary>
+    /// SHA-256 hex identity of a resolved mapping body. REF-encoded <see cref="ScriptCode"/> instances
+    /// share the empty-string <see cref="ScriptCode.ContentHash"/> (their <see cref="ScriptCode.DecodedCode"/>
+    /// is empty by design), so per-source identity must hash the resolved body instead — exactly as the
+    /// evaluator's own <c>GenerateCacheKey</c> would for the raw-string path.
+    /// </summary>
+    private static string SourceHashOf(ScriptCode scriptCode, string body) =>
+        scriptCode.IsReference
+            ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body)))
+            : scriptCode.ContentHash;
+
+    /// <summary>
     /// Compiles C# code into an instance of the specified type asynchronously.
     /// Automatically includes default metadata references and using directives,
     /// merging them with any additional references and usings provided.
@@ -279,8 +303,12 @@ public sealed class ScriptEngine(
         ArgumentNullException.ThrowIfNull(scriptCode);
 
         // Flow-level scripts are global to the workflow; union them with the task/mapping-level scripts.
+        // NOTE: deliberately NOT .ToArray()'d — Union returns one of its inputs UNCHANGED when either
+        // side is null (the common single-source case), so keeping the authored IReadOnlyList<string>
+        // object as-is lets MergedGrantOf's ConditionalWeakTable key on that stable definition object
+        // instead of missing on a fresh copy every single call.
         var effective = ScriptSettings.Union(flowScripts, scriptCode.Scripts);
-        var grant = effective?.AllowedAssemblies?.ToArray();
+        var grant = effective?.AllowedAssemblies;
 
         // Resolve the mapping body: for REF encoding, fetch it from the sys-mappings component store;
         // otherwise use the inline (Native/Base64) code.
@@ -301,16 +329,14 @@ public sealed class ScriptEngine(
             if (engineControlsInputs)
             {
                 // Profile depends only on the grant here (references/usings are always the engine's own
-                // defaults) — one profile per distinct grant, reused across every no-helper compile.
-                var profile = BaseProfiles.GetOrAdd(GrantKeyOf(grant), _ =>
+                // defaults) — one profile per distinct grant, reused across every no-helper compile
+                // against THIS evaluator.
+                var baseProfiles = BaseProfilesByEvaluator.GetValue(
+                    _evaluator, static _ => new ConcurrentDictionary<string, string>());
+                var profile = baseProfiles.GetOrAdd(GrantKeyOf(grant), _ =>
                     _evaluator.BuildProfile(MergedRefs(null), MergedUsings(null), MergedGrantOf(grant), loadContext: null));
 
-                // REF-encoded ScriptCode instances share the empty-string ContentHash (their DecodedCode
-                // is empty by design — see ScriptCode.ContentHash), so per-source identity must hash the
-                // resolved body instead, exactly as the evaluator's own GenerateCacheKey would.
-                var sourceHash = scriptCode.IsReference
-                    ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body)))
-                    : scriptCode.ContentHash;
+                var sourceHash = SourceHashOf(scriptCode, body);
                 var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), profile);
 
                 return await CompileCoreAsync<T>(
@@ -357,17 +383,17 @@ public sealed class ScriptEngine(
 
         if (engineControlsInputs)
         {
-            // Keyed on the Reference object itself (see HelperProfiles' doc comment): stable across the
-            // registry's `with { FromCache = true }` copies, unlike the owning HelperSet record. Built
-            // from the exact same MergedRefs/MergedUsings calls CompileCoreAsync below will make with
-            // these exact `refs`/`usings` values, so the profile can never diverge from what the
-            // evaluator actually compiles against.
-            var helperProfile = HelperProfiles.GetValue(helperSet.Reference, _ =>
+            // Keyed on the Reference object itself (see HelperProfilesByEvaluator's doc comment): stable
+            // across the registry's `with { FromCache = true }` copies, unlike the owning HelperSet
+            // record. Built from the exact same MergedRefs/MergedUsings calls CompileCoreAsync below will
+            // make with these exact `refs`/`usings` values, so the profile can never diverge from what
+            // the evaluator actually compiles against.
+            var helperProfiles = HelperProfilesByEvaluator.GetValue(
+                _evaluator, static _ => new ConditionalWeakTable<MetadataReference, string>());
+            var helperProfile = helperProfiles.GetValue(helperSet.Reference, _ =>
                 _evaluator.BuildProfile(MergedRefs(refs), MergedUsings(usings), MergedGrantOf(grant), helperSet.LoadContext));
 
-            var sourceHash = scriptCode.IsReference
-                ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body)))
-                : scriptCode.ContentHash;
+            var sourceHash = SourceHashOf(scriptCode, body);
             var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), helperProfile);
 
             return await CompileCoreAsync<T>(
