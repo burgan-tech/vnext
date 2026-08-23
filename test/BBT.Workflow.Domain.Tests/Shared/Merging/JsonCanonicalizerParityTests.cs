@@ -6,7 +6,6 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Shared.Merging;
 using Xunit;
 
 namespace BBT.Workflow.Shared.Merging;
