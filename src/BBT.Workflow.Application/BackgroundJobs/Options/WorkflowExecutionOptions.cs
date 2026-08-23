@@ -34,16 +34,6 @@ public sealed class WorkflowExecutionOptions
     public bool DirectEnqueueContinuations { get; set; } = true;
 
     /// <summary>
-    /// When enabled, aggregate instance loads include only the IsLatest data row instead of the
-    /// full version history — the full-merge model makes the latest row self-sufficient for
-    /// pipeline merges, script context and polling, turning O(history) IO per load into O(1).
-    /// History-dependent operations must use the repository full-history APIs; the aggregate
-    /// fails fast otherwise. Default: false (canary rollout — enable per environment, compare
-    /// baseline metrics, then flip the default).
-    /// </summary>
-    public bool LatestOnlyInstanceLoading { get; set; }
-
-    /// <summary>
     /// Lease duration in seconds for the auxiliary transition lock scopes that are NOT the
     /// short status lock — the per-subInstance terminal locks in the SubFlow completion /
     /// fault / cancellation services and the async accept (enqueue) lock. When 0 (default),

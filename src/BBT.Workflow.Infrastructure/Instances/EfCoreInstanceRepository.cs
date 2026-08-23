@@ -12,11 +12,9 @@ using BBT.Workflow.Infrastructure.Instances;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
-using BBT.Workflow.BackgroundJobs.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
 namespace BBT.Workflow.Instances;
 
@@ -28,7 +26,6 @@ public sealed class EfCoreInstanceRepository(
     IDataSinkManager dataSinkManager,
      ICurrentSchema currentSchema,
     ISchemaValidator schemaValidator,
-    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<EfCoreInstanceRepository> logger)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
@@ -46,46 +43,36 @@ public sealed class EfCoreInstanceRepository(
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
-        // Default (legacy) load pulls the full InstanceData history. With latest-only loading
-        // enabled (WorkflowExecution:LatestOnlyInstanceLoading), only the IsLatest row is
-        // included: the full-merge model makes it self-sufficient for pipeline merges, script
-        // context and polling (it carries the complete state, the highest version and the
-        // highest VersionNo of its own version line). History-dependent callers must use
-        // FindByIdentifierWithFullHistoryAsync / FindByIdentifierWithFullDataAsync — aggregates
-        // materialized through the identifier finders are marked partially loaded and fail fast
-        // on history reads. ChildCorrelations are always filtered to active-only.
+        // Aggregate loads include ONLY the IsLatest InstanceData row. The full-merge model makes
+        // that row self-sufficient for pipeline merges, script context and polling (it carries the
+        // complete state, the highest version and the highest VersionNo of its own version line),
+        // so pulling the whole history turned every load into O(history) IO for nothing.
+        // History-dependent callers must use FindByIdentifierWithFullHistoryAsync /
+        // FindByIdentifierWithFullDataAsync — aggregates materialized through the identifier
+        // finders are marked partially loaded and fail fast on history reads.
+        // ChildCorrelations are always filtered to active-only.
         var query = await base.WithDetailsAsync();
 
-        query = LatestOnlyLoading
-            ? query.Include(i => i.DataList.Where(d => d.IsLatest))
-            : query.Include(i => i.DataList);
-
-        return query.Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+        return query
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
     }
 
-    private bool LatestOnlyLoading => executionOptions.Value.LatestOnlyInstanceLoading;
-
     /// <summary>
-    /// Conditional data include for list/query paths: list consumers read only the latest
-    /// version (full-merge model), so latest-only loading spares each listed instance its
-    /// entire version history. History-reading flows use the dedicated full-history APIs.
+    /// Data include for list/query paths: list consumers read only the latest version
+    /// (full-merge model), so each listed instance is spared its entire version history.
+    /// History-reading flows use the dedicated full-history APIs.
     /// </summary>
-    private IQueryable<Instance> IncludeListData(IQueryable<Instance> query) =>
-        LatestOnlyLoading
-            ? query.Include(i => i.DataList.Where(d => d.IsLatest))
-            : query.Include(i => i.DataList);
+    private static IQueryable<Instance> IncludeListData(IQueryable<Instance> query) =>
+        query.Include(i => i.DataList.Where(d => d.IsLatest));
 
     /// <summary>
     /// Stamps the latest-only marker on a materialized aggregate so history-dependent domain
     /// members fail fast instead of silently answering from a partial list.
     /// </summary>
-    private Instance? MarkIfPartiallyLoaded(Instance? instance)
+    private static Instance? MarkIfPartiallyLoaded(Instance? instance)
     {
-        if (instance is not null && LatestOnlyLoading)
-        {
-            instance.MarkDataPartiallyLoaded();
-        }
-
+        instance?.MarkDataPartiallyLoaded();
         return instance;
     }
 
@@ -93,16 +80,13 @@ public sealed class EfCoreInstanceRepository(
     /// Stamps the latest-only marker on every instance in a list/paged result so a consumer
     /// (view/extension/script) that reaches for <c>DataList</c> / <c>FindData</c> /
     /// <c>GetVersionHistory</c> fails fast instead of reading a silently-incomplete history.
-    /// No-op when latest-only loading is off. Fluent: returns the same list for inline use.
+    /// Fluent: returns the same list for inline use.
     /// </summary>
-    private List<Instance> MarkListIfPartiallyLoaded(List<Instance> instances)
+    private static List<Instance> MarkListIfPartiallyLoaded(List<Instance> instances)
     {
-        if (LatestOnlyLoading)
+        foreach (var instance in instances)
         {
-            foreach (var instance in instances)
-            {
-                instance.MarkDataPartiallyLoaded();
-            }
+            instance.MarkDataPartiallyLoaded();
         }
 
         return instances;
