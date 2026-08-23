@@ -109,6 +109,17 @@
       "title": "Parallel-branch merge conflict detection is now structural and order-insensitive",
       "description": "Parallel-branch merge conflict detection now compares JsonElement values structurally (JsonElement.DeepEquals — object property order ignored); previously the comparison was serialized-text based and order-sensitive, so reordered-but-structurally-equal outputs threw a false conflict. Same-content different-order now merges.",
       "action": "None expected; conflict semantics for genuinely different content unchanged."
+    },
+    {
+      "id": "script-body-cycles-throw-instead-of-being-dropped",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "scriptContext.setBody",
+      "since": "0.0.81",
+      "severity": "info",
+      "title": "Self-referencing script values now fail fast instead of being silently truncated",
+      "description": "Body/branch cloning moved from a JSON round-trip to a structural clone. The old round-trip used ReferenceHandler.IgnoreCycles, so a script that assigned an ExpandoObject into itself (directly or transitively) had the repeated reference silently replaced with null and the task continued with truncated data. The structural clone instead detects the runaway nesting and throws InvalidOperationException at depth 256, so the task fails visibly through the normal error boundary rather than persisting quietly corrupted content. Acyclic values — every value that originates from JSON — are unaffected.",
+      "action": "Scripts must not build self-referencing dynamic values. If a mapping legitimately nests deeper than 256 levels, flatten it; if a task starts failing with this message, inspect the mapping for a value assigned into itself instead of into a delta."
     }
   ]
 }
