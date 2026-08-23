@@ -53,10 +53,20 @@ Domain'de `JsonCanonicalizer`'ın yanına: `public enum JsonNumberPolicy { Legac
 
 `Legacy` altında bugünkü merdiven (`TryGetInt32 → GetDouble`) aynen korunur.
 
-**Tasarımın çekirdek özelliği:** `1e5`, `-0`, `2.50`, `1.0`, `0.10` gibi sıradan değerler her iki modda
-**aynı metni** üretir. `PreservePrecision`, çıktıyı yalnızca bugün hassasiyet kaybettiği yerde
-değiştirir — hash churn'ü tam olarak bozuk kümeye sınırlar ve kanonik formun (aynı değer → aynı hash)
-anlamını korur.
+**Tasarımın çekirdek özelliği:** `1e5`, `-0`, `2.50`, `1.0`, `0.10`, `1234.56` gibi sıradan değerler her
+iki modda **aynı metni** üretir; kanonik formun (aynı değer → aynı hash) anlamı korunur.
+
+> **Tasarım düzeltmesi (2026-08-23, plan aşamasında koddan bulundu — kullanıcı kararı: "üstel gösterim
+> yok"):** yukarıdaki eşitlik, **bilimsel gösterimle biçimlenen değerler için geçerli DEĞİLDİR.**
+> Legacy yol double formatlaması kullandığı için `0.00001` bugün `"1E-05"`, `1000000000000000000` ise
+> `"1E+18"` olarak yazılıyor; `PreservePrecision` bunları düz gösterimle (`"0.00001"`,
+> `"1000000000000000000"`) yazar. Kayıp yoktur, ama metin — dolayısıyla hash — değişir.
+> **Kabul edilen sonuç:** kanonik form artık "üstel gösterim yok, düz ondalık" olarak tanımlanır; bir
+> değerin tek temsili olur. Bedeli, flag açıldığındaki bir kerelik churn'ün bozuk kümenin yanı sıra
+> E-gösterimli değerleri de kapsaması; tipik para/oran verisinde (`1234.56`, `0.075`) bu küme boştur,
+> E-gösterimi ancak çok küçük (`<0.0001`) ya da çok büyük yuvarlak sayılarda devreye girer.
+> Reddedilen alternatif: "yalnız kayıp varsa müdahale et" (legacy'nin biçimlendirme tuhaflığını kanonik
+> tanıma kalıcı olarak dondurur + sayı başına çift hesaplama).
 
 ## 2. Flag ve bağlama
 
@@ -75,11 +85,15 @@ anlamını korur.
 1. **Mevcut parite ağı korunur:** `JsonCanonicalizerParityTests`'in 12 korpus vakası + 200 rastgele çifti
    `Legacy` modunda koşmaya devam eder; hiçbir mevcut beklenti değişmez ("yeni pipeline == eski pipeline"
    byte-parite garantisi aynen yaşar).
-2. **"PreservePrecision yalnız bozuk değerlerde farklıdır" invaryantı** (bu değişikliğin asıl bekçisi):
+2. **"PreservePrecision sıradan değerlerde Legacy ile aynıdır" invaryantı** (bu değişikliğin asıl bekçisi):
    sıradan-değer korpusu + rastgele çiftler `PreservePrecision` modunda da koşar ve çıktının `Legacy`
-   çıktısıyla **birebir aynı** olması assert edilir. Rastgele üretici iki havuza ayrılır: **sıradan**
-   (invaryant: eşitlik) ve **bozuk** (beklenti: düzeltilmiş değer, tablodan). Bugünkü üretici int64-aşan
-   tamsayı ve 20-hane ondalık ürettiği için bu ayrım zorunludur.
+   çıktısıyla **birebir aynı** olması assert edilir. Üretici ve korpus **üç** havuza ayrılır:
+   **sıradan** (invaryant: eşitlik — düz ondalık, `1.0`, `2.50`, `1e2` gibi tamsayıya çözülen üsteller),
+   **bozuk** (beklenti tablosu: int64 taşması, 2^53+1, >15 hane ondalık) ve **E-gösterimli**
+   (beklenti tablosu: `0.00001` → `"0.00001"`, `1e18` → düz gösterim; tasarım düzeltmesi §1). Mevcut
+   `Corpus()` (12 vaka) `Legacy` modunda TAMAMEN korunur; sıradan alt kümesi ayrı bir üye olarak
+   invaryant testine beslenir. Bugünkü rastgele üretici zaten int64-aşan tamsayı, 20-hane ondalık ve
+   `e-`/`E+` biçimleri ürettiği için bu ayrım zorunludur.
 3. **Bozuk küme için tam beklenti tablosu:** `long.MaxValue`, `9007199254740993`,
    `0.12345678901234567890`, `1234567890123456.78` — her biri için beklenen `NormalizedJson` **ve** SHA1;
    gerçek `InstanceData.ComputeDataHash` ile çapraz kontrol.
@@ -115,9 +129,10 @@ anlamını korur.
 
 ## 7. Riskler
 
-1. **Flag'i açmanın bir kerelik maliyeti:** bugün bozuk değer taşıyan instance'ların sonraki
-   append'inde hash farklılaşır → bir fazladan versiyon satırı + Monitor'da bir kerelik hayalet diff.
-   Veri kaybı yok; geri dönüş flag'i kapatmak. Dokümante edilir.
+1. **Flag'i açmanın bir kerelik maliyeti:** bugün bozuk değer **veya E-gösterimli değer** taşıyan
+   instance'ların sonraki append'inde hash farklılaşır → bir fazladan versiyon satırı + Monitor'da bir
+   kerelik hayalet diff. Veri kaybı yok; geri dönüş flag'i kapatmak. `known-issues.json` kaydı ve
+   option'ın XML doc'u iki kümeyi de açıkça sayar.
 2. **Kanonik formu kazara geniş biçimde değiştirmek** → invaryant testi (§3.2) tam bunun bekçisi.
 3. **decimal aralığı dışı değerler** bugünkü double davranışında kalır — dokümante, davranış değişmez.
 4. **Kill-switch konumunda fix kaybolur** — bilinçli karar; kill-switch'in tanımı bugünkü davranışa dönmek.
