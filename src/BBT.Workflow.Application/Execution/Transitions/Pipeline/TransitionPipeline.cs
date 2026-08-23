@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
@@ -5,6 +6,7 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
@@ -206,8 +208,33 @@ public class TransitionPipeline
     {
         var context = initialContext;
 
+        // Inline-chain telemetry. Hop 0 is already represented by the caller's span
+        // (TransitionJob.Execute on the async path, the request span on the sync path), so only
+        // the CONTINUATIONS need one of their own — and only on the async path, which is where
+        // those hops used to be separate jobs with separate spans. Emitting them for sync chains
+        // would invent transactions that never existed.
+        var hopIndex = 0;
+        string? predecessorTraceParent = null;
+        string? predecessorTraceState = null;
+
         while (true)
         {
+            var emitHopSpan = hopIndex > 0 && context.CallerMode == ExecMode.Async;
+
+            // The lane ordinal must advance for the hop the same way the job handler advances it
+            // from the payload, or LaneSeq stops ordering the lane the moment a chain runs inline.
+            var laneSeq = emitHopSpan ? WorkflowTraceLane.NextSeq() : WorkflowTraceLane.Seq;
+
+            // Anchor and parent lane are preserved (null keeps them); only Seq moves, so anything
+            // the hop spawns — post-commit jobs, subflow handoffs, a Scheduled-mode enqueue —
+            // stamps this hop's ordinal.
+            using var laneScope = emitHopSpan
+                ? WorkflowTraceLane.Use(anchor: null, parentAnchor: null, seq: laneSeq)
+                : null;
+            using var hopActivity = emitHopSpan
+                ? TransitionHopActivity.Start(context, laneSeq, predecessorTraceParent, predecessorTraceState)
+                : null;
+
             // Guard: Prevent infinite chain loops
             if (context.ChainDepth > MaxChainDepth)
             {
@@ -351,6 +378,14 @@ public class TransitionPipeline
             var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, cancellationToken);
             if (!nextContextResult.IsSuccess)
                 return Result<TransitionExecutionContext>.Fail(nextContextResult.Error);
+
+            // Captured HERE, while this hop's span is still current: the next iteration links its
+            // predecessor, and by then this span is disposed and Activity.Current has fallen back
+            // to the enclosing job span. Reading it there would link every hop to the job instead
+            // of to the hop before it, flattening the chain's causality.
+            predecessorTraceParent = Activity.Current?.Id;
+            predecessorTraceState = Activity.Current?.TraceStateString;
+            hopIndex++;
 
             context = nextContextResult.Value!;
         }

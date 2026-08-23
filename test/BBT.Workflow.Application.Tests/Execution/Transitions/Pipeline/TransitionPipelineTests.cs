@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +16,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
@@ -1161,6 +1163,143 @@ public class TransitionPipelineTests
         return scope;
     }
 
+    #region Inline chain trace shape
+
+    /// <summary>
+    /// The regression lock for inline mode. With AutoTransitionMode.Scheduled every chained hop was
+    /// its own background job and therefore its own flat-lane span. Inline mode removes the job; it
+    /// must not remove the span, or a whole chain collapses into one span and per-hop timing,
+    /// ordering and causality are gone from every trace and dashboard.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_AsyncInlineChain_EmitsAFlatLaneHopSpanForTheContinuation()
+    {
+        const string anchorSpanId = "1111111111111111";
+        using var lane = WorkflowTraceLane.Reset($"00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{anchorSpanId}-01");
+        using var capture = new HopSpanCapture();
+
+        var context = CreateTransitionExecutionContext(callerMode: ExecMode.Async);
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        // The mock factory hands back the SAME context, and the inline strategy consumes the
+        // directive, so exactly one continuation runs: hop 0 plus one chained hop.
+        context.Directives.RequestNextTransition(new NextTransitionRequest("next-transition", "automatic"));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        // Hop 0 is already represented by the caller's span (TransitionJob.Execute), so only the
+        // continuation gets one of its own.
+        capture.Hops.Count.ShouldBe(1);
+        var hop = capture.Hops.Single();
+        hop.ParentSpanId.ToString().ShouldBe(anchorSpanId);
+        hop.GetTagItem(TelemetryConstants.TagNames.TraceLane).ShouldBe(true);
+        hop.GetTagItem(TelemetryConstants.TagNames.LaneSeq).ShouldBe(1);
+        hop.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe(context.TransitionKey);
+        hop.Kind.ShouldBe(ActivityKind.Consumer);
+    }
+
+    /// <summary>
+    /// Sync chains have ALWAYS continued in-process and never produced per-hop spans. Emitting them
+    /// here would invent APM transactions that never existed and move every sync flow's numbers.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_SyncInlineChain_EmitsNoHopSpan()
+    {
+        using var lane = WorkflowTraceLane.Reset("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01");
+        using var capture = new HopSpanCapture();
+
+        var context = CreateTransitionExecutionContext(callerMode: ExecMode.Sync);
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Directives.RequestNextTransition(new NextTransitionRequest("next-transition", "automatic"));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        capture.Hops.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// In Scheduled mode the continuation leaves as a job and the loop ends after hop 0, so the
+    /// hop span must come from the JOB path (TransitionJob.Execute) — never from both, which would
+    /// double-count every chained transition.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ScheduledMode_EmitsNoInlineHopSpan()
+    {
+        using var lane = WorkflowTraceLane.Reset("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01");
+        using var capture = new HopSpanCapture();
+
+        var context = CreateTransitionExecutionContext(callerMode: ExecMode.Async);
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.EnqueueContinuations = true;
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Directives.RequestNextTransition(new NextTransitionRequest("next-transition", "automatic"));
+
+        var pipeline = CreatePipelineWithContinuationStrategies(new StubEnqueueStrategy());
+
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        capture.Hops.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// Stands in for EnqueueContinuationStrategy: ends the in-process loop without needing a job
+    /// repository or an enqueue gateway, which are not what these trace-shape tests are about.
+    /// </summary>
+    private sealed class StubEnqueueStrategy : IContinuationStrategy
+    {
+        public ContinuationMode Mode => ContinuationMode.Enqueue;
+
+        public Task<Result<WorkflowExecutionContext?>> DispatchAsync(
+            TransitionExecutionContext current, CancellationToken cancellationToken)
+        {
+            current.Directives.ConsumeNextTransition();
+            return Task.FromResult(Result<WorkflowExecutionContext?>.Ok(null));
+        }
+    }
+
+    /// <summary>
+    /// Collects the inline hop spans the pipeline starts. Listens to the REAL source by name so the
+    /// test would fail if the helper moved to an ActivitySource that is not registered for export.
+    /// </summary>
+    private sealed class HopSpanCapture : IDisposable
+    {
+        private readonly ActivityListener _listener;
+
+        public List<Activity> Hops { get; } = new();
+
+        public HopSpanCapture()
+        {
+            _listener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                    ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStarted = activity =>
+                {
+                    if (activity.OperationName == TransitionHopActivity.ActivityName)
+                        Hops.Add(activity);
+                }
+            };
+            ActivitySource.AddActivityListener(_listener);
+        }
+
+        public void Dispose()
+        {
+            _listener.Dispose();
+            Activity.Current = null;
+        }
+    }
+
+    #endregion
+
     private void SetupContextFactory(TransitionExecutionContext context)
     {
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
@@ -1193,7 +1332,9 @@ public class TransitionPipelineTests
         };
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
+    private TransitionExecutionContext CreateTransitionExecutionContext(
+        string transitionKey = "test-transition",
+        ExecMode callerMode = ExecMode.Sync)
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -1215,6 +1356,7 @@ public class TransitionPipelineTests
             CorrelationId = Guid.NewGuid().ToString("N"),
             ExecutionChainId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
+            CallerMode = callerMode,
             Workflow = workflow,
             Current = state,
             Transition = transition,
