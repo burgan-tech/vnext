@@ -5,7 +5,6 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
-using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
@@ -38,11 +37,11 @@ namespace BBT.Workflow.Execution.Strategies;
 /// owner re-entry instead of a 409.
 /// </para>
 /// <para>
-/// Enqueue atomicity is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
-/// when ON (default), the durable intent + Dapr schedule commit in one unit of work (transactional
-/// enqueue). On Dapr failure the gateway falls back to the transactional outbox. When OFF, the
-/// outbox path is always used — the Inbox performs the Dapr enqueue (fully transactional, at the
-/// cost of the outbox/inbox poll hop). Both paths use the same <see cref="ITransitionEnqueueGateway"/>.
+/// The durable <c>InstanceJob</c> intent and the scheduler recording commit in one unit of work, so
+/// a scheduled job can never exist without a tracking intent. There is no outbox fallback behind
+/// <see cref="ITransitionEnqueueGateway"/> any more: a scheduler failure that outlives the gateway's
+/// short retry FAILS the accept, so the caller learns the transition was not accepted instead of
+/// receiving a 202 for work that only an Inbox relay hop might eventually deliver.
 /// </para>
 /// </summary>
 public sealed class AsyncTransitionStrategy(
@@ -153,7 +152,7 @@ public sealed class AsyncTransitionStrategy(
 
                 if (enqueueResult.IsSuccess)
                 {
-                    armHandle = enqueueResult.Value.ArmHandle;
+                    armHandle = enqueueResult.Value;
                     LogEnqueueSuccess(context, jobName.Value);
                     return Result.Ok();
                 }
@@ -165,7 +164,7 @@ public sealed class AsyncTransitionStrategy(
 
         // Arm OUTSIDE the lock: one scheduler call, no database access — the handle carries the
         // payload from the enqueue. Only after a successful accept, so a compensated flip never
-        // leaves an armed job behind. A null handle means the outbox relay owns delivery instead.
+        // leaves an armed job behind.
         if (acceptResult.IsSuccess && armHandle is not null)
         {
             await armHandle.ArmAsync(cancellationToken);
@@ -181,11 +180,16 @@ public sealed class AsyncTransitionStrategy(
     }
 
     /// <summary>
-    /// Persists the durable job intent (<see cref="InstanceJob"/>) and delegates the enqueue decision
-    /// to <see cref="ITransitionEnqueueGateway"/> — both within a single RequiresNew unit of work so
-    /// the intent and the delivery action (Dapr schedule or outbox row) commit atomically.
+    /// Persists the durable job intent (<see cref="InstanceJob"/>) and records the scheduler job —
+    /// both within a single RequiresNew unit of work, so a scheduled job can never exist without a
+    /// tracking intent.
+    /// <para>
+    /// A gateway failure is returned rather than absorbed, and the unit of work is left uncommitted:
+    /// the intent must not survive an enqueue that did not happen, or the duplicate-job guard would
+    /// block every later retry of a transition that never ran.
+    /// </para>
     /// </summary>
-    private async Task<Result<TransitionEnqueueOutcome>> EnqueueAndSaveJobAsync(
+    private async Task<Result<IBackgroundJobArmHandle?>> EnqueueAndSaveJobAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
         JobName jobName,
@@ -194,8 +198,7 @@ public sealed class AsyncTransitionStrategy(
         bool subflowChainReserved,
         CancellationToken cancellationToken)
     {
-        var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity, subflowChainReserved);
-        var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity, subflowChainReserved);
+        var payload = BuildDirectPayload(context, transContext, jobName.Value, activity, subflowChainReserved);
 
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
@@ -208,12 +211,14 @@ public sealed class AsyncTransitionStrategy(
         // deferArming: the row must commit under the status lock so the duplicate-job guard's next
         // reader sees it, but the scheduler round-trip must not — it was the dominant term of the
         // lock hold under load. The caller arms once AcceptAsync has released the lock.
-        var outcome = await enqueueGateway.EnqueueAsync(
-            directPayload, outboxEvent, deferArming: true, cancellationToken: cancellationToken);
+        var enqueueResult = await enqueueGateway.EnqueueAsync(
+            payload, jobId, deferArming: true, cancellationToken: cancellationToken);
+        if (!enqueueResult.IsSuccess)
+            return enqueueResult;
 
         await uow.CommitAsync(cancellationToken);
 
-        return Result<TransitionEnqueueOutcome>.Ok(outcome);
+        return enqueueResult;
     }
 
     /// <summary>
@@ -252,44 +257,6 @@ public sealed class AsyncTransitionStrategy(
             LaneSeq = WorkflowTraceLane.NextSeq(),
             CorrelationId = transContext.CorrelationId,
             Stage = context.Data?.Stage,
-            SubflowChainReserved = subflowChainReserved
-        };
-    }
-
-    /// <summary>
-    /// Builds the outbox event for the transactional outbox path.
-    /// </summary>
-    private static TransitionContinuationRequested BuildOutboxEvent(
-        WorkflowExecutionContext context,
-        TransitionExecutionContext transContext,
-        JobName jobName,
-        Guid jobId,
-        Activity? activity,
-        bool subflowChainReserved)
-    {
-        return new TransitionContinuationRequested
-        {
-            InstanceId = transContext.InstanceId,
-            Domain = transContext.Domain,
-            Flow = transContext.WorkflowKey,
-            Version = transContext.Workflow.Version,
-            TransitionKey = transContext.TransitionKey,
-            JobName = jobName.Value,
-            JobId = jobId,
-            Data = context.Data?.Attributes,
-            InstanceKey = context.Data?.Key,
-            Tags = context.Data?.Tags,
-            Stage = context.Data?.Stage,
-            Headers = context.Headers,
-            RouteValues = context.RouteValues,
-            ExecutionActor = context.Actor.ToString(),
-            TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString,
-            TraceRoot = WorkflowTraceLane.Current,
-            ParentTraceRoot = WorkflowTraceLane.ParentLane,
-            LaneSeq = WorkflowTraceLane.NextSeq(),
-            CorrelationId = transContext.CorrelationId,
-            ChainDepth = transContext.ChainDepth,
             SubflowChainReserved = subflowChainReserved
         };
     }

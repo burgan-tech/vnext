@@ -125,7 +125,6 @@ public sealed class InstanceControllerChildCancelTests
         Substitute.For<IInstanceCancellationService>(),
         childService,
         Substitute.For<IChildSubflowFaultService>(),
-        Substitute.For<ITransitionJobEnqueuer>(),
         Substitute.For<IInstanceCommandGateway>(),
         Substitute.For<IEventAppService>(),
         relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>(),

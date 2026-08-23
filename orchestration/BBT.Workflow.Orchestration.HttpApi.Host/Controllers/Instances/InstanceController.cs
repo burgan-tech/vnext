@@ -10,7 +10,6 @@ using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Events;
-using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
@@ -41,7 +40,6 @@ public sealed class InstanceController(
     IInstanceCancellationService cancellationService,
     IChildSubflowCancellationService childSubflowCancellationService,
     IChildSubflowFaultService childSubflowFaultService,
-    ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
@@ -454,59 +452,6 @@ public sealed class InstanceController(
 
         return FromResult(result);
     }
-
-    /// <summary>
-    /// Enqueues a (chained) transition as a background job. Internal endpoint the Inbox forwards
-    /// <c>TransitionContinuationRequested</c> events to when outbox continuations are enabled, so
-    /// the Dapr job is enqueued in the Orchestration process (never in the Inbox). Preserves the
-    /// chain token for the chain-ownership gate.
-    /// </summary>
-    [ApiExplorerSettings(IgnoreApi = true)]
-    [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}/enqueue")]
-    public async Task<IActionResult> EnqueueTransitionAsync(
-        [FromRoute] string domain,
-        [FromRoute] string workflow,
-        [FromRoute] Guid instance,
-        [FromRoute] string transitionKey,
-        [FromBody] TransitionContinuationRequested continuation,
-        CancellationToken cancellationToken = default)
-    {
-        var actor = Enum.TryParse<ExecutionActor>(continuation.ExecutionActor, ignoreCase: true, out var parsed)
-            ? parsed
-            : ExecutionActor.System;
-
-        var payload = new TransitionJobPayload
-        {
-            JobName = continuation.JobName,
-            InstanceId = continuation.InstanceId,
-            TransitionKey = continuation.TransitionKey,
-            Domain = continuation.Domain,
-            Workflow = continuation.Flow,
-            Version = continuation.Version,
-            Data = continuation.Data,
-            InstanceKey = continuation.InstanceKey,
-            Tags = continuation.Tags,
-            Stage = continuation.Stage,
-            Headers = continuation.Headers,
-            RouteValues = continuation.RouteValues,
-            ExecutionActor = actor,
-            CallerSync = false,
-            TraceParent = continuation.TraceParent,
-            TraceState = continuation.TraceState,
-            // Pure transport hop: relay the lane verbatim, never re-anchor. Re-anchoring here would
-            // make this endpoint's server span the parent and pull the hop out of the originating
-            // request's lane.
-            TraceRoot = continuation.TraceRoot,
-            ParentTraceRoot = continuation.ParentTraceRoot,
-            ChainDepth = continuation.ChainDepth,
-            LaneSeq = continuation.LaneSeq,
-            CorrelationId = continuation.CorrelationId
-        };
-
-        await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);
-        return Ok();
-    }
-
     /// <summary>
     /// Executes a transition on a workflow instance.
     /// </summary>

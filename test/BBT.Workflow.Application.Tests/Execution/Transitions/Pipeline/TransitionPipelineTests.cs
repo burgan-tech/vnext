@@ -407,22 +407,22 @@ public class TransitionPipelineTests
         var enqueueGateway = Substitute.For<ITransitionEnqueueGateway>();
         enqueueGateway.EnqueueAsync(
                 Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
-                Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<Guid>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct)));
+            .Returns(Task.FromResult(Result<BBT.Aether.BackgroundJob.IBackgroundJobArmHandle?>.Ok(null)));
         var enqueueStrategy = new EnqueueContinuationStrategy(jobRepository, enqueueGateway);
 
         var jobsVisibleDuringEnqueue = false;
         enqueueGateway.EnqueueAsync(
                 Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
-                Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<Guid>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 jobsVisibleDuringEnqueue = context.Directives.PostCommitJobs.Single() == postCommitJob;
-                return Task.FromResult(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+                return Task.FromResult(Result<BBT.Aether.BackgroundJob.IBackgroundJobArmHandle?>.Ok(null));
             });
 
         SetupContextFactory(context);
@@ -442,7 +442,7 @@ public class TransitionPipelineTests
             Arg.Any<CancellationToken>());
         await enqueueGateway.Received(1).EnqueueAsync(
             Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
-            Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+            Arg.Any<Guid>(),
             Arg.Any<bool>(),
             Arg.Any<CancellationToken>());
         result.Value!.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);

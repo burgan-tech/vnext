@@ -2,11 +2,12 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.BackgroundJob;
+using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
-using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
@@ -17,10 +18,10 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Execution.Transitions.Continuations;
 
 /// <summary>
-/// Unit tests for <see cref="EnqueueContinuationStrategy"/>.
-/// Verifies that the strategy persists a durable job intent and delegates enqueue
-/// to <see cref="ITransitionEnqueueGateway"/>; mode decisions (direct vs outbox)
-/// are encapsulated in the gateway and are not tested here.
+/// Unit tests for <see cref="EnqueueContinuationStrategy"/> — the AutoTransitionMode.Scheduled
+/// path. Verifies that the strategy persists a durable job intent, hands delivery to
+/// <see cref="ITransitionEnqueueGateway"/>, and PROPAGATES an enqueue failure: with no outbox
+/// fallback left behind the gateway, swallowing one would commit an intent nothing ever arms.
 /// </summary>
 public class EnqueueContinuationStrategyTests
 {
@@ -36,10 +37,10 @@ public class EnqueueContinuationStrategyTests
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
     }
 
     private EnqueueContinuationStrategy CreateStrategy() =>
@@ -63,7 +64,7 @@ public class EnqueueContinuationStrategyTests
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -76,16 +77,16 @@ public class EnqueueContinuationStrategyTests
         var context = CreateContextWithNextTransition("approve");
 
         TransitionJobPayload? capturedPayload = null;
-        TransitionContinuationRequested? capturedEvent = null;
+        Guid capturedJobId = Guid.Empty;
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
-                (payload, evt, _, _) => { capturedPayload = payload; capturedEvent = evt; })
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
+                (payload, jobId, _, _) => { capturedPayload = payload; capturedJobId = jobId; })
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 
@@ -95,9 +96,6 @@ public class EnqueueContinuationStrategyTests
         capturedPayload.ExecutionActor.ShouldBe(ExecutionActor.System);
         capturedPayload.CallerSync.ShouldBeFalse();
 
-        capturedEvent.ShouldNotBeNull();
-        capturedEvent!.TransitionKey.ShouldBe("approve");
-        capturedEvent.InstanceId.ShouldBe(context.InstanceId);
     }
 
     [Fact]
@@ -112,45 +110,44 @@ public class EnqueueContinuationStrategyTests
             .Callback<InstanceJob, bool, CancellationToken>((j, _, _) => insertedJob = j)
             .ReturnsAsync((InstanceJob j, bool _, CancellationToken _) => j);
 
-        TransitionContinuationRequested? capturedEvent = null;
+        Guid capturedJobId = Guid.Empty;
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
-                (_, evt, _, _) => capturedEvent = evt)
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
+                (_, jobId, _, _) => capturedJobId = jobId)
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 
         insertedJob.ShouldNotBeNull();
-        capturedEvent.ShouldNotBeNull();
-        // InstanceJob.Id == JobId == the id carried in the outbox event for cancellation-by-id to work
+        // InstanceJob.Id == JobId == the id handed to the gateway, so cancellation-by-id works.
         insertedJob!.Id.ShouldBe(insertedJob.JobId);
-        insertedJob.JobId.ShouldBe(capturedEvent!.JobId);
+        insertedJob.JobId.ShouldBe(capturedJobId);
     }
 
     [Fact]
-    public async Task WhenActivityIsAmbient_OutboxEventCarriesSameTraceContextAsDirectPayload()
+    public async Task WhenActivityIsAmbient_PayloadCarriesTheTraceContext()
     {
-        // Regression: the direct payload got TraceParent/TraceState but the outbox event did not,
-        // so continuations routed through the outbox fallback lost the trace entirely.
+        // The hop crosses the scheduler, where nothing is ambient: whatever the payload does not
+        // carry, the next hop cannot correlate to.
         var strategy = CreateStrategy();
         var context = CreateContextWithNextTransition("approve");
 
         TransitionJobPayload? capturedPayload = null;
-        TransitionContinuationRequested? capturedEvent = null;
+        Guid capturedJobId = Guid.Empty;
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
-                (payload, evt, _, _) => { capturedPayload = payload; capturedEvent = evt; })
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
+                (payload, jobId, _, _) => { capturedPayload = payload; capturedJobId = jobId; })
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
 
         var activity = new System.Diagnostics.Activity("pipeline");
         activity.SetIdFormat(System.Diagnostics.ActivityIdFormat.W3C);
@@ -167,38 +164,34 @@ public class EnqueueContinuationStrategyTests
         }
 
         capturedPayload.ShouldNotBeNull();
-        capturedEvent.ShouldNotBeNull();
         capturedPayload!.TraceParent.ShouldNotBeNullOrEmpty();
-        capturedEvent!.TraceParent.ShouldBe(capturedPayload.TraceParent);
-        capturedEvent.TraceState.ShouldBe(capturedPayload.TraceState);
+        capturedPayload.TraceState.ShouldBe("vendor=state");
     }
 
     [Fact]
-    public async Task ChainedContinuation_CarriesBusinessCorrelationOnBothPaths()
+    public async Task ChainedContinuation_CarriesBusinessCorrelation()
     {
-        // The business correlation id must survive the async hop on BOTH the direct payload and
-        // the outbox event, so every leg of an auto-chain keeps one correlation.id.
+        // The business correlation id must survive the async hop so every leg of an auto-chain
+        // keeps one correlation.id.
         var strategy = CreateStrategy();
         var context = CreateContextWithNextTransition("approve");
 
         TransitionJobPayload? capturedPayload = null;
-        TransitionContinuationRequested? capturedEvent = null;
+        Guid capturedJobId = Guid.Empty;
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
-                (payload, evt, _, _) => { capturedPayload = payload; capturedEvent = evt; })
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
+                (payload, jobId, _, _) => { capturedPayload = payload; capturedJobId = jobId; })
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 
         capturedPayload.ShouldNotBeNull();
-        capturedEvent.ShouldNotBeNull();
         capturedPayload!.CorrelationId.ShouldBe(context.CorrelationId);
-        capturedEvent!.CorrelationId.ShouldBe(context.CorrelationId);
     }
 
     [Fact]
@@ -219,10 +212,64 @@ public class EnqueueContinuationStrategyTests
         _mockEnqueueGateway.Verify(
             x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    /// <summary>
+    /// The behaviour change that came with dropping the outbox fallback. The durable intent is
+    /// already written into the ambient unit of work by this point, so a swallowed enqueue failure
+    /// would commit an intent nothing ever arms and leave the instance parked in Busy with no
+    /// owner. Failing instead routes the pipeline into MarkInstanceFaultedAsync: visible, retryable.
+    /// </summary>
+    [Fact]
+    public async Task WhenEnqueueFails_ShouldPropagateTheFailure()
+    {
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<Guid>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Fail(
+                Error.Dependency("Dependency", "scheduler unreachable", "Dapr")));
+
+        var result = await strategy.DispatchAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldBe("scheduler unreachable");
+    }
+
+    /// <summary>
+    /// The chained continuation arms inline: Aether already defers arming to the ambient unit of
+    /// work's post-commit hook, and unlike the accept path this strategy holds no status lock, so
+    /// there is nothing to move out of a critical section.
+    /// </summary>
+    [Fact]
+    public async Task ChainedContinuation_ShouldNotDeferArming()
+    {
+        var strategy = CreateStrategy();
+        var context = CreateContextWithNextTransition("approve");
+
+        var deferArming = true;
+        _mockEnqueueGateway
+            .Setup(x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<Guid>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
+                (_, _, defer, _) => deferArming = defer)
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
+
+        await strategy.DispatchAsync(context, CancellationToken.None);
+
+        deferArming.ShouldBeFalse();
     }
 
     private static TransitionExecutionContext CreateContextWithNextTransition(string nextTransitionKey)
@@ -309,16 +356,16 @@ public class EnqueueContinuationStrategyTests
         var context = CreateContextWithNextTransition("approve");
 
         TransitionJobPayload? capturedPayload = null;
-        TransitionContinuationRequested? capturedEvent = null;
+        Guid capturedJobId = Guid.Empty;
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
-                (p, e, _, _) => { capturedPayload = p; capturedEvent = e; })
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
+                (p, _, _, _) => capturedPayload = p)
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
 
         var ambient = new Activity("transition/previous-hop");
         ambient.SetIdFormat(ActivityIdFormat.W3C);
@@ -341,12 +388,6 @@ public class EnqueueContinuationStrategyTests
         capturedPayload.TraceParent.ShouldBe(ambient.Id);
         capturedPayload.TraceRoot.ShouldNotBe(capturedPayload.TraceParent);
         capturedPayload.LaneSeq.ShouldBe(4);
-
-        // Both enqueue paths must agree: the gateway may fall back from one to the other.
-        capturedEvent.ShouldNotBeNull();
-        capturedEvent!.TraceRoot.ShouldBe(laneAnchor);
-        capturedEvent.TraceParent.ShouldBe(ambient.Id);
-        capturedEvent.LaneSeq.ShouldBe(capturedPayload.LaneSeq);
     }
 
     [Fact]
@@ -359,12 +400,12 @@ public class EnqueueContinuationStrategyTests
         _mockEnqueueGateway
             .Setup(x => x.EnqueueAsync(
                 It.IsAny<TransitionJobPayload>(),
-                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<Guid>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<TransitionJobPayload, TransitionContinuationRequested, bool, CancellationToken>(
+            .Callback<TransitionJobPayload, Guid, bool, CancellationToken>(
                 (p, _, _, _) => capturedPayload = p)
-            .ReturnsAsync(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
+            .ReturnsAsync(Result<IBackgroundJobArmHandle?>.Ok(null));
 
         await strategy.DispatchAsync(context, CancellationToken.None);
 

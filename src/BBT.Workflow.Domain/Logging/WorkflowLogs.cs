@@ -61,33 +61,6 @@ public static partial class WorkflowLogs
         Guid parentInstanceId,
         Guid subFlowInstanceId,
         string reason);
-
-    /// <summary>
-    /// Logs when a transition continuation event is received by the Inbox handler.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10120,
-        Level = LogLevel.Information,
-        Message = "Transition continuation received for instance {InstanceId} transition {TransitionKey} (job {JobName})")]
-    public static partial void TransitionContinuationReceived(
-        this ILogger logger,
-        Guid instanceId,
-        string transitionKey,
-        string jobName);
-
-    /// <summary>
-    /// Logs when a transition continuation event is ignored due to a domain mismatch.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10121,
-        Level = LogLevel.Debug,
-        Message = "Transition continuation ignored: event domain {EventDomain} does not match runtime domain {RuntimeDomain} (instance {InstanceId})")]
-    public static partial void TransitionContinuationIgnoredDomainMismatch(
-        this ILogger logger,
-        string eventDomain,
-        string runtimeDomain,
-        Guid instanceId);
-
     /// <summary>
     /// Logs when a transition continuation has been enqueued as a Dapr job by the Inbox handler.
     /// </summary>
@@ -100,25 +73,6 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string transitionKey,
         string jobName);
-
-    /// <summary>
-    /// Logs when enqueuing a transition continuation job fails.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10123,
-        Level = LogLevel.Error,
-        Message = "Transition continuation enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}): {Reason}")]
-    public static partial void TransitionContinuationEnqueueFailed(
-        this ILogger logger,
-        Guid instanceId,
-        string transitionKey,
-        string jobName,
-        string reason);
-
-    /// <summary>
-    /// Logs when the direct Dapr enqueue of a chained continuation fails and the strategy
-    /// falls back to publishing the continuation through the transactional outbox.
-    /// </summary>
     /// <summary>
     /// Logs that a persisted transition job was armed in the scheduler after the instance status lock
     /// was released. Debug: one line per accepted async transition, useful when verifying that the
@@ -132,15 +86,39 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid jobId);
 
+    /// <summary>
+    /// Logs a transient scheduler failure that will be retried. Warning, not Error: the retry
+    /// usually absorbs a sidecar restart or a reset connection, and the terminal outcome is logged
+    /// separately by <see cref="TransitionEnqueueFailed"/>.
+    /// </summary>
     [LoggerMessage(
         EventId = 10127,
         Level = LogLevel.Warning,
-        Message = "Direct Dapr enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}); falling back to outbox: {Reason}")]
-    public static partial void TransitionContinuationFellBackToOutbox(
+        Message = "Transition job enqueue attempt {Attempt}/{MaxAttempts} failed for instance {InstanceId} transition {TransitionKey} (job {JobName}), retrying: {Reason}")]
+    public static partial void TransitionEnqueueRetrying(
         this ILogger logger,
+        string jobName,
         Guid instanceId,
         string transitionKey,
+        int attempt,
+        int maxAttempts,
+        string reason);
+
+    /// <summary>
+    /// Logs that every enqueue attempt failed. Error: the durable InstanceJob intent is already
+    /// committed, so nothing will arm it and the caller must fault the instance rather than leave
+    /// it parked in Busy with no owner.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10124,
+        Level = LogLevel.Error,
+        Message = "Transition job enqueue failed for instance {InstanceId} transition {TransitionKey} (job {JobName}) after {MaxAttempts} attempts: {Reason}")]
+    public static partial void TransitionEnqueueFailed(
+        this ILogger logger,
         string jobName,
+        Guid instanceId,
+        string transitionKey,
+        int maxAttempts,
         string reason);
 
     /// <summary>

@@ -179,8 +179,7 @@ public sealed class InstanceControllerRelatedDataTests
             Substitute.For<IInstanceCancellationService>(),
             Substitute.For<IChildSubflowCancellationService>(),
             Substitute.For<IChildSubflowFaultService>(),
-            Substitute.For<ITransitionJobEnqueuer>(),
-            Substitute.For<IInstanceCommandGateway>(),
+                Substitute.For<IInstanceCommandGateway>(),
             Substitute.For<IEventAppService>(),
             relatedInstanceQueryAppService,
             Substitute.For<ICurrentUser>())

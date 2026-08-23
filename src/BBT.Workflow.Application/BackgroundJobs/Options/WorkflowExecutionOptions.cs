@@ -26,21 +26,6 @@ public sealed class WorkflowExecutionOptions
     public AutoTransitionMode AutoTransitionMode { get; set; } = AutoTransitionMode.Inline;
 
     /// <summary>
-    /// Governs how <c>EnqueueContinuationStrategy</c> realizes a chained continuation.
-    /// <para>
-    /// ON (default): enqueue the Dapr job DIRECTLY (no outbox/inbox poll hop) for lower latency;
-    /// if the direct Dapr enqueue fails, fall back to publishing a <c>TransitionContinuationRequested</c>
-    /// event through the transactional outbox so durability is preserved.
-    /// </para>
-    /// <para>
-    /// OFF: always publish the continuation via the transactional outbox (legacy behavior) — fully
-    /// transactional at the cost of the outbox/inbox poll hop.
-    /// </para>
-    /// The durable <c>InstanceJob</c> intent is inserted in the ambient transition UoW in both modes.
-    /// </summary>
-    public bool DirectEnqueueContinuations { get; set; } = true;
-
-    /// <summary>
     /// Lease duration in seconds for the auxiliary transition lock scopes that are NOT the
     /// short status lock — the per-subInstance terminal locks in the SubFlow completion /
     /// fault / cancellation services and the async accept (enqueue) lock. When 0 (default),

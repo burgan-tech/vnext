@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Payloads;
-using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
@@ -9,22 +8,21 @@ using BBT.Workflow.Shared;
 namespace BBT.Workflow.Execution.Continuations;
 
 /// <summary>
-/// Realizes the auto-chain continuation as a SEPARATE background job (transition-per-job).
-/// Instead of running the next transition in-process, it persists a durable job intent
-/// (<see cref="InstanceJob"/>) within the AMBIENT transition unit of work — so "this transition
-/// committed" and "next transition tracked" are atomic — and then delegates the enqueue
-/// decision to <see cref="ITransitionEnqueueGateway"/>.
+/// Realizes the chained continuation as a SEPARATE scheduler job — the
+/// <c>AutoTransitionMode.Scheduled</c> path. Instead of running the next transition in-process, it
+/// persists a durable job intent (<see cref="InstanceJob"/>) within the AMBIENT transition unit of
+/// work — so "this transition committed" and "next transition tracked" are atomic — and then hands
+/// the delivery to <see cref="ITransitionEnqueueGateway"/>.
 /// <para>
-/// How the next hop is enqueued is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
-/// </para>
-/// <list type="bullet">
-/// <item>ON (default): the Dapr job is enqueued DIRECTLY (no outbox/inbox poll hop). If the direct
-/// enqueue fails, the gateway falls back to publishing a <see cref="TransitionContinuationRequested"/>
-/// event through the transactional outbox so durability is preserved.</item>
-/// <item>OFF: a <see cref="TransitionContinuationRequested"/> event is always published through the
-/// transactional outbox; the Inbox handler then performs the real Dapr enqueue.</item>
-/// </list>
 /// Returns Ok(null) to end the in-process loop; a separate job resumes the chain.
+/// </para>
+/// <para>
+/// A failed enqueue is PROPAGATED, never swallowed. The intent has already been written into the
+/// ambient unit of work, and there is no outbox fallback behind the gateway any more, so a swallowed
+/// failure would commit an intent nothing ever arms and strand the instance in Busy with no owner.
+/// Failing here routes the pipeline into <c>MarkInstanceFaultedAsync</c> instead: visible, and
+/// retryable.
+/// </para>
 /// </summary>
 public sealed class EnqueueContinuationStrategy(
     IInstanceJobRepository jobRepository,
@@ -43,8 +41,8 @@ public sealed class EnqueueContinuationStrategy(
             return Result<WorkflowExecutionContext?>.Ok(null);
 
         // Single caller-generated id, reused for the durable InstanceJob.JobId, the underlying
-        // BackgroundJobInfo.Id (direct + outbox paths) AND the job name's invocation segment.
-        // Keeps the three in sync so cancellation-by-id works — no placeholder.
+        // BackgroundJobInfo.Id AND the job name's invocation segment. Keeps the three in sync so
+        // cancellation-by-id works — no placeholder.
         var jobId = Guid.NewGuid();
 
         // Scope by the state the auto-transition fires from (the state just entered) so two
@@ -55,7 +53,6 @@ public sealed class EnqueueContinuationStrategy(
         var sourceStateKey = current.Target?.Key ?? current.Current?.Key ?? string.Empty;
         var jobName = JobName.ForAsyncTransition(
             current.InstanceId, sourceStateKey, next.TransitionKey, jobId);
-        var jobNameValue = jobName.Value;
 
         // Durable intent for the active-job guard / reaper — atomic with the transition commit
         // because we run inside the pipeline's ambient UoW (TransitionRunner).
@@ -74,15 +71,9 @@ public sealed class EnqueueContinuationStrategy(
 
         // The lane anchor is the PARENT of the next hop's span; activity.Id is only its PREDECESSOR
         // and is linked. That split is what makes hop N+1 a sibling of hop N instead of its child.
-        var laneAnchor = WorkflowTraceLane.Current;
-        var laneParent = WorkflowTraceLane.ParentLane;
-        // Computed once: the gateway may fall back from the direct payload to the outbox event, and
-        // incrementing at both sites would hand out the same ordinal twice.
-        var laneSeq = WorkflowTraceLane.NextSeq();
-
-        var directPayload = new TransitionJobPayload
+        var payload = new TransitionJobPayload
         {
-            JobName = jobNameValue,
+            JobName = jobName.Value,
             InstanceId = current.InstanceId,
             TransitionKey = next.TransitionKey,
             Domain = current.Domain,
@@ -95,38 +86,19 @@ public sealed class EnqueueContinuationStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
-            TraceRoot = laneAnchor,
-            ParentTraceRoot = laneParent,
+            TraceRoot = WorkflowTraceLane.Current,
+            ParentTraceRoot = WorkflowTraceLane.ParentLane,
             ChainDepth = current.ChainDepth + 1,
-            LaneSeq = laneSeq,
-            CorrelationId = current.CorrelationId
-        };
-
-        var outboxEvent = new TransitionContinuationRequested
-        {
-            InstanceId = current.InstanceId,
-            Domain = current.Domain,
-            Flow = current.WorkflowKey,
-            Version = current.Workflow.Version,
-            TransitionKey = next.TransitionKey,
-            JobName = jobNameValue,
-            JobId = jobId,
-            Data = null, // chained auto-transitions carry no new request payload
-            Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-            RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-            ExecutionActor = ExecutionActor.System.ToString(),
-            ChainDepth = current.ChainDepth + 1,
-            TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString,
-            TraceRoot = laneAnchor,
-            ParentTraceRoot = laneParent,
-            LaneSeq = laneSeq,
+            LaneSeq = WorkflowTraceLane.NextSeq(),
             CorrelationId = current.CorrelationId
         };
 
         // Auto-chain runs in the pipeline's ambient UoW and holds no status lock, so Aether already
         // defers arming to that UoW's post-commit hook. Nothing to move out here.
-        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken: cancellationToken);
+        var enqueueResult = await enqueueGateway.EnqueueAsync(
+            payload, jobId, cancellationToken: cancellationToken);
+        if (!enqueueResult.IsSuccess)
+            return Result<WorkflowExecutionContext?>.Fail(enqueueResult.Error);
 
         // No in-process next context — a separate job resumes the chain.
         return Result<WorkflowExecutionContext?>.Ok(null);

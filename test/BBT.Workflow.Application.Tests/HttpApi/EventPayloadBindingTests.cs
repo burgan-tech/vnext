@@ -112,7 +112,6 @@ public sealed class EventPayloadBindingTests
             cancellationService: Substitute.For<IInstanceCancellationService>(),
             childSubflowCancellationService: Substitute.For<IChildSubflowCancellationService>(),
             childSubflowFaultService: Substitute.For<IChildSubflowFaultService>(),
-            transitionJobEnqueuer: Substitute.For<ITransitionJobEnqueuer>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             eventAppService: Substitute.For<IEventAppService>(),
             relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
