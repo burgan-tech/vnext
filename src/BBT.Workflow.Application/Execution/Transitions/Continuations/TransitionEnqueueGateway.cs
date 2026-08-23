@@ -63,9 +63,11 @@ public sealed class TransitionEnqueueGateway(
                 payload.JobName, payload.InstanceId, payload.TransitionKey, attempt, MaxAttempts,
                 result.Error.Message ?? result.Error.Code);
 
-            // Linear doubling from a 50ms base. Deliberately not cancellation-silent: a cancelled
-            // token here means the caller is gone, and returning the last error is more honest than
-            // reporting a success that never happened.
+            // Doubling from a 50ms base. Cancellation is allowed to THROW rather than be folded
+            // into a failed Result: a cancelled token means host shutdown or an abandoned request,
+            // and TransitionJobHandler routes OperationCanceledException through recovery. Turning
+            // it into a Result here would instead have EnqueueContinuationStrategy fault the
+            // instance, converting a benign shutdown into a Faulted workflow.
             await Task.Delay(BaseDelayMilliseconds * (1 << (attempt - 1)), cancellationToken);
         }
 
