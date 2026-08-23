@@ -631,8 +631,9 @@ ileride paylaşılan başka parça çıkarsa genişletilir.)
 
 ## Task 7: Mikro yeniden ölçüm
 
-- [ ] `dotnet run -c Release --project test/BBT.Workflow.Benchmarks -- --filter "*AppendPath*|*ParallelBranch*|*InstanceDataAccess*|*AuditSerialize*" --exporters markdown` — tam koşum; `baselines/2026-08-23-master.md`'ye "Katman 2 sonrası" bölümü: önce/sonra tabloları + yorum. NOT: `ParallelBranchBenchmarks.CreateBranch` artık COW-branch üretir — ölçüm "branch yaratma" maliyetidir (yazımsız ≈ konteyner kopyaları); açıklaması yazılır. `AppendPath.Merge` legacy `JsonData.Merge`'i ölçmeye devam eder (hâlâ mevcut ve kill-switch yolu) — yeni yol için `CanonicalizeMerge` benchmark'ı EKLENİR (aynı parametrelerle).
-- [ ] Commit — `docs(benchmarks): Katman 2 micro before/after`
+- [x] `dotnet run -c Release --project test/BBT.Workflow.Benchmarks -- --filter "*AppendPath*|*ParallelBranch*|*InstanceDataAccess*|*AuditSerialize*" --exporters markdown` — tam koşum; `baselines/2026-08-23-master.md`'ye "Katman 2 sonrası" bölümü: önce/sonra tabloları + yorum. NOT: `ParallelBranchBenchmarks.CreateBranch` artık COW-branch üretir — ölçüm "branch yaratma" maliyetidir (yazımsız ≈ konteyner kopyaları); açıklaması yazılır. `AppendPath.Merge` legacy `JsonData.Merge`'i ölçmeye devam eder (hâlâ mevcut ve kill-switch yolu) — yeni yol için `CanonicalizeMerge` benchmark'ı EKLENİR (aynı parametrelerle).
+  (`|` birleştirme BenchmarkDotNet'te 0 sonuç döndürdüğü keşfedildi — her desen ayrı `--filter` argümanı olarak verildi.)
+- [x] Commit — `docs(benchmarks): Katman 2 micro before/after`
 
 ---
 
