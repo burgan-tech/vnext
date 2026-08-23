@@ -137,23 +137,44 @@ public sealed class StandardTaskResponse
 /// </remarks>
 public sealed class ScriptTransitionRequest
 {
+    private readonly Lazy<dynamic?> _data;
+    private readonly Lazy<dynamic?> _header;
+
     /// <summary>
     /// Original transition request body (dynamic, typically ExpandoObject from JSON).
+    /// Materialized on first access (B10c) — see the lazy constructor.
     /// </summary>
-    public dynamic? Data { get; }
+    public dynamic? Data => _data.Value;
 
     /// <summary>
     /// Original transition request headers with all keys normalized to lowercase.
+    /// Materialized on first access (B10c) — see the lazy constructor.
     /// </summary>
-    public dynamic? Header { get; }
+    public dynamic? Header => _header.Value;
 
     /// <summary>
-    /// Creates a new instance with the given data and header.
+    /// Creates a new instance with already-materialized data and header.
     /// </summary>
     public ScriptTransitionRequest(dynamic? data, dynamic? header)
     {
-        Data = data;
-        Header = header;
+        _data = new Lazy<dynamic?>(() => data);
+        _header = new Lazy<dynamic?>(() => header);
+    }
+
+    /// <summary>
+    /// B10c: creates a new instance that defers materializing Data/Header until first accessed.
+    /// <see cref="ScriptContextBuilder"/> uses this to avoid parsing the persisted transition
+    /// body/header <see cref="JsonElement"/>s into dynamic <c>ExpandoObject</c> graphs on every
+    /// <c>ScriptContext</c> build — most builds never read <see cref="ScriptContext.CurrentTransition"/>.
+    /// Thread-safe: <see cref="Lazy{T}"/>'s default execution mode ensures a factory runs at most
+    /// once even when accessed concurrently from parallel branches sharing this instance.
+    /// </summary>
+    public ScriptTransitionRequest(Func<dynamic?> dataFactory, Func<dynamic?> headerFactory)
+    {
+        ArgumentNullException.ThrowIfNull(dataFactory);
+        ArgumentNullException.ThrowIfNull(headerFactory);
+        _data = new Lazy<dynamic?>(dataFactory);
+        _header = new Lazy<dynamic?>(headerFactory);
     }
 }
 
@@ -183,6 +204,25 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
 
     private bool _disposed;
 
+    /// <summary>COW branch parts: what the branch has copied for itself on first write.</summary>
+    [Flags]
+    private enum OwnedParts
+    {
+        None = 0,
+        Body = 1
+    }
+
+    /// <summary>
+    /// Null ⇒ this context is not a COW branch (root or legacy-built). On a branch it points at
+    /// the parent; it is held ONLY for ownership/dispose decisions — there is never a write back
+    /// to the parent through it. The dictionaries (TaskResponse/OutputResponse/MetaData/
+    /// Definitions) are container-copied at branch creation (values shared by reference), so the
+    /// single COW-guarded part is <see cref="Body"/>.
+    /// </summary>
+    private ScriptContext? _cowParent;
+
+    private OwnedParts _owned;
+
     protected virtual void Dispose(bool disposing)
     {
         if (_disposed)
@@ -192,6 +232,10 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         {
             try
             {
+                // On a COW branch these are the branch's OWN container copies (made at
+                // CreateParallelBranch), so clearing them never touches the parent. The field
+                // assignments below only drop this context's references — a shared (not owned)
+                // Body object itself is left alone, the parent keeps its reference.
                 TaskResponse.Clear();
                 OutputResponse.Clear();
                 MetaData.Clear();
@@ -204,8 +248,10 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 Incident = null;
 
                 // Backing field, not the property: the property getter throws once disposed, and
-                // Dispose must stay callable twice.
-                if (_related is RelatedInstanceAccessor accessor)
+                // Dispose must stay callable twice. Branch-gated: RelatedInstanceAccessor.ForBranch
+                // SHARES the memo with the parent context, so a branch clearing it would evict the
+                // parent's memo — only a non-branch context owns (and may clear) it.
+                if (_cowParent is null && _related is RelatedInstanceAccessor accessor)
                     accessor.ClearMemo();
 
                 _related = NullRelatedInstanceAccessor.Instance;
@@ -633,12 +679,24 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// <param name="jsonOptions">The JSON serialization options to use.</param>
     private dynamic? MergeToBody(object? content, JsonSerializerOptions jsonOptions)
     {
-        var newValue = ToDynamic(content, jsonOptions);
+        // If the content is already ToDynamic-shaped (Expando/List/leaf) the serialize+parse
+        // round-trip adds nothing — but it must NEVER be aliased into Body either: the input may
+        // be the memoized Instance.Data tree, and ExpandoObjectMergeStrategy mutates its merge
+        // target in place, so an alias would corrupt instance data. A structural clone gives the
+        // round-trip's isolation without its cost (B10d, the safe variant): later mutations of
+        // the source never reach Body, and Body merges never reach the source.
+        var newValue = content is ExpandoObject or List<object?>
+            ? DynamicCloner.DeepClone(content)
+            : ToDynamic(content, jsonOptions);
 
         if (newValue == null)
         {
             return null;
         }
+
+        // COW branch: the first Body write copies the parent-shared tree so the in-place merge
+        // below stays private to this branch.
+        EnsureBodyOwned();
 
         // Use ObjectMerger for all merge operations - handles arrays, objects, and mixed types
         Body = ObjectMerger.MergeValues(Body, newValue);
@@ -646,8 +704,27 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     }
 
     /// <summary>
-    /// Creates a private execution copy for a parallel task branch. Mutable collections and the
-    /// instance snapshot are copied so concurrent mappings never write to the caller's context.
+    /// Copy-on-write guard for <see cref="Body"/>: on a branch whose Body is still the
+    /// parent-shared reference, replaces it with a structural deep clone before the first write.
+    /// No-op on non-branch contexts and on branches that already own their Body.
+    /// </summary>
+    private void EnsureBodyOwned()
+    {
+        if (_cowParent is null || _owned.HasFlag(OwnedParts.Body))
+            return;
+
+        Body = DynamicCloner.DeepClone(Body);
+        _owned |= OwnedParts.Body;
+    }
+
+    /// <summary>
+    /// Creates a private execution copy for a parallel task branch, copy-on-write style (B6):
+    /// <see cref="Body"/> is SHARED by reference until the branch's first Body write copies it
+    /// (<see cref="EnsureBodyOwned"/> inside the MergeToBody funnel); the response dictionaries
+    /// are container-copied (branch adds/overwrites stay private) with their VALUES shared by
+    /// reference — an accepted visibility trade-off recorded in vnext-meta migrations: in-place
+    /// mutation of a pre-existing response value inside a branch is visible to the parent.
+    /// Concurrent mappings still never write into a parent-shared structure.
     /// </summary>
     public ScriptContext CreateParallelBranch()
     {
@@ -655,24 +732,30 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
 
         var branch = new ScriptContext(logger)
         {
-            Body = CloneDynamic(Body),
+            // Shared until first write — MergeToBody's EnsureBodyOwned copies it on the branch.
+            Body = Body,
             // Headers/RouteValues/QueryParameters are transport metadata, NOT user payload — they
             // are cloned type-preservingly, deliberately not through CloneDynamic. See
             // CloneTransportMetadata for why collapsing these back into CloneDynamic breaks scripts.
             Headers = CloneTransportMetadata(Headers),
             RouteValues = CloneTransportMetadata(RouteValues),
             QueryParameters = CloneTransportMetadata(QueryParameters),
-            EventPayload = CloneDynamic(EventPayload),
+            // Read-only for mappings (no writer funnel besides the Builder) — safe to share.
+            EventPayload = EventPayload,
             RawBody = RawBody,
             Instance = Instance?.CreateSnapshot(),
             Workflow = Workflow,
             Runtime = Runtime,
             Transition = Transition,
             CurrentTransition = CurrentTransition,
-            Definitions = new Dictionary<string, dynamic>(Definitions),
-            TaskResponse = CloneDictionary(TaskResponse),
-            OutputResponse = CloneDictionary(OutputResponse),
-            MetaData = CloneMetadata(MetaData)
+            // Container copies, values shared; ComparerOf keeps a non-default key comparer alive
+            // (today these are plain default-comparer dictionaries — behavior unchanged).
+            Definitions = new Dictionary<string, dynamic>(Definitions, ComparerOf(Definitions)),
+            TaskResponse = new Dictionary<string, dynamic?>(TaskResponse, ComparerOf(TaskResponse)),
+            OutputResponse = new Dictionary<string, dynamic?>(OutputResponse, ComparerOf(OutputResponse)),
+            MetaData = new Dictionary<string, dynamic>(MetaData, ComparerOf(MetaData)),
+            _cowParent = this,
+            _owned = OwnedParts.None
         };
 
         if (branch.Instance != null)
@@ -754,19 +837,6 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         }
     }
 
-    private static Dictionary<string, dynamic?> CloneDictionary(
-        IEnumerable<KeyValuePair<string, dynamic?>> source)
-    {
-        var clone = new Dictionary<string, dynamic?>();
-        foreach (var (key, value) in source)
-            clone.Add(key, CloneDynamic(value));
-        return clone;
-    }
-
-    private static Dictionary<string, dynamic> CloneMetadata(
-        IEnumerable<KeyValuePair<string, dynamic>> source) =>
-        source.ToDictionary(pair => pair.Key, pair => (dynamic)CloneDynamic(pair.Value)!);
-
     private void MergeMetadata(Dictionary<string, dynamic> source)
     {
         foreach (var (key, value) in source)
@@ -782,9 +852,18 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         }
     }
 
-    private static dynamic? CloneDynamic(object? value) => value == null
-        ? null
-        : ToDynamic(value, JsonScriptBodyOptions);
+    /// <summary>
+    /// Clones a dynamic value for isolation. ToDynamic-shaped graphs (Expando/List) take the
+    /// structural <see cref="DynamicCloner"/> path — no JSON round-trip; anything else (anonymous
+    /// objects, POCOs, dictionaries) keeps the legacy serialize+parse so the result still lands in
+    /// the member-accessible camelCased expando shape scripts expect.
+    /// </summary>
+    private static dynamic? CloneDynamic(object? value) => value switch
+    {
+        null => null,
+        ExpandoObject or List<object?> => DynamicCloner.DeepClone(value),
+        _ => ToDynamic(value, JsonScriptBodyOptions)
+    };
 
     /// <summary>
     /// Clones <see cref="Headers"/> / <see cref="RouteValues"/> / <see cref="QueryParameters"/> for a
@@ -839,9 +918,22 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             ? concrete.Comparer
             : EqualityComparer<string>.Default;
 
-    private static bool JsonEquivalent(object? left, object? right) =>
-        JsonSerializer.Serialize(left, JsonScriptBodyOptions) ==
-        JsonSerializer.Serialize(right, JsonScriptBodyOptions);
+    /// <summary>
+    /// B7: when both sides are already parsed <see cref="JsonElement"/> (the common case for task
+    /// response/output/metadata values, which flow through <see cref="JsonData.JsonElement"/>),
+    /// compares them structurally via <see cref="JsonElement.DeepEquals"/> instead of serializing
+    /// both sides to strings. Expando/POCO inputs stay on the legacy serialize-and-compare path:
+    /// converting them to <see cref="JsonElement"/> first would cost two SerializeToElement calls,
+    /// which is not cheaper than the two Serialize calls it would replace.
+    /// </summary>
+    private static bool JsonEquivalent(object? left, object? right)
+    {
+        if (left is JsonElement le && right is JsonElement re)
+            return JsonElement.DeepEquals(le, re);
+
+        return JsonSerializer.Serialize(left, JsonScriptBodyOptions) ==
+               JsonSerializer.Serialize(right, JsonScriptBodyOptions);
+    }
 
     public sealed class Builder(ILogger<ScriptContext> logger)
     {

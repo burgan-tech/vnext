@@ -514,10 +514,17 @@ public sealed class PrometheusWorkflowMetrics : IWorkflowMetrics
             .Inc();
     }
 
-    public void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds)
+    public void RecordScriptCompilation(string result, string status)
+    {
+        WorkflowMetrics.ScriptCompilations
+            .WithLabels(result, status)
+            .Inc();
+    }
+
+    public void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds, string cache = "unknown")
     {
         WorkflowMetrics.ScriptCompilationDuration
-            .WithLabels(scriptType, language, status)
+            .WithLabels(scriptType, language, status, cache)
             .Observe(durationSeconds);
     }
 

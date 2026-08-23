@@ -11,6 +11,24 @@ namespace BBT.Workflow.Scripting;
 /// </summary>
 public interface IScriptEngine : IScriptCompiler
 {
+    /// <summary>
+    /// Compiles (or cache-hits) the mapping once and returns a factory producing a FRESH,
+    /// service-injected instance per call. Compile-time behaviour and metrics are identical to
+    /// <see cref="IScriptCompiler.CompileToInstanceAsync{T}(ScriptCode, ScriptSettings?, IEnumerable{MetadataReference}?, IEnumerable{string}?, CancellationToken)"/> —
+    /// this exists so a caller invoking the same mapping across multiple phases (e.g. input mapping
+    /// then output mapping) pays the engine exactly once instead of once per phase.
+    /// </summary>
+    /// <typeparam name="T">The target type to compile the code into.</typeparam>
+    /// <param name="scriptCode">The mapping script (code/encoding, optional <c>scripts</c> settings).</param>
+    /// <param name="flowScripts">Optional flow-level (workflow) script settings, unioned with the
+    /// mapping-level <c>scripts</c> (helpers concatenated/deduped, allowed assemblies merged).</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>A task containing a factory that produces a fresh, service-injected instance of
+    /// type <typeparamref name="T"/> on every call.</returns>
+    Task<Func<T>> CompileToFactoryAsync<T>(
+        ScriptCode scriptCode,
+        ScriptSettings? flowScripts = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

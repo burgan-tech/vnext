@@ -137,6 +137,38 @@ public sealed class InstanceDataWriteOptions
     /// Default: 10000ms (POC parity).
     /// </summary>
     public int StatementTimeoutMs { get; set; } = 10000;
+
+    /// <summary>
+    /// Kill-switch: true ⇒ append uses the old multi-pass path (<c>JsonData.Merge</c> →
+    /// <c>NormalizedJson</c> → <c>ComputeDataHash</c>). The new default path merges, canonicalizes,
+    /// and hashes in a single <c>Utf8JsonWriter</c> pass via <c>JsonCanonicalizer</c>, byte-parity
+    /// proven against the old path. Flip to true as a rollback safety net if the single-pass path
+    /// ever misbehaves in production. Default: false. Removal is a future version's work.
+    /// </summary>
+    public bool LegacyAppendPipeline { get; set; }
+
+    /// <summary>
+    /// Opt-in: true ⇒ append canonicalizes numbers losslessly (integers that fit <c>int64</c>
+    /// round-trip exactly; decimals that fit <c>decimal</c> are written in plain, trailing-zero-free
+    /// form). Default (false) preserves historical behavior across three affected classes:
+    /// precision loss beyond <c>int32</c>/15-16 significant digits, exponent notation for small
+    /// magnitudes (e.g. <c>0.00001</c> stays exponential instead of the plain form), and fractional
+    /// negative zero (<c>-0.0</c> stays <c>-0.0</c> instead of normalizing to <c>0</c>). Values
+    /// beyond <c>decimal</c>'s ~28-29 significant digits still fall back to <c>double</c> and are
+    /// still rounded under either setting — this flag narrows, but does not eliminate, that case.
+    /// Runtime cost is nil — the merge runs through
+    /// <see cref="BBT.Workflow.Shared.Merging.JsonCanonicalizer"/> either way and only the
+    /// number-formatting policy handed to it changes. What flipping this DOES cost is a one-time
+    /// content-hash change, per instance, on that instance's next append: an instance holding a
+    /// value in any of the three classes above hashes differently than it did, which yields one
+    /// extra version row and one phantom diff in Monitor for it. No data is lost and no stored row
+    /// is rewritten; turning the flag back off restores the previous hashes. Default: false.
+    /// <para>
+    /// <see cref="LegacyAppendPipeline"/> true ⇒ this flag is IGNORED: the kill-switch path
+    /// restores historical behavior verbatim and is deliberately untouched by it.
+    /// </para>
+    /// </summary>
+    public bool PreserveNumericPrecision { get; set; }
 }
 
 /// <summary>
