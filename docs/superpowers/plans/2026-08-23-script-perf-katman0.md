@@ -25,6 +25,7 @@
 | 8 Mikro baseline | ✅ 5/5 suite | `d73d3d87` | Server GC konsol-doğrulamalı; LOH varyans notu baseline'da |
 | 9 Kapanış | ✅ | — | Build temiz; Domain+Infra isim-diff'i master worktree'e karşı BOŞ (yeni failure yok); App.Tests Task 4'te stash-diff'le doğrulandı |
 | **Katman 1 (compiler hit-yolu)** | ✅ | vnext `9264f03f..86b9dcf8` + benchmark `ef260144`; vnext-example `2b0473a` | Identity yolu 1.67µs/8.67KB (düz); makro: 4KB p50 -16%, 16KB p95 -22%, hit 33→23, miss=+0; hotfix-bekçi canlı kanıtlı (exact-vs-floating semantiği koddan netleşti: TAM versiyon exact, kısmi floating) |
+| **Katman 2 (serialization/ScriptContext)** | ✅ | vnext `563b69fa..fd91e904`+ölçüm; vnext-example `ac9c69e` | Mikro: branch 1.29ms/1.7MB→102ns/992B, canonicalizer -66%/-41%; Makro: soğuk -33% (1.08s), Orch alloc -10.4%, LOH -15%, pause -35% (baseline'a göre); latency K1↔K2 gürültü-bandı; 37/37 integration + kill-switch canlı; miss=+0. Dürüst bulgu: kalan ~7.2GB'ın sahipleri başka yollar → K3 kararı için allocation-profiling işareti |
 | **Faz A (makro baseline)** | ✅ | vnext-example `feature/script-perf-lab` @ `b897518` (worktree `.worktrees/script-perf-lab`) | script-perf-lab akışı + perf-load + integration 1/1; DI smoke 4/4; cold 1.62s; sıcak p95 5.93s(4KB)/8.02s(16KB), miss=+0; Orch 8.1GB alloc/~70s. CS0012 fixture kök-neden düzeltmesi `013189a`. Spec §5 makro maddesi karşılandı. |
 
 **Bilinen ölçüm asimetrileri (final review notu):** `status="failure"` süreleri yalnız task hunilerinde
