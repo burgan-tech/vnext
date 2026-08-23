@@ -156,6 +156,10 @@ public sealed class ScriptCode : ValueObject
     /// SHA-256 hex of <see cref="DecodedCode"/>, computed once per instance. Content-derived —
     /// safe as a cache-identity component regardless of how this instance was materialized
     /// (fresh deserialization per read included). Empty-source scripts hash the empty string.
+    /// NOT a unique identity for <see cref="CodeEncoding.Reference"/> or <see cref="MappingType.Global"/>
+    /// instances — their <see cref="DecodedCode"/> is empty, so they ALL share the empty-string hash;
+    /// callers needing per-source identity must special-case <see cref="IsReference"/> (hash the
+    /// resolved body instead, as the script engine does) and never key on a Global's hash.
     /// Benign race: concurrent first accesses may compute twice and publish the same value.
     /// </summary>
     [JsonIgnore]

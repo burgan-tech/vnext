@@ -223,5 +223,18 @@ public class ScriptCodeTests
         // convention (see Equals_ShouldReturnTrue_WhenPropertiesAreSame) — not Assert.Equal.
         Assert.True(x.ValueEquals(y)); // GetAtomicValues memo alanlarını içermez
     }
+
+    [Fact]
+    public void ContentHash_ForGlobalAndReference_IsSharedEmptyStringHash_ByDesign()
+    {
+        // DecodedCode boş olduğundan Global ve Reference instance'ları AYNI hash'i paylaşır —
+        // ContentHash bu yollarda kimlik DEĞİLDİR (XML doc'ta pinli; engine REF'te gövdeyi hash'ler).
+        var emptyHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Array.Empty<byte>()));
+        var global = new ScriptCode("loc", "ignored", MappingType.Global, CodeEncoding.Native);
+        var reference = ScriptCode.FromReference(new Reference("some-helper", "core", "sys-mappings", "1.0.0"));
+
+        Assert.Equal(emptyHash, global.ContentHash);
+        Assert.Equal(emptyHash, reference.ContentHash);
+    }
 }
 
