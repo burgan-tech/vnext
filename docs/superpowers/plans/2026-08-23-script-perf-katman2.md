@@ -551,7 +551,7 @@ ileride paylaşılan başka parça çıkarsa genişletilir.)
 - Modify: `src/BBT.Workflow.Domain/Scripting/Factory/Services/ScriptContextBuilder.cs` (L254-262)
 - Test: mevcut dosyalara ekleme
 
-- [ ] **Step 1: B7** — `JsonEquivalent` fast-path:
+- [x] **Step 1: B7** — `JsonEquivalent` fast-path:
 
 ```csharp
     private static bool JsonEquivalent(object? left, object? right)
@@ -565,9 +565,9 @@ ileride paylaşılan başka parça çıkarsa genişletilir.)
 
 (Expando girdilerinde eski yol kalır — DeepEquals'a çevirmek İKİ SerializeToElement ister, kazanç yok; yorumla belirt.)
 
-- [ ] **Step 2: B10c** — `ScriptContextBuilder`: `SetCurrentTransition(BuildScriptTransitionRequest())` eager çağrısı yerine `ScriptTransitionRequest`'in alanlarını lazy taşıyan yapı. `ScriptTransitionRequest`'in tipini/tüketicisini ÖNCE oku (`grep -rn "ScriptTransitionRequest" src/ --include="*.cs"`): script'ler `context.CurrentTransition.Data/Header` okur — record ise `Lazy<dynamic>` alanlı eşdeğer sınıfa çevirmek script sözleşmesini (üye adları/dynamic erişim) DEĞİŞTİRMEMELİ. En az riskli şekil: `ScriptTransitionRequest` sınıfına lazy-ctor eklemek (`Func<dynamic> dataFactory, Func<dynamic> headerFactory` alan; `Data`/`Header` property'leri ilk erişimde üretir). Builder factory'leri kapatır; `_instanceTransition` null ise mevcut davranış aynen.
-- [ ] **Step 3: Testler** — B7: JsonElement çiftiyle eşdeğerlik/farklılık (DeepEquals yolunun kullanıldığı davranışsal olarak aynı kalır — mevcut Merge çakışma testleri yeşil); B10c: CurrentTransition'a erişilMEyen context kurulumunda `Body.JsonElement.ToDynamic` çağrılmadığını mock/sayaçla pinlemek zor — pragmatik test: erişimde doğru Data/Header dönmesi + lazy'nin yalnız ilk erişimde koşması (factory çağrı sayacı).
-- [ ] **Step 4: Commit** — `perf(scripting): DeepEquals fast-path and lazy current-transition materialization`
+- [x] **Step 2: B10c** — `ScriptContextBuilder`: `SetCurrentTransition(BuildScriptTransitionRequest())` eager çağrısı yerine `ScriptTransitionRequest`'in alanlarını lazy taşıyan yapı. `ScriptTransitionRequest`'in tipini/tüketicisini ÖNCE oku (`grep -rn "ScriptTransitionRequest" src/ --include="*.cs"`): script'ler `context.CurrentTransition.Data/Header` okur — record ise `Lazy<dynamic>` alanlı eşdeğer sınıfa çevirmek script sözleşmesini (üye adları/dynamic erişim) DEĞİŞTİRMEMELİ. En az riskli şekil: `ScriptTransitionRequest` sınıfına lazy-ctor eklemek (`Func<dynamic> dataFactory, Func<dynamic> headerFactory` alan; `Data`/`Header` property'leri ilk erişimde üretir). Builder factory'leri kapatır; `_instanceTransition` null ise mevcut davranış aynen.
+- [x] **Step 3: Testler** — B7: JsonElement çiftiyle eşdeğerlik/farklılık (DeepEquals yolunun kullanıldığı davranışsal olarak aynı kalır — mevcut Merge çakışma testleri yeşil); B10c: CurrentTransition'a erişilMEyen context kurulumunda `Body.JsonElement.ToDynamic` çağrılmadığını mock/sayaçla pinlemek zor — pragmatik test: erişimde doğru Data/Header dönmesi + lazy'nin yalnız ilk erişimde koşması (factory çağrı sayacı).
+- [x] **Step 4: Commit** — `perf(scripting): DeepEquals fast-path and lazy current-transition materialization`
 
 ---
 

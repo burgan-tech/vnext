@@ -160,6 +160,45 @@ public class ScriptContextCowBranchTests
     }
 
     /// <summary>
+    /// B7: JsonEquivalent's JsonElement fast-path (JsonElement.DeepEquals) must reach the same
+    /// no-conflict verdict as the legacy serialize-and-compare path for two structurally identical
+    /// documents — including when their property order differs, since DeepEquals compares object
+    /// members regardless of declaration order. Both sides of the comparison are seeded as raw
+    /// JsonElement directly on the dictionaries (bypassing CloneDynamic, which would otherwise
+    /// round-trip a JsonElement into an ExpandoObject on first merge) so the fast path — which
+    /// requires BOTH operands to still be JsonElement — is actually exercised, not the legacy
+    /// fallback.
+    /// </summary>
+    [Fact]
+    public void MergeParallelBranch_JsonElementValues_StructurallyEquivalent_NoConflict()
+    {
+        var parent = ParentContext();
+        parent.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":1,"b":[1,2,3]}""").RootElement;
+
+        var branch = parent.CreateParallelBranch();
+        // Same content, different property order — DeepEquals must still consider these equal.
+        branch.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"b":[1,2,3],"a":1}""").RootElement;
+
+        Should.NotThrow(() => parent.MergeParallelBranch(branch));
+    }
+
+    /// <summary>
+    /// B7: the fast-path must still detect genuine differences — the conflict contract is not
+    /// weakened by swapping the comparison mechanism.
+    /// </summary>
+    [Fact]
+    public void MergeParallelBranch_JsonElementValues_StructurallyDifferent_Conflicts()
+    {
+        var parent = ParentContext();
+        parent.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":1}""").RootElement;
+
+        var branch = parent.CreateParallelBranch();
+        branch.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":2}""").RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranch(branch));
+    }
+
+    /// <summary>
     /// The COW safety argument rests on Body writes funneling through <c>MergeToBody</c> and the
     /// dictionaries being container-copied at branch creation. If the public mutation surface of
     /// <see cref="ScriptContext"/> grows, this snapshot fails and the new writer must be reviewed

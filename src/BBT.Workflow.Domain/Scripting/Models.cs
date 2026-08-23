@@ -137,23 +137,44 @@ public sealed class StandardTaskResponse
 /// </remarks>
 public sealed class ScriptTransitionRequest
 {
+    private readonly Lazy<dynamic?> _data;
+    private readonly Lazy<dynamic?> _header;
+
     /// <summary>
     /// Original transition request body (dynamic, typically ExpandoObject from JSON).
+    /// Materialized on first access (B10c) — see the lazy constructor.
     /// </summary>
-    public dynamic? Data { get; }
+    public dynamic? Data => _data.Value;
 
     /// <summary>
     /// Original transition request headers with all keys normalized to lowercase.
+    /// Materialized on first access (B10c) — see the lazy constructor.
     /// </summary>
-    public dynamic? Header { get; }
+    public dynamic? Header => _header.Value;
 
     /// <summary>
-    /// Creates a new instance with the given data and header.
+    /// Creates a new instance with already-materialized data and header.
     /// </summary>
     public ScriptTransitionRequest(dynamic? data, dynamic? header)
     {
-        Data = data;
-        Header = header;
+        _data = new Lazy<dynamic?>(() => data);
+        _header = new Lazy<dynamic?>(() => header);
+    }
+
+    /// <summary>
+    /// B10c: creates a new instance that defers materializing Data/Header until first accessed.
+    /// <see cref="ScriptContextBuilder"/> uses this to avoid parsing the persisted transition
+    /// body/header <see cref="JsonElement"/>s into dynamic <c>ExpandoObject</c> graphs on every
+    /// <c>ScriptContext</c> build — most builds never read <see cref="ScriptContext.CurrentTransition"/>.
+    /// Thread-safe: <see cref="Lazy{T}"/>'s default execution mode ensures a factory runs at most
+    /// once even when accessed concurrently from parallel branches sharing this instance.
+    /// </summary>
+    public ScriptTransitionRequest(Func<dynamic?> dataFactory, Func<dynamic?> headerFactory)
+    {
+        ArgumentNullException.ThrowIfNull(dataFactory);
+        ArgumentNullException.ThrowIfNull(headerFactory);
+        _data = new Lazy<dynamic?>(dataFactory);
+        _header = new Lazy<dynamic?>(headerFactory);
     }
 }
 
@@ -897,9 +918,22 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             ? concrete.Comparer
             : EqualityComparer<string>.Default;
 
-    private static bool JsonEquivalent(object? left, object? right) =>
-        JsonSerializer.Serialize(left, JsonScriptBodyOptions) ==
-        JsonSerializer.Serialize(right, JsonScriptBodyOptions);
+    /// <summary>
+    /// B7: when both sides are already parsed <see cref="JsonElement"/> (the common case for task
+    /// response/output/metadata values, which flow through <see cref="JsonData.JsonElement"/>),
+    /// compares them structurally via <see cref="JsonElement.DeepEquals"/> instead of serializing
+    /// both sides to strings. Expando/POCO inputs stay on the legacy serialize-and-compare path:
+    /// converting them to <see cref="JsonElement"/> first would cost two SerializeToElement calls,
+    /// which is not cheaper than the two Serialize calls it would replace.
+    /// </summary>
+    private static bool JsonEquivalent(object? left, object? right)
+    {
+        if (left is JsonElement le && right is JsonElement re)
+            return JsonElement.DeepEquals(le, re);
+
+        return JsonSerializer.Serialize(left, JsonScriptBodyOptions) ==
+               JsonSerializer.Serialize(right, JsonScriptBodyOptions);
+    }
 
     public sealed class Builder(ILogger<ScriptContext> logger)
     {
