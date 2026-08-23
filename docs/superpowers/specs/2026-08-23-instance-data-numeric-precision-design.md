@@ -127,11 +127,23 @@ iki modda **aynı metni** üretir; kanonik formun (aynı değer → aynı hash) 
 
 ## 6. Başarı kriterleri
 
-- [ ] `Legacy` modunda mevcut tüm parite testleri değişmeden yeşil.
-- [ ] "PreservePrecision == Legacy (sıradan değerler)" invaryant testi yeşil.
-- [ ] Bozuk küme beklenti tablosu yeşil; hash'ler gerçek `ComputeDataHash` ile uyumlu.
-- [ ] İki flag'in etkileşimi testli; default davranış değişmemiş (regresyon: isim-diff temiz).
-- [ ] `known-issues.json` kaydı yazılı; flag XML doc'u hash etkisini söylüyor.
+- [x] `Legacy` modunda mevcut tüm parite testleri değişmeden yeşil.
+- [x] "PreservePrecision == Legacy (sıradan değerler)" invaryant testi yeşil.
+- [x] Bozuk küme beklenti tablosu yeşil; hash'ler gerçek `ComputeDataHash` ile uyumlu.
+- [x] İki flag'in etkileşimi testli; default davranış değişmemiş (regresyon: isim-diff temiz).
+- [x] `known-issues.json` kaydı yazılı; flag XML doc'u hash etkisini söylüyor.
+
+**Doğrulama kanıtı (2026-08-24):**
+
+- Parite: `dotnet test test/BBT.Workflow.Domain.Tests --filter JsonCanonicalizer` → 61/61 yeşil
+  (33 önceki parite + 25 sayı-politikası + 1 sıradan-havuz invaryantı + 2 negatif-sıfır korpus vakası).
+- Regresyon isim-diff'i: Domain 27 / Infrastructure 11 / Application 20 failure — master ve K2
+  baseline'larıyla **tam küme eşitliği** (yeni isim 0, kaybolan isim 0).
+- Canlı flag doğrulaması, aynı akış + aynı payload ile iki yönlü:
+  `WorkflowExecution__InstanceDataWrite__PreserveNumericPrecision=true` → `1234567890123456.78`;
+  env değişkeni kaldırılınca → `1234567890123456.8`. Yani config yolu bağlanıyor, default davranış
+  değişmemiş ve flag gerçekten append kanonikleştirmesini çeviriyor. script-perf-lab integration
+  testi her iki konumda da yeşil.
 
 ## 7. Riskler
 

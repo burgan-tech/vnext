@@ -403,10 +403,26 @@ ve yeni yardımcı:
 
 ## Task 4: Kapanış
 
-- [ ] **Step 1: İsim-diff** — Domain + Infrastructure + Application suite'leri; scratchpad'deki master baseline'larıyla isim karşılaştırması (yeni failure ismi = regresyon).
-- [ ] **Step 2: Flag'in canlı doğrulaması (opsiyonel ama önerilir)** — 4 app ayaktaysa: orchestration+execution'ı `WorkflowExecution__InstanceDataWrite__PreserveNumericPrecision=true` ile yeniden kaldır, script-perf-lab integration testini koş (yeşil kalmalı), sonra normale dön. Kanıt: flag'in config yolu çalışıyor ve akışı bozmuyor.
-- [ ] **Step 3: Spec §6 kriterlerini işaretle**; plan durum notu; memory güncellemesi (kontrolör).
-- [ ] **Step 4: Commit** — `docs(superpowers): numeric precision closure`
+- [x] **Step 1: İsim-diff** — Domain + Infrastructure + Application suite'leri; scratchpad'deki master baseline'larıyla isim karşılaştırması (yeni failure ismi = regresyon).
+- [x] **Step 2: Flag'in canlı doğrulaması (opsiyonel ama önerilir)** — 4 app ayaktaysa: orchestration+execution'ı `WorkflowExecution__InstanceDataWrite__PreserveNumericPrecision=true` ile yeniden kaldır, script-perf-lab integration testini koş (yeşil kalmalı), sonra normale dön. Kanıt: flag'in config yolu çalışıyor ve akışı bozmuyor.
+- [x] **Step 3: Spec §6 kriterlerini işaretle**; plan durum notu; memory güncellemesi (kontrolör).
+- [x] **Step 4: Commit** — `docs(superpowers): numeric precision closure`
+
+### Durum: TAMAMLANDI (2026-08-24)
+
+| Task | Commit | Not |
+|---|---|---|
+| 1 — `JsonNumberPolicy` + sayı yazımı | `c5fc371b` (+ `c88f30b3`, `ac6dbb47`) | Legacy'nin `long.MaxValue` için gerçekten `9.223372036854776E+18` ürettiği ölçülüp spec tablosu düzeltildi; negatif sıfırın 4 üretici stilinde de sapabildiği bulundu. |
+| 2 — Flag + write-service bağlama | `7e96efed` (+ `4d06177e`) | XML doc, "tek fazladan hash" yerine gerçek maliyeti (instance başına bir kerelik hash değişimi → bir ekstra versiyon satırı + Monitor'da bir hayalet diff) anlatacak şekilde yeniden yazıldı; zayıf `ShouldContain` yerine tam-token `AmountToken(...)`. |
+| 3 — Rastgele üreticiyi havuzlara ayır + known-issues | `564b1070` | `SignFor(rng, isZero)` negatif sıfırı yapısal olarak eliyor (stil stil yamamak yerine). |
+| 3b — Korpus düzeltmesi (review bulgusu) | `4d51989d` | `SignFor` `All` havuzundan da ondalıklı/üstel negatif sıfırı düşürdüğü için legacy davranışı sabit korpus vakasıyla yeniden pinlendi. |
+
+**Canlı doğrulama iki yönlü yapıldı** (aynı akış, aynı payload): flag ON → `1234567890123456.78`,
+flag kaldırılınca → `1234567890123456.8`. Kanıt ayrıntısı spec §6'da.
+
+**Bilinçli olarak yapılmadı:** `ExpandoObjectJsonConverter.Read` (yani legacy append hattı ve
+script tarafındaki Expando dönüşümü) dokunulmadı — kullanıcı kararı. Yani bu flag **sadece** yeni
+tek-geçişli append yolunu düzeltir; `LegacyAppendPipeline=true` iken hassasiyet flag'i yok sayılır.
 
 ---
 
