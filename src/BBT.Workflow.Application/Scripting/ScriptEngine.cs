@@ -11,8 +11,12 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions.Timer;
 
@@ -174,7 +178,68 @@ public sealed class ScriptEngine(
         // BannedApiAnalyzer, and dangerous sub-namespaces (Cryptography/Principal) are NOT imported.
         "System.Security"
     };
-    
+
+    /// <summary>
+    /// Profile for the no-helper compile path, keyed by effective-grant identity (see
+    /// <see cref="GrantKeyOf"/>). Every no-helper compile with the same grant shares one profile —
+    /// the reference/using set the engine itself builds never varies otherwise.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, string> BaseProfiles = new();
+
+    /// <summary>
+    /// Profile per helper-set's compiled <see cref="MetadataReference"/> identity. Keyed on the
+    /// reference rather than the owning <see cref="HelperSet"/> record: <see cref="ScriptHelperRegistry"/>
+    /// returns a fresh <c>with { FromCache = true }</c> copy on every cache hit, which would defeat a
+    /// <see cref="HelperSet"/>-keyed <see cref="ConditionalWeakTable{TKey,TValue}"/> on every hit — the
+    /// <see cref="MetadataReference"/> instance itself is never copied, so it is the stable identity.
+    /// Safe against a same-reference/different-grant collision: the registry's own cache key already
+    /// folds the grant into (helpers + allowedAssemblies), so the same <see cref="HelperSet.Reference"/>
+    /// object can only ever have been built for one grant; the profile also includes the grant again
+    /// as a second, independent guard.
+    /// </summary>
+    private static readonly ConditionalWeakTable<MetadataReference, string> HelperProfiles = new();
+
+    /// <summary>
+    /// <see cref="MergeDefaultGrant"/> result memoized per authored grant-list object. Definition
+    /// objects are replaced whole on every publish, so keying on object identity here can never serve a
+    /// stale merge for an updated definition — see the "authored ref tuple is not identity" principle.
+    /// </summary>
+    private static readonly ConditionalWeakTable<IReadOnlyList<string>, IReadOnlyList<string>> MergedGrants = new();
+
+    /// <summary>
+    /// Stable string key for a per-compile sandbox grant, used to index <see cref="BaseProfiles"/>.
+    /// Order-insensitive, case-insensitive — mirrors <see cref="CSharpEvaluator.BuildProfile"/>'s own
+    /// grant ordering so two grant lists that would produce the same profile also share one cache slot.
+    /// </summary>
+    private static string GrantKeyOf(IReadOnlyList<string>? grant) =>
+        grant is null or { Count: 0 } ? "" : string.Join("|", grant.OrderBy(g => g, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Memoized wrapper over <see cref="MergeDefaultGrant"/>: the merge is pure given a stable grant
+    /// object, so repeating it on every compile buys nothing once the grant's owning definition is
+    /// unchanged.
+    /// </summary>
+    private static IReadOnlyList<string> MergedGrantOf(IReadOnlyList<string>? grant)
+        => grant is null or { Count: 0 }
+            ? DefaultReferenceAssemblyNames.Value
+            : MergedGrants.GetValue(grant, static g => MergeDefaultGrant(g));
+
+    /// <summary>
+    /// Merges caller-supplied extra references with the engine defaults — the SAME expression
+    /// <see cref="CompileCoreAsync{T}"/> feeds the evaluator, factored out so a precomputed profile can
+    /// never diverge from what the evaluator actually compiles against.
+    /// </summary>
+    private static IEnumerable<MetadataReference> MergedRefs(IEnumerable<MetadataReference>? extraReferences)
+        => (extraReferences ?? []).Concat(DefaultReferences.Value).Distinct();
+
+    /// <summary>
+    /// Merges caller-supplied extra usings with the engine defaults — the SAME expression
+    /// <see cref="CompileCoreAsync{T}"/> feeds the evaluator, factored out for the same reason as
+    /// <see cref="MergedRefs"/>.
+    /// </summary>
+    private static IEnumerable<string> MergedUsings(IEnumerable<string>? usingDirectives)
+        => (usingDirectives ?? []).Concat(DefaultUsings).Distinct();
+
     /// <summary>
     /// Compiles C# code into an instance of the specified type asynchronously.
     /// Automatically includes default metadata references and using directives,
@@ -223,9 +288,35 @@ public sealed class ScriptEngine(
             ? await ResolveReferencedCodeAsync(scriptCode.CodeReference!, cancellationToken)
             : scriptCode.DecodedCode;
 
+        // A precomputed cache key is only valid when THIS method fully controls the reference/using set
+        // CompileCoreAsync will feed the evaluator. A caller-supplied extraReferences/usingDirectives
+        // (the public API allows both) changes that set, and a profile built without them would diverge
+        // from the key CompileCoreAsync's own merge produces — so any caller-supplied value here falls
+        // through to the untouched raw (per-call) key algorithm below.
+        var engineControlsInputs = extraReferences is null && usingDirectives is null;
+
         // No helpers declared → straight compile (effective sandbox grant still applies).
         if (effective?.HasHelpers != true)
         {
+            if (engineControlsInputs)
+            {
+                // Profile depends only on the grant here (references/usings are always the engine's own
+                // defaults) — one profile per distinct grant, reused across every no-helper compile.
+                var profile = BaseProfiles.GetOrAdd(GrantKeyOf(grant), _ =>
+                    _evaluator.BuildProfile(MergedRefs(null), MergedUsings(null), MergedGrantOf(grant), loadContext: null));
+
+                // REF-encoded ScriptCode instances share the empty-string ContentHash (their DecodedCode
+                // is empty by design — see ScriptCode.ContentHash), so per-source identity must hash the
+                // resolved body instead, exactly as the evaluator's own GenerateCacheKey would.
+                var sourceHash = scriptCode.IsReference
+                    ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body)))
+                    : scriptCode.ContentHash;
+                var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), profile);
+
+                return await CompileCoreAsync<T>(
+                    body, null, null, null, grant, cancellationToken, precomputedCacheKey: key);
+            }
+
             return await CompileCoreAsync<T>(
                 body, extraReferences, usingDirectives, null, grant, cancellationToken);
         }
@@ -263,6 +354,25 @@ public sealed class ScriptEngine(
         // helper set's load context so helper types resolve at runtime.
         var refs = (extraReferences ?? []).Append(helperSet.Reference);
         var usings = (usingDirectives ?? []).Concat(helperSet.Namespaces);
+
+        if (engineControlsInputs)
+        {
+            // Keyed on the Reference object itself (see HelperProfiles' doc comment): stable across the
+            // registry's `with { FromCache = true }` copies, unlike the owning HelperSet record. Built
+            // from the exact same MergedRefs/MergedUsings calls CompileCoreAsync below will make with
+            // these exact `refs`/`usings` values, so the profile can never diverge from what the
+            // evaluator actually compiles against.
+            var helperProfile = HelperProfiles.GetValue(helperSet.Reference, _ =>
+                _evaluator.BuildProfile(MergedRefs(refs), MergedUsings(usings), MergedGrantOf(grant), helperSet.LoadContext));
+
+            var sourceHash = scriptCode.IsReference
+                ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body)))
+                : scriptCode.ContentHash;
+            var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), helperProfile);
+
+            return await CompileCoreAsync<T>(
+                body, refs, usings, helperSet.LoadContext, grant, cancellationToken, precomputedCacheKey: key);
+        }
 
         return await CompileCoreAsync<T>(
             body, refs, usings, helperSet.LoadContext, grant, cancellationToken);
@@ -354,7 +464,8 @@ public sealed class ScriptEngine(
         IEnumerable<string>? usingDirectives,
         AssemblyLoadContext? loadContext,
         IReadOnlyList<string>? sandboxGrant,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? precomputedCacheKey = null)
     {
         var stopwatch = Stopwatch.StartNew();
         const string scriptType = "compilation";
@@ -362,15 +473,10 @@ public sealed class ScriptEngine(
 
         try
         {
-            // Use cached default references
-            var mergedReferences = (extraReferences ?? [])
-                .Concat(DefaultReferences.Value)
-                .Distinct();
-
-            // Use cached default usings
-            var mergedUsings = (usingDirectives ?? [])
-                .Concat(DefaultUsings)
-                .Distinct();
+            // Same merge expressions a precomputed profile is built from (MergedRefs/MergedUsings) —
+            // factored out so the two can never diverge.
+            var mergedReferences = MergedRefs(extraReferences);
+            var mergedUsings = MergedUsings(usingDirectives);
 
             // Pass script services to the evaluator for injection into ScriptBase instances
             var compilation = await _evaluator.CompileToInstanceAsync<T>(
@@ -380,7 +486,8 @@ public sealed class ScriptEngine(
                 mergedUsings,
                 cancellationToken,
                 loadContext,
-                MergeDefaultGrant(sandboxGrant));
+                MergeDefaultGrant(sandboxGrant),
+                precomputedCacheKey);
 
             stopwatch.Stop();
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
