@@ -442,7 +442,7 @@ public static class JsonCanonicalizer
 - Modify: `src/BBT.Workflow.Domain/Instances/InstanceData.cs` (`CreateSnapshot` → JsonData paylaşımı)
 - Test: `test/BBT.Workflow.Domain.Tests/Scripting/ScriptContextCowBranchTests.cs` (yeni), `InstanceDataMemoTests`'e snapshot testi
 
-- [ ] **Step 1: `DynamicCloner`** — JSON round-trip'siz yapısal klon (expando/dizi/leaf):
+- [x] **Step 1: `DynamicCloner`** — JSON round-trip'siz yapısal klon (expando/dizi/leaf):
 
 ```csharp
 namespace BBT.Workflow.Scripting;
@@ -474,7 +474,7 @@ public static class DynamicCloner
 
 > ÖNCE `JsonDocumentExtensions.ToDynamic`'in dizi temsili doğrulanır (`List<object?>` mi `object?[]` mi, başka konteyner var mı) ve switch gerçek tiplere göre yazılır. Birim test: `DeepClone(ToDynamic(x))` ile `CloneDynamic(x)`'in JSON-eşdeğer olduğu + klonun mutasyonunun kaynağı etkilemediği (korpus: iç içe obje/dizi/leafler).
 
-- [ ] **Step 2: Failing COW testleri** — `ScriptContextCowBranchTests.cs`:
+- [x] **Step 2: Failing COW testleri** — `ScriptContextCowBranchTests.cs`:
 
 ```csharp
     [Fact] public void Branch_NoWrites_SharesBodyByReference() { /* CreateParallelBranch sonrası branch.Body ReferenceEquals parent.Body */ }
@@ -487,7 +487,7 @@ public static class DynamicCloner
 
 (Mevcut `ScriptContextTests` branch testleri — transport metadata/comparer/dynamic round-trip — AYNEN yeşil kalmalı: Headers/RouteValues/QueryParameters klonu DEĞİŞMİYOR.)
 
-- [ ] **Step 3: Models.cs implementasyonu**
+- [x] **Step 3: Models.cs implementasyonu**
 
 1. Sahiplik durumu:
 
@@ -536,11 +536,11 @@ ileride paylaşılan başka parça çıkarsa genişletilir.)
 5. `Dispose`: branch'te (`_cowParent != null`) yalnız OWNED parçaları temizle; paylaşılanları null'lama/Clear'lama (parent'ı bozar). FanOut'un "dispose etme" notu geçerliliğini korur ama artık dispose da güvenlidir — FanOut yorumu güncellenir (Related memo notu ayrı gerekçe olarak kalır).
 6. DEBUG assert: `#if DEBUG` altında, branch'te `_owned` bayrağı olmayan parçaya doğrudan alan yazımı olmadığını doğrulamak funnel'larla garanti — property setter'ları private olduğundan yazım yüzeyi funnel'lardan ibaret (envanter: L541/557/577/593/707 + dict indexer'ları). Dict indexer'ları container-kopya ile kapalı. Assert yerine bu envanter `ScriptContextCowBranchTests`'te "yazıcı yüzeyi değişirse kır" reflection testi ile pinlenir: public yazıcı metod listesi snapshot'ı.
 
-- [ ] **Step 4: `InstanceData.CreateSnapshot` wrapper'ı** — `Data = new JsonData(Data.Json)` yerine **`Data = Data` (referans paylaş)**: `JsonData` immutable ValueObject; satır başına parse+normalize ölür, memo'lar paylaşılır. `IsLatest/VersionNo` wrapper'da kopyalanır (bayrak izolasyonu KORUNUR — `MarkAsNotLatest` yalnız kendi kopyasını etkiler). Test: snapshot sonrası orijinal satırın `MarkAsNotLatest`'i snapshot'ı etkilemez + `ReferenceEquals(row.Data, snapshot.Data)`.
+- [x] **Step 4: `InstanceData.CreateSnapshot` wrapper'ı** — `Data = new JsonData(Data.Json)` yerine **`Data = Data` (referans paylaş)**: `JsonData` immutable ValueObject; satır başına parse+normalize ölür, memo'lar paylaşılır. `IsLatest/VersionNo` wrapper'da kopyalanır (bayrak izolasyonu KORUNUR — `MarkAsNotLatest` yalnız kendi kopyasını etkiler). Test: snapshot sonrası orijinal satırın `MarkAsNotLatest`'i snapshot'ı etkilemez + `ReferenceEquals(row.Data, snapshot.Data)`.
 
-- [ ] **Step 5: PASS + geniş regresyon** — yeni testler + `ScriptContextTests` + `ScriptContextRelatedTests` + merge strategy testleri + `dotnet test test/BBT.Workflow.Domain.Tests 2>&1 | tail -3` (isim karşılaştırma) + `dotnet test test/BBT.Workflow.Application.Tests --filter "FullyQualifiedName~FanOut|FullyQualifiedName~TaskCoordinator|FullyQualifiedName~ParallelBranch" 2>&1 | tail -3`.
+- [x] **Step 5: PASS + geniş regresyon** — yeni testler + `ScriptContextTests` + `ScriptContextRelatedTests` + merge strategy testleri + `dotnet test test/BBT.Workflow.Domain.Tests 2>&1 | tail -3` (isim karşılaştırma) + `dotnet test test/BBT.Workflow.Application.Tests --filter "FullyQualifiedName~FanOut|FullyQualifiedName~TaskCoordinator|FullyQualifiedName~ParallelBranch" 2>&1 | tail -3`.
 
-- [ ] **Step 6: Commit** — `perf(scripting): copy-on-write parallel branches, structural cloning, shared-JsonData snapshots`
+- [x] **Step 6: Commit** — `perf(scripting): copy-on-write parallel branches, structural cloning, shared-JsonData snapshots`
 
 ---
 
