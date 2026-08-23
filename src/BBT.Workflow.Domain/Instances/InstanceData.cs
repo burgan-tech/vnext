@@ -85,7 +85,10 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
 
     /// <summary>
     /// Row-scoped memo: this row is immutable once constructed, so its dynamic attribute tree is
-    /// materialized at most once and shared across every subsequent read.
+    /// materialized at most once and shared across every subsequent read. Benign race: concurrent
+    /// first accesses may each build a tree — content-equivalent, last write wins; a mutation made
+    /// on the losing tree during that first-access window is not observed by later readers (the
+    /// shared-tree mutation-visibility contract starts once the field is published).
     /// </summary>
     public dynamic? Attributes => _attributes ??= Data.JsonElement.ToDynamic();
 

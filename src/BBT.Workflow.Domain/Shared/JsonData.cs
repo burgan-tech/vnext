@@ -54,6 +54,11 @@ public class JsonData : ValueObject
     
     private JsonElement? _jsonElement;
 
+    /// <summary>
+    /// Parsed once per instance (Json is assigned only in constructors). Benign race: concurrent
+    /// first accesses may parse twice; both results are equivalent standalone elements and the
+    /// last write wins.
+    /// </summary>
     public JsonElement JsonElement =>
         _jsonElement ??= JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!;
 
