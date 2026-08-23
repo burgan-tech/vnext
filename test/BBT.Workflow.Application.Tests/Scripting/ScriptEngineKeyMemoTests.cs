@@ -106,9 +106,17 @@ public class ScriptEngineKeyMemoTests
         var currentSchema = new Mock<ICurrentSchema>();
         currentSchema.Setup(x => x.Change(It.IsAny<string>())).Returns(Mock.Of<IDisposable>());
 
+        // Task 4 (A7): helper resolution now reads generation tokens to guard its memo; a fixed token is
+        // enough here since this test is about the precomputed-vs-raw key parity, not the memo itself.
+        var generationProvider = new Mock<IComponentGenerationProvider>();
+        generationProvider
+            .Setup(p => p.GetAsync(RuntimeSysSchemaInfo.Mappings, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("gen-fixed");
+
         var services = new ServiceCollection();
         services.AddSingleton(componentStore.Object);
         services.AddSingleton(currentSchema.Object);
+        services.AddSingleton(generationProvider.Object);
         using var serviceProvider = services.BuildServiceProvider();
 
         var engine = BuildEngine(evaluator, helperRegistry, serviceProvider, helpersEnabled: true);

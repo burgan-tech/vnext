@@ -220,6 +220,37 @@ public sealed class ScriptEngine(
     private static readonly ConditionalWeakTable<IReadOnlyList<string>, IReadOnlyList<string>> MergedGrants = new();
 
     /// <summary>
+    /// The component type key mappings/helpers are published under — identical to
+    /// <see cref="BBT.Workflow.Definitions.Mapping.ComponentTypeKey"/> and to the value the mapping
+    /// <c>CacheSet&lt;Mapping&gt;</c> itself passes to <see cref="IComponentGenerationProvider"/> when it
+    /// reads/bumps a generation token. <see cref="HelperSetMemoByEvaluator"/>'s guard MUST read the
+    /// identical (componentTypeKey, domain, key) triple that publish bumps, or the memo would never see
+    /// the invalidation.
+    /// </summary>
+    private const string MappingsTypeKey = RuntimeSysSchemaInfo.Mappings;
+
+    /// <summary>
+    /// Helper-set resolution result cached by <see cref="HelperSetMemoByEvaluator"/>: the resolved sources,
+    /// the per-helper generation tokens they were resolved under, and the built <see cref="HelperSet"/>.
+    /// </summary>
+    private sealed record ResolvedHelperSet(
+        IReadOnlyList<HelperSource> Sources,
+        string[] Tokens,
+        HelperSet Set);
+
+    /// <summary>
+    /// Per-evaluator helper-set resolution memo, guarded by component generation tokens (A7). The
+    /// authored reference tuple (domain/key/version) is NEVER the cache identity by itself — a version
+    /// resolves floating (see <see cref="IComponentGenerationProvider"/>'s remarks), so a hotfix publish
+    /// that keeps the authored version reachable must still be visible on the next compile. Every use
+    /// re-reads the per-helper generation tokens under <see cref="MappingsTypeKey"/>, and any mismatch
+    /// forces a full re-resolve through the component store — the token read is the guard, not an
+    /// optimization detail. Keyed per (authored refs + grant) string. Outer-keyed by <see cref="IEvaluator"/>
+    /// for the same isolation reason as <see cref="BaseProfilesByEvaluator"/>/<see cref="HelperProfilesByEvaluator"/>.
+    /// </summary>
+    private static readonly ConditionalWeakTable<IEvaluator, ConcurrentDictionary<string, ResolvedHelperSet>> HelperSetMemoByEvaluator = new();
+
+    /// <summary>
     /// Stable string key for a per-compile sandbox grant, used to index <see cref="BaseProfilesByEvaluator"/>.
     /// Order-insensitive, case-insensitive — mirrors <see cref="CSharpEvaluator.BuildProfile"/>'s own
     /// grant ordering so two grant lists that would produce the same profile also share one cache slot.
@@ -355,25 +386,58 @@ public sealed class ScriptEngine(
                 "(Scripting:Helpers:Enabled=false).");
         }
 
-        var helperSources = await ResolveHelperSourcesAsync(effective.Helpers!, cancellationToken);
-
-        // Build the referenced helper set first (sandboxed, cached by content hash), referencing the
-        // runtime-owned contract assemblies and importing the default namespaces.
-        var helperSet = _helperRegistry.GetOrBuildHelpers(
-            helperSources,
-            MergeDefaultGrant(grant),
-            DefaultReferences.Value,
-            DefaultUsings,
-            cancellationToken);
-
         var helperKeys = string.Join(", ", effective.Helpers!.Select(h => $"{h.Key}@{h.Version}"));
-        if (helperSet.FromCache)
+
+        // A7 guard: re-read the per-helper generation tokens BEFORE consulting the memo. The tokens are
+        // the guard itself, not a hint — a mismatch (hotfix publish) must force the full resolve path
+        // below even though the authored ref list and grant are unchanged.
+        var memoKey = string.Join("|", effective.Helpers!.Select(h => h.ToString())) + "||" + GrantKeyOf(grant);
+        var generationProvider = _serviceProvider.GetRequiredService<IComponentGenerationProvider>();
+
+        var tokens = new string[effective.Helpers!.Count];
+        for (var i = 0; i < effective.Helpers.Count; i++)
         {
+            var h = effective.Helpers[i];
+            tokens[i] = await generationProvider.GetAsync(MappingsTypeKey, h.Domain, h.Key, cancellationToken);
+        }
+
+        var helperSetMemo = HelperSetMemoByEvaluator.GetValue(
+            _evaluator, static _ => new ConcurrentDictionary<string, ResolvedHelperSet>());
+
+        HelperSet helperSet;
+        IReadOnlyList<HelperSource> helperSources;
+        if (helperSetMemo.TryGetValue(memoKey, out var memo) && memo.Tokens.AsSpan().SequenceEqual(tokens))
+        {
+            // Memo hit: neither the component store nor the helper registry is touched, only N cheap
+            // token comparisons. Reuses the memoized HelperSet instance verbatim (not a `with` copy) so
+            // its Reference identity stays stable for HelperProfilesByEvaluator's CWT lookup below.
+            helperSources = memo.Sources;
+            helperSet = memo.Set;
             _logger.ScriptHelperSetCacheHit(helperSources.Count, helperKeys);
         }
         else
         {
-            _logger.ScriptHelperSetBuilt(helperSources.Count, helperKeys, string.Join(", ", helperSet.Namespaces));
+            helperSources = await ResolveHelperSourcesAsync(effective.Helpers!, cancellationToken);
+
+            // Build the referenced helper set first (sandboxed, cached by content hash), referencing the
+            // runtime-owned contract assemblies and importing the default namespaces.
+            helperSet = _helperRegistry.GetOrBuildHelpers(
+                helperSources,
+                MergeDefaultGrant(grant),
+                DefaultReferences.Value,
+                DefaultUsings,
+                cancellationToken);
+
+            helperSetMemo[memoKey] = new ResolvedHelperSet(helperSources, tokens, helperSet with { FromCache = false });
+
+            if (helperSet.FromCache)
+            {
+                _logger.ScriptHelperSetCacheHit(helperSources.Count, helperKeys);
+            }
+            else
+            {
+                _logger.ScriptHelperSetBuilt(helperSources.Count, helperKeys, string.Join(", ", helperSet.Namespaces));
+            }
         }
 
         // Reference the helper assembly + auto-import its namespaces, and compile the mapping into the
