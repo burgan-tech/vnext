@@ -16,11 +16,22 @@
       "type": "behavior",
       "component": "runtime",
       "path": "prometheus.script_executions_total",
-      "deprecatedSince": "0.0.81",
+      "deprecatedSince": "0.0.85",
       "removedAt": null,
       "replacement": "script_compilations_total (compile-or-fetch calls, result=hit|miss) and script_execution_duration_seconds_count (true script executions by script_type)",
       "severity": "warning",
       "message": "script_executions_total has always been incremented on the COMPILE path (cache hits included), not on script execution. It keeps emitting unchanged for backward compatibility; migrate dashboards/alerts to script_compilations_total and script_execution_duration_seconds, then this metric will be removed in a future release."
+    },
+    {
+      "id": "extension-scope-get-history-transition-removed",
+      "type": "field",
+      "component": "extension",
+      "path": "extension.scope",
+      "deprecatedSince": "0.0.85",
+      "removedAt": "0.0.85",
+      "replacement": null,
+      "severity": "warning",
+      "message": "The ExtensionScope member GetHistoryTransition was removed. It shared its numeric value (2) with GetAllInstances, was never accepted by the extension component schema (scope allows 1, 2, 3), was never handled by the scope switch and was never referenced by any code path, so no authored extension could request it and no stored value ever meant it. Extensions on the transitions-history endpoint are not supported; reinstating that capability requires a new scope value plus runtime wiring."
     }
   ]
 }
