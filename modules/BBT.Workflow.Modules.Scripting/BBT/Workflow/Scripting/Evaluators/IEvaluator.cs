@@ -62,6 +62,12 @@ public interface IEvaluator
     /// Optional per-compile assembly grant merged on top of the sandbox baseline (effective only when
     /// the sandbox is enabled).
     /// </param>
+    /// <param name="precomputedCacheKey">
+    /// Optional cache key computed ahead of time via <see cref="BuildProfile"/> +
+    /// <see cref="ComputeCacheKey"/>, bypassing this call's own key derivation. The caller MUST have
+    /// produced it via BuildProfile+ComputeCacheKey with the very same inputs; a divergent key serves
+    /// the wrong compiled type.
+    /// </param>
     /// <returns>
     /// A task containing the compile outcome: the compiled instance of type T, whether this call
     /// performed the Roslyn compile (cache miss) or hit an already-compiled entry, and the compile
@@ -74,12 +80,42 @@ public interface IEvaluator
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
-        IReadOnlyList<string>? sandboxGrant = null);
+        IReadOnlyList<string>? sandboxGrant = null,
+        string? precomputedCacheKey = null);
 
     /// <summary>
     /// Gets the number of cached compiled script types (unique compilation identities).
     /// </summary>
     int CachedTypeCount { get; }
+
+    /// <summary>
+    /// Builds the profile half of the cache key: everything EXCEPT the source and target type —
+    /// sandbox flag, load-context scope, sorted grant, sorted usings, sorted reference displays.
+    /// Deterministic and order-insensitive so callers may compute it once per stable input set
+    /// (helper set / grant profile) and reuse it across compiles via <see cref="ComputeCacheKey"/>
+    /// and <see cref="CompileToInstanceAsync{T}"/>'s <c>precomputedCacheKey</c> parameter.
+    /// </summary>
+    /// <param name="extraReferences">The extra metadata references that will be passed to compile.</param>
+    /// <param name="usingDirectives">The using directives that will be passed to compile.</param>
+    /// <param name="sandboxGrant">The sandbox grant that will be passed to compile.</param>
+    /// <param name="loadContext">The load context that will be passed to compile.</param>
+    /// <returns>The profile string.</returns>
+    string BuildProfile(
+        IEnumerable<MetadataReference>? extraReferences,
+        IEnumerable<string>? usingDirectives,
+        IReadOnlyList<string>? sandboxGrant,
+        AssemblyLoadContext? loadContext);
+
+    /// <summary>
+    /// Combines a source hash (SHA-256 hex of the exact source text), the target type and a
+    /// <see cref="BuildProfile"/> result into the final cache key. THE single key algorithm:
+    /// the raw-string path routes through here too, so a precomputed key can never diverge.
+    /// </summary>
+    /// <param name="sourceHashHex">SHA-256 hex of the exact source text to be compiled.</param>
+    /// <param name="targetType">The target type the compiled instance will be cast to.</param>
+    /// <param name="profile">A <see cref="BuildProfile"/> result for the same compile inputs.</param>
+    /// <returns>The cache key.</returns>
+    string ComputeCacheKey(string sourceHashHex, Type targetType, string profile);
 
     /// <summary>
     /// Compiles a set of helper component sources into a single assembly loaded into the supplied

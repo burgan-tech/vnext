@@ -452,9 +452,21 @@ public class SandboxedScriptingTests
             IEnumerable<string>? usingDirectives = null,
             CancellationToken cancellationToken = default,
             AssemblyLoadContext? loadContext = null,
-            IReadOnlyList<string>? sandboxGrant = null)
+            IReadOnlyList<string>? sandboxGrant = null,
+            string? precomputedCacheKey = null)
             => Inner.CompileToInstanceAsync<T>(
-                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant);
+                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant,
+                precomputedCacheKey);
+
+        public string BuildProfile(
+            IEnumerable<MetadataReference>? extraReferences,
+            IEnumerable<string>? usingDirectives,
+            IReadOnlyList<string>? sandboxGrant,
+            AssemblyLoadContext? loadContext)
+            => Inner.BuildProfile(extraReferences, usingDirectives, sandboxGrant, loadContext);
+
+        public string ComputeCacheKey(string sourceHashHex, Type targetType, string profile)
+            => Inner.ComputeCacheKey(sourceHashHex, targetType, profile);
 
         // Declared without default values: defaults are not part of the signature, so this still
         // implements IEvaluator.CompileHelpers, and every call site here passes all arguments.
