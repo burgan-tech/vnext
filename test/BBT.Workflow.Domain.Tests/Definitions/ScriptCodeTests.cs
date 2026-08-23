@@ -184,5 +184,44 @@ public class ScriptCodeTests
         // Assert
         Assert.Equal(originalCode, decodedCode);
     }
+
+    [Fact]
+    public void DecodedCode_ShouldBeMemoized_SameReferenceAcrossAccesses()
+    {
+        var code = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("public class M {}"));
+        var scriptCode = new ScriptCode("loc", code);
+
+        var first = scriptCode.DecodedCode;
+        var second = scriptCode.DecodedCode;
+
+        Assert.Same(first, second); // memo: aynı string referansı, her erişimde yeni decode değil
+    }
+
+    [Fact]
+    public void ContentHash_ShouldBeStable_AndDifferForDifferentSources()
+    {
+        var a1 = ScriptCode.FromNative("public class A {}");
+        var a2 = ScriptCode.FromNative("public class A {}");
+        var b = ScriptCode.FromNative("public class B {}");
+
+        Assert.Equal(a1.ContentHash, a2.ContentHash);   // içerik-türevli, deterministik
+        Assert.NotEqual(a1.ContentHash, b.ContentHash);
+        Assert.Same(a1.ContentHash, a1.ContentHash);    // instance-başına bir kez hesaplanır
+        Assert.Equal(64, a1.ContentHash.Length);        // SHA256 hex
+    }
+
+    [Fact]
+    public void MemoFields_ShouldNotAffectValueEquality()
+    {
+        var x = ScriptCode.FromNative("public class M {}");
+        var y = ScriptCode.FromNative("public class M {}");
+        _ = x.ContentHash; // yalnız birinde memo tetiklenir
+        _ = x.DecodedCode;
+
+        // ScriptCode/ValueObject does not wire Equals/GetHashCode to ValueEquals (pre-existing,
+        // out of scope here), so structural equality is asserted via ValueEquals — the file's own
+        // convention (see Equals_ShouldReturnTrue_WhenPropertiesAreSame) — not Assert.Equal.
+        Assert.True(x.ValueEquals(y)); // GetAtomicValues memo alanlarını içermez
+    }
 }
 
