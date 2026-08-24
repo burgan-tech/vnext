@@ -1,0 +1,238 @@
+# Publishes prerelease Docker images for pull requests that carry a publish-* label.
+#
+# Opt-in per PR: add `publish-alpha`, `publish-beta` or `publish-rc` to the PR and every
+# subsequent push rebuilds and republishes the images for that channel. When several
+# publish-* labels are present the highest channel wins: rc > beta > alpha.
+#
+# Version scheme: {common.props base X.Y.Z}-{channel}.pr{PR number}.{run number}
+# (e.g. 0.0.84-alpha.pr123.7), plus a moving `pr-{N}` convenience tag per service.
+# The versioned tag is the canonical reference — a cancelled run can leave `pr-{N}`
+# pointing at different builds across services.
+#
+# Scope is deliberately narrow: Docker images to GHCR only. No git tag, no GitHub
+# Release, no NuGet/npm publish, no signing/SBOM/scan — those belong to the release
+# pipeline (build-and-publish-images.yml).
+#
+# Security note: adding a label requires only triage permission, and the images are
+# built from the UNREVIEWED PR head. The prerelease tag namespace (`-{channel}.prN.`)
+# is the mitigation — nothing here can touch `latest` or a stable version tag.
+# Fork PRs are excluded (their GITHUB_TOKEN is read-only anyway).
+name: PR Prerelease Images
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches:
+      - master
+      - 'release-v*'
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+  # PR builds are single-arch: the arm64 leg would run the whole .NET build under QEMU
+  # emulation (3-10x slower). Flip to `linux/amd64,linux/arm64` if arm64 test images
+  # are ever needed — but see the cleanup note below before doing so.
+  PLATFORMS: linux/amd64
+
+concurrency:
+  group: pr-prerelease-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    # Gate lives only here — the `needs` chain skips everything downstream.
+    # `labeled` fires for EVERY label, so unrelated labels must not trigger a rebuild;
+    # it also fires on closed PRs, hence the state check.
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(github.event.pull_request.labels.*.name, 'publish-alpha') ||
+       contains(github.event.pull_request.labels.*.name, 'publish-beta') ||
+       contains(github.event.pull_request.labels.*.name, 'publish-rc')) &&
+      (github.event.action != 'labeled' || startsWith(github.event.label.name, 'publish-'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # The PR head, not the transient refs/pull/N/merge commit: the image must
+          # correspond to a commit the developer can point at, and the merge ref does
+          # not exist while the PR has conflicts.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Resolve prerelease channel
+        id: channel
+        env:
+          HAS_ALPHA: ${{ contains(github.event.pull_request.labels.*.name, 'publish-alpha') }}
+          HAS_BETA: ${{ contains(github.event.pull_request.labels.*.name, 'publish-beta') }}
+          HAS_RC: ${{ contains(github.event.pull_request.labels.*.name, 'publish-rc') }}
+        run: |
+          if [ "$HAS_RC" = "true" ]; then
+            CHANNEL=rc
+          elif [ "$HAS_BETA" = "true" ]; then
+            CHANNEL=beta
+          else
+            CHANNEL=alpha
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Resolved channel: $CHANNEL"
+
+      - name: Compute prerelease version
+        id: version
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          BASE=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
+          if [ -z "$BASE" ]; then
+            echo "::error::Could not read <Version> from common.props"
+            exit 1
+          fi
+          # Tolerate a prerelease suffix someone may have committed into common.props.
+          BASE="${BASE%%-*}"
+          VERSION="${BASE}-${CHANNEL}.pr${PR_NUMBER}.${{ github.run_number }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: execution
+            dockerfile: ./execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile
+          - image: orchestrator
+            dockerfile: ./orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile
+          - image: init
+            dockerfile: ./init/VNext.Init.Host/Dockerfile
+          - image: inbox
+            dockerfile: ./workers/BBT.Workflow.Workers.Inbox/Dockerfile
+          - image: outbox
+            dockerfile: ./workers/BBT.Workflow.Workers.Outbox/Dockerfile
+          - image: db-migrator
+            dockerfile: ./workers/BBT.Workflow.DbMigrator/Dockerfile
+          - image: mcp-server
+            dockerfile: ./tools/BBT.Workflow.Mcp.Server/Dockerfile
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # The Dockerfiles COPY common.props; this stamp is how the version reaches the
+      # compiled assemblies (same mechanism as the release pipeline).
+      - name: Stamp version into common.props
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
+          echo "Stamped common.props with version $VERSION"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          # Only PR-scoped tags — never `latest`, branch or sha tags from PR code.
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=ref,event=pr
+
+      # provenance/sbom off keeps each push a single plain manifest (no attestation
+      # index), so every GHCR version stays tagged and cleanup by tag is safe.
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+
+  comment:
+    needs: [prepare, build]
+    # Comment on build failure too, so the sticky comment reflects broken state instead
+    # of going silently stale; skip only cancelled runs (a newer push will re-comment).
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Upsert sticky PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          MARKER='<!-- pr-prerelease-images -->'
+
+          if [ "$BUILD_RESULT" = "success" ]; then
+            STATUS="✅ **Build succeeded**"
+          else
+            STATUS="❌ **Build failed** (result: \`$BUILD_RESULT\`) — tags below may be missing or stale"
+          fi
+
+          BODY="$MARKER
+          ## 🐳 PR Prerelease Images
+
+          $STATUS
+
+          - **Channel**: \`$CHANNEL\`
+          - **Version**: \`$VERSION\`
+          - **Commit**: $HEAD_SHA
+
+          \`\`\`bash
+          docker pull ghcr.io/$REPO/execution:$VERSION
+          docker pull ghcr.io/$REPO/orchestrator:$VERSION
+          docker pull ghcr.io/$REPO/init:$VERSION
+          docker pull ghcr.io/$REPO/inbox:$VERSION
+          docker pull ghcr.io/$REPO/outbox:$VERSION
+          docker pull ghcr.io/$REPO/db-migrator:$VERSION
+          docker pull ghcr.io/$REPO/mcp-server:$VERSION
+          \`\`\`
+
+          The moving tag \`pr-$PR\` also points at the newest build of this PR. A cancelled run can leave it inconsistent across services — the versioned tag above is the canonical reference."
+
+          CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
+
+          if [ -n "$CID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$CID" -f body="$BODY"
+            echo "Updated existing comment $CID"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$BODY"
+            echo "Created new comment"
+          fi
