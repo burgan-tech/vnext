@@ -6,6 +6,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -164,7 +165,8 @@ public sealed class TriggerTaskRoutingLaneTests : IDisposable
             Substitute.For<IScriptEngine>(),
             runtimeInfo,
             Substitute.For<IRemoteInvokerService>(),
-            Substitute.For<ILogger>());
+            Substitute.For<ILogger>(),
+            Substitute.For<IWorkflowMetrics>());
     }
 
     /// <summary>
@@ -177,8 +179,10 @@ public sealed class TriggerTaskRoutingLaneTests : IDisposable
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
-        ILogger logger)
-        : TriggerTaskExecutorBase<FakeTriggerTask>(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger logger,
+        IWorkflowMetrics metrics)
+        : TriggerTaskExecutorBase<FakeTriggerTask>(
+            scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
     {
         public override TaskType TaskType => TaskType.StartTrigger;
 
