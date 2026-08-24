@@ -22,7 +22,7 @@ public class EfCoreInstanceTransitionRepository(
     {
         var result = await base.InsertAsync(entity, autoSave, cancellationToken);
         
-        // Transfer to data sinks (e.g., ClickHouse) if enabled
+        // Transfer to registered data sinks if any
         try
         {
             await dataSinkManager.HandleInsertAsync(result, cancellationToken);
@@ -43,7 +43,7 @@ public class EfCoreInstanceTransitionRepository(
     {
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
         
-        // Transfer to data sinks (e.g., ClickHouse) if enabled
+        // Transfer to registered data sinks if any
         try
         {
             await dataSinkManager.HandleUpdateAsync(result, cancellationToken);
