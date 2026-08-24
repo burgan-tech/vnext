@@ -75,18 +75,11 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         }
 
         var instanceIdentifier = instanceIdResult.Value!;
-        var isSameDomain = IsSameDomain(task);
 
-        Logger.LogDebug(
-            "DirectTrigger task {TaskKey} targeting domain {TargetDomain}, instance {InstanceId}, same domain: {IsSameDomain}",
-            task.Key, task.TriggerDomain, instanceIdentifier, isSameDomain);
-
-        if (isSameDomain)
-        {
-            return await ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken);
-        }
-
-        return await ExecuteRemoteAsync(task, context, cancellationToken);
+        return await RouteAsync(
+            task,
+            () => ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken),
+            () => ExecuteRemoteAsync(task, context, cancellationToken));
     }
 
     private Result<string> ResolveInstanceIdentifier(DirectTriggerTask task)

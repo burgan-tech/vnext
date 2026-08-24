@@ -778,6 +778,21 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs which way a trigger-family task was routed. Debug: one line per trigger task, and the
+    /// local/remote split decides both the invocation path and whether a child trace lane is opened.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10125,
+        Level = LogLevel.Debug,
+        Message = "Trigger task {TaskKey} ({TaskType}) routed to target domain {TargetDomain}, sameDomain={IsSameDomain}")]
+    public static partial void TriggerTaskRouted(
+        this ILogger logger,
+        string taskKey,
+        string taskType,
+        string targetDomain,
+        bool isSameDomain);
+
+    /// <summary>
     /// Logs when local task execution fails.
     /// </summary>
     [LoggerMessage(

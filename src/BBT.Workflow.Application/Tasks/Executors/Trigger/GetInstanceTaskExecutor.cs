@@ -66,18 +66,11 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
         }
 
         var instanceIdentifier = instanceIdResult.Value!;
-        var isSameDomain = IsSameDomain(task);
 
-        Logger.LogDebug(
-            "GetInstance task {TaskKey} targeting domain {TargetDomain}, instance {InstanceId}, same domain: {IsSameDomain}",
-            task.Key, task.TriggerDomain, instanceIdentifier, isSameDomain);
-
-        if (isSameDomain)
-        {
-            return await ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken);
-        }
-
-        return await ExecuteRemoteAsync(task, instanceIdentifier, context, cancellationToken);
+        return await RouteAsync(
+            task,
+            () => ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken),
+            () => ExecuteRemoteAsync(task, instanceIdentifier, context, cancellationToken));
     }
 
     private static Result<string> ResolveInstanceIdentifier(GetInstanceTask task)

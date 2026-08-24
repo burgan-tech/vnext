@@ -33,15 +33,65 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     protected abstract string GetTargetDomain(TTask task);
 
     /// <summary>
-    /// Checks if the target domain matches the current runtime domain.
+    /// Checks if the target domain matches the current runtime domain. An empty target domain means
+    /// "this one".
+    /// <para>
+    /// PRIVATE on purpose: <see cref="RouteAsync{TResult}"/> is the only caller, so a subclass cannot
+    /// branch on the domain itself and skip the child trace lane the local branch owes.
+    /// </para>
     /// </summary>
-    protected bool IsSameDomain(TTask task)
+    private bool IsSameDomain(TTask task)
     {
         var targetDomain = GetTargetDomain(task);
         if (string.IsNullOrEmpty(targetDomain))
             return true;
 
         return string.Equals(RuntimeInfoProvider.Domain, targetDomain, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Routes the task to its local (same-domain, in-process) or remote (cross-domain, over Dapr)
+    /// invocation, and — on the local branch only — opens a CHILD TRACE LANE anchored on this task's
+    /// span.
+    /// <para>
+    /// The lane is why this helper exists rather than each executor branching for itself. A local
+    /// dispatch runs in-process, so anything the target instance starts reads the ambient
+    /// <see cref="WorkflowTraceLane"/> — which still belongs to the CALLING instance's request. Its
+    /// transition jobs and post-commit work would then anchor to the caller's lane and surface as
+    /// SIBLINGS of the caller's own hops, with nothing tying them to the task that triggered them.
+    /// <see cref="WorkflowTraceLane.EnterChildLane"/> makes the current <c>Task.Execute</c> span the
+    /// target instance's anchor instead, so the triggered work is flat UNDERNEATH the task, exactly
+    /// as a subflow handoff already behaves.
+    /// </para>
+    /// <para>
+    /// The remote branch needs nothing: it crosses Dapr, and the lane travels in the request as
+    /// TraceRoot/ParentTraceRoot, already anchored by the invoker.
+    /// </para>
+    /// <para>
+    /// For a read-only trigger task (GetInstance / GetInstances / GetInstanceData) the child lane is
+    /// inert today — a read starts no lane-aware span. It is still entered, so the policy is
+    /// uniform across the family and a read that later gains one cannot silently escape.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TResult">The invocation result type; differs across the family.</typeparam>
+    /// <param name="task">The task being routed.</param>
+    /// <param name="local">Invoked when the target domain is this runtime's domain.</param>
+    /// <param name="remote">Invoked when the target domain is another runtime's.</param>
+    protected async Task<TResult> RouteAsync<TResult>(
+        TTask task,
+        Func<Task<TResult>> local,
+        Func<Task<TResult>> remote)
+    {
+        var isSameDomain = IsSameDomain(task);
+
+        Logger.TriggerTaskRouted(
+            task.Key, TaskType.ToString(), GetTargetDomain(task) ?? string.Empty, isSameDomain);
+
+        if (!isSameDomain)
+            return await remote();
+
+        using var lane = WorkflowTraceLane.EnterChildLane();
+        return await local();
     }
 
     /// <inheritdoc />

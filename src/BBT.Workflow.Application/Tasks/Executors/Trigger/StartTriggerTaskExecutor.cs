@@ -52,17 +52,10 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var isSameDomain = IsSameDomain(task);
-
-        Logger.LogDebug("StartTrigger task {TaskKey} targeting domain {TargetDomain}, same domain: {IsSameDomain}",
-            task.Key, task.TriggerDomain, isSameDomain);
-
-        if (isSameDomain)
-        {
-            return await ExecuteLocalAsync(task, context, cancellationToken);
-        }
-
-        return await ExecuteRemoteAsync(task, context, cancellationToken);
+        return await RouteAsync(
+            task,
+            () => ExecuteLocalAsync(task, context, cancellationToken),
+            () => ExecuteRemoteAsync(task, context, cancellationToken));
     }
 
     private async Task<Result<TaskInvocationResult>> ExecuteLocalAsync(

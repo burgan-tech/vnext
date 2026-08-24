@@ -79,18 +79,10 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                 validation.Errors[0].Target ?? "filter"));
         }
 
-        var isSameDomain = IsSameDomain(task);
-
-        Logger.LogDebug(
-            "GetInstances task {TaskKey} targeting domain {TargetDomain}, workflow {Workflow}, same domain: {IsSameDomain}",
-            task.Key, task.TriggerDomain, task.TriggerFlow, isSameDomain);
-
-        if (isSameDomain)
-        {
-            return await ExecuteLocalAsync(task, context, cancellationToken);
-        }
-
-        return await ExecuteRemoteAsync(task, context, cancellationToken);
+        return await RouteAsync(
+            task,
+            () => ExecuteLocalAsync(task, context, cancellationToken),
+            () => ExecuteRemoteAsync(task, context, cancellationToken));
     }
 
     private async Task<Result<TaskInvocationResult>> ExecuteLocalAsync(

@@ -68,21 +68,10 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         // Generate IDs for correlation tracking
         var subFlowInstanceId = _guidGenerator.Create();
         var correlationId = _guidGenerator.Create();
-        var isSameDomain = IsSameDomain(task);
-
-        Logger.LogDebug("SubProcess task {TaskKey} targeting domain {TargetDomain}, same domain: {IsSameDomain}",
-            task.Key, task.TriggerDomain, isSameDomain);
-
-        TaskInvocationResult result;
-
-        if (isSameDomain)
-        {
-            result = await ExecuteLocalAsync(task, context, subFlowInstanceId, correlationId, cancellationToken);
-        }
-        else
-        {
-            result = await ExecuteRemoteAsync(task, context, subFlowInstanceId, correlationId, cancellationToken);
-        }
+        var result = await RouteAsync(
+            task,
+            () => ExecuteLocalAsync(task, context, subFlowInstanceId, correlationId, cancellationToken),
+            () => ExecuteRemoteAsync(task, context, subFlowInstanceId, correlationId, cancellationToken));
 
         return Result<TaskInvocationResult>.Ok(result);
     }
